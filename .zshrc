@@ -1,5 +1,6 @@
 # Don't put secrets here, put them in ~/secrets.zsh
 [[ -f ~/secrets.zsh ]] && source ~/secrets.zsh
+[[ "$(uname -s)" = "Darwin" ]] && echo "macOS detected" && source ~/git/dotfiles/zsh/macos.zsh
 source ~/git/dotfiles/zsh/colors.zsh
 if diff ~/git/dotfiles/.zshrc ~/.zshrc; then
   echo ".zshrc is up to date with dotfiles"
@@ -22,6 +23,5 @@ function push-dotfiles-from-zshrc() {
     git@github.com:kaovilai/dotfiles.git ~/git/dotfiles"
 source ~/git/dotfiles/zsh/znap.zsh
 source ~/git/dotfiles/zsh/openshift-functions.zsh
-source ~/git/dotfiles/zsh/macos.zsh
 source ~/git/dotfiles/zsh/paths.zsh
 source ~/git/dotfiles/zsh/completions.zsh
