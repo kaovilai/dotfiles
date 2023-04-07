@@ -1,5 +1,6 @@
 # Don't put secrets here, put them in ~/secrets.zsh
 [[ -f ~/secrets.zsh ]] && source ~/secrets.zsh
+export HISTSIZE=100000 # number of commands stored in history
 [[ "$(uname -s)" = "Darwin" ]] && echo "macOS detected" && source ~/git/dotfiles/zsh/macos.zsh
 source ~/git/dotfiles/zsh/colors.zsh
 if diff ~/git/dotfiles/.zshrc ~/.zshrc; then

@@ -1,13 +1,9 @@
 #compdef kubectl
 compdef _kubectl kubectl
 if [ -f '~/Downloads/google-cloud-sdk/path.zsh.inc' ]; then . '~/Downloads/google-cloud-sdk/path.zsh.inc'; fi
-if [ /opt/homebrew/bin/oc ]; then
+if [ $(command -v oc) ]; then
   source <(oc completion zsh)
   compdef _oc oc
-fi
-if [ /opt/homebrew/bin/kubectl ]; then
-  source <(kubectl completion zsh)
-  compdef _kubectl kubectl
 fi
 
 # The next line updates PATH for the Google Cloud SDK.
