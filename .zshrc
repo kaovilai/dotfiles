@@ -6,28 +6,21 @@ if diff ~/git/dotfiles/.zshrc ~/.zshrc; then
   echo ".zshrc is up to date with dotfiles"
 else
   echo ".zshrc is out of sync with dotfiles\n\
-    ${RED}push-dotfiles-from-zshrc${NC} to update dotfiles\n\
+    ${RED}copy-to-dotfiles-from-zshrc${NC} to copy .zshrc to dotfiles and review diff\n\
+    ${RED}push-dotfiles-from-zshrc${NC} to push dotfiles\n\
     ${RED}update-zshrc-from-dotfiles${NC} to update .zshrc"
 fi
 function update-zshrc-from-dotfiles() {
   git -C ~/git/dotfiles pull && \
   cp ~/git/dotfiles/.zshrc ~/.zshrc
 }
-function push-dotfiles-from-zshrc() {
+function copy-to-dotfiles-from-zshrc() {
   cp ~/.zshrc ~/git/dotfiles/.zshrc && \
   git -C ~/git/dotfiles diff
-  # prompt if diff is ok
-  if [[ $? -eq 0 ]]; then
-    echo "No changes to commit"
-  else
-    echo "Changes detected, commit and push?"
-    select yn in "Yes" "No"; do
-      case $yn in
-        Yes ) break;;
-        No ) return;;
-      esac
-    done
-  fi
+  echo
+  echo "${RED}push-dotfiles-from-zshrc${NC} to push dotfiles"
+}
+function push-dotfiles-from-zshrc() {
   git -C ~/git/dotfiles add .zshrc && \
   git -C ~/git/dotfiles commit -m "Update .zshrc" && \
   git -C ~/git/dotfiles push
