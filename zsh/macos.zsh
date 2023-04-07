@@ -1,4 +1,5 @@
 alias code='open -a Visual\ Studio\ Code'
+alias ghd='open -a GitHub\ Desktop'
 alias finder='open -R'
 alias idlesleeppreventers='pmset -g assertions'
 
