@@ -94,3 +94,16 @@ znap function installClusterOpenshiftInstall(){
     $OC_INSTALLER version && \
     $OC_INSTALLER create cluster --dir ~/clusters/$DATE
 }
+
+# cp KUBECONFIG to ~/.kube/config
+znap function copyKUBECONFIG() {
+    [ -f $KUBECONFIG ] || {
+        echo "KUBECONFIG not set"
+        return 1
+    }
+    [ -f $KUBECONFIG ] && {
+        echo "KUBECONFIG set to $KUBECONFIG"
+        echo "Copying to ~/.kube/config"
+        cp $KUBECONFIG ~/.kube/config
+    }
+}
