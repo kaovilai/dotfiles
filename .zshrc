@@ -15,9 +15,10 @@ function update-zshrc-from-dotfiles() {
 }
 function push-dotfiles-from-zshrc() {
   cp ~/.zshrc ~/git/dotfiles/.zshrc && \
-  git -C ~/git/dotfiles diff
-  git -C ~/git/dotfiles add .zshrc
-  git -C ~/git/dotfiles commit -m "Update .zshrc"
+  git -C ~/git/dotfiles diff && \
+  git -C ~/git/dotfiles add .zshrc && \
+  git -C ~/git/dotfiles commit -m "Update .zshrc" && \
+  git -C ~/git/dotfiles push
 }
 [[ -f ~/git/dotfiles/zsh/znap.zsh ]] || sh -c "mkdir -p ~/git && git clone --depth 1 -- \
     git@github.com:kaovilai/dotfiles.git ~/git/dotfiles"
