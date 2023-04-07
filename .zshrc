@@ -15,7 +15,19 @@ function update-zshrc-from-dotfiles() {
 }
 function push-dotfiles-from-zshrc() {
   cp ~/.zshrc ~/git/dotfiles/.zshrc && \
-  git -C ~/git/dotfiles diff && \
+  git -C ~/git/dotfiles diff
+  # prompt if diff is ok
+  if [[ $? -eq 0 ]]; then
+    echo "No changes to commit"
+  else
+    echo "Changes detected, commit and push?"
+    select yn in "Yes" "No"; do
+      case $yn in
+        Yes ) break;;
+        No ) return;;
+      esac
+    done
+  fi
   git -C ~/git/dotfiles add .zshrc && \
   git -C ~/git/dotfiles commit -m "Update .zshrc" && \
   git -C ~/git/dotfiles push
