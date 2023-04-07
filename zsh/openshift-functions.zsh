@@ -107,3 +107,20 @@ znap function copyKUBECONFIG() {
         cp $KUBECONFIG ~/.kube/config
     }
 }
+
+znap function watchAllPodLogsInNamespace(){
+    if [ -z "$1" ]; then
+        echo "No namespace supplied"
+        return 1
+    fi
+    oc get pods -n $1 -o name | xargs -n 1 -P 100 oc logs -f -n $1
+}
+
+znap function watchAllPodErrorsInNamespace(){
+    if [ -z "$1" ]; then
+        echo "No namespace supplied"
+        return 1
+    fi
+    # get all pod logs in namespace, grep for error, and prefix with pod name
+    oc get pods -n $1 -o name | xargs -n 1 -P 100 -I {} sh -c "oc logs -n $1 -f {} | grep --line-buffered error | sed \"s#^#{}: #\""
+}

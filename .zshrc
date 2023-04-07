@@ -1,4 +1,5 @@
 # Don't put secrets here, put them in ~/secrets.zsh
+# edit ~/.zshrc first then run copy-to-dotfiles-from-zshrc to copy to dotfiles
 [[ -f ~/secrets.zsh ]] && source ~/secrets.zsh
 export HISTSIZE=100000 # number of commands stored in history
 export HISTFILESIZE=200000 # bytes in history file
@@ -13,8 +14,9 @@ else
     ${RED}push-dotfiles-from-zshrc${NC} to push dotfiles\n\
     ${RED}update-zshrc-from-dotfiles${NC} to update ~/.zshrc"
 fi
+alias edit-dotfiles='code ~/git/dotfiles/'
 if git -C ~/git/dotfiles status --porcelain | grep -q "M"; then
-  echo "dotfiles repo has uncommitted changes"
+  echo "dotfiles repo has uncommitted changes, run ${RED}edit-dotfiles${NC} to review"
 fi
 [[ "$(uname -s)" = "Darwin" ]] && echo "macOS detected" && source ~/git/dotfiles/zsh/macos.zsh
 source ~/git/dotfiles/zsh/znap.zsh
@@ -33,7 +35,6 @@ znap function push-dotfiles-from-zshrc() {
   git -C ~/git/dotfiles commit -m "Update .zshrc" && \
   git -C ~/git/dotfiles push
 }
-alias edit-dotfiles='code ~/git/dotfiles/'
 source ~/git/dotfiles/zsh/paths.zsh
 source ~/git/dotfiles/zsh/openshift-functions.zsh
 source ~/git/dotfiles/zsh/completions.zsh
