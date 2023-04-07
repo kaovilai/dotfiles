@@ -12,6 +12,9 @@ else
     ${RED}push-dotfiles-from-zshrc${NC} to push dotfiles\n\
     ${RED}update-zshrc-from-dotfiles${NC} to update ~/.zshrc"
 fi
+if git -C ~/git/dotfiles status --porcelain | grep -q "M"; then
+  echo "dotfiles repo has uncommitted changes"
+fi
 [[ "$(uname -s)" = "Darwin" ]] && echo "macOS detected" && source ~/git/dotfiles/zsh/macos.zsh
 source ~/git/dotfiles/zsh/znap.zsh
 znap function update-zshrc-from-dotfiles() {
