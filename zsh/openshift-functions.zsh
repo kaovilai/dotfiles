@@ -1,5 +1,5 @@
 alias kubectl=oc
-function agdKubeAdminPassword(){
+znap function agdKubeAdminPassword(){
  if [$1 = ""]; then 
   echo "No GUID supplied"
   return 1
@@ -9,18 +9,18 @@ function agdKubeAdminPassword(){
  fi
 }
 
-function getOCrouterCA(){
+znap function getOCrouterCA(){
     echo "Getting Ingress Router CA for server"
     oc whoami --show-server
     oc get secret router-ca -n openshift-ingress-operator -ojsonpath="{.data['tls\.crt']}" | base64 --decode > router-ca.crt
 }
 
-function rmRouterCA(){
+znap function rmRouterCA(){
     echo "Removing Ingress Router CA"
     rm router-ca.crt
 }
 
-function trustOCRouterCAFromFileInCurrentDir(){
+znap function trustOCRouterCAFromFileInCurrentDir(){
     if uname -s | grep -q Darwin; then
         echo "Mac OS detected"
         sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain router-ca.crt
@@ -30,25 +30,25 @@ function trustOCRouterCAFromFileInCurrentDir(){
     fi
 }
 
-function trustOCRouterCA(){
+znap function trustOCRouterCA(){
     getOCrouterCA
     trustOCRouterCAFromFileInCurrentDir
     rmRouterCA
 }
 
-function getAPICA(){
+znap function getAPICA(){
     echo "Getting API CA for server"
     oc whoami --show-server
     # oc get secret router-certs-default -n openshift-ingress -ojsonpath="{.data['tls\.crt']}" | base64 --decode > api-ca.crt
     oc get secret kube-apiserver-to-kubelet-signer -n openshift-kube-apiserver-operator -ojsonpath="{.data['tls\.crt']}" | base64 --decode > api-ca.crt
 }
 
-function rmAPICA(){
+znap function rmAPICA(){
     echo "Removing API CA"
     rm api-ca.crt
 }
 
-function trustAPICAFromFileInCurrentDir(){
+znap function trustAPICAFromFileInCurrentDir(){
     if uname -s | grep -q Darwin; then
         echo "Mac OS detected"
         sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain api-ca.crt
@@ -58,7 +58,7 @@ function trustAPICAFromFileInCurrentDir(){
     fi
 }
 
-function trustAPICA(){
+znap function trustAPICA(){
     getAPICA
     trustAPICAFromFileInCurrentDir
     rmAPICA
