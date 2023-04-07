@@ -1,6 +1,7 @@
 # Don't put secrets here, put them in ~/secrets.zsh
 [[ -f ~/secrets.zsh ]] && source ~/secrets.zsh
 export HISTSIZE=100000 # number of commands stored in history
+export HISTFILESIZE=200000 # bytes in history file
 [[ -f ~/git/dotfiles/zsh/znap.zsh ]] || sh -c "mkdir -p ~/git && git clone --depth 1 -- \
     git@github.com:kaovilai/dotfiles.git ~/git/dotfiles"
 source ~/git/dotfiles/zsh/colors.zsh
