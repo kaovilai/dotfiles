@@ -4,6 +4,7 @@ alias finder='open -R'
 alias idlesleeppreventers='pmset -g assertions'
 alias edgedev='open -a Microsoft\ Edge\ Dev'
 alias edge='open -a Microsoft\ Edge'
+alias docker-desktop='open -a /Applications/Docker.app/Contents/MacOS/Docker\ Desktop.app'
 
 PATH=$PATH:/Users/tiger/Library/Python/3.9/bin
 
