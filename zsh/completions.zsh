@@ -28,3 +28,7 @@ if [ $(command -v podman) ]; then
   source <(curl -s https://raw.githubusercontent.com/containers/podman/main/completions/zsh/_podman)
   compdef _podman podman
 fi
+
+if [ $(command -v aws_completer) ]; then
+  complete -C aws_completer aws
+fi
