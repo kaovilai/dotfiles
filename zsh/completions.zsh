@@ -32,3 +32,8 @@ fi
 if [ $(command -v aws_completer) ]; then
   complete -C aws_completer aws
 fi
+
+if [ $(command -v rosa) ]; then
+  source <(rosa completion zsh)
+  compdef _rosa rosa
+fi
