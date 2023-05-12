@@ -18,6 +18,10 @@ alias edit-dotfiles='code ~/git/dotfiles/'
 if git -C ~/git/dotfiles status --porcelain | grep -q "M"; then
   echo "dotfiles repo has uncommitted changes, run ${RED}edit-dotfiles${NC} to review"
 fi
+
+# gpg tty
+export GPG_TTY=$(tty)
+
 [[ "$(uname -s)" = "Darwin" ]] && echo "macOS detected" && source ~/git/dotfiles/zsh/macos.zsh
 source ~/git/dotfiles/zsh/znap.zsh
 znap function update-zshrc-from-dotfiles() {
