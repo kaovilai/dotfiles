@@ -19,4 +19,4 @@ znap source zsh-users/zsh-autosuggestions
 znap source zsh-users/zsh-syntax-highlighting
 
 # `znap eval` caches any kind of command output for you.
-znap eval iterm2 'curl -fsSL https://iterm2.com/shell_integration/zsh'
+# znap eval iterm2 'curl -fsSL https://iterm2.com/shell_integration/zsh'
