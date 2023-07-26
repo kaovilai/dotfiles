@@ -38,3 +38,8 @@ if [ $(command -v rosa) ]; then
   source <(rosa completion zsh)
   compdef _rosa rosa
 fi
+
+if [ $(command -v ccoctl) ]; then
+  source <(ccoctl completion zsh)
+  compdef _ccoctl ccoctl
+fi
