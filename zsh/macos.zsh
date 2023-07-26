@@ -7,7 +7,7 @@ alias edge='open -a Microsoft\ Edge'
 alias docker-desktop='open -a /Applications/Docker.app/Contents/MacOS/Docker\ Desktop.app'
 alias dockerd='open -a /Applications/Docker.app'
 alias ocwebconsole='edgedev $(oc whoami --show-console)'
-PATH=$PATH:/Users/tiger/Library/Python/3.9/bin
+PATH=$PATH:~/Library/Python/3.9/bin
 
 function podmanMachineReset(){
     podman machine stop; podman machine rm --save-image --force; podman machine init --cpus 6 --disk-size 30 --memory 1500 --now
