@@ -45,4 +45,4 @@ if [ $(command -v ccoctl) ]; then
 fi
 
 # The next line enables shell command completion for gcloud.
-if [ -f '~/google-cloud-sdk/completion.zsh.inc' ]; then . '~/google-cloud-sdk/completion.zsh.inc'; fi
+if [ -f '/Users/tiger/google-cloud-sdk/completion.zsh.inc' ]; then . '/Users/tiger/google-cloud-sdk/completion.zsh.inc'; fi
