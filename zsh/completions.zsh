@@ -44,5 +44,10 @@ if [ $(command -v ccoctl) ]; then
   compdef _ccoctl ccoctl
 fi
 
+if [ $(command -v glab) ]; then
+  source <(glab completion -s zsh)
+  compdef _glab glab
+fi
+
 # The next line enables shell command completion for gcloud.
 if [ -f '/Users/tiger/google-cloud-sdk/completion.zsh.inc' ]; then . '/Users/tiger/google-cloud-sdk/completion.zsh.inc'; fi
