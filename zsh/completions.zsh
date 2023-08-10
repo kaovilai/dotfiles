@@ -51,3 +51,5 @@ fi
 
 # The next line enables shell command completion for gcloud.
 if [ -f '/Users/tiger/google-cloud-sdk/completion.zsh.inc' ]; then . '/Users/tiger/google-cloud-sdk/completion.zsh.inc'; fi
+
+source /usr/local/ibmcloud/autocomplete/zsh_autocomplete
