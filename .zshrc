@@ -39,6 +39,7 @@ znap function push-dotfiles-from-zshrc() {
   git -C ~/git/dotfiles commit -m "Update .zshrc" && \
   git -C ~/git/dotfiles push
 }
+source ~/git/dotfiles/zsh/alias.zsh
 source ~/git/dotfiles/zsh/go.zsh
 source ~/git/dotfiles/zsh/paths.zsh
 source ~/git/dotfiles/zsh/openshift-functions.zsh
