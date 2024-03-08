@@ -49,6 +49,11 @@ if [ $(command -v glab) ]; then
   compdef _glab glab
 fi
 
+if [ $(command -v velero) ]; then
+  source <(velero completion zsh)
+  compdef _velero velero
+fi
+
 # The next line enables shell command completion for gcloud.
 if [ -f '/Users/tiger/google-cloud-sdk/completion.zsh.inc' ]; then . '/Users/tiger/google-cloud-sdk/completion.zsh.inc'; fi
 
