@@ -44,10 +44,10 @@ if [ $(command -v ccoctl) ]; then
   compdef _ccoctl ccoctl
 fi
 
-if [ $(command -v glab) ]; then
-  source <(glab completion -s zsh)
-  compdef _glab glab
-fi
+# if [ $(command -v glab) ]; then
+#   source <(glab completion -s zsh)
+#   compdef _glab glab
+# fi
 
 if [ $(command -v velero) ]; then
   source <(velero completion zsh)
