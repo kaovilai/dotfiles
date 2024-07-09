@@ -59,6 +59,12 @@ if [ $(command -v colima) ]; then
   compdef _colima colima
 fi
 
+# kind completion zsh
+if [ $(command -v kind) ]; then
+  source <(kind completion zsh)
+  compdef _kind kind
+fi
+
 # The next line enables shell command completion for gcloud.
 if [ -f '/Users/tiger/google-cloud-sdk/completion.zsh.inc' ]; then . '/Users/tiger/google-cloud-sdk/completion.zsh.inc'; fi
 
