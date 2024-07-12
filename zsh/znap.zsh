@@ -15,7 +15,8 @@ znap prompt sindresorhus/pure
 
 # `znap source` automatically downloads and installs your plugins.
 znap source marlonrichert/zsh-autocomplete
-znap source zsh-users/zsh-autosuggestions
+# conflicts I think with autocomplete
+# znap source zsh-users/zsh-autosuggestions
 znap source zsh-users/zsh-syntax-highlighting
 
 # `znap eval` caches any kind of command output for you.
