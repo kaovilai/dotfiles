@@ -47,3 +47,4 @@ source ~/git/dotfiles/zsh/openshift-functions.zsh
 source ~/git/dotfiles/zsh/aws.zsh
 source ~/git/dotfiles/zsh/podman.zsh
 source ~/git/dotfiles/zsh/completions.zsh
+eval "$(gh copilot alias -- zsh)"
