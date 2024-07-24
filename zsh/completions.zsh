@@ -25,7 +25,7 @@ fi
 
 if [ $(command -v podman) ]; then
   # https://raw.githubusercontent.com/containers/podman/main/completions/zsh/_podman
-  timeout 1s sh -c "curl -s https://raw.githubusercontent.com/containers/podman/main/completions/zsh/_podman > ~/_podman_curl" && mv ~/_podman_curl ~/_podman || (rm ~/_podman_curl; echo "offline - _podman")
+  timeout 5s sh -c "curl -s https://raw.githubusercontent.com/containers/podman/main/completions/zsh/_podman > ~/_podman_curl" && mv ~/_podman_curl ~/_podman || (rm -f ~/_podman_curl; echo "offline - _podman")
   source <(cat ~/_podman)
   compdef _podman podman
 fi
