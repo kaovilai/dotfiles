@@ -41,6 +41,7 @@ znap function push-dotfiles-from-zshrc() {
 }
 
 source ~/git/dotfiles/zsh/alias.zsh
+source ~/git/dotfiles/zsh/util.zsh
 source ~/git/dotfiles/zsh/go.zsh
 source ~/git/dotfiles/zsh/paths.zsh
 source ~/git/dotfiles/zsh/openshift-functions.zsh
