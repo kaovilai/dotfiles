@@ -28,3 +28,4 @@ alias changelog-not-required='gh pr comment --body "/kind changelog-not-required
 alias gcaf='git commit --amend --no-edit && git push --force'
 alias gcan='git commit --amend --no-edit'
 alias terminal='open -a Terminal .'
+alias recent-branches='git branch --sort=committerdate | tail -n 10'
