@@ -29,7 +29,14 @@ if [[ "$WIFI_NAME" = "$TF_NETWORK_NAME" ]]; then
     networksetup -setsecurewebproxy Wi-Fi $TF_ROUTER_IP $TF_ROUTER_PROXY_PORT
     networksetup -setwebproxystate Wi-Fi on
     networksetup -setsecurewebproxystate Wi-Fi on
+    mkdir -p ~/.ssh/tigerdotfiles/
+    echo "Host github.com
+    Hostname github.com
+    ServerAliveInterval 55
+    ForwardAgent yes
+    ProxyCommand $(which socat) - PROXY:$TF_ROUTER_IP:%h:%p,proxyport=$TF_ROUTER_PROXY_PORT" > ~/.ssh/tigerdotfiles/config
 else
     networksetup -setwebproxystate Wi-Fi off
     networksetup -setsecurewebproxystate Wi-Fi off
+    echo "" > ~/.ssh/tigerdotfiles/config
 fi
