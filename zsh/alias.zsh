@@ -86,4 +86,3 @@ alias pr-checkout-draft-branch='gh pr checkout --draft --branch'
 alias pr-checkout-draft-head='gh pr checkout --draft --head'
 alias pr-checkout-draft-base='gh pr checkout --draft --base'
 alias pr-checkout-draft-target='gh pr checkout --draft --target'
-alias pr-checkout-title='gh
