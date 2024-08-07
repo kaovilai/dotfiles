@@ -19,6 +19,9 @@ function setTTLforHotspot(){
 # https://docs.brew.sh/Shell-Completion says need to be done before compinit which is in znap.zsh sourced right after this in .zshrc
 FPATH="$(brew --prefix)/share/zsh/site-functions:${FPATH}"
 
+# To get git to work over ssh via 443 proxy,
+# replace .git/config `git@github.com:(.*)/`
+# with `ssh://git@ssh.github.com:443/$1/`
 WIFI_NAME=$(networksetup -getairportnetwork en0 | cut -d " " -f 4)
 if [[ "$WIFI_NAME" = "$TF_NETWORK_NAME" ]]; then
     export TF_ROUTER_IP=$(networksetup -getinfo Wi-Fi | grep -e "^Router" | cut -d " " -f 2)
@@ -29,12 +32,12 @@ if [[ "$WIFI_NAME" = "$TF_NETWORK_NAME" ]]; then
     networksetup -setsecurewebproxy Wi-Fi $TF_ROUTER_IP $TF_ROUTER_PROXY_PORT
     networksetup -setwebproxystate Wi-Fi on
     networksetup -setsecurewebproxystate Wi-Fi on
-    mkdir -p ~/.ssh/tigerdotfiles/
-    echo "Host github.com
-    Hostname github.com
-    ServerAliveInterval 55
-    ForwardAgent yes
-    ProxyCommand $(which socat) - PROXY:$TF_ROUTER_IP:%h:%p,proxyport=$TF_ROUTER_PROXY_PORT" > ~/.ssh/tigerdotfiles/config
+    # mkdir -p ~/.ssh/tigerdotfiles/
+    # echo "Host github.com
+    # Hostname github.com
+    # ServerAliveInterval 55
+    # ForwardAgent yes
+    # ProxyCommand $(which socat) - PROXY:$TF_ROUTER_IP:%h:%p,proxyport=$TF_ROUTER_PROXY_PORT" > ~/.ssh/tigerdotfiles/config
 else
     networksetup -setwebproxystate Wi-Fi off
     networksetup -setsecurewebproxystate Wi-Fi off
