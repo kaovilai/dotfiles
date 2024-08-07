@@ -1,4 +1,5 @@
 alias kubectl=oc
+alias ocwebconsole='edge $(oc whoami --show-console)'
 znap function agdKubeAdminPassword(){
  if [$1 = ""]; then 
   echo "No GUID supplied"
