@@ -41,5 +41,7 @@ if [[ "$WIFI_NAME" = "$TF_NETWORK_NAME" ]]; then
 else
     networksetup -setwebproxystate Wi-Fi off
     networksetup -setsecurewebproxystate Wi-Fi off
+    unset http_proxy
+    unset https_proxy
     echo "" > ~/.ssh/tigerdotfiles/config
 fi
