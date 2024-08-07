@@ -69,3 +69,5 @@ fi
 if [ -f '/Users/tiger/google-cloud-sdk/completion.zsh.inc' ]; then . '/Users/tiger/google-cloud-sdk/completion.zsh.inc'; fi
 
 source /usr/local/ibmcloud/autocomplete/zsh_autocomplete
+
+eval "$(_PIPENV_COMPLETE=zsh_source pipenv)"
