@@ -16,3 +16,17 @@ function cherrypick-pr-to-branch() {
     git checkout -b $NEW_BRANCH $BRANCH || (git checkout $NEW_BRANCH && git reset --hard $BRANCH)
     cherrypick-pr $PR_NUMBER
 }
+
+# Helper function to create a new changelog for velero repos
+function new-changelog(){
+    GH_LOGIN=$(gh pr view --json author --jq .author.login 2> /dev/null)
+    GH_PR_NUMBER=$(gh pr view --json number --jq .number 2> /dev/null)
+    CHANGELOG_BODY="$(gh pr view --json title --jq .title)"
+    if [ "$GH_LOGIN" = "" ]; then \
+        echo "branch does not have PR or cli not logged in, try 'gh auth login' or 'gh pr create'"; \
+        exit 1; \
+    fi
+    mkdir -p ./changelogs/unreleased/ && \
+    echo $CHANGELOG_BODY > ./changelogs/unreleased/$GH_PR_NUMBER-$GH_LOGIN && \
+    echo "\"$CHANGELOG_BODY\" added to ./changelogs/unreleased/$GH_PR_NUMBER-$GH_LOGIN"
+}
