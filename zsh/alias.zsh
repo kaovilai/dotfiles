@@ -96,3 +96,4 @@ alias ibmcloud-cos-instance='echo \"$(ibmcloud resource service-instances --serv
 alias ibmcloud-cos-instance-crn='ibmcloud resource service-instances --long --service-name cloud-object-storage --output json | jq --raw-output ".[] | select(.name==\"Cloud Object Storage-tkaovila-89\") | .id"'
 alias ibmcloud-oc-cluster-create='ibmcloud oc cluster create vpc-gen2 --name tiger-2 --zone us-east-1 --vpc-id $(ibmcloud-vpcid) --subnet-id $(ibmcloud-subnetid) --flavor cx2.8x16 --workers 2 --cos-instance=$(ibmcloud-cos-instance-crn) --version $(ibmcloud-oc-latestversion)'
 alias ibmcloud-oc-config='ibmcloud oc cluster config --admin -c tiger-2'
+alias ollama-run='ollama run llama3.1:latest'
