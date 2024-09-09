@@ -29,6 +29,8 @@ alias changelog-not-required='((gh pr view --json labels | jq .labels | grep -q 
 alias gcaf='git commit --amend --no-edit && git push --force'
 alias gcan='git commit --amend --no-edit'
 alias gca='git commit --amend'
+alias gcas='git commit --amend --no-edit --signoff'
+alias gcasf='git commit --amend --no-edit --signoff && git push --force'
 alias terminal='open -a Terminal .'
 alias recent-branches='git branch --sort=committerdate | tail -n 10'
 alias code-lastcommitted='code $(git log --name-only --pretty=format: | head -n 1)'
