@@ -101,3 +101,5 @@ alias ibmcloud-oc-cluster-create='ibmcloud oc cluster create vpc-gen2 --name tig
 alias ibmcloud-oc-config='ibmcloud oc cluster config --admin -c tiger-2'
 alias ollama-run='ollama run llama3.1:latest'
 alias openwebui-docker='docker run -d -p 3000:8080 --add-host=host.docker.internal:host-gateway -v open-webui:/app/backend/data --name open-webui --restart always ghcr.io/open-webui/open-webui:main'
+# opencommit with signoff
+alias ocos='oco && gcas'
