@@ -1,8 +1,12 @@
 # non os specific aliases
 alias gfa='git fetch --all'
 alias gfu='git fetch upstream'
+alias gfum='git fetch upstream main'
+alias gfumas='git fetch upstream master'
 alias gfo='git fetch origin'
 alias gfop='git fetch openshift'
+alias gfopm='git fetch openshift master'
+alias gfopk='git fetch openshift konveyor-dev'
 alias ghcr_tag='echo ghcr.io/kaovilai/$(basename $PWD):$(git branch --show-current)'
 alias db='docker build'
 alias dbt='docker build --tag'
