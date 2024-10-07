@@ -7,11 +7,13 @@ alias docker-desktop='open -a /Applications/Docker.app/Contents/MacOS/Docker\ De
 alias dockerd='open -a /Applications/Docker.app'
 PATH=$PATH:~/Library/Python/3.9/bin
 
-znap function podmanMachineReset(){
-    podman machine stop; podman machine rm --save-image --force; podman machine init --cpus 6 --disk-size 30 --memory 1500 --now
-}
+# znap function podmanMachineReset(){
+# if [ $(command -v podman) ]; then
+#     podman machine stop; podman machine rm --save-image --force; podman machine init --cpus 6 --disk-size 30 --memory 1500 --now
+# fi
+# }
 
-znap function setTTLforHotspot(){
+function setTTLforHotspot(){
     sudo sysctl -w net.inet.ip.ttl=65
 }
 # https://docs.brew.sh/Shell-Completion says need to be done before compinit which is in znap.zsh sourced right after this in .zshrc
