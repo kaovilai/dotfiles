@@ -21,6 +21,8 @@ fi
 
 # gpg tty
 export GPG_TTY=$(tty)
+# for openshift/release makefile
+export CONTAINER_ENGINE=docker
 
 [[ "$(uname -s)" = "Darwin" ]] && echo "macOS detected" && source ~/git/dotfiles/zsh/macos.zsh
 source ~/git/dotfiles/zsh/znap.zsh
