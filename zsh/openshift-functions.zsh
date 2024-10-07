@@ -21,7 +21,7 @@ znap function rmRouterCA(){
     rm router-ca.crt
 }
 
-znap function trustOCRouterCAFromFileInCurrentDir(){
+function trustOCRouterCAFromFileInCurrentDir(){
     if uname -s | grep -q Darwin; then
         echo "Mac OS detected, trusting oc router ca"
         sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain router-ca.crt
@@ -49,7 +49,7 @@ znap function rmAPICA(){
     rm api-ca.crt
 }
 
-znap function trustAPICAFromFileInCurrentDir(){
+function trustAPICAFromFileInCurrentDir(){
     if uname -s | grep -q Darwin; then
         echo "Mac OS detected"
         sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain api-ca.crt
