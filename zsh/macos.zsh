@@ -6,6 +6,7 @@ alias edge='open -a Microsoft\ Edge'
 alias docker-desktop='open -a /Applications/Docker.app/Contents/MacOS/Docker\ Desktop.app'
 alias dockerd='open -a /Applications/Docker.app'
 alias dequarantine='xattr -d com.apple.quarantine'
+alias dsstoredelete='find . -name .DS_Store -delete'
 PATH=$PATH:~/Library/Python/3.9/bin
 
 # znap function podmanMachineReset(){
