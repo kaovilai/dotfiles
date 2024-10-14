@@ -1,5 +1,6 @@
 alias kubectl=oc
 alias oc-login-crc='oc login --server=https://api.crc.testing:6443 -u kubeadmin -p $(cat ~/.crc/machines/crc/kubeadmin-password)'
+alias crc-kubeadminpass='cat ~/.crc/machines/crc/kubeadmin-password'
 alias ocwebconsole='edge $(oc whoami --show-console)'
 znap function agdKubeAdminPassword(){
  if [$1 = ""]; then 
