@@ -65,6 +65,12 @@ if [ $(command -v kind) ]; then
   compdef _kind kind
 fi
 
+# openshift-installer zshcompletion
+if [ $(command -v openshift-install) ]; then
+  source <(cat /Users/tiger/git/dotfiles/openshift-install-completion-zsh.txt)
+  compdef _openshift-install openshift-install
+fi
+
 # The next line enables shell command completion for gcloud.
 if [ -f '/Users/tiger/google-cloud-sdk/completion.zsh.inc' ]; then . '/Users/tiger/google-cloud-sdk/completion.zsh.inc'; fi
 
