@@ -1,1 +1,1 @@
-alias gofmtgitdiff='go fmt $(git diff-files --name-only)'
+alias gofmtgitdiff='git diff --name-only  | xargs -L 1 go fmt'
