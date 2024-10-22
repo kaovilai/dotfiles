@@ -23,6 +23,8 @@ fi
 export GPG_TTY=$(tty)
 # for openshift/release makefile
 export CONTAINER_ENGINE=docker
+# for velero Makefile to skip buildx running checks
+export BUILDX_ENABLED=true
 
 [[ "$(uname -s)" = "Darwin" ]] && echo "macOS detected" && source ~/git/dotfiles/zsh/macos.zsh
 source ~/git/dotfiles/zsh/znap.zsh
