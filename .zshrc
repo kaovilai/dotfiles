@@ -9,6 +9,7 @@ source ~/git/dotfiles/zsh/colors.zsh
 if diff ~/git/dotfiles/.zshrc ~/.zshrc; then
   echo ".zshrc is up to date with dotfiles"
 else
+  echo "diff ~/git/dotfiles/.zshrc ~/.zshrc";\
   echo ".zshrc is out of sync with dotfiles\n\
     ${RED}copy-to-dotfiles-from-zshrc${NC} to copy .zshrc to dotfiles and review diff\n\
     ${RED}push-dotfiles-from-zshrc${NC} to push dotfiles\n\
