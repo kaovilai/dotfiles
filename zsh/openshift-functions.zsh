@@ -1,5 +1,7 @@
 alias kubectl=oc
 alias oc-login-crc='oc login --server=https://api.crc.testing:6443 -u kubeadmin -p $(cat ~/.crc/machines/crc/kubeadmin-password)'
+alias oc-registry-login='oc registry login'
+alias oc-registry-route='oc get route -n openshift-image-registry default-route -o jsonpath={.spec.host}'
 alias crc-kubeadminpass='cat ~/.crc/machines/crc/kubeadmin-password'
 alias ocwebconsole='edge $(oc whoami --show-console)'
 znap function agdKubeAdminPassword(){
