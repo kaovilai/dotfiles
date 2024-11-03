@@ -39,6 +39,11 @@ if [ $(command -v rosa) ]; then
   compdef _rosa rosa
 fi
 
+if [ $(command -v crc) ]; then
+  source <(crc completion zsh)
+  compdef _crc crc
+fi
+
 if [ $(command -v ccoctl) ]; then
   source <(ccoctl completion zsh)
   compdef _ccoctl ccoctl
