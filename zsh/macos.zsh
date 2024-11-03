@@ -51,6 +51,8 @@ function unsetSOCKSproxy(){
 }
 if [[ "$WIFI_NAME" = "S23" ]]; then
     (curl --silent --socks5 $SOCKS_ROUTER_IP:$SOCKS_ROUTER_PROXY_PORT http://www.google.com && setSOCKSproxy) || unsetSOCKSproxy
+else
+    unsetSOCKSproxy
 fi
 # To get git to work over ssh via 443 proxy,
 # replace .git/config `git@github.com:(.*)/`
