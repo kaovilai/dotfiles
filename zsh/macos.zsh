@@ -50,16 +50,16 @@ function unsetSOCKSproxy(){
     networksetup -setsocksfirewallproxystate Wi-Fi off
 }
 if [[ "$WIFI_NAME" = "S23" ]]; then
-    (curl --silent --socks5 $SOCKS_ROUTER_IP:$SOCKS_ROUTER_PROXY_PORT http://www.google.com && setSOCKSproxy) || unsetSOCKSproxy
+    (curl --silent --socks5 $SOCKS_ROUTER_IP:$SOCKS_ROUTER_PROXY_PORT http://www.google.com && setSOCKSproxy) || unsetSOCKSproxy &
 else
-    unsetSOCKSproxy
+    unsetSOCKSproxy &
 fi
 # To get git to work over ssh via 443 proxy,
 # replace .git/config `git@github.com:(.*)/`
 # with `ssh://git@ssh.github.com:443/$1/`
 WIFI_NAME=$(networksetup -getairportnetwork en0 | cut -d " " -f 4)
 if [[ "$WIFI_NAME" = "$TF_NETWORK_NAME" ]]; then
-    setTFproxy
+    setTFproxy &
     # mkdir -p ~/.ssh/tigerdotfiles/
     # echo "Host github.com
     # Hostname github.com
@@ -67,5 +67,5 @@ if [[ "$WIFI_NAME" = "$TF_NETWORK_NAME" ]]; then
     # ForwardAgent yes
     # ProxyCommand $(which socat) - PROXY:$TF_ROUTER_IP:%h:%p,proxyport=$TF_ROUTER_PROXY_PORT" > ~/.ssh/tigerdotfiles/config
 else
-    unsetTFproxy
+    unsetTFproxy &
 fi
