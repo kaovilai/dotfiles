@@ -59,7 +59,6 @@ alias ocregistry_tag='echo $(oc-registry-route)/$(basename $PWD):$(current-branc
 alias ocregistry_notag='echo $(oc-registry-route)/$(basename $PWD)'
 alias dockerplatforms-amdarm='echo linux/amd64,linux/arm64'
 alias dockerplatforms-amdarmibm='echo linux/amd64,linux/arm64,linux/s390x,linux/ppc64le'
-alias terminal='open -a Terminal .'
 alias recent-branches='git branch --sort=committerdate | tail -n 10'
 alias rev-sha-short='git rev-parse --short HEAD'
 alias code-lastcommitted='code $(git log --name-only --pretty=format: | head -n 1)'
@@ -141,4 +140,3 @@ alias velero-goruninstall='velero-makecontainer-cluster-arch && go run cmd/veler
 alias velero-goruninstall-node-agent='velero-makecontainer-cluster-arch && go run cmd/velero/velero.go install --use-node-agent --image=$(ghcr_notag):$(current-branch)-$(rev-sha-short)-$(cluster-arch-only) --provider aws --bucket $AWS_BUCKET --prefix velero --plugins velero/velero-plugin-for-aws:latest --secret-file $AWS_SECRET_FILE'
 alias velero-makecontainer-cluster-arch='make container IMAGE=$(ghcr_notag) VERSION=$(current-branch)-$(rev-sha-short)-$(cluster-arch-only) && docker push $(ghcr_notag):$(current-branch)-$(rev-sha-short)-$(cluster-arch-only) && echo $(ghcr_notag):$(current-branch)-$(rev-sha-short)-$(cluster-arch-only)'
 alias velero-makecontainer-velero-restore-helper-cluster-arch='make container IMAGE=$(ghcr_notag) VERSION=velero-restore-helper-$(current-branch)-$(rev-sha-short)-$(cluster-arch-only) && docker push $(ghcr_notag):velero-restore-helper-$(current-branch)-$(rev-sha-short)-$(cluster-arch-only) && echo $(ghcr_notag):velero-restore-helper-$(current-branch)-$(rev-sha-short)-$(cluster-arch-only)'
-alias restart-displaylink='osascript -e "quit app \"DisplayLink Manager\""; while pgrep DisplayLinkUserAgent > /dev/null; do sleep 0.1; done; open -a DisplayLink\ Manager'
