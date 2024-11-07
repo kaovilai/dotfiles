@@ -7,7 +7,14 @@ alias docker-desktop='open -a /Applications/Docker.app/Contents/MacOS/Docker\ De
 alias dockerd='open -a /Applications/Docker.app'
 alias dequarantine='xattr -d com.apple.quarantine'
 alias dsstoredelete='find . -name .DS_Store -delete'
+alias terminal='open -a Terminal .'
+alias restart-displaylink='(osascript -e "quit app \"DisplayLink Manager\""; while pgrep DisplayLinkUserAgent > /dev/null; do sleep 0.1; done; open -a DisplayLink\ Manager)'
+alias at-home='(ioreg -p IOUSB | grep "Plugable USBC-6950U" > /dev/null && ioreg -p IOUSB | grep "CalDigit TS4" > /dev/null && networksetup -getnetworkserviceenabled Thunderbolt\ Ethernet\ Slot\ 2 | grep Enabled > /dev/null)'
+alias displaylink-displays-connected='(system_profiler SPDisplaysDataType | grep ARZOPA > /dev/null || system_profiler SPDisplaysDataType | grep TYPE-C > /dev/null)'
 PATH=$PATH:~/Library/Python/3.9/bin
+
+# restart displaylink if plugged-in at home and displays not connected
+at-home && (displaylink-displays-connected || restart-displaylink) &
 
 # znap function podmanMachineReset(){
 # if [ $(command -v podman) ]; then
@@ -49,6 +56,7 @@ function setSOCKSproxy(){
 function unsetSOCKSproxy(){
     networksetup -setsocksfirewallproxystate Wi-Fi off
 }
+WIFI_NAME=$(networksetup -getairportnetwork en0 | cut -d " " -f 4)
 if [[ "$WIFI_NAME" = "S23" ]]; then
     (curl --silent --socks5 $SOCKS_ROUTER_IP:$SOCKS_ROUTER_PROXY_PORT http://www.google.com && setSOCKSproxy) || unsetSOCKSproxy &
 else
@@ -57,7 +65,6 @@ fi
 # To get git to work over ssh via 443 proxy,
 # replace .git/config `git@github.com:(.*)/`
 # with `ssh://git@ssh.github.com:443/$1/`
-WIFI_NAME=$(networksetup -getairportnetwork en0 | cut -d " " -f 4)
 if [[ "$WIFI_NAME" = "$TF_NETWORK_NAME" ]]; then
     setTFproxy &
     # mkdir -p ~/.ssh/tigerdotfiles/

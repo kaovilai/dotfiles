@@ -19,7 +19,7 @@ alias edit-dotfiles='code ~/git/dotfiles/'
 if git -C ~/git/dotfiles status --porcelain | grep -q "M"; then
   echo "dotfiles repo has uncommitted changes, run ${RED}edit-dotfiles${NC} to review"
 fi
-
+source ~/git/dotfiles/zsh/alias.zsh
 # gpg tty
 export GPG_TTY=$(tty)
 # for openshift/release makefile
@@ -30,7 +30,7 @@ export BUILDX_ENABLED=true
 [[ "$(uname -s)" = "Darwin" ]] && echo "macOS detected" && source ~/git/dotfiles/zsh/macos.zsh
 source ~/git/dotfiles/zsh/znap.zsh
 znap function update-zshrc-from-dotfiles() {
-  git -C ~/git/dotfiles pull && \
+  git -C ~/git/dotfiles pull > /dev/null && \
   cp ~/git/dotfiles/.zshrc ~/.zshrc
 }
 znap function copy-to-dotfiles-from-zshrc() {
@@ -45,7 +45,6 @@ znap function push-dotfiles-from-zshrc() {
   git -C ~/git/dotfiles push
 }
 
-source ~/git/dotfiles/zsh/alias.zsh
 source ~/git/dotfiles/zsh/util.zsh
 source ~/git/dotfiles/zsh/go.zsh
 source ~/git/dotfiles/zsh/paths.zsh
