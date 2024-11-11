@@ -8,6 +8,8 @@ alias db_amd64t='docker build --platform linux/amd64 --tag'
 alias db_amd64r='docker build --platform linux/amd64 --tag $(ghcr_tag)'
 alias db_amd64rp='docker build --platform linux/amd64 --tag $(ghcr_tag) --push'
 alias multiarch='echo linux/amd64,linux/arm64'
+alias single_arch='echo linux/amd64'
+alias db_single='docker build --platform linux/amd64'
 alias db_multi='docker buildx build --platform linux/amd64,linux/arm64'
 alias db_multit='docker buildx build --platform linux/amd64,linux/arm64 --tag'
 alias db_multir='docker buildx build --platform linux/amd64,linux/arm64 --tag $(ghcr_tag)'
@@ -22,6 +24,8 @@ alias cvelero-aws='code ~/git/velero-plugin-for-aws/'
 alias cvelero-gcp='code ~/git/velero-plugin-for-gcp/'
 alias cvelero-azure='code ~/git/velero-plugin-for-microsoft-azure/'
 alias cvelero-ocp='code ~/git/openshift-velero-plugin/'
+alias cvelero-lvp='code ~/git/local-volume-provider/'
+alias clvp='code ~/git/local-volume-provider/'
 alias cluster-arch="kubectl get nodes -o jsonpath='{range .items[0]}{.status.nodeInfo.operatingSystem}{\"/\"}{.status.nodeInfo.architecture}{end}'"
 # without linux/
 alias cluster-arch-only="kubectl get nodes -o jsonpath='{range .items[0]}{.status.nodeInfo.architecture}{end}'"
@@ -128,6 +132,7 @@ alias ibmcloud-cos-instance-crn='ibmcloud resource service-instances --long --se
 alias ibmcloud-oc-cluster-create='ibmcloud oc cluster create vpc-gen2 --name tiger-2 --zone us-east-1 --vpc-id $(ibmcloud-vpcid) --subnet-id $(ibmcloud-subnetid) --flavor cx2.8x16 --workers 2 --cos-instance=$(ibmcloud-cos-instance-crn) --version $(ibmcloud-oc-latestversion)'
 alias ibmcloud-oc-config='ibmcloud oc cluster config --admin -c tiger-2'
 alias ollama-run='ollama run llama3.1:latest'
+alias ollama-pull='ollama pull llama3-gradient:latest && llama3.1:latest'
 alias openwebui-docker='docker run -d -p 3000:8080 --add-host=host.docker.internal:host-gateway -v open-webui:/app/backend/data --name open-webui --restart always ghcr.io/open-webui/open-webui:main'
 # opencommit with signoff
 alias ocos='oco && gcas'
