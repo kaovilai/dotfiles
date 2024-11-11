@@ -30,3 +30,17 @@ znap function new-changelog(){
     echo $CHANGELOG_BODY > ./changelogs/unreleased/$GH_PR_NUMBER-$GH_LOGIN && \
     echo "\"$CHANGELOG_BODY\" added to ./changelogs/unreleased/$GH_PR_NUMBER-$GH_LOGIN"
 }
+
+znap function code-git(){
+    code ~/git/$1
+}
+
+#compdef code-git
+
+_code-git() {
+    local -a files
+    files=(${(f)"$(ls ~/git)"})
+    _describe 'files' files
+}
+
+compdef _code-git code-git
