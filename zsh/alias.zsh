@@ -67,6 +67,7 @@ alias dockerplatforms-amdarmibm='echo linux/amd64,linux/arm64,linux/s390x,linux/
 alias recent-branches='git branch --sort=committerdate | tail -n 10'
 alias rev-sha-short='git rev-parse --short HEAD'
 alias code-lastcommitted='code $(git log --name-only --pretty=format: | head -n 1)'
+alias gh-pr-view='gh pr view --web'
 alias pr-view='gh pr view --web'
 alias pr-comment='gh pr comment --body'
 alias pr-label='gh pr label --add'
