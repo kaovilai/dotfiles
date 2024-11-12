@@ -133,7 +133,7 @@ znap function watchAllPodErrorsInNamespace(){
 znap function crc-start-version(){
     # check X.Y.Z version is specified
     if [ -z "$1" ]; then
-        echo "No version supplied"
+        echo "No version supplied, try 2.43.0 or check https://github.com/crc-org/crc/releases"
         return 1
     fi
     # check version is semver
