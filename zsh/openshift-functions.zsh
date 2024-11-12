@@ -129,3 +129,17 @@ znap function watchAllPodErrorsInNamespace(){
     # get all pod logs in namespace, grep for error, and prefix with pod name
     oc get pods -n $1 -o name | xargs -n 1 -P 100 -I {} sh -c "oc logs -n $1 -f {} | grep --line-buffered error | sed \"s#^#{}: #\""
 }
+
+znap function crc-start-version(){
+    # check X.Y.Z version is specified
+    if [ -z "$1" ]; then
+        echo "No version supplied"
+        return 1
+    fi
+    # check version is semver
+    if ! [[ "$1" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+        echo "Version $1 is not semver"
+        return 1
+    fi
+    crc stop; crc delete -f; crc cleanup; (cat Downloads/$1-crc.pkg >/dev/null || curl https://developers.redhat.com/content-gateway/file/pub/openshift-v4/clients/crc/$1/crc-macos-installer.pkg -L -o Downloads/$1-crc.pkg) && sudo installer -pkg Downloads/$1-crc.pkg -target LocalSystem && sw_vers && crc version && crc setup && crc start --log-level debug && crc status --log-level debug
+}
