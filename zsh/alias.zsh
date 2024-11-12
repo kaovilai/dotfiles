@@ -149,3 +149,4 @@ alias velero-makecontainer-cluster-arch='make container IMAGE=$(ghcr_notag) VERS
 alias velero-makecontainer-velero-restore-helper-cluster-arch='make container IMAGE=$(ghcr_notag) VERSION=velero-restore-helper-$(current-branch)-$(rev-sha-short)-$(cluster-arch-only) && docker push $(ghcr_notag):velero-restore-helper-$(current-branch)-$(rev-sha-short)-$(cluster-arch-only) && echo $(ghcr_notag):velero-restore-helper-$(current-branch)-$(rev-sha-short)-$(cluster-arch-only)'
 alias source-zshrc='source ~/.zshrc'
 alias listening-ports='lsof -i -P | grep LISTEN'
+alias go-install-kind='go install sigs.k8s.io/kind@latest'
