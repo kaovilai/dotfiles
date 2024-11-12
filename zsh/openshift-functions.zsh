@@ -141,5 +141,5 @@ znap function crc-start-version(){
         echo "Version $1 is not semver"
         return 1
     fi
-    crc stop; crc delete -f; crc cleanup; (cat Downloads/$1-crc.pkg >/dev/null || curl https://developers.redhat.com/content-gateway/file/pub/openshift-v4/clients/crc/$1/crc-macos-installer.pkg -L -o Downloads/$1-crc.pkg) && sudo installer -pkg Downloads/$1-crc.pkg -target LocalSystem && sw_vers && crc version && crc setup && crc start --log-level debug && crc status --log-level debug
+    crc stop; crc delete -f; crc cleanup; (cat ~/Downloads/$1-crc.pkg >/dev/null || curl https://developers.redhat.com/content-gateway/file/pub/openshift-v4/clients/crc/$1/crc-macos-installer.pkg -L -o ~/Downloads/$1-crc.pkg) && sudo installer -pkg ~/Downloads/$1-crc.pkg -target LocalSystem && sw_vers && crc version && crc setup && crc start --log-level debug && crc status --log-level debug
 }
