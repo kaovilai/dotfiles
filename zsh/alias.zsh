@@ -150,3 +150,5 @@ alias velero-makecontainer-velero-restore-helper-cluster-arch='make container IM
 alias source-zshrc='source ~/.zshrc'
 alias listening-ports='lsof -i -P | grep LISTEN'
 alias go-install-kind='go install sigs.k8s.io/kind@latest'
+export VELERO_NS=openshift-adp
+alias kubectl-patch-velero-debug="kubectl patch -n \$VELERO_NS deployment.apps/velero --type=json -p=\"[{\"op\": \"add\", \"path\": \"/spec/template/spec/containers/0/args/-\", \"value\": \"--log-level=debug\"}]\""
