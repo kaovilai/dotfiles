@@ -141,5 +141,22 @@ znap function crc-start-version(){
         echo "Version $1 is not semver"
         return 1
     fi
-    crc stop; crc delete -f; crc cleanup; (cat ~/Downloads/$1-crc.pkg >/dev/null || curl https://developers.redhat.com/content-gateway/file/pub/openshift-v4/clients/crc/$1/crc-macos-installer.pkg -L -o ~/Downloads/$1-crc.pkg) && sudo installer -pkg ~/Downloads/$1-crc.pkg -target LocalSystem && sw_vers && crc version && crc setup && crc start --log-level debug && crc status --log-level debug
+    # if running
+    if [[ $(crc status --output json | jq --raw-output .openshiftStatus) = "Running" ]]; then
+    # exit if version matching already
+        if [[ $(crc version --output json 2> /dev/null | jq --raw-output .version) =  $1 ]]; then
+            echo already requested version and running
+            return 0
+        fi
+    fi
+    # if not stopped
+    if ! [[ $(crc status --output json | jq --raw-output .openshiftStatus) = "Stopped" ]]; then
+        echo stopping and cleanup.
+        crc stop; crc delete -f; crc cleanup;
+    fi
+    # install/upgrade if version mismatched
+    if ! [[ $(crc version --output json 2> /dev/null | jq --raw-output .version) =  $1 ]]; then
+        (cat ~/Downloads/$1-crc.pkg >/dev/null || curl https://developers.redhat.com/content-gateway/file/pub/openshift-v4/clients/crc/$1/crc-macos-installer.pkg -L -o ~/Downloads/$1-crc.pkg) && sudo installer -pkg ~/Downloads/$1-crc.pkg -target LocalSystem
+    fi
+    crc version && crc setup && crc start --log-level debug && crc status --log-level debug
 }
