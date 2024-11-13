@@ -77,3 +77,9 @@ if [[ "$WIFI_NAME" = "$TF_NETWORK_NAME" ]]; then
 else
     unsetTFproxy &
 fi
+
+# kill apps that are not essential
+# kill -9 $(ps aux | grep -v grep | grep -E '/Messenger.app/|Acrobat|Fathom|Todoist|LINE')
+function give-me-ram(){
+    ps aux | grep -v grep | grep -E '/Messenger.app/|Acrobat|Fathom|Todoist|LINE' | sed -E 's/ +/ /g' | cut -d ' ' -f 2 | xargs kill -9
+}
