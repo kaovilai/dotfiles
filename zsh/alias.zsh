@@ -16,7 +16,7 @@ alias db_multir='docker buildx build --platform linux/amd64,linux/arm64 --tag $(
 alias db_multip='docker buildx build --platform linux/amd64,linux/arm64 --tag $(ghcr_tag) --push'
 alias dbubi_multi='docker buildx build --platform=linux/amd64,linux/arm64 -t $(ghcr_tag) -f Dockerfile.ubi .'
 alias dbubi_multip='docker buildx build --platform=linux/amd64,linux/arm64 -t $(ghcr_tag) -f Dockerfile.ubi --push .'
-alias colima-restart='colima stop; colima start --arch aarch64 --vm-type=vz --vz-rosetta --cpu 8 --disk 100 --memory 4; colima-multiplat'
+alias colima-restart='colima stop; colima start --arch aarch64 --vm-type=vz --vz-rosetta --cpu 8 --disk 100 --memory 3; colima-multiplat'
 alias colima-multiplat='docker buildx rm colima-multiplat; docker buildx create --name colima-multiplat --platform=linux/amd64,linux/arm64,linux/ppc64le,linux/s390x; docker buildx use colima-multiplat'
 alias coadp='code ~/oadp-operator/'
 alias cvelero='code ~/git/velero/'
