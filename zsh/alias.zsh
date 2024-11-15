@@ -16,6 +16,7 @@ alias db_multir='docker buildx build --platform linux/amd64,linux/arm64 --tag $(
 alias db_multip='docker buildx build --platform linux/amd64,linux/arm64 --tag $(ghcr_tag) --push'
 alias dbubi_multi='docker buildx build --platform=linux/amd64,linux/arm64 -t $(ghcr_tag) -f Dockerfile.ubi .'
 alias dbubi_multip='docker buildx build --platform=linux/amd64,linux/arm64 -t $(ghcr_tag) -f Dockerfile.ubi --push .'
+alias docker-buildx-crc='docker buildx rm crc; oc create ns docker-driver > /dev/null 2>&1; oc create role docker-driver --verb use --resource scc --resource-name privileged -n docker-driver; oc create sa -n docker-driver docker-driver; oc create rolebinding docker-driver-rolebinding --role docker-driver --serviceaccount docker-driver:docker-driver -n docker-driver; docker buildx create --name crc --driver kubernetes --driver-opt=namespace=docker-driver,qemu.install=true,annotations=openshift.io/required-scc=privileged,serviceaccount=docker-driver --use --bootstrap'
 alias colima-restart='colima stop; colima start --arch aarch64 --vm-type=vz --vz-rosetta --cpu 8 --disk 100 --memory 3; colima-multiplat'
 alias colima-multiplat='docker buildx rm colima-multiplat; docker buildx create --name colima-multiplat --platform=linux/amd64,linux/arm64,linux/ppc64le,linux/s390x; docker buildx use colima-multiplat'
 alias coadp='code ~/oadp-operator/'
