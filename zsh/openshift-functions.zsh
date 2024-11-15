@@ -4,6 +4,7 @@ alias oc-registry-login='oc registry login'
 alias oc-registry-route='oc get route -n openshift-image-registry default-route -o jsonpath={.spec.host}'
 alias crc-kubeadminpass='cat ~/.crc/machines/crc/kubeadmin-password'
 alias ocwebconsole='edge $(oc whoami --show-console)'
+alias oc-run='oc run --rm -it --image'
 znap function agdKubeAdminPassword(){
  if [$1 = ""]; then 
   echo "No GUID supplied"
