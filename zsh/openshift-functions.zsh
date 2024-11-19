@@ -225,7 +225,11 @@ function create-ocp-gcp-wif(){
     --name $CLUSTER_NAME \
     --project $GCP_PROJECT_ID \
     --credentials-requests-dir $OCP_CREATE_DIR/credentials-requests && echo "cleaned up ccoctl gcp resources") || true
-    ((rm -r $OCP_CREATE_DIR && echo "removed existing create dir") || (true && echo "no existing install dir")) && \
+    ((rm -r $OCP_CREATE_DIR && echo "removed existing create dir") || (true && echo "no existing install dir")) || return 1
+    # if param is delete then stop here
+    if [[ $1 == "delete" ]]; then
+        return 0
+    fi
     mkdir -p $OCP_CREATE_DIR && \
     echo "additionalTrustBundlePolicy: Proxyonly
 apiVersion: v1
