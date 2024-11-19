@@ -23,7 +23,7 @@ if [ $(command -v docker) ]; then
   compdef _docker docker
 fi
 
-if [ $(command -v podman) ]; then
+if [ -n "$(command -v podman)" ]; then
   # https://raw.githubusercontent.com/containers/podman/main/completions/zsh/_podman
   (timeout 10s sh -c "curl -s https://raw.githubusercontent.com/containers/podman/main/completions/zsh/_podman > ~/_podman_curl" && mv ~/_podman_curl ~/_podman || (rm -f ~/_podman_curl; echo "offline - _podman")) &
   source <(cat ~/_podman)
