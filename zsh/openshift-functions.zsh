@@ -219,13 +219,15 @@ function create-ocp-gcp-wif(){
     # prompt and remove if exists already so user can interrupt if uninstall is needed.
     OCP_CREATE_DIR=$OCP_MANIFESTS_DIR/$TODAY-gcp-wif
     CLUSTER_NAME=tkaovila-$TODAY-wif #max 21 char allowed
-    openshift-install destroy cluster --dir $OCP_CREATE_DIR || echo "no existing cluster"
-    openshift-install destroy bootstrap --dir $OCP_CREATE_DIR || echo "no existing bootstrap"
-    (ccoctl gcp delete \
-    --name $CLUSTER_NAME \
-    --project $GCP_PROJECT_ID \
-    --credentials-requests-dir $OCP_CREATE_DIR/credentials-requests && echo "cleaned up ccoctl gcp resources") || true
-    ((rm -r $OCP_CREATE_DIR && echo "removed existing create dir") || (true && echo "no existing install dir")) || return 1
+    if [[ $1 != "no-delete" ]]; then
+         openshift-install destroy cluster --dir $OCP_CREATE_DIR || echo "no existing cluster"
+        openshift-install destroy bootstrap --dir $OCP_CREATE_DIR || echo "no existing bootstrap"
+        (ccoctl gcp delete \
+        --name $CLUSTER_NAME \
+        --project $GCP_PROJECT_ID \
+        --credentials-requests-dir $OCP_CREATE_DIR/credentials-requests && echo "cleaned up ccoctl gcp resources") || true
+        ((rm -r $OCP_CREATE_DIR && echo "removed existing create dir") || (true && echo "no existing install dir")) || return 1
+    fi
     # if param is delete then stop here
     if [[ $1 == "delete" ]]; then
         return 0
