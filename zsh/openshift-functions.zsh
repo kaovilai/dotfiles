@@ -220,7 +220,7 @@ function create-ocp-gcp-wif(){
     OCP_CREATE_DIR=$OCP_MANIFESTS_DIR/$TODAY-gcp-wif
     CLUSTER_NAME=tkaovila-$TODAY-wif #max 21 char allowed
     if [[ $1 != "no-delete" ]]; then
-         openshift-install destroy cluster --dir $OCP_CREATE_DIR || echo "no existing cluster"
+        openshift-install destroy cluster --dir $OCP_CREATE_DIR || echo "no existing cluster"
         openshift-install destroy bootstrap --dir $OCP_CREATE_DIR || echo "no existing bootstrap"
         (ccoctl gcp delete \
         --name $CLUSTER_NAME \
@@ -289,4 +289,19 @@ openshift-install create manifests --dir $OCP_CREATE_DIR || return 1
 cp $OCP_CREATE_DIR/credentials-requests/* $OCP_CREATE_DIR/manifests/ || return 1 # copy cred requests to manifests dir, ccoctl delete will delete cred requests in separate dir
 openshift-install create cluster --dir $OCP_CREATE_DIR \
     --log-level=info
+}
+
+function delete-ocp-gcp-wif(){
+    OCP_CREATE_DIR=$OCP_MANIFESTS_DIR/$TODAY-gcp-wif
+    CLUSTER_NAME=tkaovila-$TODAY-wif
+    if [[ -n $1 ]]; then
+        CLUSTER_NAME=$1
+    fi
+    openshift-install destroy cluster --dir $OCP_CREATE_DIR || echo "no existing cluster"
+    openshift-install destroy bootstrap --dir $OCP_CREATE_DIR || echo "no existing bootstrap"
+    (ccoctl gcp delete \
+    --name $CLUSTER_NAME \
+    --project $GCP_PROJECT_ID \
+    --credentials-requests-dir $OCP_CREATE_DIR/credentials-requests && echo "cleaned up ccoctl gcp resources") || true
+    ((rm -r $OCP_CREATE_DIR && echo "removed existing create dir") || (true && echo "no existing install dir")) || return 1
 }
