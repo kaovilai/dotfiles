@@ -18,14 +18,14 @@ if [ $(command -v gh) ]; then
 fi
 if [ $(command -v docker) ]; then
   # get completion by curling from https://raw.githubusercontent.com/docker/docker-ce/master/components/cli/contrib/completion/zsh/_docker
-  (timeout 10s sh -c "curl -s https://raw.githubusercontent.com/docker/docker-ce/master/components/cli/contrib/completion/zsh/_docker > ~/_docker_curl" && mv ~/_docker_curl ~/_docker || (rm ~/_docker_curl; echo "offline - _docker")) &
+  (curl -sLm 10 https://raw.githubusercontent.com/docker/docker-ce/master/components/cli/contrib/completion/zsh/_docker > ~/_docker_curl && mv ~/_docker_curl ~/_docker || (rm ~/_docker_curl; echo "offline - _docker")) &
   source <(cat ~/_docker)
   compdef _docker docker
 fi
 
 if [ -n "$(command -v podman)" ]; then
   # https://raw.githubusercontent.com/containers/podman/main/completions/zsh/_podman
-  (timeout 10s sh -c "curl -s https://raw.githubusercontent.com/containers/podman/main/completions/zsh/_podman > ~/_podman_curl" && mv ~/_podman_curl ~/_podman || (rm -f ~/_podman_curl; echo "offline - _podman")) &
+  (curl -sLm 10 https://raw.githubusercontent.com/containers/podman/main/completions/zsh/_podman > ~/_podman_curl && mv ~/_podman_curl ~/_podman || (rm -f ~/_podman_curl; echo "offline - _podman")) &
   source <(cat ~/_podman)
   compdef _podman podman
 fi
