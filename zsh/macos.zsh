@@ -12,7 +12,7 @@ alias restart-displaylink='(osascript -e "quit app \"DisplayLink Manager\""; whi
 alias at-home='(ioreg -p IOUSB | grep "Plugable USBC-6950U" > /dev/null && ioreg -p IOUSB | grep "CalDigit TS4" > /dev/null && networksetup -getnetworkserviceenabled Thunderbolt\ Ethernet\ Slot\ 2 | grep Enabled > /dev/null)'
 alias displaylink-displays-connected='(system_profiler SPDisplaysDataType | grep ARZOPA > /dev/null || system_profiler SPDisplaysDataType | grep TYPE-C > /dev/null)'
 alias install-pkg='sudo installer -target LocalSystem -pkg'
-znap function install-pkg-from-url(){
+function install-pkg-from-url(){
     curl -L -o ~/Downloads/$(basename $1) $1 && install-pkg ~/Downloads/$(basename $1)
 }
 PATH=$PATH:~/Library/Python/3.9/bin
