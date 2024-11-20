@@ -213,12 +213,17 @@ function install-opm(){
 OCP_MANIFESTS_DIR=~/OCP/manifests
 TODAY=$(date +%Y%m%d)
 # create a cluster with gcp workload identity using CCO manual mode
+# pre-req: ssh-add ~/.ssh/id_rsa
 function create-ocp-gcp-wif(){
     # openshift-install create install-config --dir $OCP_MANIFESTS_DIR/$TODAY-gcp-wif --log-level debug
     # https://docs.redhat.com/en/documentation/openshift_container_platform/4.17/html-single/installing_on_gcp/index#cco-ccoctl-configuring_installing-gcp-customizations
     # prompt and remove if exists already so user can interrupt if uninstall is needed.
     OCP_CREATE_DIR=$OCP_MANIFESTS_DIR/$TODAY-gcp-wif
     CLUSTER_NAME=tkaovila-$TODAY-wif #max 21 char allowed
+    if [[ $1 == "gather" ]]; then
+        openshift-install gather bootstrap --dir $OCP_CREATE_DIR || return 1
+        return 0
+    fi
     if [[ $1 != "no-delete" ]]; then
         openshift-install destroy cluster --dir $OCP_CREATE_DIR || echo "no existing cluster"
         openshift-install destroy bootstrap --dir $OCP_CREATE_DIR || echo "no existing bootstrap"
@@ -288,7 +293,7 @@ ccoctl gcp create-all \
 openshift-install create manifests --dir $OCP_CREATE_DIR || return 1
 cp $OCP_CREATE_DIR/credentials-requests/* $OCP_CREATE_DIR/manifests/ || return 1 # copy cred requests to manifests dir, ccoctl delete will delete cred requests in separate dir
 openshift-install create cluster --dir $OCP_CREATE_DIR \
-    --log-level=info
+    --log-level=info || openshift-install gather bootstrap --dir $OCP_CREATE_DIR || return 1
 }
 
 function delete-ocp-gcp-wif(){
