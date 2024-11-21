@@ -18,7 +18,7 @@ function install-pkg-from-url(){
 PATH=$PATH:~/Library/Python/3.9/bin
 
 # restart displaylink if plugged-in at home and displays not connected
-at-home && (displaylink-displays-connected || restart-displaylink) &
+(ioreg -p IOUSB | grep "Plugable USBC-6950U" > /dev/null && ioreg -p IOUSB | grep "CalDigit TS4" > /dev/null && networksetup -getnetworkserviceenabled Thunderbolt\ Ethernet\ Slot\ 2 | grep Enabled > /dev/null) && (displaylink-displays-connected || restart-displaylink) &
 
 # znap function podmanMachineReset(){
 # if [ $(command -v podman) ]; then
