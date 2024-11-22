@@ -12,7 +12,9 @@ AT_HOME='(ioreg -p IOUSB | grep "Plugable USBC-6950U" > /dev/null && ioreg -p IO
 DISPLAYLINK_CONNECTED='(system_profiler SPDisplaysDataType | grep ARZOPA > /dev/null || system_profiler SPDisplaysDataType | grep TYPE-C > /dev/null)'
 RESTART_DISPLAYLINK='(osascript -e "quit app \"DisplayLink Manager\""; while pgrep DisplayLinkUserAgent > /dev/null; do sleep 0.1; done; open -a DisplayLink\ Manager)'
 eval $AT_HOME && (eval $DISPLAYLINK_CONNECTED || eval $RESTART_DISPLAYLINK) &
+
 alias install-pkg='sudo installer -target LocalSystem -pkg'
+
 function install-pkg-from-url(){
     curl -L -o ~/Downloads/$(basename $1) $1 && install-pkg ~/Downloads/$(basename $1)
 }
