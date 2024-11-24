@@ -26,6 +26,8 @@ export GPG_TTY=$(tty)
 export CONTAINER_ENGINE=docker
 # for velero Makefile to skip buildx running checks
 export BUILDX_ENABLED=true
+export BUILDX_PUSH=true
+export GCR_IMAGE_TAGS=""
 # for velero to `make container` for multi-arch builds
 export BUILDX_PLATFORMS=linux/amd64,linux/arm64
 
