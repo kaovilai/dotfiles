@@ -18,7 +18,7 @@ alias install-pkg='sudo installer -target LocalSystem -pkg'
 function install-pkg-from-url(){
     curl -L -o ~/Downloads/$(basename $1) $1 && install-pkg ~/Downloads/$(basename $1)
 }
-PATH=$PATH:~/Library/Python/3.9/bin
+PATH=$PATH:/Library/Frameworks/Python.framework/Versions/Current/bin/
 
 # znap function podmanMachineReset(){
 # if [ $(command -v podman) ]; then
