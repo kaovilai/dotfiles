@@ -4,6 +4,26 @@ alias oc-registry-login='oc registry login'
 alias oc-registry-route='oc get route -n openshift-image-registry default-route -o jsonpath={.spec.host}'
 alias crc-kubeadminpass='cat ~/.crc/machines/crc/kubeadmin-password'
 alias ocwebconsole='edge $(oc whoami --show-console)'
+alias rosa-create-cluster='rosa create cluster --cluster-name tkaovila-sts --sts --create-admin-user --region us-east-1 --replicas 2 --machine-cidr 10.0.0.0/16 --service-cidr 172.30.0.0/16 --pod-cidr 10.128.0.0/14 --host-prefix 23 --disable-workload-monitoring && rosa create operator-roles --cluster tkaovila-sts && rosa create oidc-provider --cluster tkaovila-sts'
+function patchCSVreplicas(){
+    if [ -z "$1" ]; then
+        echo "No CSV name supplied"
+        return 1
+    fi
+    if [ -z "$2" ]; then
+        echo "No replicas supplied"
+        return 1
+    fi
+    oc patch csv $1 --type='json' -p '[
+  {
+    "op": "replace",
+    "path": "/spec/install/spec/deployments/0/spec/replicas",
+    "value": '$2'
+  }
+]
+'
+}
+
 alias oc-run='oc run --rm -it --image'
 znap function agdKubeAdminPassword(){
  if [$1 = ""]; then 
