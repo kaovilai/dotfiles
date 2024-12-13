@@ -62,7 +62,7 @@ function unsetSOCKSproxy(){
 }
 WIFI_NAME=$(networksetup -getairportnetwork en0 | cut -d " " -f 4)
 if [[ "$WIFI_NAME" = "S23" ]]; then
-    (curl --silent --socks5 $SOCKS_ROUTER_IP:$SOCKS_ROUTER_PROXY_PORT http://www.google.com && setSOCKSproxy) || unsetSOCKSproxy &
+    (curl --silent --socks5 $SOCKS_ROUTER_IP:$SOCKS_ROUTER_PROXY_PORT http://www.google.com && setSOCKSproxy) &
 else
     unsetSOCKSproxy &
 fi
