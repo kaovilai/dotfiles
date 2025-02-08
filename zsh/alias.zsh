@@ -24,6 +24,7 @@ alias docker-buildx-kube='docker buildx rm kube; oc create ns docker-driver > /d
 alias colima-restart='colima stop; colima start --arch aarch64 --vm-type=vz --vz-rosetta --cpu 8 --disk 30 --memory 3; colima-multiplat'
 alias colima-multiplat='docker buildx rm colima-multiplat; docker buildx create --name colima-multiplat --platform=linux/amd64,linux/arm64,linux/ppc64le,linux/s390x; docker buildx use colima-multiplat'
 alias coadp='code ~/oadp-operator/'
+alias coadp-nac='code ~/git/oadp-non-admin/'
 alias cvelero='code ~/git/velero/'
 alias cvelero-aws='code ~/git/velero-plugin-for-aws/'
 alias cvelero-gcp='code ~/git/velero-plugin-for-gcp/'
