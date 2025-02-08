@@ -66,6 +66,11 @@ if [[ "$WIFI_NAME" = "S23" ]]; then
 else
     unsetSOCKSproxy &
 fi
+
+# randomize mac address, requires wi-fi to be en0, check with `sudo networksetup -listallhardwareports`
+# requires spoof-mac -> https://formulae.brew.sh/formula/spoof-mac
+alias randomize-mac='sudo networksetup -setairportpower en0 off && sudo spoof-mac randomize wi-fi'
+
 # To get git to work over ssh via 443 proxy,
 # replace .git/config `git@github.com:(.*)/`
 # with `ssh://git@ssh.github.com:443/$1/`
