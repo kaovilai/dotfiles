@@ -61,4 +61,9 @@ function go-mod-upgrade(){
 function go-mod-upgrade-dirs(){
     find . -type d -maxdepth 1 -name "$1" -exec sh -c "cd {} && pwd && git fetch upstream && (git checkout upstream/main || git checkout upstream/master) && git checkout -b $2 && go get $2 && go mod tidy && git add go.mod go.sum && git commit -sm \"go-mod-upgrade: $2\" && gh pr create" \;
 }
-    # find . -type d -maxdepth 1 -name "$1" -exec sh -c "cd \$1 && git fetch upstream && (git checkout upstream/main || git checkout upstream/master) && git checkout -b $2 && go get $2 && go mod tidy && git add go.mod go.sum && git commit -sm \"go-mod-upgrade: $1\" && gh pr create" \\\\\;
+
+# open all dirs matching patterh in code
+# ex: code-dirs "velero*"
+function code-dirs() {
+    find . -type d -maxdepth 1 -name "$1" | xargs -P 10 -I {} -- code {}
+}
