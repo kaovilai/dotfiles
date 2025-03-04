@@ -64,6 +64,11 @@ if [ $(command -v colima) ]; then
   compdef _colima colima
 fi
 
+if [ $(command -v kubebuilder) ]; then
+  source <(kubebuilder completion zsh)
+  compdef _kubebuilder kubebuilder
+fi
+
 # kind completion zsh
 if [ $(command -v kind) ]; then
   source <(kind completion zsh)
