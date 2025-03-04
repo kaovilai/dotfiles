@@ -59,7 +59,7 @@ function go-mod-upgrade(){
 # run go mod upgrade for each dir matched by find . -type d -maxdepth 1 -name "<$1>"
 # Examples: GOTOOLCHAIN=go1.23.6 go-mod-upgrade-dirs "velero*" golang.org/x/oauth2@v0.27.0
 function go-mod-upgrade-dirs(){
-    find . -type d -maxdepth 1 -name "$1" -exec sh -c "cd {} && pwd && git fetch upstream && (git checkout upstream/main || git checkout upstream/master) && git checkout -b $2 && go get $2 && go mod tidy && git add go.mod go.sum && git commit -sm \"go-mod-upgrade: $2\" && gh pr create" \;
+    find . -type d -maxdepth 1 -name "$1" -exec sh -c "cd {} && pwd && git fetch upstream && (git checkout upstream/main || git checkout upstream/master) && (git checkout -b $2 || git checkout $2) && go get $2 && go mod tidy && git add go.mod go.sum && git commit -sm \"$2\" && gh pr create --web --title \"$2\"" \;
 }
 
 # open all dirs matching patterh in code
