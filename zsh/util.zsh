@@ -76,11 +76,11 @@ function go-mod-upgrade-dirs(){
 # execute commands in dirs matched by find . -type d -maxdepth 1 -name "<$1>"
 # Examples: exec-dirs "velero*" branch-name "command"
 # Examples: exec-dirs "velero*" golang.org/x/oauth2@v0.27.0 "pwd && pwd"
+# Examples: exec-dirs "velero*" golang.org/x/oauth2@v0.27.0 "snyk test"
 function exec-dirs(){
     find . -type d -maxdepth 1 -name "$1" -exec sh -c "cd {} && pwd && git fetch upstream && (git checkout upstream/main || git checkout upstream/master) && (git checkout -b $2 || git checkout $2) && sh -c \"$3\"" \;
 }
 
-# gsed -i "s/golang:1.22-bookworm/golang:1.23-bookworm/g" Dockerfile && git add Dockerfile && gcaf
 # open all dirs matching patterh in code
 # ex: code-dirs "velero*"
 function code-dirs() {
