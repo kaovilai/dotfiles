@@ -57,9 +57,13 @@ function go-mod-upgrade(){
 }
 
 # run go mod upgrade for each dir matched by find . -type d -maxdepth 1 -name "<$1>"
+# $1 is dir pattern
+# $2 is go mod to upgrade
+# $3 is additional commands to execute such as "gsed -i \"s/golang:1.22-bookworm/golang:1.23-bookworm/g\" Dockerfile && git add Dockerfile"
 # Examples: GOTOOLCHAIN=go1.23.6 go-mod-upgrade-dirs "velero*" golang.org/x/oauth2@v0.27.0
+# Examples: GOTOOLCHAIN=go1.23.6 go-mod-upgrade-dirs "velero*" golang.org/x/crypto@v0.35.0 "gsed -i \"s/golang:1.22-bookworm/golang:1.23-bookworm/g\" Dockerfile && git add Dockerfile"
 function go-mod-upgrade-dirs(){
-    find . -type d -maxdepth 1 -name "$1" -exec sh -c "cd {} && pwd && git fetch upstream && (git checkout upstream/main || git checkout upstream/master) && (git checkout -b $2 || git checkout $2) && go get $2 && go mod tidy && git add go.mod go.sum && git commit -sm \"$2\" && gh pr create --web --title \"$2\"" \;
+    find . -type d -maxdepth 1 -name "$1" -exec sh -c "cd {} && pwd && git fetch upstream && (git checkout upstream/main || git checkout upstream/master) && (git checkout -b $2 || git checkout $2) && go get $2 && go mod tidy && git add go.mod go.sum && sh -c \"$3\" && git commit -sm \"$2\" && gh pr create --web --title \"$2\"" \;
 }
 
 # execute commands in dirs matched by find . -type d -maxdepth 1 -name "<$1>"
@@ -74,4 +78,10 @@ function exec-dirs(){
 # ex: code-dirs "velero*"
 function code-dirs() {
     find . -type d -maxdepth 1 -name "$1" | parallel code {}
+}
+
+# view current prs in dirs matched by find . -type d -maxdepth 1 -name "<$1>"
+# view-pr-dirs "velero*"
+function view-pr-dirs() {
+    find . -type d -maxdepth 1 -name "$1" -exec sh -c "cd {} && pwd && gh pr view --web" \;
 }
