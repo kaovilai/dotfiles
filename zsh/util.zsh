@@ -73,6 +73,8 @@ function go-mod-upgrade-dirs(){
         gh pr create --web --title \"$4$2\"" \;
 }
 
+# git checkout -b CVE-2025-22869+CVE-2025-22868 && go get golang.org/x/oauth2@v0.27.0  golang.org/x/crypto@v0.35.0 toolchain@1.23.6 && go mod tidy && git add go.mod go.sum && find . -type f -name "Dockerfile" -name "Tiltfile" -exec sed s/golang:1.22.10/golang:1.23.6/g {} \;
+
 # execute commands in dirs matched by find . -type d -maxdepth 1 -name "<$1>"
 # Examples: exec-dirs "velero*" branch-name "command"
 # Examples: exec-dirs "velero*" golang.org/x/oauth2@v0.27.0 "pwd && pwd"
@@ -85,6 +87,12 @@ function exec-dirs(){
 # ex: code-dirs "velero*"
 function code-dirs() {
     find . -type d -maxdepth 1 -name "$1" | parallel code {}
+}
+
+# open all dirs matching patterh in finder
+# ex: finder-dirs "velero*"
+function finder-dirs() {
+    find . -type d -maxdepth 1 -name "$1" | parallel open -a Finder {}
 }
 
 # view current prs in dirs matched by find . -type d -maxdepth 1 -name "<$1>"
