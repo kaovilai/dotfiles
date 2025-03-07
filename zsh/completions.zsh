@@ -69,6 +69,11 @@ if [ $(command -v kubebuilder) ]; then
   compdef _kubebuilder kubebuilder
 fi
 
+if [ $(command -v yq) ]; then
+  source <(yq completion zsh)
+  compdef _yq yq
+fi
+
 # kind completion zsh
 if [ $(command -v kind) ]; then
   source <(kind completion zsh)
