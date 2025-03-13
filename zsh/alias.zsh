@@ -142,6 +142,7 @@ alias ibmcloud-cos-instance-crn='ibmcloud resource service-instances --long --se
 alias ibmcloud-oc-cluster-create='ibmcloud oc cluster create vpc-gen2 --name tiger-2 --zone us-east-1 --vpc-id $(ibmcloud-vpcid) --subnet-id $(ibmcloud-subnetid) --flavor cx2.8x16 --workers 2 --cos-instance=$(ibmcloud-cos-instance-crn) --version $(ibmcloud-oc-latestversion)'
 alias ibmcloud-oc-config='ibmcloud oc cluster config --admin -c tiger-2'
 alias ollama-run='ollama run llama3.1:latest'
+alias ollama-run-deepseek='ollama run deepseek-r1:8b'
 alias ollama-pull='ollama pull llama3-gradient:latest && llama3.1:latest'
 alias openwebui-docker='docker run -d -p 3000:8080 --add-host=host.docker.internal:host-gateway -v open-webui:/app/backend/data --name open-webui --restart always ghcr.io/open-webui/open-webui:main'
 # opencommit with signoff
