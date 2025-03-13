@@ -79,8 +79,29 @@ function go-mod-upgrade-dirs(){
 # Examples: exec-dirs "velero*" branch-name "command"
 # Examples: exec-dirs "velero*" golang.org/x/oauth2@v0.27.0 "pwd && pwd"
 # Examples: exec-dirs "velero*" golang.org/x/oauth2@v0.27.0 "snyk test"
+#   find . -type f -name \"Dockerfile*\" -name \"Tiltfile\" -exec sed s/golang:1.22.10/golang:1.23.6/g {} \; \
+#   find . -type f -name \"Dockerfile*\" -name \"Tiltfile\" -exec git add {} \;"
 function exec-dirs(){
     find . -type d -maxdepth 1 -name "$1" -exec sh -c "cd {} && pwd && git fetch upstream && (git checkout upstream/main || git checkout upstream/master) && (git checkout -b $2 || git checkout $2) && sh -c \"$3\"" \;
+}
+
+# like exec-dirs but for downstream
+# $1: path pattern
+# $2: ds name
+# $3: base branch
+# $4: branch checkout name
+# $5: command
+# Examples: exec-dirs-ds "velero*" openshift oadp-1.3 CVE-2025-22869+CVE-2025-22868+CVE-2025-22870 'go get golang.org/x/oauth2@v0.27.0 golang.org/x/crypto@v0.35.0 golang.org/x/net@v0.36.0 toolchain@1.23.6 && go mod tidy && git add go.mod go.sum && \
+#    find . -type f \( -name "Dockerfile*" -or -name "Tiltfile" \) -not -path "./\.go/*" -exec gsed -i s/golang:1.22.10/golang:1.23.6/g \{\} \; && \
+#    find . -type f \( -name "Dockerfile*" -or -name "Tiltfile" \) -not -path "./\.go/*" -exec git add \{\} \; ; \
+#    find . -type f \( -name "Dockerfile*" -or -name "Tiltfile" \) -not -path "./\.go/*" -exec gsed -i s#quay.io/konveyor/builder:ubi9-v1.20#quay.io/konveyor/builder:ubi9-v1.23#g \{\} \; && \
+#    find . -type f \( -name "Dockerfile*" -or -name "Tiltfile" \) -not -path "./\.go/*" -exec git add \{\} \; ; \
+#    (git commit -m "CVE-2025-22869+CVE-2025-22868+CVE-2025-22870" --signoff || echo "nothing to comit")'
+function exec-dirs-ds(){
+    find . -type d -maxdepth 1 -name "$1" -exec sh -c "cd {} && pwd && git fetch $2 && (git checkout $2/$3) && (git checkout -b $2-$3-$4 || git checkout $2-$3-$4 && git reset --hard $2/$3) && sh -c '$5' && git push --force -u origin $2-$3-$4 && gh pr create --repo $2/\$(basename {}) --base $3 --title \"$3-$4\"" \;
+}
+function exec-dirs-ds-echo(){
+    find . -type d -maxdepth 1 -name "$1" -exec sh -c "cd {} && pwd && git fetch $2 && (git checkout $2/$3) && (git checkout -b $2-$3-$4 || git checkout $2-$3-$4 && git reset --hard $2/$3) && echo -c '$5' && echo git push --force -u origin $2-$3-$4 && gh pr create --repo $2/\$(basename {}) --base $3 --title \"$3-$4\"" \;
 }
 
 # open all dirs matching patterh in code
