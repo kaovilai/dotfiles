@@ -348,3 +348,62 @@ znap function unsymlink-from-sd() {
 function view-pr-dirs() {
     find . -type d -maxdepth 1 -name "$1" -exec sh -c "cd {} && pwd && gh pr view --web" \;
 }
+
+# Recreate symlinks for directories previously created with symlink-to-sd
+# Useful when moving to a new machine where the SD volume exists but original symlinks don't
+# Usage: relink-from-sd <sd-path> [<local-path>]
+# Example: relink-from-sd /Volumes/SD/Users/olduser/git/project /Users/newuser/git/project
+znap function relink-from-sd() {
+    local sd_path="$1"
+    local local_path="$2"
+    
+    # Check if SD volume is mounted
+    if [ ! -d "/Volumes/SD" ]; then
+        echo "Error: SD volume is not mounted at /Volumes/SD"
+        return 1
+    fi
+    
+    # Validate SD path exists
+    if [ ! -d "$sd_path" ]; then
+        echo "Error: The specified SD path does not exist: $sd_path"
+        return 1
+    fi
+    
+    # Ensure SD path is actually on the SD volume
+    if [[ ! "$sd_path" == "/Volumes/SD"* ]]; then
+        echo "Error: The specified path is not on the SD volume: $sd_path"
+        return 1
+    fi
+    
+    # If local path is not provided, derive it from the SD path
+    if [ -z "$local_path" ]; then
+        # Remove "/Volumes/SD" prefix to get the original path
+        local_path="${sd_path#/Volumes/SD}"
+        echo "No local path specified, derived path: $local_path"
+    fi
+    
+    # Check if local path already exists
+    if [ -e "$local_path" ]; then
+        echo "Error: Local path already exists: $local_path"
+        echo "Please remove it first or specify a different path."
+        return 1
+    fi
+    
+    # Create parent directory structure
+    local parent_dir="$(dirname "$local_path")"
+    echo "Creating parent directory structure: $parent_dir"
+    if ! mkdir -p "$parent_dir"; then
+        echo "Error: Failed to create parent directory structure"
+        return 1
+    fi
+    
+    # Create the symlink
+    echo "Creating symlink: $local_path -> $sd_path"
+    if ! ln -s "$sd_path" "$local_path"; then
+        echo "Error: Failed to create symlink"
+        return 1
+    fi
+    
+    echo "Operation completed successfully."
+    echo "Symlink created: $local_path -> $sd_path"
+}
