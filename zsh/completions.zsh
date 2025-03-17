@@ -92,3 +92,6 @@ if [ -f '/Users/tiger/google-cloud-sdk/completion.zsh.inc' ]; then . '/Users/tig
 source /usr/local/ibmcloud/autocomplete/zsh_autocomplete
 
 eval "$(_PIPENV_COMPLETE=zsh_source pipenv)"
+
+# for cline
+[[ "$TERM_PROGRAM" == "vscode" ]] && . "$(code --locate-shell-integration-path zsh)"

@@ -116,6 +116,177 @@ function finder-dirs() {
     find . -type d -maxdepth 1 -name "$1" | parallel open -a Finder {}
 }
 
+# Move files to SD volume and create a symlink in their place to save disk space
+# Usage: symlink-to-sd
+znap function symlink-to-sd() {
+    local current_dir="$(pwd)"
+    local current_name="$(basename "$current_dir")"
+    local parent_dir="$(dirname "$current_dir")"
+    local sd_target="/Volumes/SD$current_dir"
+    local sd_backup="/Volumes/SD$current_dir.backup.$(date +%Y%m%d%H%M%S)"
+    
+    # Check if SD volume is mounted
+    if [ ! -d "/Volumes/SD" ]; then
+        echo "Error: SD volume is not mounted at /Volumes/SD"
+        return 1
+    fi
+    
+    # Create parent directory structure on SD
+    if ! mkdir -p "$(dirname "$sd_target")"; then
+        echo "Error: Failed to create directory structure on SD volume"
+        return 1
+    fi
+    
+    # Create target directory
+    if ! mkdir -p "$sd_target"; then
+        echo "Error: Failed to create target directory on SD volume"
+        return 1
+    fi
+    
+    echo "Copying files from $current_dir to $sd_target..."
+    
+    # Copy all files (including hidden files)
+    if ! cp -R "$current_dir/"* "$sd_target/" 2>/dev/null; then
+        echo "Warning: Some files may not have been copied (possibly empty dir)"
+    fi
+    
+    # Copy hidden files separately (since * doesn't match them)
+    # Use find to avoid issues with .* expanding to include . and ..
+    find "$current_dir" -maxdepth 1 -name ".*" -type f -o -name ".*" -type d ! -path "$current_dir" | while read file; do
+        cp -R "$file" "$sd_target/" 2>/dev/null || echo "Warning: Could not copy $(basename "$file")"
+    done
+    
+    echo "Files copied to SD volume successfully."
+    
+    # Create a backup directory ON THE SD VOLUME
+    echo "Creating backup on SD volume at $sd_backup..."
+    mkdir -p "$sd_backup"
+    cp -R "$sd_target/"* "$sd_backup/" 2>/dev/null || true
+    
+    # Backup hidden files using find to avoid issues with .* expansion
+    find "$sd_target" -maxdepth 1 -name ".*" -type f -o -name ".*" -type d ! -path "$sd_target" | while read file; do
+        cp -R "$file" "$sd_backup/" 2>/dev/null || echo "Warning: Could not backup $(basename "$file")"
+    done
+    
+    # Navigate to parent directory so we can replace the current directory
+    echo "Changing to parent directory: $parent_dir"
+    cd "$parent_dir" || {
+        echo "Error: Failed to change directory to $parent_dir"
+        return 1
+    }
+    
+    # Remove the original directory
+    echo "Removing original directory to save space..."
+    rm -rf "$current_name"
+    
+    # Create symlink at the original location pointing to SD volume
+    echo "Creating symlink to replace the original directory..."
+    ln -s "$sd_target" "$current_name"
+    
+    # Change back to the "same" directory (now a symlink to SD)
+    cd "$current_dir" 2>/dev/null || echo "Note: Could not cd back to $current_dir"
+    
+    echo "Operation completed successfully."
+    echo "Files are now stored at: $sd_target"
+    echo "The original path $current_dir now points to the SD volume."
+    echo "A backup was created on the SD volume at: $sd_backup"
+}
+
+# Undo the symlink-to-sd operation by moving files back from SD volume
+# Usage: unsymlink-from-sd [--keep-sd-files]
+znap function unsymlink-from-sd() {
+    local current_path="$(pwd)"
+    local parent_dir="$(dirname "$current_path")"
+    local dir_name="$(basename "$current_path")"
+    local keep_sd_files=false
+    
+    # Check for option to keep SD files
+    if [[ "$1" == "--keep-sd-files" ]]; then
+        keep_sd_files=true
+    fi
+    
+    # Check if current directory is a symlink
+    if [[ ! -L "$current_path" ]]; then
+        # Try parent directory if we're inside a symlinked directory
+        cd ..
+        if [[ -L "$(pwd)" ]]; then
+            current_path="$(pwd)"
+            parent_dir="$(dirname "$current_path")"
+            dir_name="$(basename "$current_path")"
+        else
+            echo "Error: Current directory is not a symlink created by symlink-to-sd"
+            return 1
+        fi
+    fi
+    
+    # Get the target of the symlink
+    local symlink_target="$(readlink "$current_path")"
+    
+    # Verify that this is a symlink to the SD volume
+    if [[ ! "$symlink_target" == "/Volumes/SD"* ]]; then
+        echo "Error: This symlink doesn't point to the SD volume"
+        return 1
+    fi
+    
+    # Check if SD volume is mounted
+    if [ ! -d "/Volumes/SD" ]; then
+        echo "Error: SD volume is not mounted at /Volumes/SD"
+        return 1
+    fi
+    
+    echo "Preparing to restore files from $symlink_target to $current_path..."
+    
+    # Navigate to parent directory to replace the symlink
+    cd "$parent_dir"
+    
+    # Create a temporary directory to hold files during transfer
+    local temp_dir="$parent_dir/.temp_restore_$dir_name"
+    mkdir -p "$temp_dir"
+    
+    # Copy files from SD volume to temporary directory
+    echo "Copying files from SD volume to temporary location..."
+    if ! cp -R "$symlink_target/"* "$temp_dir/" 2>/dev/null; then
+        echo "Warning: Some files may not have been copied (possibly empty dir)"
+    fi
+    
+    # Copy hidden files separately using find to avoid .* expansion issues
+    find "$symlink_target" -maxdepth 1 -name ".*" -type f -o -name ".*" -type d ! -path "$symlink_target" | while read file; do
+        cp -R "$file" "$temp_dir/" 2>/dev/null || echo "Warning: Could not copy $(basename "$file")"
+    done
+    
+    # Remove the symlink
+    echo "Removing symlink..."
+    rm "$dir_name"
+    
+    # Create the directory and move files
+    echo "Restoring files to original location..."
+    mkdir -p "$dir_name"
+    mv "$temp_dir"/* "$dir_name/" 2>/dev/null || true
+    
+    # Move hidden files using find to avoid expansion issues
+    find "$temp_dir" -maxdepth 1 -name ".*" -type f -o -name ".*" -type d ! -path "$temp_dir" | while read file; do
+        mv "$file" "$dir_name/" 2>/dev/null || echo "Warning: Could not move $(basename "$file")"
+    done
+    
+    # Remove temporary directory
+    rm -rf "$temp_dir"
+    
+    # Remove files from SD volume if requested
+    if ! $keep_sd_files; then
+        echo "Removing files from SD volume..."
+        rm -rf "$symlink_target"
+    else
+        echo "Files on SD volume have been kept as requested."
+    fi
+    
+    echo "Operation completed successfully."
+    echo "Files have been moved back to their original location: $current_path"
+    echo "The symbolic link has been replaced with a regular directory."
+    
+    # Change back to the original directory
+    cd "$current_path"
+}
+
 # view current prs in dirs matched by find . -type d -maxdepth 1 -name "<$1>"
 # view-pr-dirs "velero*"
 function view-pr-dirs() {
