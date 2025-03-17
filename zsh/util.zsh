@@ -85,23 +85,79 @@ function exec-dirs(){
     find . -type d -maxdepth 1 -name "$1" -exec sh -c "cd {} && pwd && git fetch upstream && (git checkout upstream/main || git checkout upstream/master) && (git checkout -b $2 || git checkout $2) && sh -c \"$3\"" \;
 }
 
-# like exec-dirs but for downstream
+# Improved version of exec-dirs-ds and exec-dirs-ds-echo with better error handling,
+# progress feedback, and streamlined implementation
+# 
 # $1: path pattern
-# $2: ds name
+# $2: ds name (downstream)
 # $3: base branch
 # $4: branch checkout name
 # $5: command
-# Examples: exec-dirs-ds "velero*" openshift oadp-1.3 CVE-2025-22869+CVE-2025-22868+CVE-2025-22870 'go get golang.org/x/oauth2@v0.27.0 golang.org/x/crypto@v0.35.0 golang.org/x/net@v0.36.0 toolchain@1.23.6 && go mod tidy && git add go.mod go.sum && \
-#    find . -type f \( -name "Dockerfile*" -or -name "Tiltfile" \) -not -path "./\.go/*" -exec gsed -i s/golang:1.22.10/golang:1.23.6/g \{\} \; && \
-#    find . -type f \( -name "Dockerfile*" -or -name "Tiltfile" \) -not -path "./\.go/*" -exec git add \{\} \; ; \
-#    find . -type f \( -name "Dockerfile*" -or -name "Tiltfile" \) -not -path "./\.go/*" -exec gsed -i s#quay.io/konveyor/builder:ubi9-v1.20#quay.io/konveyor/builder:ubi9-v1.23#g \{\} \; && \
-#    find . -type f \( -name "Dockerfile*" -or -name "Tiltfile" \) -not -path "./\.go/*" -exec git add \{\} \; ; \
-#    (git commit -m "CVE-2025-22869+CVE-2025-22868+CVE-2025-22870" --signoff || echo "nothing to comit")'
 function exec-dirs-ds(){
-    find . -type d -maxdepth 1 -name "$1" -exec sh -c "cd {} && pwd && git fetch $2 && (git checkout $2/$3) && (git checkout -b $2-$3-$4 || git checkout $2-$3-$4 && git reset --hard $2/$3) && sh -c '$5' && git push --force -u origin $2-$3-$4 && gh pr create --repo $2/\$(basename {}) --base $3 --title \"$3-$4\"" \;
+    local pattern="$1"
+    local ds_name="$2"
+    local base_branch="$3"
+    local branch_name="$4"
+    local cmd="$5"
+    local echo_only=false
+    
+    # Use find to locate matching directories
+    find . -type d -maxdepth 1 -name "$pattern" | while read dir; do
+        (
+            echo "\033[1;34mProcessing $dir...\033[0m"
+            cd "$dir" || { echo "\033[1;31mFailed to cd into $dir\033[0m"; return 1; }
+            
+            echo "Fetching from $ds_name..."
+            git fetch $ds_name || { echo "\033[1;31mFailed to fetch $ds_name\033[0m"; return 1; }
+            
+            echo "Checking out $ds_name/$base_branch..."
+            git checkout $ds_name/$base_branch || { echo "\033[1;31mFailed to checkout $ds_name/$base_branch\033[0m"; return 1; }
+            
+            branch_full="$ds_name-$base_branch-$branch_name"
+            echo "Creating/checking out branch $branch_full..."
+            git checkout -b $branch_full 2>/dev/null || (
+                git checkout $branch_full && 
+                git reset --hard $ds_name/$base_branch
+            ) || { echo "\033[1;31mFailed to setup branch $branch_full\033[0m"; return 1; }
+            
+            if [ "$echo_only" = true ]; then
+                echo "Would execute: $cmd"
+            else
+                echo "Executing command..."
+                sh -c "$cmd" || { echo "\033[1;31mCommand execution failed\033[0m"; return 1; }
+                
+                echo "Pushing branch..."
+                git push --force -u origin $branch_full || { echo "\033[1;31mFailed to push branch\033[0m"; return 1; }
+                
+                echo "Creating PR..."
+                repo_name=$(basename $dir)
+                gh pr create --repo $ds_name/$repo_name --base $base_branch --title "$base_branch-$branch_name" || { 
+                    echo "\033[1;31mFailed to create PR, but branch was pushed. Create PR manually for $ds_name/$repo_name\033[0m";
+                }
+            fi
+            
+            echo "\033[1;32mCompleted processing $dir\033[0m"
+        )
+    done
 }
+
+# Echo-only version of exec-dirs-ds (for testing what would happen)
 function exec-dirs-ds-echo(){
-    find . -type d -maxdepth 1 -name "$1" -exec sh -c "cd {} && pwd && git fetch $2 && (git checkout $2/$3) && (git checkout -b $2-$3-$4 || git checkout $2-$3-$4 && git reset --hard $2/$3) && echo -c '$5' && echo git push --force -u origin $2-$3-$4 && gh pr create --repo $2/\$(basename {}) --base $3 --title \"$3-$4\"" \;
+    local pattern="$1"
+    local ds_name="$2"
+    local base_branch="$3"
+    local branch_name="$4"
+    local cmd="$5"
+    
+    # Pass the same arguments but set a flag to only echo commands
+    find . -type d -maxdepth 1 -name "$pattern" | while read dir; do
+        echo "\033[1;34mWould process $dir\033[0m"
+        echo "  Would fetch $ds_name"
+        echo "  Would checkout $ds_name/$base_branch"
+        echo "  Would create/reset branch $ds_name-$base_branch-$branch_name"
+        echo "  Would execute: $cmd"
+        echo "  Would push branch and create PR to $ds_name/$(basename $dir) base $base_branch"
+    done
 }
 
 # open all dirs matching patterh in code

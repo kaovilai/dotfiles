@@ -1,33 +1,78 @@
 #compdef kubectl
 compdef _kubectl kubectl
-if [ -f '~/Downloads/google-cloud-sdk/path.zsh.inc' ]; then . '~/Downloads/google-cloud-sdk/path.zsh.inc'; fi
+
+# Google Cloud SDK configuration - consolidated
+if [ -f '/Users/tiger/google-cloud-sdk/path.zsh.inc' ]; then 
+  source '/Users/tiger/google-cloud-sdk/path.zsh.inc'
+fi
+if [ -f '/Users/tiger/google-cloud-sdk/completion.zsh.inc' ]; then 
+  source '/Users/tiger/google-cloud-sdk/completion.zsh.inc'
+fi
+
 if [ $(command -v oc) ]; then
   source <(oc completion zsh)
   compdef _oc oc
 fi
 
-# The next line updates PATH for the Google Cloud SDK.
-if [ -f '~/google-cloud-sdk/path.zsh.inc' ]; then . '~/google-cloud-sdk/path.zsh.inc'; fi
-
-# The next line enables shell command completion for gcloud.
-if [ -f '~/google-cloud-sdk/completion.zsh.inc' ]; then . '~/google-cloud-sdk/completion.zsh.inc'; fi
-
 if [ $(command -v gh) ]; then
   source <(gh completion -s zsh)
   compdef _gh gh
 fi
+# Function to check if completion file cache is older than 7 days
+completion_cache_expired() {
+  local file="$1"
+  local max_age=604800  # 7 days in seconds
+
+  if [[ ! -f "$file" ]]; then
+    return 0  # Cache expired (file doesn't exist)
+  fi
+
+  # Get file modification time
+  local file_time=$(stat -f %m "$file")
+  local current_time=$(date +%s)
+  local file_age=$((current_time - file_time))
+
+  if [[ $file_age -gt $max_age ]]; then
+    return 0  # Cache expired
+  else
+    return 1  # Cache still valid
+  fi
+}
+
+# Docker completion
 if [ $(command -v docker) ]; then
-  # get completion by curling from https://raw.githubusercontent.com/docker/docker-ce/master/components/cli/contrib/completion/zsh/_docker
-  (curl -sLm 10 https://raw.githubusercontent.com/docker/docker-ce/master/components/cli/contrib/completion/zsh/_docker > ~/_docker_curl && mv ~/_docker_curl ~/_docker || (rm ~/_docker_curl; echo "offline - _docker")) &
-  source <(cat ~/_docker)
-  compdef _docker docker
+  local docker_completion_file=~/_docker
+  
+  if completion_cache_expired "$docker_completion_file"; then
+    # Download completion file in the background
+    (curl -sLm 10 https://raw.githubusercontent.com/docker/docker-ce/master/components/cli/contrib/completion/zsh/_docker > "${docker_completion_file}.tmp" && 
+     mv "${docker_completion_file}.tmp" "$docker_completion_file" || 
+     (rm -f "${docker_completion_file}.tmp"; echo "Failed to download docker completion")) &
+  fi
+  
+  # Source existing completion file (even if it's being updated)
+  if [[ -f "$docker_completion_file" ]]; then
+    source "$docker_completion_file"
+    compdef _docker docker
+  fi
 fi
 
+# Podman completion
 if [ -n "$(command -v podman)" ]; then
-  # https://raw.githubusercontent.com/containers/podman/main/completions/zsh/_podman
-  (curl -sLm 10 https://raw.githubusercontent.com/containers/podman/main/completions/zsh/_podman > ~/_podman_curl && mv ~/_podman_curl ~/_podman || (rm -f ~/_podman_curl; echo "offline - _podman")) &
-  source <(cat ~/_podman)
-  compdef _podman podman
+  local podman_completion_file=~/_podman
+  
+  if completion_cache_expired "$podman_completion_file"; then
+    # Download completion file in the background
+    (curl -sLm 10 https://raw.githubusercontent.com/containers/podman/main/completions/zsh/_podman > "${podman_completion_file}.tmp" && 
+     mv "${podman_completion_file}.tmp" "$podman_completion_file" || 
+     (rm -f "${podman_completion_file}.tmp"; echo "Failed to download podman completion")) &
+  fi
+  
+  # Source existing completion file (even if it's being updated)
+  if [[ -f "$podman_completion_file" ]]; then
+    source "$podman_completion_file"
+    compdef _podman podman
+  fi
 fi
 
 if [ $(command -v aws_completer) ]; then
@@ -85,9 +130,6 @@ if [ $(command -v openshift-install) ]; then
   source <(cat /Users/tiger/git/dotfiles/openshift-install-completion-zsh.txt)
   compdef _openshift-install openshift-install
 fi
-
-# The next line enables shell command completion for gcloud.
-if [ -f '/Users/tiger/google-cloud-sdk/completion.zsh.inc' ]; then . '/Users/tiger/google-cloud-sdk/completion.zsh.inc'; fi
 
 source /usr/local/ibmcloud/autocomplete/zsh_autocomplete
 
