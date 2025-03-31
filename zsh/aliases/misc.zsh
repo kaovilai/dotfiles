@@ -8,3 +8,4 @@ alias openwebui-docker='docker run -d -p 3000:8080 --add-host=host.docker.intern
 alias source-zshrc='source ~/.zshrc'
 alias listening-ports='lsof -i -P | grep LISTEN'
 alias go-install-kind='go install sigs.k8s.io/kind@latest'
+alias open-webui-serve='docker run -d -p 3000:8080 --add-host=host.docker.internal:host-gateway -v open-webui:/app/backend/data --name open-webui --restart always ghcr.io/open-webui/open-webui:main || podman container start open-webui'
