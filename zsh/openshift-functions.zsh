@@ -373,6 +373,9 @@ function delete-ocp-gcp-wif(){
 }
 
 function create-ocp-aws-arm64(){
+    # Use specified openshift-install or default to 4.19.0-ec.4
+    local OPENSHIFT_INSTALL=${OPENSHIFT_INSTALL:-openshift-install-4.19.0-ec.4}
+    
     # Check if help is requested
     if [[ $1 == "help" ]]; then
         echo "Usage: create-ocp-aws-arm64 [OPTION]"
@@ -408,8 +411,8 @@ function create-ocp-aws-arm64(){
         AWS_BASEDOMAIN="mg.dog8code.com"
     fi
     
-    # Check if openshift-install supports ARM64 architecture
-    if openshift-install version | grep -q "release architecture arm64"; then
+    # Check if the installer supports ARM64 architecture
+    if $OPENSHIFT_INSTALL version | grep -q "release architecture arm64"; then
         ARCHITECTURE="arm64"
         echo "INFO: Using ARM64 architecture for cluster nodes (supported by current release payload)"
     else
@@ -423,12 +426,12 @@ function create-ocp-aws-arm64(){
     OCP_CREATE_DIR=$OCP_MANIFESTS_DIR/$TODAY-aws-arm64
     CLUSTER_NAME=tkaovila-$TODAY-arm64 #max 21 char allowed
     if [[ $1 == "gather" ]]; then
-        openshift-install gather bootstrap --dir $OCP_CREATE_DIR || return 1
+        $OPENSHIFT_INSTALL gather bootstrap --dir $OCP_CREATE_DIR || return 1
         return 0
     fi
     if [[ $1 != "no-delete" ]]; then
-        openshift-install destroy cluster --dir $OCP_CREATE_DIR || echo "no existing cluster"
-        openshift-install destroy bootstrap --dir $OCP_CREATE_DIR || echo "no existing bootstrap"
+        $OPENSHIFT_INSTALL destroy cluster --dir $OCP_CREATE_DIR || echo "no existing cluster"
+        $OPENSHIFT_INSTALL destroy bootstrap --dir $OCP_CREATE_DIR || echo "no existing bootstrap"
         ((rm -r $OCP_CREATE_DIR && echo "removed existing create dir") || (true && echo "no existing install dir")) || return 1
     fi
     # if param is delete then stop here
@@ -471,12 +474,15 @@ pullSecret: '$(cat ~/pull-secret.txt)'
 sshKey: |
   $(cat ~/.ssh/id_rsa.pub)
 " > $OCP_CREATE_DIR/install-config.yaml && echo "created install-config.yaml" || return 1
-    openshift-install create manifests --dir $OCP_CREATE_DIR || return 1
-    openshift-install create cluster --dir $OCP_CREATE_DIR \
-        --log-level=info || openshift-install gather bootstrap --dir $OCP_CREATE_DIR || return 1
+    $OPENSHIFT_INSTALL create manifests --dir $OCP_CREATE_DIR || return 1
+    $OPENSHIFT_INSTALL create cluster --dir $OCP_CREATE_DIR \
+        --log-level=info || $OPENSHIFT_INSTALL gather bootstrap --dir $OCP_CREATE_DIR || return 1
 }
 
 function delete-ocp-aws-arm64(){
+    # Use specified openshift-install or default to 4.19.0-ec.4
+    local OPENSHIFT_INSTALL=${OPENSHIFT_INSTALL:-openshift-install-4.19.0-ec.4}
+    
     # Check if help is requested
     if [[ $1 == "help" ]]; then
         echo "Usage: delete-ocp-aws-arm64 [CLUSTER_NAME]"
@@ -499,7 +505,7 @@ function delete-ocp-aws-arm64(){
     if [[ -n $1 ]]; then
         CLUSTER_NAME=$1
     fi
-    openshift-install destroy cluster --dir $OCP_CREATE_DIR || echo "no existing cluster"
-    openshift-install destroy bootstrap --dir $OCP_CREATE_DIR || echo "no existing bootstrap"
+    $OPENSHIFT_INSTALL destroy cluster --dir $OCP_CREATE_DIR || echo "no existing cluster"
+    $OPENSHIFT_INSTALL destroy bootstrap --dir $OCP_CREATE_DIR || echo "no existing bootstrap"
     ((rm -r $OCP_CREATE_DIR && echo "removed existing create dir") || (true && echo "no existing install dir")) || return 1
 }
