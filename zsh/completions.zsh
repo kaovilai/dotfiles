@@ -9,12 +9,12 @@ if [ -f '/Users/tiger/google-cloud-sdk/completion.zsh.inc' ]; then
   source '/Users/tiger/google-cloud-sdk/completion.zsh.inc'
 fi
 
-if [ $(command -v oc) ]; then
+if [ "$(command -v oc)" ]; then
   source <(oc completion zsh)
   compdef _oc oc
 fi
 
-if [ $(command -v gh) ]; then
+if [ "$(command -v gh)" ]; then
   source <(gh completion -s zsh)
   compdef _gh gh
 fi
@@ -40,7 +40,7 @@ completion_cache_expired() {
 }
 
 # Docker completion
-if [ $(command -v docker) ]; then
+if [ "$(command -v docker)" ]; then
   local docker_completion_file=~/_docker
   
   if completion_cache_expired "$docker_completion_file"; then
@@ -75,58 +75,58 @@ if [ -n "$(command -v podman)" ]; then
   fi
 fi
 
-if [ $(command -v aws_completer) ]; then
+if [ "$(command -v aws_completer)" ]; then
   complete -C aws_completer aws
 fi
 
-if [ $(command -v rosa) ]; then
+if [ "$(command -v rosa)" ]; then
   source <(rosa completion zsh)
   compdef _rosa rosa
 fi
 
-if [ $(command -v crc) ]; then
+if [ "$(command -v crc)" ]; then
   source <(crc completion zsh)
   compdef _crc crc
 fi
 
-if [ $(command -v ccoctl) ]; then
+if [ "$(command -v ccoctl)" ]; then
   source <(ccoctl completion zsh)
   compdef _ccoctl ccoctl
 fi
 
-# if [ $(command -v glab) ]; then
+# if [ "$(command -v glab)" ]; then
 #   source <(glab completion -s zsh)
 #   compdef _glab glab
 # fi
 
-if [ $(command -v velero) ]; then
+if [ "$(command -v velero)" ]; then
   source <(velero completion zsh)
   compdef _velero velero
 fi
 
-if [ $(command -v colima) ]; then
+if [ "$(command -v colima)" ]; then
   source <(colima completion zsh)
   compdef _colima colima
 fi
 
-if [ $(command -v kubebuilder) ]; then
+if [ "$(command -v kubebuilder)" ]; then
   source <(kubebuilder completion zsh)
   compdef _kubebuilder kubebuilder
 fi
 
-if [ $(command -v yq) ]; then
+if [ "$(command -v yq)" ]; then
   source <(yq completion zsh)
   compdef _yq yq
 fi
 
 # kind completion zsh
-if [ $(command -v kind) ]; then
+if [ "$(command -v kind)" ]; then
   source <(kind completion zsh)
   compdef _kind kind
 fi
 
 # openshift-installer zshcompletion
-if [ $(command -v openshift-install) ]; then
+if [ "$(command -v openshift-install)" ]; then
   source <(cat /Users/tiger/git/dotfiles/openshift-install-completion-zsh.txt)
   compdef _openshift-install openshift-install
 fi

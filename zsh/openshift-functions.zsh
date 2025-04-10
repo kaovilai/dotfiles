@@ -235,6 +235,29 @@ TODAY=$(date +%Y%m%d)
 # create a cluster with gcp workload identity using CCO manual mode
 # pre-req: ssh-add ~/.ssh/id_rsa
 function create-ocp-gcp-wif(){
+    # Check if help is requested
+    if [[ $1 == "help" ]]; then
+        echo "Usage: create-ocp-gcp-wif [OPTION]"
+        echo "Create an OpenShift cluster on GCP with Workload Identity Federation"
+        echo ""
+        echo "Options:"
+        echo "  help      Display this help message"
+        echo "  gather    Gather bootstrap logs from the installation directory"
+        echo "  delete    Just delete the cluster without recreating it"
+        echo "  no-delete Skip deletion of existing cluster before creation"
+        echo ""
+        echo "Prerequisites:"
+        echo "  - GCP_PROJECT_ID environment variable must be set"
+        echo "  - GCP_REGION environment variable must be set"
+        echo "  - GCP_BASEDOMAIN environment variable must be set"
+        echo "  - SSH key must be added to the agent (ssh-add ~/.ssh/id_rsa)"
+        echo "  - Pull secret must exist at ~/pull-secret.txt"
+        echo ""
+        echo "Directory:"
+        echo "  Installation files will be created in: $OCP_MANIFESTS_DIR/$TODAY-gcp-wif"
+        return 0
+    fi
+    
     # openshift-install create install-config --dir $OCP_MANIFESTS_DIR/$TODAY-gcp-wif --log-level debug
     # https://docs.redhat.com/en/documentation/openshift_container_platform/4.17/html-single/installing_on_gcp/index#cco-ccoctl-configuring_installing-gcp-customizations
     # prompt and remove if exists already so user can interrupt if uninstall is needed.
@@ -317,6 +340,24 @@ openshift-install create cluster --dir $OCP_CREATE_DIR \
 }
 
 function delete-ocp-gcp-wif(){
+    # Check if help is requested
+    if [[ $1 == "help" ]]; then
+        echo "Usage: delete-ocp-gcp-wif [CLUSTER_NAME]"
+        echo "Delete an OpenShift cluster on GCP that was created with Workload Identity Federation"
+        echo ""
+        echo "Options:"
+        echo "  help          Display this help message"
+        echo "  CLUSTER_NAME  Optional: Specify a custom cluster name (default: tkaovila-YYYYMMDD-wif)"
+        echo ""
+        echo "This function:"
+        echo "  - Destroys the cluster using openshift-install"
+        echo "  - Deletes the GCP WIF resources using ccoctl"
+        echo "  - Removes the installation directory"
+        echo ""
+        echo "Directory used: $OCP_MANIFESTS_DIR/$TODAY-gcp-wif"
+        return 0
+    fi
+
     OCP_CREATE_DIR=$OCP_MANIFESTS_DIR/$TODAY-gcp-wif
     CLUSTER_NAME=tkaovila-$TODAY-wif
     if [[ -n $1 ]]; then
@@ -332,6 +373,53 @@ function delete-ocp-gcp-wif(){
 }
 
 function create-ocp-aws-arm64(){
+    # Check if help is requested
+    if [[ $1 == "help" ]]; then
+        echo "Usage: create-ocp-aws-arm64 [OPTION]"
+        echo "Create an OpenShift cluster on AWS using ARM64 architecture"
+        echo "Note: This function will use ARM64 if the release payload supports it, otherwise falls back to AMD64"
+        echo ""
+        echo "Options:"
+        echo "  help      Display this help message"
+        echo "  gather    Gather bootstrap logs from the installation directory"
+        echo "  delete    Just delete the cluster without recreating it"
+        echo "  no-delete Skip deletion of existing cluster before creation"
+        echo ""
+        echo "Prerequisites:"
+        echo "  - AWS_REGION environment variable (defaults to us-east-1 if not set)"
+        echo "  - AWS_BASEDOMAIN environment variable (defaults to mg.dog8code.com if not set)"
+        echo "  - AWS credentials must be configured"
+        echo "  - SSH key must be added to the agent (ssh-add ~/.ssh/id_rsa)"
+        echo "  - Pull secret must exist at ~/pull-secret.txt"
+        echo ""
+        echo "Directory:"
+        echo "  Installation files will be created in: $OCP_MANIFESTS_DIR/$TODAY-aws-arm64"
+        return 0
+    fi
+    
+    # Set default values for AWS_REGION and AWS_BASEDOMAIN if not already set
+    if [[ -z "$AWS_REGION" ]]; then
+        echo "INFO: AWS_REGION not set, defaulting to us-east-1"
+        AWS_REGION="us-east-1"
+    fi
+    
+    if [[ -z "$AWS_BASEDOMAIN" ]]; then
+        echo "INFO: AWS_BASEDOMAIN not set, defaulting to mg.dog8code.com"
+        AWS_BASEDOMAIN="mg.dog8code.com"
+    fi
+    
+    # Check if openshift-install supports ARM64 architecture
+    if openshift-install version | grep -q "release architecture arm64"; then
+        ARCHITECTURE="arm64"
+        echo "INFO: Using ARM64 architecture for cluster nodes (supported by current release payload)"
+    else
+        ARCHITECTURE="amd64"
+        echo "WARN: ARM64 architecture not supported in current release payload, using AMD64 instead"
+        echo "WARN: To use ARM64, you need an openshift-install binary built for ARM64"
+        echo "WARN: Run 'openshift-install version' to check if 'release architecture arm64' is present"
+        return 0
+    fi
+    
     OCP_CREATE_DIR=$OCP_MANIFESTS_DIR/$TODAY-aws-arm64
     CLUSTER_NAME=tkaovila-$TODAY-arm64 #max 21 char allowed
     if [[ $1 == "gather" ]]; then
@@ -352,13 +440,13 @@ function create-ocp-aws-arm64(){
 apiVersion: v1
 baseDomain: $AWS_BASEDOMAIN
 compute:
-- architecture: arm64
+- architecture: $ARCHITECTURE
   hyperthreading: Enabled
   name: worker
   platform: {}
   replicas: 3
 controlPlane:
-  architecture: arm64
+  architecture: $ARCHITECTURE
   hyperthreading: Enabled
   name: master
   platform: {}
@@ -389,6 +477,23 @@ sshKey: |
 }
 
 function delete-ocp-aws-arm64(){
+    # Check if help is requested
+    if [[ $1 == "help" ]]; then
+        echo "Usage: delete-ocp-aws-arm64 [CLUSTER_NAME]"
+        echo "Delete an OpenShift cluster on AWS that was created with ARM64 architecture"
+        echo ""
+        echo "Options:"
+        echo "  help          Display this help message"
+        echo "  CLUSTER_NAME  Optional: Specify a custom cluster name (default: tkaovila-YYYYMMDD-arm64)"
+        echo ""
+        echo "This function:"
+        echo "  - Destroys the cluster using openshift-install"
+        echo "  - Removes the installation directory"
+        echo ""
+        echo "Directory used: $OCP_MANIFESTS_DIR/$TODAY-aws-arm64"
+        return 0
+    fi
+    
     OCP_CREATE_DIR=$OCP_MANIFESTS_DIR/$TODAY-aws-arm64
     CLUSTER_NAME=tkaovila-$TODAY-arm64
     if [[ -n $1 ]]; then
