@@ -330,3 +330,71 @@ function delete-ocp-gcp-wif(){
     --credentials-requests-dir $OCP_CREATE_DIR/credentials-requests && echo "cleaned up ccoctl gcp resources") || true
     ((rm -r $OCP_CREATE_DIR && echo "removed existing create dir") || (true && echo "no existing install dir")) || return 1
 }
+
+function create-ocp-aws-arm64(){
+    OCP_CREATE_DIR=$OCP_MANIFESTS_DIR/$TODAY-aws-arm64
+    CLUSTER_NAME=tkaovila-$TODAY-arm64 #max 21 char allowed
+    if [[ $1 == "gather" ]]; then
+        openshift-install gather bootstrap --dir $OCP_CREATE_DIR || return 1
+        return 0
+    fi
+    if [[ $1 != "no-delete" ]]; then
+        openshift-install destroy cluster --dir $OCP_CREATE_DIR || echo "no existing cluster"
+        openshift-install destroy bootstrap --dir $OCP_CREATE_DIR || echo "no existing bootstrap"
+        ((rm -r $OCP_CREATE_DIR && echo "removed existing create dir") || (true && echo "no existing install dir")) || return 1
+    fi
+    # if param is delete then stop here
+    if [[ $1 == "delete" ]]; then
+        return 0
+    fi
+    mkdir -p $OCP_CREATE_DIR && \
+    echo "additionalTrustBundlePolicy: Proxyonly
+apiVersion: v1
+baseDomain: $AWS_BASEDOMAIN
+compute:
+- architecture: arm64
+  hyperthreading: Enabled
+  name: worker
+  platform: {}
+  replicas: 3
+controlPlane:
+  architecture: arm64
+  hyperthreading: Enabled
+  name: master
+  platform: {}
+  replicas: 3
+metadata:
+  creationTimestamp: null
+  name: $CLUSTER_NAME
+networking:
+  clusterNetwork:
+  - cidr: 10.128.0.0/14
+    hostPrefix: 23
+  machineNetwork:
+  - cidr: 10.0.0.0/16
+  networkType: OVNKubernetes
+  serviceNetwork:
+  - 172.30.0.0/16
+platform:
+  aws:
+    region: $AWS_REGION
+publish: External
+pullSecret: '$(cat ~/pull-secret.txt)'
+sshKey: |
+  $(cat ~/.ssh/id_rsa.pub)
+" > $OCP_CREATE_DIR/install-config.yaml && echo "created install-config.yaml" || return 1
+    openshift-install create manifests --dir $OCP_CREATE_DIR || return 1
+    openshift-install create cluster --dir $OCP_CREATE_DIR \
+        --log-level=info || openshift-install gather bootstrap --dir $OCP_CREATE_DIR || return 1
+}
+
+function delete-ocp-aws-arm64(){
+    OCP_CREATE_DIR=$OCP_MANIFESTS_DIR/$TODAY-aws-arm64
+    CLUSTER_NAME=tkaovila-$TODAY-arm64
+    if [[ -n $1 ]]; then
+        CLUSTER_NAME=$1
+    fi
+    openshift-install destroy cluster --dir $OCP_CREATE_DIR || echo "no existing cluster"
+    openshift-install destroy bootstrap --dir $OCP_CREATE_DIR || echo "no existing bootstrap"
+    ((rm -r $OCP_CREATE_DIR && echo "removed existing create dir") || (true && echo "no existing install dir")) || return 1
+}
