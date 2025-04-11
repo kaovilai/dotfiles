@@ -1,3 +1,5 @@
+# set kubectl edit to use vscode
+export EDITOR="code -w"
 alias kubectl=oc
 alias oc-login-crc='export KUBECONFIG=~/.crc/machines/crc/kubeconfig'
 alias oc-registry-login='oc registry login'
