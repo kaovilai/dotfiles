@@ -57,3 +57,12 @@ source ~/git/dotfiles/zsh/aws.zsh
 source ~/git/dotfiles/zsh/podman.zsh
 source ~/git/dotfiles/zsh/completions.zsh
 eval "$(gh copilot alias -- zsh)"
+
+# bun completions
+[ -s "/Users/tiger/.bun/_bun" ] && source "/Users/tiger/.bun/_bun"
+
+# bun
+export BUN_INSTALL="$HOME/.bun"
+export PATH="$BUN_INSTALL/bin:$PATH"
+
+export PATH="$HOME/.local/bin:$PATH"
