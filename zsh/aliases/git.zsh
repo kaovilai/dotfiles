@@ -49,6 +49,15 @@ function git-worktree-code() {
   
   local current_repo=$(basename $(pwd))
   local dir="../$current_repo-$1"
-  git worktree add "$dir" "$1" && code "$dir"
+  
+  # Check if branch exists
+  if git show-ref --verify --quiet refs/heads/"$1"; then
+    # Branch exists, add worktree
+    git worktree add "$dir" "$1" && code "$dir"
+  else
+    # Branch doesn't exist, create it with the worktree
+    echo "Branch '$1' doesn't exist, creating it..."
+    git worktree add -b "$1" "$dir" && code "$dir"
+  fi
 }
 alias gwc='git-worktree-code'
