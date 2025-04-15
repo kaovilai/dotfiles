@@ -37,3 +37,18 @@ alias ocosp='oco && gcas && gpf'
 alias oco-signoff='oco && gcas'
 alias oco-signoff-push-force='oco && gcas && gpf'
 alias oco-confirm-signoff-push-force='(oco -y || (open -a Ollama && oco -y)) && gcas && gpf'
+
+# Worktree functions
+function git-worktree-code() {
+  # Create a worktree in parent directory with name <current-dir-basename>-<param1> and open in VS Code
+  if [ -z "$1" ]; then
+    echo "Error: Missing branch name parameter"
+    echo "Usage: git-worktree-code <branch-name>"
+    return 1
+  fi
+  
+  local current_repo=$(basename $(pwd))
+  local dir="../$current_repo-$1"
+  git worktree add "$dir" "$1" && code "$dir"
+}
+alias gwc='git-worktree-code'
