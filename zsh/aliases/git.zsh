@@ -32,6 +32,7 @@ alias dco='git rebase HEAD~$(gh pr view --json commits -q ".commits | length") -
 alias dco-push='dco && git push --force'
 
 # Opencommit aliases
+alias ococ='oco -y'
 alias ocos='oco && gcas'
 alias ocosp='oco && gcas && gpf'
 alias oco-signoff='oco && gcas'

@@ -1,2 +1,2 @@
 .vscode/
-zsh/*.zwc
+zsh/**/*.zwc
