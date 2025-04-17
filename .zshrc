@@ -45,6 +45,7 @@ eval "$(gh copilot alias -- zsh)"
 # source ~/git/dotfiles/zsh/aws.zsh
 if [[ "$TERM_PROGRAM" != "vscode" ]]; then
   source ~/git/dotfiles/zsh/openshift-functions.zsh
+  source ~/git/dotfiles/zsh/check-existing-clusters.zsh
 fi
 # source ~/git/dotfiles/zsh/podman.zsh
 source ~/git/dotfiles/zsh/util.zsh

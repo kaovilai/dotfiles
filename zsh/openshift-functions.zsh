@@ -115,6 +115,10 @@ znap function installClusterOpenshiftInstall(){
     DATE=$(date +%b%d-%H%M)
     # lowercase the date
     DATE=$(echo $DATE | tr '[:upper:]' '[:lower:]')
+    
+    # Check for existing clusters before proceeding
+    check-for-existing-clusters "all" "$DATE" || return 1
+    
     mkdir -p ~/clusters/$DATE && \
     echo "Installing into dir ~/clusters/$DATE" && \
     cp ~/install-config.yaml ~/clusters/$DATE/ && \
@@ -287,6 +291,9 @@ znap function create-ocp-gcp-wif(){
     if [[ $1 == "delete" ]]; then
         return 0
     fi
+    
+    # Check for existing clusters before proceeding
+    check-for-existing-clusters "gcp" || return 1
     mkdir -p $OCP_CREATE_DIR && \
     echo "additionalTrustBundlePolicy: Proxyonly
 apiVersion: v1
@@ -457,6 +464,9 @@ znap function create-ocp-aws() {
     if [[ $1 == "delete" ]]; then
         return 0
     fi
+    
+    # Check for existing clusters before proceeding
+    check-for-existing-clusters "aws" "$ARCH_SUFFIX" || return 1
     
     mkdir -p $OCP_CREATE_DIR && \
     echo "additionalTrustBundlePolicy: Proxyonly
