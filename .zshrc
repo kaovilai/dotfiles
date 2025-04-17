@@ -1,3 +1,8 @@
+# expected content of ~/.zshrc
+# ```
+# source ~/git/dotfiles/.zshrc
+# ```
+
 # Don't put secrets here, put them in ~/secrets.zsh
 # edit ~/.zshrc first then run copy-to-dotfiles-from-zshrc to copy to dotfiles
 [[ -f ~/secrets.zsh ]] && source ~/secrets.zsh
@@ -6,19 +11,8 @@ export HISTFILESIZE=200000 # bytes in history file
 [[ -f ~/git/dotfiles/zsh/znap.zsh ]] || sh -c "mkdir -p ~/git && git clone --depth 1 -- \
     git@github.com:kaovilai/dotfiles.git ~/git/dotfiles"
 source ~/git/dotfiles/zsh/colors.zsh
-if diff ~/git/dotfiles/.zshrc ~/.zshrc; then
-  echo ".zshrc is up to date with dotfiles"
-else
-  echo "diff ~/git/dotfiles/.zshrc ~/.zshrc";\
-  echo ".zshrc is out of sync with dotfiles\n\
-    ${RED}copy-to-dotfiles-from-zshrc${NC} to copy .zshrc to dotfiles and review diff\n\
-    ${RED}push-dotfiles-from-zshrc${NC} to push dotfiles\n\
-    ${RED}update-zshrc-from-dotfiles${NC} to update ~/.zshrc"
-fi
+
 alias edit-dotfiles='code ~/git/dotfiles/'
-if git -C ~/git/dotfiles status --porcelain | grep -q "M"; then
-  echo "dotfiles repo has uncommitted changes, run ${RED}edit-dotfiles${NC} to review"
-fi
 source ~/git/dotfiles/zsh/alias.zsh
 # gpg tty
 export GPG_TTY=$(tty)
@@ -57,14 +51,19 @@ source ~/git/dotfiles/zsh/aws.zsh
 source ~/git/dotfiles/zsh/podman.zsh
 source ~/git/dotfiles/zsh/completions.zsh
 eval "$(gh copilot alias -- zsh)"
+if [[ "$TERM_PROGRAM" != "vscode" ]]; then
+  if git -C ~/git/dotfiles status --porcelain | grep -q "M"; then
+    echo "dotfiles repo has uncommitted changes, run ${RED}edit-dotfiles${NC} to review"
+  fi
+fi
+# # bun completions
+# [ -s "/Users/tiger/.bun/_bun" ] && source "/Users/tiger/.bun/_bun"
 
-# bun completions
-[ -s "/Users/tiger/.bun/_bun" ] && source "/Users/tiger/.bun/_bun"
 
-# bun
-export BUN_INSTALL="$HOME/.bun"
-export PATH="$BUN_INSTALL/bin:$PATH"
+# # bun
+# export BUN_INSTALL="$HOME/.bun"
+# export PATH="$BUN_INSTALL/bin:$PATH"
 
-export PATH="$HOME/.local/bin:$PATH"
+# export PATH="$HOME/.local/bin:$PATH"
 
-[ -f "/Users/tiger/.ghcup/env" ] && . "/Users/tiger/.ghcup/env" # ghcup-env
+# [ -f "/Users/tiger/.ghcup/env" ] && . "/Users/tiger/.ghcup/env" # ghcup-env

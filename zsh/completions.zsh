@@ -42,12 +42,13 @@ completion_cache_expired() {
 # Docker completion
 if [ "$(command -v docker)" ]; then
   local docker_completion_file=~/_docker
-  
-  if completion_cache_expired "$docker_completion_file"; then
-    # Download completion file in the background
-    (curl -sLm 10 https://raw.githubusercontent.com/docker/docker-ce/master/components/cli/contrib/completion/zsh/_docker > "${docker_completion_file}.tmp" && 
-     mv "${docker_completion_file}.tmp" "$docker_completion_file" || 
-     (rm -f "${docker_completion_file}.tmp"; echo "Failed to download docker completion")) &
+  if [[ "$TERM_PROGRAM" != "vscode" ]]; then
+    if completion_cache_expired "$docker_completion_file"; then
+      # Download completion file in the background
+      (curl -sLm 10 https://raw.githubusercontent.com/docker/docker-ce/master/components/cli/contrib/completion/zsh/_docker > "${docker_completion_file}.tmp" && 
+      mv "${docker_completion_file}.tmp" "$docker_completion_file" || 
+      (rm -f "${docker_completion_file}.tmp"; echo "Failed to download docker completion")) &
+    fi
   fi
   
   # Source existing completion file (even if it's being updated)
@@ -60,12 +61,13 @@ fi
 # Podman completion
 if [ -n "$(command -v podman)" ]; then
   local podman_completion_file=~/_podman
-  
-  if completion_cache_expired "$podman_completion_file"; then
-    # Download completion file in the background
-    (curl -sLm 10 https://raw.githubusercontent.com/containers/podman/main/completions/zsh/_podman > "${podman_completion_file}.tmp" && 
-     mv "${podman_completion_file}.tmp" "$podman_completion_file" || 
-     (rm -f "${podman_completion_file}.tmp"; echo "Failed to download podman completion")) &
+  if [[ "$TERM_PROGRAM" != "vscode" ]]; then
+    if completion_cache_expired "$podman_completion_file"; then
+      # Download completion file in the background
+      (curl -sLm 10 https://raw.githubusercontent.com/containers/podman/main/completions/zsh/_podman > "${podman_completion_file}.tmp" && 
+      mv "${podman_completion_file}.tmp" "$podman_completion_file" || 
+      (rm -f "${podman_completion_file}.tmp"; echo "Failed to download podman completion")) &
+    fi
   fi
   
   # Source existing completion file (even if it's being updated)
@@ -84,10 +86,10 @@ if [ "$(command -v rosa)" ]; then
   compdef _rosa rosa
 fi
 
-if [ "$(command -v crc)" ]; then
-  source <(crc completion zsh)
-  compdef _crc crc
-fi
+# if [ "$(command -v crc)" ]; then
+#   source <(crc completion zsh)
+#   compdef _crc crc
+# fi
 
 if [ "$(command -v ccoctl)" ]; then
   source <(ccoctl completion zsh)
@@ -104,15 +106,15 @@ if [ "$(command -v velero)" ]; then
   compdef _velero velero
 fi
 
-if [ "$(command -v colima)" ]; then
-  source <(colima completion zsh)
-  compdef _colima colima
-fi
+# if [ "$(command -v colima)" ]; then
+#   source <(colima completion zsh)
+#   compdef _colima colima
+# fi
 
-if [ "$(command -v kubebuilder)" ]; then
-  source <(kubebuilder completion zsh)
-  compdef _kubebuilder kubebuilder
-fi
+# if [ "$(command -v kubebuilder)" ]; then
+#   source <(kubebuilder completion zsh)
+#   compdef _kubebuilder kubebuilder
+# fi
 
 if [ "$(command -v yq)" ]; then
   source <(yq completion zsh)

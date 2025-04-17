@@ -12,7 +12,7 @@ alias terminal='open -a Terminal .'
 AT_HOME='(ioreg -p IOUSB | grep "Plugable USBC-6950U" > /dev/null && ioreg -p IOUSB | grep "CalDigit TS4" > /dev/null && networksetup -getnetworkserviceenabled Thunderbolt\ Ethernet\ Slot\ 2 | grep Enabled > /dev/null)'
 DISPLAYLINK_CONNECTED='(system_profiler SPDisplaysDataType | grep ARZOPA > /dev/null || system_profiler SPDisplaysDataType | grep TYPE-C > /dev/null)'
 RESTART_DISPLAYLINK='(osascript -e "quit app \"DisplayLink Manager\""; while pgrep DisplayLinkUserAgent > /dev/null; do sleep 0.1; done; open -a DisplayLink\ Manager)'
-eval $AT_HOME && (eval $DISPLAYLINK_CONNECTED || eval $RESTART_DISPLAYLINK) &
+
 
 alias install-pkg='sudo installer -target LocalSystem -pkg'
 
@@ -62,30 +62,33 @@ function unsetSOCKSproxy(){
     networksetup -setsocksfirewallproxystate Wi-Fi off
 }
 WIFI_NAME=$(networksetup -getairportnetwork en0 | cut -d " " -f 4)
-if [[ "$WIFI_NAME" = "S23" ]]; then
-    (curl --silent --socks5 $SOCKS_ROUTER_IP:$SOCKS_ROUTER_PROXY_PORT http://www.google.com && setSOCKSproxy) &
-else
-    unsetSOCKSproxy &
+if [[ "$TERM_PROGRAM" != "vscode" ]]; then
+  eval $AT_HOME && (eval $DISPLAYLINK_CONNECTED || eval $RESTART_DISPLAYLINK) &
+    if [[ "$WIFI_NAME" = "S23" ]]; then
+        (curl --silent --socks5 $SOCKS_ROUTER_IP:$SOCKS_ROUTER_PROXY_PORT http://www.google.com && setSOCKSproxy) &
+    else
+        unsetSOCKSproxy &
+    fi
+    # randomize mac address, requires wi-fi to be en0, check with `sudo networksetup -listallhardwareports`
+    # requires spoof-mac -> https://formulae.brew.sh/formula/spoof-mac
+    alias randomize-mac='sudo networksetup -setairportpower en0 off && sudo spoof-mac randomize wi-fi'
+
+    # To get git to work over ssh via 443 proxy,
+    # replace .git/config `git@github.com:(.*)/`
+    # with `ssh://git@ssh.github.com:443/$1/`
+    if [[ "$WIFI_NAME" = "$TF_NETWORK_NAME" ]]; then
+        setTFproxy &
+        # mkdir -p ~/.ssh/tigerdotfiles/
+        # echo "Host github.com
+        # Hostname github.com
+        # ServerAliveInterval 55
+        # ForwardAgent yes
+        # ProxyCommand $(which socat) - PROXY:$TF_ROUTER_IP:%h:%p,proxyport=$TF_ROUTER_PROXY_PORT" > ~/.ssh/tigerdotfiles/config
+    else
+        unsetTFproxy &
+    fi
 fi
 
-# randomize mac address, requires wi-fi to be en0, check with `sudo networksetup -listallhardwareports`
-# requires spoof-mac -> https://formulae.brew.sh/formula/spoof-mac
-alias randomize-mac='sudo networksetup -setairportpower en0 off && sudo spoof-mac randomize wi-fi'
-
-# To get git to work over ssh via 443 proxy,
-# replace .git/config `git@github.com:(.*)/`
-# with `ssh://git@ssh.github.com:443/$1/`
-if [[ "$WIFI_NAME" = "$TF_NETWORK_NAME" ]]; then
-    setTFproxy &
-    # mkdir -p ~/.ssh/tigerdotfiles/
-    # echo "Host github.com
-    # Hostname github.com
-    # ServerAliveInterval 55
-    # ForwardAgent yes
-    # ProxyCommand $(which socat) - PROXY:$TF_ROUTER_IP:%h:%p,proxyport=$TF_ROUTER_PROXY_PORT" > ~/.ssh/tigerdotfiles/config
-else
-    unsetTFproxy &
-fi
 
 # kill apps that are not essential
 # kill -9 $(ps aux | grep -v grep | grep -E '/Messenger.app/|Acrobat|Fathom|Todoist|LINE')
