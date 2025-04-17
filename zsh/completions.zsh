@@ -38,8 +38,7 @@ fi
 if [ "$(command -v docker)" ]; then
   local docker_completion_file="$ZSH_COMPLETION_CACHE_DIR/_docker"
   if [[ -f "$docker_completion_file" ]]; then
-    source "$docker_completion_file"
-    compdef _docker docker
+    cat "$docker_completion_file" > "${fpath[1]}/_docker" &!
   fi
   
   # Update check and download in the background
@@ -52,59 +51,35 @@ if [ "$(command -v docker)" ]; then
   fi
 fi
 
-# -- PHASE 2: Lazy-loaded completions with znap function --
-# Each completion is loaded only when the command is called or completion is attempted
+# -- PHASE 2: Direct completion generation --
+# Each completion is generated and written to fpath directly
 
 # OpenShift Install - uses cached file to avoid generating completion on every shell start
 if [ "$(command -v openshift-install)" ]; then
-  znap function _openshift_install openshift-install "cat /Users/tiger/git/dotfiles/openshift-install-completion-zsh.txt"
-  compdef _openshift_install openshift-install
+  cat /Users/tiger/git/dotfiles/openshift-install-completion-zsh.txt > "${fpath[1]}/_openshift-install" &!
 fi
 
 # GitHub CLI completion
 if [ "$(command -v gh)" ]; then
-  znap function _gh_completion gh 'eval "$(gh completion -s zsh)"'
-  compdef _gh_completion gh
+  gh completion -s zsh > "${fpath[1]}/_gh" &!
 fi
 
-# covered by 
-# ❯ which _kubectl 
-# _kubectl () {
-# 	# undefined
-# 	builtin autoload -XUz /opt/homebrew/share/zsh/site-functions
-# }
-#compdef kubectl
-# if [ "$(command -v kubectl)" ]; then
-#   znap function _kubectl_completion kubectl 'eval "$(kubectl completion -s zsh)"'
-#   compdef _kubectl_completion kubectl
-# fi
-#compdef oc
-# if [ "$(command -v oc)" ]; then
-znap function _oc_completion oc 'eval "$(oc completion zsh)"'
-# znap function _oc_completion 'oc source <(oc completion zsh)'
-compdef _oc_completion oc
-# fi
+# Kubernetes CLI
+if [ "$(command -v kubectl)" ]; then
+  kubectl completion zsh > "${fpath[1]}/_kubectl" &!
+fi
+
 # OpenShift Client
-# if [ "$(command -v oc)" ]; then
-#   # Add direct compdef at the top level similar to kubectl
-#   if [[ -z "$_oc_completion_initialized" ]]; then
-#     # Generate completion directly once
-#     source <(oc completion zsh)
-#     # Mark as initialized to avoid regenerating
-#     _oc_completion_initialized=1
-#   fi
-#   # Keep the znap function for refreshing completions in the future
-#   znap function _oc_completion oc 'eval "$(oc completion zsh)"'
-#   compdef _oc_completion oc
-# fi
+if [ "$(command -v oc)" ]; then
+  oc completion zsh > "${fpath[1]}/_oc" &!
+fi
 
 # Podman completion - use centralized cache location
 if [ -n "$(command -v podman)" ]; then
   local podman_completion_file="$ZSH_COMPLETION_CACHE_DIR/_podman"
   
   if [[ -f "$podman_completion_file" ]]; then
-    source "$podman_completion_file"
-    compdef _podman podman
+    cat "$podman_completion_file" > "${fpath[1]}/_podman" &!
   fi
   
   # Update check and download in the background
@@ -119,54 +94,59 @@ fi
 
 # Rosa CLI
 if [ "$(command -v rosa)" ]; then
-  znap function _rosa_completion rosa 'eval "$(rosa completion zsh)"'
-  compdef _rosa_completion rosa
+  rosa completion zsh > "${fpath[1]}/_rosa" &!
 fi
 
 # CCOCTL
 if [ "$(command -v ccoctl)" ]; then
-  znap function _ccoctl_completion ccoctl 'eval "$(ccoctl completion zsh)"'
-  compdef _ccoctl_completion ccoctl
+  ccoctl completion zsh > "${fpath[1]}/_ccoctl" &!
 fi
 
 # Velero
 if [ "$(command -v velero)" ]; then
-  znap function _velero_completion velero 'eval "$(velero completion zsh)"'
-  compdef _velero_completion velero
+  velero completion zsh > "${fpath[1]}/_velero" &!
 fi
 
 # YQ
 if [ "$(command -v yq)" ]; then
-  znap function _yq_completion yq 'eval "$(yq completion zsh)"'
-  compdef _yq_completion yq
+  yq completion zsh > "${fpath[1]}/_yq" &!
 fi
 
 # Kind
 if [ "$(command -v kind)" ]; then
-  znap function _kind_completion kind 'eval "$(kind completion zsh)"'
-  compdef _kind_completion kind
+  kind completion zsh > "${fpath[1]}/_kind" &!
 fi
 
 # Google Cloud SDK configuration - loaded on demand
 if [ -f '/Users/tiger/google-cloud-sdk/path.zsh.inc' ]; then 
   source '/Users/tiger/google-cloud-sdk/path.zsh.inc'
 fi
-if [ -f '/Users/tiger/google-cloud-sdk/completion.zsh.inc' ]; then 
-  znap function _gcloud_completion gcloud 'source /Users/tiger/google-cloud-sdk/completion.zsh.inc'
-  compdef _gcloud_completion gcloud
+if [ -f '/Users/tiger/google-cloud-sdk/completion.zsh.inc' ] && [ "$(command -v gcloud)" ]; then
+  gcloud completion zsh > "${fpath[1]}/_gcloud" &!
 fi
 
-# Pipenv - Load only when needed
+# Pipenv
 if [ "$(command -v pipenv)" ]; then
-  znap function _pipenv_completion pipenv 'eval "$(_PIPENV_COMPLETE=zsh_source pipenv)"'
-  compdef _pipenv_completion pipenv
+  _PIPENV_COMPLETE=zsh_source pipenv > "${fpath[1]}/_pipenv" &!
 fi
 
 # IBM Cloud completion - if needed
 if [[ -f /usr/local/ibmcloud/autocomplete/zsh_autocomplete ]]; then
-  znap function _ibmcloud_completion ibmcloud 'source /usr/local/ibmcloud/autocomplete/zsh_autocomplete'
-  compdef _ibmcloud_completion ibmcloud
+  cat /usr/local/ibmcloud/autocomplete/zsh_autocomplete > "${fpath[1]}/_ibmcloud" &!
 fi
+
+# Custom code-git completion
+cat << EOF > "${fpath[1]}/_code-git" &!
+#compdef code-git
+
+_code-git() {
+    local -a files
+    files=(\${(f)"\$(ls ~/git)"})
+    _describe 'files' files
+}
+
+_code-git
+EOF
 
 # Help command to view cache status
 zsh_completion_cache_status() {
