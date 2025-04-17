@@ -1,5 +1,5 @@
 # Define release payload for OpenShift installations
-export OCP_FUNCTIONS_RELEASE_IMAGE=registry.ci.openshift.org/origin/release:4.19
+export OCP_FUNCTIONS_RELEASE_IMAGE=quay.io/openshift-release-dev/ocp-release:4.19.0-ec.4-multi
 
 # Directory containing the manifests for many clusters
 export OCP_MANIFESTS_DIR=~/OCP/manifests
@@ -16,7 +16,7 @@ else
         export ocpclientos='linux'
         export ocpclientarch=$(dpkg --print-architecture)
     else
-        echo "openshift-functions.zsh: Unknown OS"
+        echo "zsh/functions/openshift/variables.zsh: Unknown OS"
     fi
 fi
 
