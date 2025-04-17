@@ -45,7 +45,7 @@ _code-git() {
 
 compdef _code-git code-git
 
-function go-mod-upgrade(){
+znap function go-mod-upgrade(){
     # first argument is the package to upgrade
     if [[ -z "$1" ]]; then
     echo "Usage: go-mod-upgrade <package>"
@@ -63,7 +63,7 @@ function go-mod-upgrade(){
 # $4 is text to prefix commit/PR title such as "CVE-2025-22869: "
 # Examples: GOTOOLCHAIN=go1.23.6 go-mod-upgrade-dirs "velero*" golang.org/x/oauth2@v0.27.0
 # Examples: GOTOOLCHAIN=go1.23.6 go-mod-upgrade-dirs "velero*" golang.org/x/crypto@v0.35.0 "gsed -i \"s/golang:1.22-bookworm/golang:1.23-bookworm/g\" Dockerfile && git add Dockerfile" CVE-2025-22869
-function go-mod-upgrade-dirs(){
+znap function go-mod-upgrade-dirs(){
     find . -type d -maxdepth 1 -name "$1" -exec sh -c "cd {} && pwd && \
         git fetch upstream && (git checkout upstream/main || git checkout upstream/master) && \
         (git checkout -b $2 || git checkout $2) && \
@@ -81,7 +81,7 @@ function go-mod-upgrade-dirs(){
 # Examples: exec-dirs "velero*" golang.org/x/oauth2@v0.27.0 "snyk test"
 #   find . -type f -name \"Dockerfile*\" -name \"Tiltfile\" -exec sed s/golang:1.22.10/golang:1.23.6/g {} \; \
 #   find . -type f -name \"Dockerfile*\" -name \"Tiltfile\" -exec git add {} \;"
-function exec-dirs(){
+znap function exec-dirs(){
     find . -type d -maxdepth 1 -name "$1" -exec sh -c "cd {} && pwd && git fetch upstream && (git checkout upstream/main || git checkout upstream/master) && (git checkout -b $2 || git checkout $2) && sh -c \"$3\"" \;
 }
 
@@ -93,7 +93,7 @@ function exec-dirs(){
 # $3: base branch
 # $4: branch checkout name
 # $5: command
-function exec-dirs-ds(){
+znap function exec-dirs-ds(){
     local pattern="$1"
     local ds_name="$2"
     local base_branch="$3"
@@ -142,7 +142,7 @@ function exec-dirs-ds(){
 }
 
 # Echo-only version of exec-dirs-ds (for testing what would happen)
-function exec-dirs-ds-echo(){
+znap function exec-dirs-ds-echo(){
     local pattern="$1"
     local ds_name="$2"
     local base_branch="$3"
@@ -162,13 +162,13 @@ function exec-dirs-ds-echo(){
 
 # open all dirs matching patterh in code
 # ex: code-dirs "velero*"
-function code-dirs() {
+znap function code-dirs() {
     find . -type d -maxdepth 1 -name "$1" | parallel code {}
 }
 
 # open all dirs matching patterh in finder
 # ex: finder-dirs "velero*"
-function finder-dirs() {
+znap function finder-dirs() {
     find . -type d -maxdepth 1 -name "$1" | parallel open -a Finder {}
 }
 
@@ -345,7 +345,7 @@ znap function unsymlink-from-sd() {
 
 # view current prs in dirs matched by find . -type d -maxdepth 1 -name "<$1>"
 # view-pr-dirs "velero*"
-function view-pr-dirs() {
+znap function view-pr-dirs() {
     find . -type d -maxdepth 1 -name "$1" -exec sh -c "cd {} && pwd && gh pr view --web" \;
 }
 

@@ -40,7 +40,7 @@ alias oco-signoff-push-force='oco && gcas && gpf'
 alias oco-confirm-signoff-push-force='(oco -y || (open -a Ollama && oco -y)) && gcas && gpf'
 
 # Worktree functions
-function git-worktree-code() {
+znap function git-worktree-code() {
   # Create a worktree in parent directory with name <current-dir-basename>-<param1> and open in VS Code
   if [ -z "$1" ]; then
     echo "Error: Missing branch name parameter"
