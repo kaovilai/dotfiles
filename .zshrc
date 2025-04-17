@@ -32,25 +32,25 @@ export BUILDX_PLATFORMS=linux/amd64,linux/arm64
 source ~/git/dotfiles/zsh/paths.zsh
 source ~/git/dotfiles/zsh/command-cache.zsh
 source ~/git/dotfiles/zsh/cached-commands.zsh
-source ~/git/dotfiles/zsh/completions.zsh
+source ~/git/dotfiles/zsh/aws.zsh
+source ~/git/dotfiles/zsh/openshift-functions.zsh
+source ~/git/dotfiles/zsh/podman.zsh
+source ~/git/dotfiles/zsh/util.zsh
+source ~/git/dotfiles/zsh/go.zsh
+# Load GitHub Copilot aliases
+eval "$(gh copilot alias -- zsh)"
 # -- Non-essential initialization (happens in background) --
 {
   # Load extended utilities in background
-  source ~/git/dotfiles/zsh/util.zsh
-  source ~/git/dotfiles/zsh/go.zsh
-  source ~/git/dotfiles/zsh/openshift-functions.zsh
-  source ~/git/dotfiles/zsh/aws.zsh
-  source ~/git/dotfiles/zsh/podman.zsh
+  source ~/git/dotfiles/zsh/completions.zsh
   
-  # Load GitHub Copilot aliases
-  eval "$(gh copilot alias -- zsh)"
   
-  # # Git status check in background
-  # if [[ "$TERM_PROGRAM" != "vscode" ]]; then
-  #   if git -C ~/git/dotfiles status --porcelain | grep -q "M"; then
-  #     echo "dotfiles repo has uncommitted changes, run ${RED}edit-dotfiles${NC} to review"
-  #   fi
-  # fi
+  # Git status check in background
+  if [[ "$TERM_PROGRAM" != "vscode" ]]; then
+    if git -C ~/git/dotfiles status --porcelain | grep -q "M"; then
+      echo "dotfiles repo has uncommitted changes, run ${RED}edit-dotfiles${NC} to review"
+    fi
+  fi
 } &!
 # # bun completions
 # [ -s "/Users/tiger/.bun/_bun" ] && source "/Users/tiger/.bun/_bun"

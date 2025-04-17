@@ -35,16 +35,6 @@ znap function code-git(){
     code ~/git/$1
 }
 
-#compdef code-git
-
-_code-git() {
-    local -a files
-    files=(${(f)"$(ls ~/git)"})
-    _describe 'files' files
-}
-
-compdef _code-git code-git
-
 znap function go-mod-upgrade(){
     # first argument is the package to upgrade
     if [[ -z "$1" ]]; then
