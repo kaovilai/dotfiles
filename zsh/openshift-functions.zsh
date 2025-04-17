@@ -231,6 +231,8 @@ znap function install-ccoctl(){
 znap function install-opm(){
     go install github.com/operator-framework/operator-registry/cmd/opm@latest
 }
+# Define release payload for OpenShift installations
+OCP_FUNCTIONS_RELEASE_IMAGE=registry.ci.openshift.org/origin/release:4.19
 # directory containing the manifests for many clusters
 OCP_MANIFESTS_DIR=~/OCP/manifests
 TODAY=$(date +%Y%m%d)
@@ -338,10 +340,12 @@ ccoctl gcp create-all \
 --region $GCP_REGION \
 --output-dir $OCP_CREATE_DIR \
 --credentials-requests-dir $OCP_CREATE_DIR/credentials-requests || return 1
-$OPENSHIFT_INSTALL create manifests --dir $OCP_CREATE_DIR || return 1
-cp $OCP_CREATE_DIR/credentials-requests/* $OCP_CREATE_DIR/manifests/ || return 1 # copy cred requests to manifests dir, ccoctl delete will delete cred requests in separate dir
-$OPENSHIFT_INSTALL create cluster --dir $OCP_CREATE_DIR \
-    --log-level=info || $OPENSHIFT_INSTALL gather bootstrap --dir $OCP_CREATE_DIR || return 1
+    $OPENSHIFT_INSTALL create manifests --dir $OCP_CREATE_DIR || return 1
+    cp $OCP_CREATE_DIR/credentials-requests/* $OCP_CREATE_DIR/manifests/ || return 1 # copy cred requests to manifests dir, ccoctl delete will delete cred requests in separate dir
+    # Use the custom release image
+    OPENSHIFT_INSTALL_RELEASE_IMAGE_OVERRIDE=$OCP_FUNCTIONS_RELEASE_IMAGE \
+    $OPENSHIFT_INSTALL create cluster --dir $OCP_CREATE_DIR \
+        --log-level=info || $OPENSHIFT_INSTALL gather bootstrap --dir $OCP_CREATE_DIR || return 1
 }
 
 znap function delete-ocp-gcp-wif(){
@@ -492,6 +496,8 @@ sshKey: |
 " > $OCP_CREATE_DIR/install-config.yaml && echo "created install-config.yaml" || return 1
     
     $OPENSHIFT_INSTALL create manifests --dir $OCP_CREATE_DIR || return 1
+    # Use the custom release image
+    OPENSHIFT_INSTALL_RELEASE_IMAGE_OVERRIDE=$OCP_FUNCTIONS_RELEASE_IMAGE \
     $OPENSHIFT_INSTALL create cluster --dir $OCP_CREATE_DIR \
         --log-level=info || $OPENSHIFT_INSTALL gather bootstrap --dir $OCP_CREATE_DIR || return 1
 }
