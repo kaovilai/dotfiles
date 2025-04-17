@@ -1,0 +1,67 @@
+#!/usr/bin/env zsh
+# Profiled version of .zshrc with performance instrumentation
+
+# Load profiling utilities
+source ~/git/dotfiles/zsh/zsh_profiler.zsh
+
+# Don't put secrets here, put them in ~/secrets.zsh
+# edit ~/.zshrc first then run copy-to-dotfiles-from-zshrc to copy to dotfiles
+profile "Load secrets" 'if [[ -f ~/secrets.zsh ]]; then source ~/secrets.zsh; fi'
+
+profile "Set history size" 'export HISTSIZE=100000; export HISTFILESIZE=200000'
+
+profile_with_network_check "Clone dotfiles if needed" 'if [[ ! -f ~/git/dotfiles/zsh/znap.zsh ]]; then mkdir -p ~/git && git clone --depth 1 -- git@github.com:kaovilai/dotfiles.git ~/git/dotfiles; fi'
+
+profile_source ~/git/dotfiles/zsh/colors.zsh
+
+profile "Check zshrc sync with dotfiles" 'if diff ~/git/dotfiles/.zshrc ~/.zshrc >/dev/null 2>&1; then echo ".zshrc is up to date with dotfiles"; else echo "diff ~/git/dotfiles/.zshrc ~/.zshrc"; echo ".zshrc is out of sync with dotfiles\n    ${RED}copy-to-dotfiles-from-zshrc${NC} to copy .zshrc to dotfiles and review diff\n    ${RED}push-dotfiles-from-zshrc${NC} to push dotfiles\n    ${RED}update-zshrc-from-dotfiles${NC} to update ~/.zshrc"; fi; alias edit-dotfiles="code ~/git/dotfiles/"; if git -C ~/git/dotfiles status --porcelain | grep -q "M"; then echo "dotfiles repo has uncommitted changes, run ${RED}edit-dotfiles${NC} to review"; fi'
+
+profile_source ~/git/dotfiles/zsh/alias.zsh
+
+# gpg tty
+profile "Set environment variables" 'export GPG_TTY=$(tty); export CONTAINER_ENGINE=docker; export BUILDX_ENABLED=true; export BUILDX_PUSH=true; export GCR_IMAGE_TAGS=""; export BUILDX_PLATFORMS=linux/amd64,linux/arm64'
+
+profile "Source macOS config" 'if [[ "$(uname -s)" = "Darwin" ]]; then echo "macOS detected" && source ~/git/dotfiles/zsh/macos.zsh; fi'
+
+profile_source ~/git/dotfiles/zsh/znap.zsh
+
+profile "Define znap functions" '
+znap function update-zshrc-from-dotfiles() {
+  git -C ~/git/dotfiles pull > /dev/null && \
+  cp ~/git/dotfiles/.zshrc ~/.zshrc
+}
+znap function copy-to-dotfiles-from-zshrc() {
+  cp ~/.zshrc ~/git/dotfiles/.zshrc && \
+  git -C ~/git/dotfiles diff
+  echo
+  echo "${RED}push-dotfiles-from-zshrc${NC} to push dotfiles"
+}
+znap function push-dotfiles-from-zshrc() {
+  git -C ~/git/dotfiles add .zshrc && \
+  git -C ~/git/dotfiles commit -m "Update .zshrc" && \
+  git -C ~/git/dotfiles push
+}
+'
+
+profile_source ~/git/dotfiles/zsh/util.zsh
+profile_source ~/git/dotfiles/zsh/go.zsh
+profile_source ~/git/dotfiles/zsh/paths.zsh
+profile_source ~/git/dotfiles/zsh/openshift-functions.zsh
+profile_source ~/git/dotfiles/zsh/aws.zsh
+profile_source ~/git/dotfiles/zsh/podman.zsh
+profile_source ~/git/dotfiles/zsh/completions.zsh
+
+profile_with_network_check "gh copilot alias" 'eval "$(gh copilot alias -- zsh)"'
+
+# bun completions
+profile "bun setup" '
+[ -s "/Users/tiger/.bun/_bun" ] && source "/Users/tiger/.bun/_bun"
+
+# bun
+export BUN_INSTALL="$HOME/.bun"
+export PATH="$BUN_INSTALL/bin:$PATH"
+
+export PATH="$HOME/.local/bin:$PATH"
+'
+
+profile "ghcup setup" '[ -f "/Users/tiger/.ghcup/env" ] && . "/Users/tiger/.ghcup/env" # ghcup-env'

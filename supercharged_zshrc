@@ -1,0 +1,346 @@
+#!/usr/bin/env zsh
+# supercharged_zshrc - Ultra-fast ZSH configuration with all optimizations
+# This combines all optimizations into a single high-performance configuration
+
+# Uncomment to enable detailed profiling
+# zmodload zsh/zprof
+
+# Ensure key directories exist
+[[ -d "$HOME/.zsh_completion_cache" ]] || mkdir -p "$HOME/.zsh_completion_cache"
+
+###############################################################
+# CRITICAL FAST-PATH SECTION - Keep this section ultra minimal
+###############################################################
+
+# History settings
+export HISTSIZE=100000 
+export HISTFILESIZE=200000 
+
+# Key environment variables needed early
+export GPG_TTY=$(tty)
+export CONTAINER_ENGINE=docker
+export BUILDX_ENABLED=true
+export BUILDX_PUSH=true
+export BUILDX_PLATFORMS=linux/amd64,linux/arm64
+
+# Optimized history options
+setopt HIST_FCNTL_LOCK
+setopt HIST_IGNORE_ALL_DUPS
+setopt HIST_REDUCE_BLANKS
+setopt HIST_VERIFY
+
+# Decrease key sequence timeout for faster key response
+KEYTIMEOUT=1
+
+# Don't put secrets here, put them in ~/secrets.zsh
+[[ -f ~/secrets.zsh ]] && source ~/secrets.zsh
+
+# Use static compiled dump for completions
+autoload -Uz compinit
+compinit -C -d "$HOME/.zcompdump"
+zcompile "$HOME/.zcompdump"
+
+###############################################################
+# EARLY INITIALIZATION - Only critical path functions and paths
+###############################################################
+
+# Ensure dotfiles repo exists
+[[ -f ~/git/dotfiles/zsh/znap.zsh ]] || {
+  mkdir -p ~/git
+  git clone --depth 1 -- git@github.com:kaovilai/dotfiles.git ~/git/dotfiles
+}
+
+# Load essential color definitions first (needed for other modules)
+source ~/git/dotfiles/zsh/colors.zsh
+
+# Load critical path definitions
+source ~/git/dotfiles/zsh/paths.zsh
+
+###############################################################
+# TMUX OPTIMIZATION - Skip heavy operations in nested shells
+###############################################################
+
+# Only perform heavy operations on the first shell instance
+if [[ ! -v TMUX ]]; then
+
+  # ZNAP INITIALIZATION - Optimized loading of plugins
+  
+  # Configure znap repos directory
+  zstyle ':znap:*' repos-dir ~/.zsh-snap
+
+  # Download Znap, if it's not there yet.
+  if [[ ! -f ~/git/zsh-snap/znap.zsh ]]; then
+    git clone --depth 1 -- \
+      https://github.com/marlonrichert/zsh-snap.git ~/git/zsh-snap
+  fi
+
+  # Start Znap
+  source ~/git/zsh-snap/znap.zsh
+
+  # Configure prompt immediately
+  znap prompt sindresorhus/pure
+
+  # Optimize pure prompt performance
+  zstyle :prompt:pure:git:stash show yes
+  zstyle :prompt:pure:git:fetch only_upstream yes
+
+  # Load essential plugins in the background
+  {
+    # Use znap eval to cache plugin output when possible
+    znap source zsh-users/zsh-syntax-highlighting
+    
+    # Lightweight alternatives to zsh-autocomplete
+    znap source zsh-users/zsh-autosuggestions
+    znap source zsh-users/zsh-history-substring-search
+  } &!
+
+  # Define znap function wrappers in the main shell
+  znap function update-zshrc-from-dotfiles() {
+    git -C ~/git/dotfiles pull > /dev/null && \
+    cp ~/git/dotfiles/.zshrc ~/.zshrc
+  }
+
+  znap function copy-to-dotfiles-from-zshrc() {
+    cp ~/.zshrc ~/git/dotfiles/.zshrc && \
+    git -C ~/git/dotfiles diff
+    echo
+    echo "${RED}push-dotfiles-from-zshrc${NC} to push dotfiles"
+  }
+
+  znap function push-dotfiles-from-zshrc() {
+    git -C ~/git/dotfiles add .zshrc && \
+    git -C ~/git/dotfiles commit -m "Update .zshrc" && \
+    git -C ~/git/dotfiles push
+  }
+
+  ###############################################################
+  # LAZY COMPLETIONS - Load completions only when needed
+  ###############################################################
+
+  # Lazy completion functions
+  lazy_completion_source() {
+    local cmd=$1
+    local source_cmd=$2
+    
+    # Only create if command exists
+    if [[ -z "$(command -v $cmd)" ]]; then
+      return
+    fi
+    
+    # Create function that loads completion on first use
+    eval "
+    function $cmd() {
+      # Remove this function, so it's only run once
+      unfunction $cmd
+      
+      # Generate and load the completion
+      source <($source_cmd)
+      
+      # Execute the original command with the original parameters
+      command $cmd \"\$@\"
+    }
+    "
+  }
+
+  # Create a completion file cache with expiration
+  completion_cache() {
+    local cmd=$1        # Command name
+    local url=$2        # URL to download completion from
+    local expiry=$3     # Cache expiry in seconds (default: 7 days)
+    local cache_file=$4 # Cache file location
+    
+    # Set defaults
+    expiry=${expiry:-604800}  # 7 days in seconds
+    cache_file=${cache_file:-"$HOME/.zsh_completion_cache/$cmd"}
+    
+    # Ensure cache directory exists
+    mkdir -p "$(dirname "$cache_file")"
+    
+    # Check if file exists and is not expired
+    local should_download=0
+    if [[ ! -f "$cache_file" ]]; then
+      should_download=1
+    else
+      # Check if file is older than expiry period
+      local file_age=$(($(date +%s) - $(stat -f %m "$cache_file")))
+      if ((file_age > expiry)); then
+        should_download=1
+      fi
+    fi
+    
+    # Download in the background if needed
+    if ((should_download == 1)); then
+      (curl -sL "$url" > "${cache_file}.tmp" && 
+       mv "${cache_file}.tmp" "$cache_file" || 
+       rm -f "${cache_file}.tmp") &!
+    fi
+    
+    # Always source the cache file if it exists
+    if [[ -f "$cache_file" ]]; then
+      source "$cache_file"
+    fi
+  }
+
+  # Configure lazy loading for specific commands
+
+  # Docker completion - use improved caching mechanism
+  if [ "$(command -v docker)" ]; then
+    local docker_completion_file=~/.zsh_completion_cache/_docker
+    completion_cache docker "https://raw.githubusercontent.com/docker/docker-ce/master/components/cli/contrib/completion/zsh/_docker" 604800 "$docker_completion_file"
+  fi
+
+  # Podman completion - use improved caching mechanism
+  if [ -n "$(command -v podman)" ]; then
+    local podman_completion_file=~/.zsh_completion_cache/_podman
+    completion_cache podman "https://raw.githubusercontent.com/containers/podman/main/completions/zsh/_podman" 604800 "$podman_completion_file"
+  fi
+
+  # OpenShift CLI completion
+  if [ "$(command -v oc)" ]; then
+    lazy_completion_source oc "oc completion zsh"
+  fi
+
+  # GitHub CLI completion
+  if [ "$(command -v gh)" ]; then
+    lazy_completion_source gh "gh completion -s zsh"
+  fi
+
+  # AWS CLI completion
+  if [ "$(command -v aws_completer)" ]; then
+    complete -C aws_completer aws
+  fi
+
+  # Rosa completion
+  if [ "$(command -v rosa)" ]; then
+    lazy_completion_source rosa "rosa completion zsh"
+  fi
+
+  # More tool completions
+  [ "$(command -v crc)" ] && lazy_completion_source crc "crc completion zsh"
+  [ "$(command -v ccoctl)" ] && lazy_completion_source ccoctl "ccoctl completion zsh"
+  [ "$(command -v velero)" ] && lazy_completion_source velero "velero completion zsh"
+  [ "$(command -v colima)" ] && lazy_completion_source colima "colima completion zsh"
+  [ "$(command -v kubebuilder)" ] && lazy_completion_source kubebuilder "kubebuilder completion zsh"
+  [ "$(command -v yq)" ] && lazy_completion_source yq "yq completion zsh"
+  [ "$(command -v kind)" ] && lazy_completion_source kind "kind completion zsh"
+
+  # openshift-install completion - special case since it uses a file
+  if [ "$(command -v openshift-install)" ]; then
+    openshift_install_completion_file=~/.zsh_completion_cache/_openshift-install
+    if [[ ! -f "$openshift_install_completion_file" ]]; then
+      cp /Users/tiger/git/dotfiles/openshift-install-completion-zsh.txt "$openshift_install_completion_file"
+    fi
+    source "$openshift_install_completion_file"
+    compdef _openshift-install openshift-install
+  fi
+
+  # IBM Cloud - can't easily be lazy-loaded because it's a direct source
+  if [ -f "/usr/local/ibmcloud/autocomplete/zsh_autocomplete" ]; then
+    source /usr/local/ibmcloud/autocomplete/zsh_autocomplete
+  fi
+
+  # pipenv completion - special handling as it uses eval
+  if [ "$(command -v pipenv)" ]; then
+    function pipenv() {
+      unfunction pipenv
+      eval "$(_PIPENV_COMPLETE=zsh_source pipenv)"
+      command pipenv "$@"
+    }
+  fi
+
+  # Google Cloud SDK - load only if files exist
+  if [ -f '/Users/tiger/google-cloud-sdk/path.zsh.inc' ]; then 
+    source '/Users/tiger/google-cloud-sdk/path.zsh.inc'
+  fi
+  if [ -f '/Users/tiger/google-cloud-sdk/completion.zsh.inc' ]; then 
+    source '/Users/tiger/google-cloud-sdk/completion.zsh.inc'
+  fi
+
+  ###############################################################
+  # LOAD MODULES - Efficiently load other modules
+  ###############################################################
+  
+  # Load utility functions
+  source ~/git/dotfiles/zsh/util.zsh
+  
+  # Load aliases
+  source ~/git/dotfiles/zsh/alias.zsh
+  
+  # Check for macOS in the background to avoid startup delay
+  if [[ "$(uname -s)" = "Darwin" ]]; then
+    { 
+      echo "macOS detected"
+      source ~/git/dotfiles/zsh/macos.zsh 
+    } &!
+  fi
+
+  # Launch tool-specific configurations in background for non-critical components
+  {
+    # Load non-essential tool configs in the background
+    source ~/git/dotfiles/zsh/go.zsh
+    source ~/git/dotfiles/zsh/openshift-functions.zsh
+    source ~/git/dotfiles/zsh/aws.zsh
+    source ~/git/dotfiles/zsh/podman.zsh
+
+    # GitHub Copilot alias loading
+    if command -v gh &>/dev/null; then
+      eval "$(gh copilot alias -- zsh)"
+    fi
+    
+    # bun configuration
+    if [[ -s "$HOME/.bun/_bun" ]]; then
+      source "$HOME/.bun/_bun"
+      export BUN_INSTALL="$HOME/.bun"
+      export PATH="$BUN_INSTALL/bin:$PATH"
+    fi
+
+    # ghcup environment
+    [[ -f "$HOME/.ghcup/env" ]] && . "$HOME/.ghcup/env"
+
+    # Defer .zshrc sync check to avoid startup delay
+    (
+      sleep 0.5  # Short delay to ensure the terminal is ready
+      if ! diff ~/git/dotfiles/.zshrc ~/.zshrc &>/dev/null; then
+        echo "diff ~/git/dotfiles/.zshrc ~/.zshrc"
+        echo ".zshrc is out of sync with dotfiles"
+        echo "  ${RED}copy-to-dotfiles-from-zshrc${NC} to copy .zshrc to dotfiles and review diff"
+        echo "  ${RED}push-dotfiles-from-zshrc${NC} to push dotfiles"
+        echo "  ${RED}update-zshrc-from-dotfiles${NC} to update ~/.zshrc"
+      fi
+      
+      # Check git status in the background
+      if git -C ~/git/dotfiles status --porcelain | grep -q "M"; then
+        echo "dotfiles repo has uncommitted changes, run ${RED}edit-dotfiles${NC} to review"
+      fi
+    ) &!
+  } &!
+
+else
+  # MINIMAL TMUX CONFIGURATION
+  # Skip heavy initialization for nested shells in tmux
+  source ~/git/dotfiles/zsh/colors.zsh
+  source ~/git/dotfiles/zsh/paths.zsh
+  source ~/git/dotfiles/zsh/alias.zsh
+  source ~/git/dotfiles/zsh/util.zsh
+fi
+
+###############################################################
+# COMMON CONFIGURATION - Needed regardless of TMUX
+###############################################################
+
+# Additional PATH entries
+export PATH="$HOME/.local/bin:$PATH"
+
+# VSCode shell integration - only load if in VSCode
+if [[ "$TERM_PROGRAM" == "vscode" && "$(command -v code)" ]]; then
+  code_shell_path="$(code --locate-shell-integration-path zsh 2>/dev/null)"
+  if [[ -n "$code_shell_path" ]]; then
+    source "$code_shell_path"
+  fi
+fi
+
+# Define useful aliases
+alias edit-dotfiles="code ~/git/dotfiles/"
+
+# Uncomment to print profiling results
+# [[ -v zprof ]] && zprof
