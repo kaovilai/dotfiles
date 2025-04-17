@@ -2,14 +2,14 @@
 # ```
 # source ~/git/dotfiles/.zshrc
 # ```
-
+source ~/git/dotfiles/zsh/znap.zsh
+[[ -f ~/git/dotfiles/zsh/znap.zsh ]] || sh -c "mkdir -p ~/git && git clone --depth 1 -- \
+    git@github.com:kaovilai/dotfiles.git ~/git/dotfiles"
 # Don't put secrets here, put them in ~/secrets.zsh
 # edit ~/.zshrc first then run copy-to-dotfiles-from-zshrc to copy to dotfiles
 [[ -f ~/secrets.zsh ]] && source ~/secrets.zsh
 export HISTSIZE=100000 # number of commands stored in history
 export HISTFILESIZE=200000 # bytes in history file
-[[ -f ~/git/dotfiles/zsh/znap.zsh ]] || sh -c "mkdir -p ~/git && git clone --depth 1 -- \
-    git@github.com:kaovilai/dotfiles.git ~/git/dotfiles"
 source ~/git/dotfiles/zsh/colors.zsh
 
 alias edit-dotfiles='code ~/git/dotfiles/'
@@ -26,7 +26,7 @@ export GCR_IMAGE_TAGS=""
 export BUILDX_PLATFORMS=linux/amd64,linux/arm64
 
 [[ "$(uname -s)" = "Darwin" ]] && echo "macOS detected" && source ~/git/dotfiles/zsh/macos.zsh
-source ~/git/dotfiles/zsh/znap.zsh
+
 znap function update-zshrc-from-dotfiles() {
   git -C ~/git/dotfiles pull > /dev/null && \
   cp ~/git/dotfiles/.zshrc ~/.zshrc
