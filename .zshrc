@@ -32,10 +32,10 @@ export BUILDX_ENABLED=true
 export BUILDX_PUSH=true
 export GCR_IMAGE_TAGS=""
 export BUILDX_PLATFORMS=linux/amd64,linux/arm64
-
-# Load OS-specific essentials
-[[ "$(uname -s)" = "Darwin" ]] && source ~/git/dotfiles/zsh/macos.zsh
-
+if [[ "$TERM_PROGRAM" != "vscode" ]]; then
+  # Load OS-specific essentials
+  [[ "$(uname -s)" = "Darwin" ]] && source ~/git/dotfiles/zsh/macos.zsh
+fi
 # Essential utilities (needed for basic shell functionality)
 source ~/git/dotfiles/zsh/paths.zsh
 # source ~/git/dotfiles/zsh/command-cache.zsh
@@ -43,18 +43,18 @@ source ~/git/dotfiles/zsh/paths.zsh
 # Load GitHub Copilot aliases
 eval "$(gh copilot alias -- zsh)"
 # source ~/git/dotfiles/zsh/aws.zsh
-source ~/git/dotfiles/zsh/openshift-functions.zsh
-source ~/git/dotfiles/zsh/podman.zsh
+if [[ "$TERM_PROGRAM" != "vscode" ]]; then
+  source ~/git/dotfiles/zsh/openshift-functions.zsh
+fi
+# source ~/git/dotfiles/zsh/podman.zsh
 source ~/git/dotfiles/zsh/util.zsh
-source ~/git/dotfiles/zsh/go.zsh
 # -- Non-essential initialization (happens in background) --
 {
   # Load extended utilities in background
-  source ~/git/dotfiles/zsh/completions.zsh
-  
-  
-  # Git status check in background
+  # completions are written to fpaths, so likely won't need to run them everytime, esp in vscode.
   if [[ "$TERM_PROGRAM" != "vscode" ]]; then
+    source ~/git/dotfiles/zsh/completions.zsh
+  # Git status check in background
     if git -C ~/git/dotfiles status --porcelain | grep -q "M"; then
       echo "dotfiles repo has uncommitted changes, run ${RED}edit-dotfiles${NC} to review"
       echo
