@@ -1,5 +1,3 @@
-#compdef kubectl
-compdef _kubectl kubectl
 
 # Cache settings
 export ZSH_COMPLETION_CACHE_DIR="$HOME/.zsh-completion-cache"
@@ -69,11 +67,36 @@ if [ "$(command -v gh)" ]; then
   compdef _gh_completion gh
 fi
 
+# covered by 
+# ❯ which _kubectl 
+# _kubectl () {
+# 	# undefined
+# 	builtin autoload -XUz /opt/homebrew/share/zsh/site-functions
+# }
+#compdef kubectl
+# if [ "$(command -v kubectl)" ]; then
+#   znap function _kubectl_completion kubectl 'eval "$(kubectl completion -s zsh)"'
+#   compdef _kubectl_completion kubectl
+# fi
+#compdef oc
+# if [ "$(command -v oc)" ]; then
+znap function _oc_completion oc 'eval "$(oc completion zsh)"'
+# znap function _oc_completion 'oc source <(oc completion zsh)'
+compdef _oc_completion oc
+# fi
 # OpenShift Client
-if [ "$(command -v oc)" ]; then
-  znap function _oc_completion oc 'eval "$(oc completion zsh)"'
-  compdef _oc_completion oc
-fi
+# if [ "$(command -v oc)" ]; then
+#   # Add direct compdef at the top level similar to kubectl
+#   if [[ -z "$_oc_completion_initialized" ]]; then
+#     # Generate completion directly once
+#     source <(oc completion zsh)
+#     # Mark as initialized to avoid regenerating
+#     _oc_completion_initialized=1
+#   fi
+#   # Keep the znap function for refreshing completions in the future
+#   znap function _oc_completion oc 'eval "$(oc completion zsh)"'
+#   compdef _oc_completion oc
+# fi
 
 # Podman completion - use centralized cache location
 if [ -n "$(command -v podman)" ]; then
