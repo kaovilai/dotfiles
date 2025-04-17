@@ -7,7 +7,7 @@ alias oc-registry-route='oc get route -n openshift-image-registry default-route 
 alias crc-kubeadminpass='cat ~/.crc/machines/crc/kubeadmin-password'
 alias ocwebconsole='edge $(oc whoami --show-console)'
 alias rosa-create-cluster='rosa create cluster --cluster-name tkaovila-sts --sts --create-admin-user --region us-east-1 --replicas 2 --machine-cidr 10.0.0.0/16 --service-cidr 172.30.0.0/16 --pod-cidr 10.128.0.0/14 --host-prefix 23 --disable-workload-monitoring && rosa create operator-roles --cluster tkaovila-sts && rosa create oidc-provider --cluster tkaovila-sts'
-function patchCSVreplicas(){
+znap function patchCSVreplicas(){
     if [ -z "$1" ]; then
         echo "No CSV name supplied"
         return 1
@@ -48,7 +48,7 @@ znap function rmRouterCA(){
     rm router-ca.crt
 }
 
-function trustOCRouterCAFromFileInCurrentDir(){
+znap function trustOCRouterCAFromFileInCurrentDir(){
     if uname -s | grep -q Darwin; then
         echo "Mac OS detected, trusting oc router ca"
         sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain router-ca.crt
@@ -76,7 +76,7 @@ znap function rmAPICA(){
     rm api-ca.crt
 }
 
-function trustAPICAFromFileInCurrentDir(){
+znap function trustAPICAFromFileInCurrentDir(){
     if uname -s | grep -q Darwin; then
         echo "Mac OS detected"
         sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain api-ca.crt
@@ -185,10 +185,10 @@ znap function crc-start-version(){
 }
 
 export OPENSHIFT_REJECT_VERSIONS_EXPRESSION="nightly|rc|fc|ci|ec"
-function openshift-patch-versions-arm64(){
+znap function openshift-patch-versions-arm64(){
     curl --silent https://openshift-release-artifacts-arm64.apps.ci.l2s4.p1.openshiftapps.com/ | grep -vE $OPENSHIFT_REJECT_VERSIONS_EXPRESSION | cut -d '"' -f 2 | sed "s/\///g" | grep -vE "<|>|en|utf|^$" | grep -ve "\.\." | sort -V | awk -F. '{if(!a[$1"."$2]++)print $1"."$2"."$NF}'
 }
-function openshift-patch-versions-amd64(){
+znap function openshift-patch-versions-amd64(){
     curl --silent https://openshift-release-artifacts.apps.ci.l2s4.p1.openshiftapps.com/ | grep -vE $OPENSHIFT_REJECT_VERSIONS_EXPRESSION | cut -d '"' -f 2 | sed "s/\///g" | grep -vE "<|>|en|utf|^$" | grep -ve "\.\." | sort -V | awk -F. '{if(!a[$1"."$2]++)print $1"."$2"."$NF}'
 }
 alias latest-openshift-patch-version-arm64="openshift-patch-versions-arm64 | tail -n 1"
@@ -207,7 +207,7 @@ else
     fi
 fi
 
-function install-oc(){
+znap function install-oc(){
     curl --silent https://mirror.openshift.com/pub/openshift-v4/clients/ocp/latest/openshift-client-$ocpclientos-$ocpclientarch.tar.gz -o ~/Downloads/openshift-client-$ocpclientos-$ocpclientarch.tar.gz && \
     tar -xvf ~/Downloads/openshift-client-$ocpclientos-$ocpclientarch.tar.gz -C ~/Downloads && \
     sudo mv ~/Downloads/oc /usr/local/bin && \
@@ -216,7 +216,7 @@ function install-oc(){
     rm ~/Downloads/README.md
 }
 
-function install-ocp-installer(){
+znap function install-ocp-installer(){
     curl --silent https://mirror.openshift.com/pub/openshift-v4/clients/ocp/latest/openshift-install-$ocpclientos-$ocpclientarch.tar.gz -o ~/Downloads/openshift-install-$ocpclientos-$ocpclientarch.tar.gz && \
     tar -xvf ~/Downloads/openshift-install-$ocpclientos-$ocpclientarch.tar.gz -C ~/Downloads && \
     sudo mv ~/Downloads/openshift-install /usr/local/bin
@@ -224,11 +224,11 @@ function install-ocp-installer(){
     rm ~/Downloads/README.md
 }
 
-function install-ccoctl(){
+znap function install-ccoctl(){
     go install github.com/openshift/cloud-credential-operator/cmd/ccoctl@release-$(latest-openshift-minor-version-arm64)
 }
 
-function install-opm(){
+znap function install-opm(){
     go install github.com/operator-framework/operator-registry/cmd/opm@latest
 }
 # directory containing the manifests for many clusters
@@ -236,7 +236,7 @@ OCP_MANIFESTS_DIR=~/OCP/manifests
 TODAY=$(date +%Y%m%d)
 # create a cluster with gcp workload identity using CCO manual mode
 # pre-req: ssh-add ~/.ssh/id_rsa
-function create-ocp-gcp-wif(){
+znap function create-ocp-gcp-wif(){
     # Check if help is requested
     if [[ $1 == "help" ]]; then
         echo "Usage: create-ocp-gcp-wif [OPTION]"
@@ -341,7 +341,7 @@ openshift-install create cluster --dir $OCP_CREATE_DIR \
     --log-level=info || openshift-install gather bootstrap --dir $OCP_CREATE_DIR || return 1
 }
 
-function delete-ocp-gcp-wif(){
+znap function delete-ocp-gcp-wif(){
     # Check if help is requested
     if [[ $1 == "help" ]]; then
         echo "Usage: delete-ocp-gcp-wif [CLUSTER_NAME]"
@@ -374,7 +374,7 @@ function delete-ocp-gcp-wif(){
     ((rm -r $OCP_CREATE_DIR && echo "removed existing create dir") || (true && echo "no existing install dir")) || return 1
 }
 
-function create-ocp-aws() {
+znap function create-ocp-aws() {
     # Core implementation for AWS OpenShift cluster creation
     # Parameters:
     #   $1 - Command/option (help, gather, delete, no-delete)
@@ -490,17 +490,17 @@ sshKey: |
         --log-level=info || $OPENSHIFT_INSTALL gather bootstrap --dir $OCP_CREATE_DIR || return 1
 }
 
-function create-ocp-aws-arm64() {
+znap function create-ocp-aws-arm64() {
     # ARM64 wrapper function
     create-ocp-aws "$1" "arm64"
 }
 
-function create-ocp-aws-amd64() {
+znap function create-ocp-aws-amd64() {
     # AMD64 wrapper function
     create-ocp-aws "$1" "amd64"
 }
 
-function delete-ocp-aws() {
+znap function delete-ocp-aws() {
     # Core implementation for AWS OpenShift cluster deletion
     # Parameters:
     #   $1 - Cluster name or help
@@ -539,17 +539,17 @@ function delete-ocp-aws() {
     ((rm -r $OCP_CREATE_DIR && echo "removed existing create dir") || (true && echo "no existing install dir")) || return 1
 }
 
-function delete-ocp-aws-arm64() {
+znap function delete-ocp-aws-arm64() {
     # ARM64 deletion wrapper function
     delete-ocp-aws "$1" "arm64"
 }
 
-function delete-ocp-aws-amd64() {
+znap function delete-ocp-aws-amd64() {
     # AMD64 deletion wrapper function
     delete-ocp-aws "$1" "amd64"
 }
 
-function delete-ocp-aws-dir() {
+znap function delete-ocp-aws-dir() {
     # Delete AWS OpenShift cluster based on a directory name
     # This extracts the date (TODAY) and architecture from the directory name
     # Parameters:
@@ -616,7 +616,7 @@ function delete-ocp-aws-dir() {
     fi
 }
 
-function delete-ocp-gcp-wif-dir() {
+znap function delete-ocp-gcp-wif-dir() {
     # Delete GCP-WIF OpenShift cluster based on a directory name
     # This extracts the date (TODAY) from the directory name
     # Parameters:

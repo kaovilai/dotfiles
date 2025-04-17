@@ -16,7 +16,7 @@ RESTART_DISPLAYLINK='(osascript -e "quit app \"DisplayLink Manager\""; while pgr
 
 alias install-pkg='sudo installer -target LocalSystem -pkg'
 
-function install-pkg-from-url(){
+znap function install-pkg-from-url(){
     curl -L -o ~/Downloads/$(basename $1) $1 && install-pkg ~/Downloads/$(basename $1)
 }
 PATH=$PATH:/Library/Frameworks/Python.framework/Versions/Current/bin/
@@ -27,13 +27,13 @@ PATH=$PATH:/Library/Frameworks/Python.framework/Versions/Current/bin/
 # fi
 # }
 
-function setTTLforHotspot(){
+znap function setTTLforHotspot(){
     sudo sysctl -w net.inet.ip.ttl=65
 }
 # https://docs.brew.sh/Shell-Completion says need to be done before compinit which is in znap.zsh sourced right after this in .zshrc
 FPATH="$(brew --prefix)/share/zsh/site-functions:${FPATH}"
 
-function setTFproxy(){
+znap function setTFproxy(){
     export TF_ROUTER_IP=$(networksetup -getinfo Wi-Fi | grep -e "^Router" | cut -d " " -f 2)
     export TF_ROUTER_PROXY_PORT=8228
     export http_proxy=$TF_ROUTER_IP:$TF_ROUTER_PROXY_PORT
@@ -44,21 +44,21 @@ function setTFproxy(){
     networksetup -setsecurewebproxystate Wi-Fi on
 }
 
-function unsetTFproxy(){
+znap function unsetTFproxy(){
     networksetup -setwebproxystate Wi-Fi off
     networksetup -setsecurewebproxystate Wi-Fi off
     unset http_proxy
     unset https_proxy
 }
 
-function setSOCKSproxy(){
+znap function setSOCKSproxy(){
     export SOCKS_ROUTER_IP=$(networksetup -getinfo Wi-Fi | grep -e "^Router" | cut -d " " -f 2)
     export SOCKS_ROUTER_PROXY_PORT=1888
     networksetup -setsocksfirewallproxy Wi-Fi $SOCKS_ROUTER_IP $SOCKS_ROUTER_PROXY_PORT off
     networksetup -setsocksfirewallproxystate Wi-Fi on
 }
 
-function unsetSOCKSproxy(){
+znap function unsetSOCKSproxy(){
     networksetup -setsocksfirewallproxystate Wi-Fi off
 }
 WIFI_NAME=$(networksetup -getairportnetwork en0 | cut -d " " -f 4)
@@ -92,6 +92,6 @@ fi
 
 # kill apps that are not essential
 # kill -9 $(ps aux | grep -v grep | grep -E '/Messenger.app/|Acrobat|Fathom|Todoist|LINE')
-function give-me-ram(){
+znap function give-me-ram(){
     ps aux | grep -v grep | grep -E '/Messenger.app/|Acrobat|Fathom|Todoist|LINE' | sed -E 's/ +/ /g' | cut -d ' ' -f 2 | xargs kill -9
 }
