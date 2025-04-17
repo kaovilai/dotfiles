@@ -49,6 +49,7 @@ eval "$(gh copilot alias -- zsh)"
   if [[ "$TERM_PROGRAM" != "vscode" ]]; then
     if git -C ~/git/dotfiles status --porcelain | grep -q "M"; then
       echo "dotfiles repo has uncommitted changes, run ${RED}edit-dotfiles${NC} to review"
+      echo
     fi
   fi
 } &!
