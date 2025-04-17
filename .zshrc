@@ -38,17 +38,17 @@ export BUILDX_PLATFORMS=linux/amd64,linux/arm64
 
 # Essential utilities (needed for basic shell functionality)
 source ~/git/dotfiles/zsh/paths.zsh
-source ~/git/dotfiles/zsh/command-cache.zsh
-source ~/git/dotfiles/zsh/cached-commands.zsh
+# source ~/git/dotfiles/zsh/command-cache.zsh
+# source ~/git/dotfiles/zsh/cached-commands.zsh
 # Load GitHub Copilot aliases
 eval "$(gh copilot alias -- zsh)"
-# -- Non-essential initialization (happens in background) --
-{
-source ~/git/dotfiles/zsh/aws.zsh
+# source ~/git/dotfiles/zsh/aws.zsh
 source ~/git/dotfiles/zsh/openshift-functions.zsh
 source ~/git/dotfiles/zsh/podman.zsh
 source ~/git/dotfiles/zsh/util.zsh
 source ~/git/dotfiles/zsh/go.zsh
+# -- Non-essential initialization (happens in background) --
+{
   # Load extended utilities in background
   source ~/git/dotfiles/zsh/completions.zsh
   
