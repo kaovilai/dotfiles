@@ -237,6 +237,9 @@ TODAY=$(date +%Y%m%d)
 # create a cluster with gcp workload identity using CCO manual mode
 # pre-req: ssh-add ~/.ssh/id_rsa
 znap function create-ocp-gcp-wif(){
+    # Use specified openshift-install or default to 4.19.0-ec.4
+    local OPENSHIFT_INSTALL=${OPENSHIFT_INSTALL:-openshift-install-4.19.0-ec.4}
+
     # Check if help is requested
     if [[ $1 == "help" ]]; then
         echo "Usage: create-ocp-gcp-wif [OPTION]"
@@ -266,12 +269,12 @@ znap function create-ocp-gcp-wif(){
     OCP_CREATE_DIR=$OCP_MANIFESTS_DIR/$TODAY-gcp-wif
     CLUSTER_NAME=tkaovila-$TODAY-wif #max 21 char allowed
     if [[ $1 == "gather" ]]; then
-        openshift-install gather bootstrap --dir $OCP_CREATE_DIR || return 1
+        $OPENSHIFT_INSTALL gather bootstrap --dir $OCP_CREATE_DIR || return 1
         return 0
     fi
     if [[ $1 != "no-delete" ]]; then
-        openshift-install destroy cluster --dir $OCP_CREATE_DIR || echo "no existing cluster"
-        openshift-install destroy bootstrap --dir $OCP_CREATE_DIR || echo "no existing bootstrap"
+        $OPENSHIFT_INSTALL destroy cluster --dir $OCP_CREATE_DIR || echo "no existing cluster"
+        $OPENSHIFT_INSTALL destroy bootstrap --dir $OCP_CREATE_DIR || echo "no existing bootstrap"
         (ccoctl gcp delete \
         --name $CLUSTER_NAME \
         --project $GCP_PROJECT_ID \
@@ -321,7 +324,7 @@ sshKey: |
   $(cat ~/.ssh/id_rsa.pub)
 " > $OCP_CREATE_DIR/install-config.yaml && echo "created install-config.yaml" || return 1
 # Set a $RELEASE_IMAGE variable with the release image from your installation file by running the following command:
-RELEASE_IMAGE=$(openshift-install version | awk '/release image/ {print $3}')
+RELEASE_IMAGE=$($OPENSHIFT_INSTALL version | awk '/release image/ {print $3}')
 # Extract the list of CredentialsRequest custom resources (CRs) from the OpenShift Container Platform release image by running the following command:
 echo "extracting credential-requests" && oc adm release extract \
   --from=$RELEASE_IMAGE \
@@ -335,13 +338,16 @@ ccoctl gcp create-all \
 --region $GCP_REGION \
 --output-dir $OCP_CREATE_DIR \
 --credentials-requests-dir $OCP_CREATE_DIR/credentials-requests || return 1
-openshift-install create manifests --dir $OCP_CREATE_DIR || return 1
+$OPENSHIFT_INSTALL create manifests --dir $OCP_CREATE_DIR || return 1
 cp $OCP_CREATE_DIR/credentials-requests/* $OCP_CREATE_DIR/manifests/ || return 1 # copy cred requests to manifests dir, ccoctl delete will delete cred requests in separate dir
-openshift-install create cluster --dir $OCP_CREATE_DIR \
-    --log-level=info || openshift-install gather bootstrap --dir $OCP_CREATE_DIR || return 1
+$OPENSHIFT_INSTALL create cluster --dir $OCP_CREATE_DIR \
+    --log-level=info || $OPENSHIFT_INSTALL gather bootstrap --dir $OCP_CREATE_DIR || return 1
 }
 
 znap function delete-ocp-gcp-wif(){
+    # Use specified openshift-install or default to 4.19.0-ec.4
+    local OPENSHIFT_INSTALL=${OPENSHIFT_INSTALL:-openshift-install-4.19.0-ec.4}
+
     # Check if help is requested
     if [[ $1 == "help" ]]; then
         echo "Usage: delete-ocp-gcp-wif [CLUSTER_NAME]"
@@ -365,8 +371,8 @@ znap function delete-ocp-gcp-wif(){
     if [[ -n $1 ]]; then
         CLUSTER_NAME=$1
     fi
-    openshift-install destroy cluster --dir $OCP_CREATE_DIR || echo "no existing cluster"
-    openshift-install destroy bootstrap --dir $OCP_CREATE_DIR || echo "no existing bootstrap"
+    $OPENSHIFT_INSTALL destroy cluster --dir $OCP_CREATE_DIR || echo "no existing cluster"
+    $OPENSHIFT_INSTALL destroy bootstrap --dir $OCP_CREATE_DIR || echo "no existing bootstrap"
     (ccoctl gcp delete \
     --name $CLUSTER_NAME \
     --project $GCP_PROJECT_ID \
