@@ -28,23 +28,6 @@ export BUILDX_PLATFORMS=linux/amd64,linux/arm64
 # Load OS-specific essentials
 [[ "$(uname -s)" = "Darwin" ]] && source ~/git/dotfiles/zsh/macos.zsh
 
-# Essential znap functions
-znap function update-zshrc-from-dotfiles() {
-  git -C ~/git/dotfiles pull > /dev/null && \
-  cp ~/git/dotfiles/.zshrc ~/.zshrc
-}
-znap function copy-to-dotfiles-from-zshrc() {
-  cp ~/.zshrc ~/git/dotfiles/.zshrc && \
-  git -C ~/git/dotfiles diff
-  echo
-  echo "${RED}push-dotfiles-from-zshrc${NC} to push dotfiles"
-}
-znap function push-dotfiles-from-zshrc() {
-  git -C ~/git/dotfiles add .zshrc && \
-  git -C ~/git/dotfiles commit -m "Update .zshrc" && \
-  git -C ~/git/dotfiles push
-}
-
 # Essential utilities (needed for basic shell functionality)
 source ~/git/dotfiles/zsh/paths.zsh
 source ~/git/dotfiles/zsh/command-cache.zsh
