@@ -13,30 +13,30 @@ compinit
 
 source ~/git/zsh-snap/znap.zsh  # Start Znap
 
-# `znap prompt` reduces your shell's startup time to just 15-40 ms!
+# -- Essential prompt initialization (foreground) --
+# Prompt setup - keep in foreground as it's visually important
 znap prompt sindresorhus/pure
 
-# `znap source` automatically downloads and installs your plugins.
-znap source marlonrichert/zsh-autocomplete
-# conflicts I think with autocomplete
-# znap source zsh-users/zsh-autosuggestions
+# -- Essential plugins (foreground) --
+# Syntax highlighting is loaded in foreground for immediate feedback
 znap source zsh-users/zsh-syntax-highlighting
+znap source marlonrichert/zsh-autocomplete
 
-# `znap eval` caches any kind of command output for you.
-# znap eval iterm2 'curl -fsSL https://iterm2.com/shell_integration/zsh'
+# -- Non-essential plugins (background) --
+{
+} &!
 
-# This section configures eval caching for frequently used commands
-# These are commands that:
-# 1. Generate shell code that needs to be evaluated
-# 2. Take time to execute but change infrequently
-# 3. Are part of your common development workflow
 
-# Shell integrations and environment setup
-[[ -n "$ITERM_PROFILE" ]] && znap eval iterm2 'curl -fsSL https://iterm2.com/shell_integration/zsh'
+# -- Asynchronous evaluations --
+# Start background initializations
+{
+  # Shell integrations and environment setup
+  [[ -n "$ITERM_PROFILE" ]] && znap eval iterm2 'curl -fsSL https://iterm2.com/shell_integration/zsh'
 
-# Node version manager (if installed)
-[[ -s "$HOME/.nvm/nvm.sh" ]] && znap eval nvm-init "$HOME/.nvm/nvm.sh"
+  # Node version manager (if installed)
+  [[ -s "$HOME/.nvm/nvm.sh" ]] && znap eval nvm-init "$HOME/.nvm/nvm.sh"
 
-# Python virtual environment managers
-command -v pyenv >/dev/null && znap eval pyenv-init 'pyenv init -'
-command -v pipenv >/dev/null && znap eval pipenv-shell 'pipenv --completion'
+  # Python virtual environment managers
+  command -v pyenv >/dev/null && znap eval pyenv-init 'pyenv init -'
+  command -v pipenv >/dev/null && znap eval pipenv-shell 'pipenv --completion'
+} &!

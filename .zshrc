@@ -26,7 +26,7 @@ export GCR_IMAGE_TAGS=""
 export BUILDX_PLATFORMS=linux/amd64,linux/arm64
 
 # Load OS-specific essentials
-[[ "$(uname -s)" = "Darwin" ]] && echo "macOS detected" && source ~/git/dotfiles/zsh/macos.zsh
+[[ "$(uname -s)" = "Darwin" ]] && source ~/git/dotfiles/zsh/macos.zsh
 
 # Essential znap functions
 znap function update-zshrc-from-dotfiles() {
@@ -65,12 +65,12 @@ source ~/git/dotfiles/zsh/cached-commands.zsh
   # Load GitHub Copilot aliases
   eval "$(gh copilot alias -- zsh)"
   
-  # Git status check in background
-  if [[ "$TERM_PROGRAM" != "vscode" ]]; then
-    if git -C ~/git/dotfiles status --porcelain | grep -q "M"; then
-      echo "dotfiles repo has uncommitted changes, run ${RED}edit-dotfiles${NC} to review"
-    fi
-  fi
+  # # Git status check in background
+  # if [[ "$TERM_PROGRAM" != "vscode" ]]; then
+  #   if git -C ~/git/dotfiles status --porcelain | grep -q "M"; then
+  #     echo "dotfiles repo has uncommitted changes, run ${RED}edit-dotfiles${NC} to review"
+  #   fi
+  # fi
 } &!
 # # bun completions
 # [ -s "/Users/tiger/.bun/_bun" ] && source "/Users/tiger/.bun/_bun"

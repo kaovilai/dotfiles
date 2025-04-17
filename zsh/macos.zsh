@@ -63,11 +63,11 @@ znap function unsetSOCKSproxy(){
 }
 WIFI_NAME=$(networksetup -getairportnetwork en0 | cut -d " " -f 4)
 if [[ "$TERM_PROGRAM" != "vscode" ]]; then
-  eval $AT_HOME && (eval $DISPLAYLINK_CONNECTED || eval $RESTART_DISPLAYLINK) &
+  eval $AT_HOME && (eval $DISPLAYLINK_CONNECTED || eval $RESTART_DISPLAYLINK) &!
     if [[ "$WIFI_NAME" = "S23" ]]; then
-        (curl --silent --socks5 $SOCKS_ROUTER_IP:$SOCKS_ROUTER_PROXY_PORT http://www.google.com && setSOCKSproxy) &
+        (curl --silent --socks5 $SOCKS_ROUTER_IP:$SOCKS_ROUTER_PROXY_PORT http://www.google.com && setSOCKSproxy) &!
     else
-        unsetSOCKSproxy &
+        unsetSOCKSproxy &!
     fi
     # randomize mac address, requires wi-fi to be en0, check with `sudo networksetup -listallhardwareports`
     # requires spoof-mac -> https://formulae.brew.sh/formula/spoof-mac
@@ -77,7 +77,7 @@ if [[ "$TERM_PROGRAM" != "vscode" ]]; then
     # replace .git/config `git@github.com:(.*)/`
     # with `ssh://git@ssh.github.com:443/$1/`
     if [[ "$WIFI_NAME" = "$TF_NETWORK_NAME" ]]; then
-        setTFproxy &
+        setTFproxy &!
         # mkdir -p ~/.ssh/tigerdotfiles/
         # echo "Host github.com
         # Hostname github.com
@@ -85,7 +85,7 @@ if [[ "$TERM_PROGRAM" != "vscode" ]]; then
         # ForwardAgent yes
         # ProxyCommand $(which socat) - PROXY:$TF_ROUTER_IP:%h:%p,proxyport=$TF_ROUTER_PROXY_PORT" > ~/.ssh/tigerdotfiles/config
     else
-        unsetTFproxy &
+        unsetTFproxy &!
     fi
 fi
 
