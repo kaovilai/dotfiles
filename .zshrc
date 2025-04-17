@@ -3,9 +3,17 @@
 # source ~/git/dotfiles/.zshrc
 # ```
 # -- Essential initialization section (happens in foreground) --
+# profiling start
+# zmodload zsh/zprof
+
 source ~/git/dotfiles/zsh/znap.zsh
 [[ -f ~/git/dotfiles/zsh/znap.zsh ]] || sh -c "mkdir -p ~/git && git clone --depth 1 -- \
     git@github.com:kaovilai/dotfiles.git ~/git/dotfiles"
+znap function timezsh() {
+  shell=${1-$SHELL}
+  for i in $(seq 1 10); do /usr/bin/time $shell -i -c exit; done;
+}
+
 # Don't put secrets here, put them in ~/secrets.zsh
 # edit ~/.zshrc first then run copy-to-dotfiles-from-zshrc to copy to dotfiles
 [[ -f ~/secrets.zsh ]] && source ~/secrets.zsh
@@ -32,15 +40,15 @@ export BUILDX_PLATFORMS=linux/amd64,linux/arm64
 source ~/git/dotfiles/zsh/paths.zsh
 source ~/git/dotfiles/zsh/command-cache.zsh
 source ~/git/dotfiles/zsh/cached-commands.zsh
+# Load GitHub Copilot aliases
+eval "$(gh copilot alias -- zsh)"
+# -- Non-essential initialization (happens in background) --
+{
 source ~/git/dotfiles/zsh/aws.zsh
 source ~/git/dotfiles/zsh/openshift-functions.zsh
 source ~/git/dotfiles/zsh/podman.zsh
 source ~/git/dotfiles/zsh/util.zsh
 source ~/git/dotfiles/zsh/go.zsh
-# Load GitHub Copilot aliases
-eval "$(gh copilot alias -- zsh)"
-# -- Non-essential initialization (happens in background) --
-{
   # Load extended utilities in background
   source ~/git/dotfiles/zsh/completions.zsh
   
@@ -52,7 +60,7 @@ eval "$(gh copilot alias -- zsh)"
       echo
     fi
   fi
-} &!
+} &
 # # bun completions
 # [ -s "/Users/tiger/.bun/_bun" ] && source "/Users/tiger/.bun/_bun"
 
@@ -64,3 +72,6 @@ eval "$(gh copilot alias -- zsh)"
 # export PATH="$HOME/.local/bin:$PATH"
 
 # [ -f "/Users/tiger/.ghcup/env" ] && . "/Users/tiger/.ghcup/env" # ghcup-env
+
+# profiling end
+# zprof
