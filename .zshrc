@@ -49,7 +49,7 @@ znap function push-dotfiles-from-zshrc() {
 source ~/git/dotfiles/zsh/paths.zsh
 source ~/git/dotfiles/zsh/command-cache.zsh
 source ~/git/dotfiles/zsh/cached-commands.zsh
-
+source ~/git/dotfiles/zsh/completions.zsh
 # -- Non-essential initialization (happens in background) --
 {
   # Load extended utilities in background
@@ -58,9 +58,6 @@ source ~/git/dotfiles/zsh/cached-commands.zsh
   source ~/git/dotfiles/zsh/openshift-functions.zsh
   source ~/git/dotfiles/zsh/aws.zsh
   source ~/git/dotfiles/zsh/podman.zsh
-  
-  # Load completions system (already has internal background processes)
-  source ~/git/dotfiles/zsh/completions.zsh
   
   # Load GitHub Copilot aliases
   eval "$(gh copilot alias -- zsh)"
