@@ -2,7 +2,8 @@
 # pre-req: ssh-add ~/.ssh/id_rsa
 znap function create-ocp-gcp-wif(){
     # Use specified openshift-install or default to 4.19.0-ec.4
-    local OPENSHIFT_INSTALL=${OPENSHIFT_INSTALL:-openshift-install-4.19.0-ec.4}
+    local OPENSHIFT_INSTALL=./Downloads/openshift-install-mac-4.19.0-ec.4/openshift-install
+    # local OPENSHIFT_INSTALL=${OPENSHIFT_INSTALL:-openshift-install-4.19.0-ec.4}
     $OPENSHIFT_INSTALL version
     # Check if help is requested
     if [[ $1 == "help" ]]; then
@@ -141,16 +142,16 @@ ccoctl gcp create-all \
     $OPENSHIFT_INSTALL create manifests --dir $OCP_CREATE_DIR || return 1
     cp $OCP_CREATE_DIR/credentials-requests/* $OCP_CREATE_DIR/manifests/ || return 1 # copy cred requests to manifests dir, ccoctl delete will delete cred requests in separate dir
     # Export the release image override
-    export OPENSHIFT_INSTALL_RELEASE_IMAGE_OVERRIDE=$RELEASE_IMAGE
-    echo "INFO: Exported OPENSHIFT_INSTALL_RELEASE_IMAGE_OVERRIDE=$RELEASE_IMAGE"
+    # export OPENSHIFT_INSTALL_RELEASE_IMAGE_OVERRIDE=$RELEASE_IMAGE
+    # echo "INFO: Exported OPENSHIFT_INSTALL_RELEASE_IMAGE_OVERRIDE=$RELEASE_IMAGE"
     
     # Create the cluster
     $OPENSHIFT_INSTALL create cluster --dir $OCP_CREATE_DIR \
         --log-level=info || $OPENSHIFT_INSTALL gather bootstrap --dir $OCP_CREATE_DIR || return 1
     
     # Unset the release image override after use
-    echo "INFO: Unsetting OPENSHIFT_INSTALL_RELEASE_IMAGE_OVERRIDE=$OPENSHIFT_INSTALL_RELEASE_IMAGE_OVERRIDE"
-    unset OPENSHIFT_INSTALL_RELEASE_IMAGE_OVERRIDE
+    # echo "INFO: Unsetting OPENSHIFT_INSTALL_RELEASE_IMAGE_OVERRIDE=$OPENSHIFT_INSTALL_RELEASE_IMAGE_OVERRIDE"
+    # unset OPENSHIFT_INSTALL_RELEASE_IMAGE_OVERRIDE
         
     # Reset the flag to avoid affecting future cluster creations
     if [[ -n "$PROCEED_WITH_EXISTING_CLUSTERS" ]]; then
