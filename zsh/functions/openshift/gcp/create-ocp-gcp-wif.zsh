@@ -122,8 +122,9 @@ pullSecret: '$(cat ~/pull-secret.txt)'
 sshKey: |
   $(cat ~/.ssh/id_rsa.pub)
 " > $OCP_CREATE_DIR/install-config.yaml && echo "created install-config.yaml" || return 1
-# Set a $RELEASE_IMAGE variable with the release image from your installation file by running the following command:
-RELEASE_IMAGE=$($OPENSHIFT_INSTALL version | awk '/release image/ {print $3}')
+# GCP only supports AMD64 architecture, so use the specific release image
+RELEASE_IMAGE=$OCP_FUNCTIONS_RELEASE_IMAGE_AMD64
+echo "INFO: Using AMD64 architecture release image for GCP: $RELEASE_IMAGE"
 # Extract the list of CredentialsRequest custom resources (CRs) from the OpenShift Container Platform release image by running the following command:
 echo "extracting credential-requests" && oc adm release extract \
   --from=$RELEASE_IMAGE \
@@ -139,10 +140,17 @@ ccoctl gcp create-all \
 --credentials-requests-dir $OCP_CREATE_DIR/credentials-requests || return 1
     $OPENSHIFT_INSTALL create manifests --dir $OCP_CREATE_DIR || return 1
     cp $OCP_CREATE_DIR/credentials-requests/* $OCP_CREATE_DIR/manifests/ || return 1 # copy cred requests to manifests dir, ccoctl delete will delete cred requests in separate dir
-    # Use the custom release image
-    OPENSHIFT_INSTALL_RELEASE_IMAGE_OVERRIDE=$OCP_FUNCTIONS_RELEASE_IMAGE \
+    # Export the release image override
+    export OPENSHIFT_INSTALL_RELEASE_IMAGE_OVERRIDE=$RELEASE_IMAGE
+    echo "INFO: Exported OPENSHIFT_INSTALL_RELEASE_IMAGE_OVERRIDE=$RELEASE_IMAGE"
+    
+    # Create the cluster
     $OPENSHIFT_INSTALL create cluster --dir $OCP_CREATE_DIR \
         --log-level=info || $OPENSHIFT_INSTALL gather bootstrap --dir $OCP_CREATE_DIR || return 1
+    
+    # Unset the release image override after use
+    echo "INFO: Unsetting OPENSHIFT_INSTALL_RELEASE_IMAGE_OVERRIDE"
+    unset OPENSHIFT_INSTALL_RELEASE_IMAGE_OVERRIDE
         
     # Reset the flag to avoid affecting future cluster creations
     if [[ -n "$PROCEED_WITH_EXISTING_CLUSTERS" ]]; then
