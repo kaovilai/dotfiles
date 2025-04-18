@@ -3,7 +3,7 @@
 znap function create-ocp-gcp-wif(){
     # Use specified openshift-install or default to 4.19.0-ec.4
     local OPENSHIFT_INSTALL=${OPENSHIFT_INSTALL:-openshift-install-4.19.0-ec.4}
-
+    $OPENSHIFT_INSTALL version
     # Check if help is requested
     if [[ $1 == "help" ]]; then
         echo "Usage: create-ocp-gcp-wif [OPTION]"
@@ -149,7 +149,7 @@ ccoctl gcp create-all \
         --log-level=info || $OPENSHIFT_INSTALL gather bootstrap --dir $OCP_CREATE_DIR || return 1
     
     # Unset the release image override after use
-    echo "INFO: Unsetting OPENSHIFT_INSTALL_RELEASE_IMAGE_OVERRIDE"
+    echo "INFO: Unsetting OPENSHIFT_INSTALL_RELEASE_IMAGE_OVERRIDE=$OPENSHIFT_INSTALL_RELEASE_IMAGE_OVERRIDE"
     unset OPENSHIFT_INSTALL_RELEASE_IMAGE_OVERRIDE
         
     # Reset the flag to avoid affecting future cluster creations
