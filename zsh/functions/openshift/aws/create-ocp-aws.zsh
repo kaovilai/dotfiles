@@ -8,7 +8,7 @@ znap function create-ocp-aws() {
     local OPENSHIFT_INSTALL=${OPENSHIFT_INSTALL:-openshift-install-4.19.0-ec.4}
     local ARCHITECTURE=$2
     local ARCH_SUFFIX=${2}
-    
+    $OPENSHIFT_INSTALL version
     # Check if help is requested
     if [[ $1 == "help" ]]; then
         echo "Usage: create-ocp-aws-$ARCH_SUFFIX [OPTION]"
