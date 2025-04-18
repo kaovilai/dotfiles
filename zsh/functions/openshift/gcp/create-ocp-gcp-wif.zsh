@@ -124,7 +124,20 @@ sshKey: |
   $(cat ~/.ssh/id_rsa.pub)
 " > $OCP_CREATE_DIR/install-config.yaml && echo "created install-config.yaml" || return 1
 # GCP only supports AMD64 architecture, so use the specific release image
-RELEASE_IMAGE=$OCP_FUNCTIONS_RELEASE_IMAGE_AMD64
+# RELEASE_IMAGE=$OCP_FUNCTIONS_RELEASE_IMAGE_AMD64
+RELEASE_IMAGE=$($OPENSHIFT_INSTALL version | awk '/release image/ {print $3}')
+# make sure logged into registry since cco steps requires it.
+BASE_RELEASE_IMAGE_REGISTRY=$(echo $RELEASE_IMAGE | awk -F/ '{print $1}')
+
+echo INFO checking if podman is logged into $BASE_RELEASE_IMAGE_REGISTRY
+podman login $BASE_RELEASE_IMAGE_REGISTRY || if [ "$BASE_RELEASE_IMAGE_REGISTRY" = "registry.ci.openshift.org" ]; then
+  open "https://oauth-openshift.apps.ci.l2s4.p1.openshiftapps.com/oauth/authorize?client_id=openshift-browser-client&redirect_uri=https%3A%2F%2Foauth-openshift.apps.ci.l2s4.p1.openshiftapps.com%2Foauth%2Ftoken%2Fdisplay&response_type=code"
+  echo "Login URL opened in browser. Please copy the login command from the browser and paste it below:"
+  read login_command
+  echo "Executing login command..."
+  eval "$login_command"
+fi
+
 echo "INFO: Using AMD64 architecture release image for GCP: $RELEASE_IMAGE"
 # Extract the list of CredentialsRequest custom resources (CRs) from the OpenShift Container Platform release image by running the following command:
 echo "extracting credential-requests" && oc adm release extract \
@@ -143,15 +156,15 @@ ccoctl gcp create-all \
     cp $OCP_CREATE_DIR/credentials-requests/* $OCP_CREATE_DIR/manifests/ || return 1 # copy cred requests to manifests dir, ccoctl delete will delete cred requests in separate dir
     # Export the release image override
     # export OPENSHIFT_INSTALL_RELEASE_IMAGE_OVERRIDE=$RELEASE_IMAGE
-    # echo "INFO: Exported OPENSHIFT_INSTALL_RELEASE_IMAGE_OVERRIDE=$RELEASE_IMAGE"
+    echo "INFO: Exported OPENSHIFT_INSTALL_RELEASE_IMAGE_OVERRIDE=$RELEASE_IMAGE"
     
     # Create the cluster
     $OPENSHIFT_INSTALL create cluster --dir $OCP_CREATE_DIR \
         --log-level=info || $OPENSHIFT_INSTALL gather bootstrap --dir $OCP_CREATE_DIR || return 1
     
     # Unset the release image override after use
-    # echo "INFO: Unsetting OPENSHIFT_INSTALL_RELEASE_IMAGE_OVERRIDE=$OPENSHIFT_INSTALL_RELEASE_IMAGE_OVERRIDE"
-    # unset OPENSHIFT_INSTALL_RELEASE_IMAGE_OVERRIDE
+    echo "INFO: Unsetting OPENSHIFT_INSTALL_RELEASE_IMAGE_OVERRIDE=$OPENSHIFT_INSTALL_RELEASE_IMAGE_OVERRIDE"
+    unset OPENSHIFT_INSTALL_RELEASE_IMAGE_OVERRIDE
         
     # Reset the flag to avoid affecting future cluster creations
     if [[ -n "$PROCEED_WITH_EXISTING_CLUSTERS" ]]; then
