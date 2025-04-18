@@ -81,23 +81,35 @@ znap function delete-ocp-aws-dir() {
     
     # Extract date and architecture from directory name
     # Assuming format like 20250410-aws-arm64 or 20250410-aws-amd64
-    if [[ $dir_basename =~ ([0-9]{8})-aws-(arm64|amd64) ]]; then
+    # Also handle numbered suffixes like 20250410-aws-arm64-1
+    if [[ $dir_basename =~ ([0-9]{8})-aws-(arm64|amd64)(-[0-9]+)? ]]; then
         local extracted_date=${BASH_REMATCH[1]}
         local extracted_arch=${BASH_REMATCH[2]}
+        local extracted_suffix=${BASH_REMATCH[3]}
         
-        echo "Extracted date: $extracted_date, architecture: $extracted_arch"
+        echo "Extracted date: $extracted_date, architecture: $extracted_arch, suffix: ${extracted_suffix:-none}"
         
         # Temporarily set TODAY to the extracted date
         local original_today=$TODAY
         TODAY=$extracted_date
         
+        # If we have a numbered suffix, adjust the directory and cluster name
+        if [[ -n "$extracted_suffix" ]]; then
+            # Override the directory path to include the suffix
+            export OCP_CREATE_DIR="$OCP_MANIFESTS_DIR/$extracted_date-aws-$extracted_arch$extracted_suffix"
+            # Override the cluster name to include the suffix
+            export CLUSTER_NAME="tkaovila-$extracted_date-$extracted_arch$extracted_suffix"
+            echo "Using directory path: $OCP_CREATE_DIR"
+            echo "Using cluster name: $CLUSTER_NAME"
+        fi
+        
         # Call the appropriate delete function based on the architecture
         if [[ "$extracted_arch" == "arm64" ]]; then
             echo "Calling delete-ocp-aws-arm64"
-            delete-ocp-aws-arm64
+            delete-ocp-aws-arm64 "$CLUSTER_NAME"
         elif [[ "$extracted_arch" == "amd64" ]]; then
             echo "Calling delete-ocp-aws-amd64"
-            delete-ocp-aws-amd64
+            delete-ocp-aws-amd64 "$CLUSTER_NAME"
         else
             echo "ERROR: Unknown architecture: $extracted_arch"
             # Restore original TODAY

@@ -68,18 +68,30 @@ znap function delete-ocp-gcp-wif-dir() {
     
     # Extract date from directory name
     # Assuming format like 20250410-gcp-wif
-    if [[ $dir_basename =~ ([0-9]{8})-gcp-wif ]]; then
+    # Also handle numbered suffixes like 20250410-gcp-wif-1
+    if [[ $dir_basename =~ ([0-9]{8})-gcp-wif(-[0-9]+)? ]]; then
         local extracted_date=${BASH_REMATCH[1]}
+        local extracted_suffix=${BASH_REMATCH[2]}
         
-        echo "Extracted date: $extracted_date"
+        echo "Extracted date: $extracted_date, suffix: ${extracted_suffix:-none}"
         
         # Temporarily set TODAY to the extracted date
         local original_today=$TODAY
         TODAY=$extracted_date
         
+        # If we have a numbered suffix, adjust the directory and cluster name
+        if [[ -n "$extracted_suffix" ]]; then
+            # Override the directory path to include the suffix
+            export OCP_CREATE_DIR="$OCP_MANIFESTS_DIR/$extracted_date-gcp-wif$extracted_suffix"
+            # Override the cluster name to include the suffix
+            export CLUSTER_NAME="tkaovila-$extracted_date-wif$extracted_suffix"
+            echo "Using directory path: $OCP_CREATE_DIR"
+            echo "Using cluster name: $CLUSTER_NAME"
+        fi
+        
         # Call the delete function
         echo "Calling delete-ocp-gcp-wif"
-        delete-ocp-gcp-wif
+        delete-ocp-gcp-wif "$CLUSTER_NAME"
         
         # Restore original TODAY
         TODAY=$original_today
