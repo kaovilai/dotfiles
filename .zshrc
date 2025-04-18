@@ -48,17 +48,19 @@ if [[ "$TERM_PROGRAM" != "vscode" ]]; then
 fi
 # source ~/git/dotfiles/zsh/podman.zsh
 source ~/git/dotfiles/zsh/util.zsh
+if [[ "$TERM_PROGRAM" != "vscode" ]]; then
+  # Git status check
+  if git -C ~/git/dotfiles status --porcelain | grep -q "M"; then
+    echo "dotfiles repo has uncommitted changes, run ${RED}edit-dotfiles${NC} to review"
+    echo
+  fi
+fi
 # -- Non-essential initialization (happens in background) --
 {
   # Load extended utilities in background
   # completions are written to fpaths, so likely won't need to run them everytime, esp in vscode.
   if [[ "$TERM_PROGRAM" != "vscode" ]]; then
     source ~/git/dotfiles/zsh/completions.zsh
-  # Git status check in background
-    if git -C ~/git/dotfiles status --porcelain | grep -q "M"; then
-      echo "dotfiles repo has uncommitted changes, run ${RED}edit-dotfiles${NC} to review"
-      echo
-    fi
   fi
 } &
 # # bun completions
