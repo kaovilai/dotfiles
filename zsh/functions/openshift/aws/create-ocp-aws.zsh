@@ -144,10 +144,26 @@ sshKey: |
 " > $OCP_CREATE_DIR/install-config.yaml && echo "created install-config.yaml" || return 1
     
     $OPENSHIFT_INSTALL create manifests --dir $OCP_CREATE_DIR || return 1
-    # Use the custom release image
-    OPENSHIFT_INSTALL_RELEASE_IMAGE_OVERRIDE=$OCP_FUNCTIONS_RELEASE_IMAGE \
+    # Set the appropriate release image based on architecture
+    if [[ "$ARCHITECTURE" == "arm64" ]]; then
+        RELEASE_IMAGE=$OCP_FUNCTIONS_RELEASE_IMAGE_ARM64
+    else
+        RELEASE_IMAGE=$OCP_FUNCTIONS_RELEASE_IMAGE_AMD64
+    fi
+    
+    # Use the architecture-specific release image
+    echo "INFO: Using architecture-specific release image for $ARCHITECTURE: $RELEASE_IMAGE"
+    # Export the release image override
+    export OPENSHIFT_INSTALL_RELEASE_IMAGE_OVERRIDE=$RELEASE_IMAGE
+    echo "INFO: Exported OPENSHIFT_INSTALL_RELEASE_IMAGE_OVERRIDE=$RELEASE_IMAGE"
+    
+    # Create the cluster
     $OPENSHIFT_INSTALL create cluster --dir $OCP_CREATE_DIR \
         --log-level=info || $OPENSHIFT_INSTALL gather bootstrap --dir $OCP_CREATE_DIR || return 1
+    
+    # Unset the release image override after use
+    echo "INFO: Unsetting OPENSHIFT_INSTALL_RELEASE_IMAGE_OVERRIDE"
+    unset OPENSHIFT_INSTALL_RELEASE_IMAGE_OVERRIDE
         
     # Reset the flag to avoid affecting future cluster creations
     if [[ -n "$PROCEED_WITH_EXISTING_CLUSTERS" ]]; then
