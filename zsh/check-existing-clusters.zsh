@@ -9,6 +9,13 @@ znap function check-for-existing-clusters() {
         echo "  CLOUD_PROVIDER  Optional: Filter by provider (aws, gcp, all)"
         echo "  PATTERN         Optional: Pattern to match in cluster names"
         echo ""
+        echo "Pattern examples:"
+        echo "  20250417        Match clusters created on April 17, 2025"
+        echo "  arm64           Match AWS ARM64 architecture clusters"
+        echo "  amd64           Match AWS AMD64 architecture clusters"
+        echo "  wif             Match GCP WIF clusters"
+        echo "  -1              Match clusters with suffix -1 (created alongside others)"
+        echo ""
         echo "Returns:"
         echo "  0 - User chose to proceed (no clusters found or user approved)"
         echo "  1 - User chose to cancel operation"
@@ -112,6 +119,8 @@ znap function check-for-existing-clusters() {
         3)
             echo "Proceeding with creation alongside existing clusters."
             echo "WARNING: This may cause resource conflicts or increased costs."
+            # Set a global flag that we're proceeding with existing clusters
+            export PROCEED_WITH_EXISTING_CLUSTERS="true"
             return 0
             ;;
         *)
