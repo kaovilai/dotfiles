@@ -20,4 +20,36 @@ alias computer-use-claud='docker run \
     -it ghcr.io/anthropics/anthropic-quickstarts:computer-use-demo-latest'
 alias activepieces-start='podman compose -f /Users/tiger/OneDrive/activepieces/docker-compose.activepiecestailscale.yml up -d'
 alias activepieces-stop='podman compose -f /Users/tiger/OneDrive/activepieces/docker-compose.activepiecestailscale.yml down'
-alias activepieces-restart='podman compose -f /Users/tiger/OneDrive/activepieces/docker-compose.activepiecestailscale.yml down && podman compose -f /Users/tiger/OneDrive/activepieces/docker-compose.activepiecestailscale.yml up -d'
+alias activepieces-restart='
+    # First bring down the containers
+    podman compose -f /Users/tiger/OneDrive/activepieces/docker-compose.activepiecestailscale.yml down
+    
+    # Clean up Tailscale machines if API key and tailnet are configured
+    if [ -n "$TAILSCALE_API_KEY" ] && [ -n "$TAILSCALE_TAILNET" ]; then
+        echo "Looking for activepieces machines in Tailscale..."
+        
+        # List all machines and find ones with activepieces in the name
+        DEVICES_JSON=$(curl -s -H "Authorization: Bearer $TAILSCALE_API_KEY" \
+                                 "https://api.tailscale.com/api/v2/tailnet/$TAILSCALE_TAILNET/devices")
+        
+        # Extract machine IDs with activepieces in the name
+        MACHINE_IDS=$(echo "$DEVICES_JSON" | jq -r \
+                                 ".devices[] | select(.hostname | contains(\"activepieces\")) | .id")
+        
+        if [ -n "$MACHINE_IDS" ]; then
+            echo "Found activepieces machines to clean up"
+            for ID in $MACHINE_IDS; do
+                echo "Deleting Tailscale machine: $ID"
+                curl -s -X DELETE -H "Authorization: Bearer $TAILSCALE_API_KEY" \
+                         "https://api.tailscale.com/api/v2/device/$ID"
+            done
+        else
+            echo "No activepieces machines found in Tailscale"
+        fi
+    else
+        echo "Tailscale API credentials not configured, skipping machine cleanup"
+    fi
+    
+    # Finally, bring up the containers again
+    podman compose -f /Users/tiger/OneDrive/activepieces/docker-compose.activepiecestailscale.yml up -d
+'
