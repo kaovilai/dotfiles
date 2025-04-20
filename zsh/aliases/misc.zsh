@@ -18,3 +18,5 @@ alias computer-use-claud='docker run \
     -p 6080:6080 \
     -p 8080:8080 \
     -it ghcr.io/anthropics/anthropic-quickstarts:computer-use-demo-latest'
+alias activepieces-start='podman compose -f /Users/tiger/OneDrive/activepieces/docker-compose.activepiecestailscale.yml up -d'
+alias activepieces-stop='podman compose -f /Users/tiger/OneDrive/activepieces/docker-compose.activepiecestailscale.yml down'
