@@ -105,7 +105,18 @@ znap function create-ocp-aws() {
     
     # Check for existing clusters before proceeding
     check-for-existing-clusters "aws" "$ARCH_SUFFIX" || return 1
+    # Set the appropriate release image based on architecture
+    if [[ "$ARCHITECTURE" == "arm64" ]]; then
+        RELEASE_IMAGE=$OCP_FUNCTIONS_RELEASE_IMAGE_ARM64
+    else
+        RELEASE_IMAGE=$OCP_FUNCTIONS_RELEASE_IMAGE_AMD64
+    fi
     
+    # Use the architecture-specific release image
+    echo "INFO: Using architecture-specific release image for $ARCHITECTURE: $RELEASE_IMAGE"
+    # Export the release image override
+    export OPENSHIFT_INSTALL_RELEASE_IMAGE_OVERRIDE=$RELEASE_IMAGE
+    echo "INFO: Exported OPENSHIFT_INSTALL_RELEASE_IMAGE_OVERRIDE=$RELEASE_IMAGE"
     mkdir -p $OCP_CREATE_DIR && \
     echo "additionalTrustBundlePolicy: Proxyonly
 apiVersion: v1
@@ -144,18 +155,6 @@ sshKey: |
 " > $OCP_CREATE_DIR/install-config.yaml && echo "created install-config.yaml" || return 1
     
     $OPENSHIFT_INSTALL create manifests --dir $OCP_CREATE_DIR || return 1
-    # Set the appropriate release image based on architecture
-    if [[ "$ARCHITECTURE" == "arm64" ]]; then
-        RELEASE_IMAGE=$OCP_FUNCTIONS_RELEASE_IMAGE_ARM64
-    else
-        RELEASE_IMAGE=$OCP_FUNCTIONS_RELEASE_IMAGE_AMD64
-    fi
-    
-    # Use the architecture-specific release image
-    echo "INFO: Using architecture-specific release image for $ARCHITECTURE: $RELEASE_IMAGE"
-    # Export the release image override
-    export OPENSHIFT_INSTALL_RELEASE_IMAGE_OVERRIDE=$RELEASE_IMAGE
-    echo "INFO: Exported OPENSHIFT_INSTALL_RELEASE_IMAGE_OVERRIDE=$RELEASE_IMAGE"
     
     # Create the cluster
     $OPENSHIFT_INSTALL create cluster --dir $OCP_CREATE_DIR \
