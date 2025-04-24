@@ -138,6 +138,37 @@ podman login $BASE_RELEASE_IMAGE_REGISTRY || if [ "$BASE_RELEASE_IMAGE_REGISTRY"
   eval "$login_command"
 fi
 
+# Update pull-secret.txt with podman auth credentials if logged in
+if podman login --get-login $BASE_RELEASE_IMAGE_REGISTRY &>/dev/null; then
+  echo "INFO: Podman is logged into $BASE_RELEASE_IMAGE_REGISTRY, updating pull-secret.txt"
+  
+  # Get podman auth file location and extract credentials
+  PODMAN_AUTH_FILE="${XDG_RUNTIME_DIR}/containers/auth.json"
+  if [ ! -f "$PODMAN_AUTH_FILE" ]; then
+    PODMAN_AUTH_FILE="$HOME/.config/containers/auth.json"
+  fi
+  
+  if [ -f "$PODMAN_AUTH_FILE" ]; then
+    # Extract auth for the specific registry
+    REGISTRY_AUTH=$(jq -r --arg reg "$BASE_RELEASE_IMAGE_REGISTRY" '.auths[$reg] // empty' "$PODMAN_AUTH_FILE")
+    
+    if [ -n "$REGISTRY_AUTH" ]; then
+      # Read current pull secret
+      PULL_SECRET=$(cat ~/pull-secret.txt)
+      
+      # Update pull secret with the registry auth
+      UPDATED_PULL_SECRET=$(echo "$PULL_SECRET" | jq --arg reg "$BASE_RELEASE_IMAGE_REGISTRY" --argjson auth "$REGISTRY_AUTH" '.auths[$reg] = $auth')
+      
+      # Write back to pull-secret.txt
+      echo "$UPDATED_PULL_SECRET" > ~/pull-secret.txt
+      echo "INFO: Updated ~/pull-secret.txt with credentials for $BASE_RELEASE_IMAGE_REGISTRY"
+    else
+      echo "WARN: No auth found for $BASE_RELEASE_IMAGE_REGISTRY in podman auth file"
+    fi
+  else
+    echo "WARN: Podman auth file not found at expected locations"
+  fi
+fi
 echo "INFO: Using AMD64 architecture release image for GCP: $RELEASE_IMAGE"
 # Extract the list of CredentialsRequest custom resources (CRs) from the OpenShift Container Platform release image by running the following command:
 echo "extracting credential-requests" && oc adm release extract \
