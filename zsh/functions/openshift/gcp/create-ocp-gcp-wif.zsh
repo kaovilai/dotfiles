@@ -170,6 +170,10 @@ if podman login --get-login $BASE_RELEASE_IMAGE_REGISTRY &>/dev/null; then
   fi
 fi
 echo "INFO: Using AMD64 architecture release image for GCP: $RELEASE_IMAGE"
+
+# Export the release image override
+export OPENSHIFT_INSTALL_RELEASE_IMAGE_OVERRIDE=$RELEASE_IMAGE
+echo "INFO: Exported OPENSHIFT_INSTALL_RELEASE_IMAGE_OVERRIDE=$RELEASE_IMAGE"
 # Extract the list of CredentialsRequest custom resources (CRs) from the OpenShift Container Platform release image by running the following command:
 echo "extracting credential-requests" && oc adm release extract \
   --from=$RELEASE_IMAGE \
@@ -185,9 +189,6 @@ ccoctl gcp create-all \
 --credentials-requests-dir $OCP_CREATE_DIR/credentials-requests || return 1
     $OPENSHIFT_INSTALL create manifests --dir $OCP_CREATE_DIR || return 1
     cp $OCP_CREATE_DIR/credentials-requests/* $OCP_CREATE_DIR/manifests/ || return 1 # copy cred requests to manifests dir, ccoctl delete will delete cred requests in separate dir
-    # Export the release image override
-    export OPENSHIFT_INSTALL_RELEASE_IMAGE_OVERRIDE=$RELEASE_IMAGE
-    echo "INFO: Exported OPENSHIFT_INSTALL_RELEASE_IMAGE_OVERRIDE=$RELEASE_IMAGE"
     
     # Create the cluster
     $OPENSHIFT_INSTALL create cluster --dir $OCP_CREATE_DIR \
