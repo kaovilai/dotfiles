@@ -2,8 +2,8 @@
 # pre-req: ssh-add ~/.ssh/id_rsa
 znap function create-ocp-gcp-wif(){
     # Use specified openshift-install or default to 4.19.0-ec.4
-    local OPENSHIFT_INSTALL=./Downloads/openshift-install-mac-4.19.0-ec.4/openshift-install
-    # local OPENSHIFT_INSTALL=${OPENSHIFT_INSTALL:-openshift-install-4.19.0-ec.4}
+    # local OPENSHIFT_INSTALL=./Downloads/openshift-install-mac-4.19.0-ec.4/openshift-install
+    local OPENSHIFT_INSTALL=${OPENSHIFT_INSTALL:-openshift-install-4.19.0-ec.4}
     $OPENSHIFT_INSTALL version
     # Check if help is requested
     if [[ $1 == "help" ]]; then
@@ -124,8 +124,8 @@ sshKey: |
   $(cat ~/.ssh/id_rsa.pub)
 " > $OCP_CREATE_DIR/install-config.yaml && echo "created install-config.yaml" || return 1
 # GCP only supports AMD64 architecture, so use the specific release image
-# RELEASE_IMAGE=$OCP_FUNCTIONS_RELEASE_IMAGE_AMD64
-RELEASE_IMAGE=$($OPENSHIFT_INSTALL version | awk '/release image/ {print $3}')
+RELEASE_IMAGE=$OCP_FUNCTIONS_RELEASE_IMAGE_MULTI
+# RELEASE_IMAGE=$($OPENSHIFT_INSTALL version | awk '/release image/ {print $3}')
 # make sure logged into registry since cco steps requires it.
 BASE_RELEASE_IMAGE_REGISTRY=$(echo $RELEASE_IMAGE | awk -F/ '{print $1}')
 
@@ -186,7 +186,7 @@ ccoctl gcp create-all \
     $OPENSHIFT_INSTALL create manifests --dir $OCP_CREATE_DIR || return 1
     cp $OCP_CREATE_DIR/credentials-requests/* $OCP_CREATE_DIR/manifests/ || return 1 # copy cred requests to manifests dir, ccoctl delete will delete cred requests in separate dir
     # Export the release image override
-    # export OPENSHIFT_INSTALL_RELEASE_IMAGE_OVERRIDE=$RELEASE_IMAGE
+    export OPENSHIFT_INSTALL_RELEASE_IMAGE_OVERRIDE=$RELEASE_IMAGE
     echo "INFO: Exported OPENSHIFT_INSTALL_RELEASE_IMAGE_OVERRIDE=$RELEASE_IMAGE"
     
     # Create the cluster
