@@ -65,6 +65,7 @@ znap function delete-ocp-gcp-wif-dir() {
     
     # Extract basename from the directory
     local dir_basename=$(basename "$1")
+    echo "DEBUG: Processing directory basename: $dir_basename"
     
     # Extract date from directory name
     # Assuming format like 20250410-gcp-wif
@@ -74,6 +75,13 @@ znap function delete-ocp-gcp-wif-dir() {
         local extracted_suffix=${BASH_REMATCH[2]}
         
         echo "Extracted date: $extracted_date, suffix: ${extracted_suffix:-none}"
+        
+        # Safety check - ensure extracted_date is not empty
+        if [[ -z "$extracted_date" ]]; then
+            echo "ERROR: Failed to extract date from directory name: $dir_basename"
+            echo "Using current date as fallback"
+            extracted_date=$(date +%Y%m%d)
+        fi
         
         # Temporarily set TODAY to the extracted date
         local original_today=$TODAY
@@ -87,6 +95,12 @@ znap function delete-ocp-gcp-wif-dir() {
             export CLUSTER_NAME="tkaovila-$extracted_date-wif$extracted_suffix"
             echo "Using directory path: $OCP_CREATE_DIR"
             echo "Using cluster name: $CLUSTER_NAME"
+        else
+            # Explicitly set the directory path and cluster name for clarity
+            export OCP_CREATE_DIR="$OCP_MANIFESTS_DIR/$extracted_date-gcp-wif"
+            export CLUSTER_NAME="tkaovila-$extracted_date-wif"
+            echo "Using directory path: $OCP_CREATE_DIR"
+            echo "Using cluster name: $CLUSTER_NAME"
         fi
         
         # Call the delete function
@@ -98,6 +112,23 @@ znap function delete-ocp-gcp-wif-dir() {
     else
         echo "ERROR: Directory name format not recognized: $dir_basename"
         echo "Expected format: YYYYMMDD-gcp-wif (e.g., 20250410-gcp-wif)"
+        echo "Using current date as fallback"
+        
+        # Use current date as fallback
+        local fallback_date=$(date +%Y%m%d)
+        local original_today=$TODAY
+        TODAY=$fallback_date
+        
+        echo "Using fallback directory path: $OCP_MANIFESTS_DIR/$fallback_date-gcp-wif"
+        echo "Using fallback cluster name: tkaovila-$fallback_date-wif"
+        
+        # Call the delete function with explicit cluster name
+        echo "Calling delete-ocp-gcp-wif with fallback values"
+        delete-ocp-gcp-wif "tkaovila-$fallback_date-wif"
+        
+        # Restore original TODAY
+        TODAY=$original_today
+        
         return 1
     fi
 }

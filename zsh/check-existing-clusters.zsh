@@ -100,10 +100,20 @@ znap function check-for-existing-clusters() {
                 local dir_name=$(basename "$dir")
                 if [[ "$dir" == *"-aws-"* ]]; then
                     echo "Destroying AWS cluster: $dir_name"
-                    delete-ocp-aws-dir "$dir"
+                    # Ensure the directory exists before attempting to delete
+                    if [ -d "$dir" ]; then
+                        delete-ocp-aws-dir "$dir"
+                    else
+                        echo "WARNING: Directory $dir does not exist, skipping deletion"
+                    fi
                 elif [[ "$dir" == *"-gcp-wif"* ]]; then
                     echo "Destroying GCP-WIF cluster: $dir_name"
-                    delete-ocp-gcp-wif-dir "$dir"
+                    # Ensure the directory exists before attempting to delete
+                    if [ -d "$dir" ]; then
+                        delete-ocp-gcp-wif-dir "$dir"
+                    else
+                        echo "WARNING: Directory $dir does not exist, skipping deletion"
+                    fi
                 else
                     echo "Unknown cluster type, using generic destroy: $dir_name"
                     local OPENSHIFT_INSTALL=${OPENSHIFT_INSTALL:-openshift-install-4.19.0-ec.4}
