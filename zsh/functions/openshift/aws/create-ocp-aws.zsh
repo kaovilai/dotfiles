@@ -57,6 +57,12 @@ znap function create-ocp-aws() {
         echo "INFO: Using $ARCHITECTURE architecture for cluster nodes (supported by current release payload)"
     fi
     
+    # Safety check - ensure TODAY is not empty
+    if [[ -z "$TODAY" ]]; then
+        echo "WARNING: TODAY variable is empty, using current date"
+        TODAY=$(date +%Y%m%d)
+    fi
+    
     OCP_CREATE_DIR=$OCP_MANIFESTS_DIR/$TODAY-aws-$ARCH_SUFFIX
     CLUSTER_BASE_NAME=tkaovila-$TODAY-$ARCH_SUFFIX
     CLUSTER_NAME=$CLUSTER_BASE_NAME #max 21 char allowed
