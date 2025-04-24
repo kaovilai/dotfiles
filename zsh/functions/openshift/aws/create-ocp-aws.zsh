@@ -4,6 +4,11 @@ znap function create-ocp-aws() {
     #   $1 - Command/option (help, gather, delete, no-delete)
     #   $2 - Architecture (arm64 or amd64)
     
+    # Unset SSH_AUTH_SOCK on Darwin systems to avoid SSH errors
+    if [[ "$(uname)" == "Darwin" ]]; then
+        unset SSH_AUTH_SOCK
+    fi
+    
     # Use specified openshift-install or default to 4.19.0-ec.4
     local OPENSHIFT_INSTALL=${OPENSHIFT_INSTALL:-openshift-install-4.19.0-ec.4}
     local ARCHITECTURE=$2

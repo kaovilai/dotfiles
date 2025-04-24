@@ -1,4 +1,9 @@
 znap function installClusterOpenshiftInstall(){
+    # Unset SSH_AUTH_SOCK on Darwin systems to avoid SSH errors
+    if [[ "$(uname)" == "Darwin" ]]; then
+        unset SSH_AUTH_SOCK
+    fi
+    
     [ $(command -v openshift-install-official) ] || [ $(command -v openshift-install) ] || {
         echo "openshift-install-official or openshift-install not found"
         return 1

@@ -1,4 +1,9 @@
 znap function delete-ocp-gcp-wif(){
+    # Unset SSH_AUTH_SOCK on Darwin systems to avoid SSH errors
+    if [[ "$(uname)" == "Darwin" ]]; then
+        unset SSH_AUTH_SOCK
+    fi
+    
     # Use specified openshift-install or default to 4.19.0-ec.4
     local OPENSHIFT_INSTALL=${OPENSHIFT_INSTALL:-openshift-install-4.19.0-ec.4}
 

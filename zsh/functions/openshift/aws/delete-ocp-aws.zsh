@@ -4,6 +4,11 @@ znap function delete-ocp-aws() {
     #   $1 - Cluster name or help
     #   $2 - Architecture suffix (arm64 or amd64)
     
+    # Unset SSH_AUTH_SOCK on Darwin systems to avoid SSH errors
+    if [[ "$(uname)" == "Darwin" ]]; then
+        unset SSH_AUTH_SOCK
+    fi
+    
     # Use specified openshift-install or default to 4.19.0-ec.4
     local OPENSHIFT_INSTALL=${OPENSHIFT_INSTALL:-openshift-install-4.19.0-ec.4}
     local ARCH_SUFFIX=$2
