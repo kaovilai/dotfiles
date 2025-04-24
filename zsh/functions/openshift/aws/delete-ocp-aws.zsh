@@ -78,6 +78,7 @@ znap function delete-ocp-aws-dir() {
     
     # Extract basename from the directory
     local dir_basename=$(basename "$1")
+    echo "DEBUG: Processing directory basename: $dir_basename"
     
     # Extract date and architecture from directory name
     # Assuming format like 20250410-aws-arm64 or 20250410-aws-amd64
@@ -89,6 +90,20 @@ znap function delete-ocp-aws-dir() {
         
         echo "Extracted date: $extracted_date, architecture: $extracted_arch, suffix: ${extracted_suffix:-none}"
         
+        # Safety check - ensure extracted_date is not empty
+        if [[ -z "$extracted_date" ]]; then
+            echo "ERROR: Failed to extract date from directory name: $dir_basename"
+            echo "Using current date as fallback"
+            extracted_date=$(date +%Y%m%d)
+        fi
+        
+        # Safety check - ensure extracted_arch is not empty
+        if [[ -z "$extracted_arch" ]]; then
+            echo "ERROR: Failed to extract architecture from directory name: $dir_basename"
+            echo "Using arm64 as fallback architecture"
+            extracted_arch="arm64"
+        fi
+        
         # Temporarily set TODAY to the extracted date
         local original_today=$TODAY
         TODAY=$extracted_date
@@ -99,6 +114,12 @@ znap function delete-ocp-aws-dir() {
             export OCP_CREATE_DIR="$OCP_MANIFESTS_DIR/$extracted_date-aws-$extracted_arch$extracted_suffix"
             # Override the cluster name to include the suffix
             export CLUSTER_NAME="tkaovila-$extracted_date-$extracted_arch$extracted_suffix"
+            echo "Using directory path: $OCP_CREATE_DIR"
+            echo "Using cluster name: $CLUSTER_NAME"
+        else
+            # Explicitly set the directory path and cluster name for clarity
+            export OCP_CREATE_DIR="$OCP_MANIFESTS_DIR/$extracted_date-aws-$extracted_arch"
+            export CLUSTER_NAME="tkaovila-$extracted_date-$extracted_arch"
             echo "Using directory path: $OCP_CREATE_DIR"
             echo "Using cluster name: $CLUSTER_NAME"
         fi
@@ -122,6 +143,24 @@ znap function delete-ocp-aws-dir() {
     else
         echo "ERROR: Directory name format not recognized: $dir_basename"
         echo "Expected format: YYYYMMDD-aws-ARCH (e.g., 20250410-aws-arm64)"
+        echo "Using current date and arm64 architecture as fallback"
+        
+        # Use current date and arm64 as fallback
+        local fallback_date=$(date +%Y%m%d)
+        local fallback_arch="arm64"
+        local original_today=$TODAY
+        TODAY=$fallback_date
+        
+        echo "Using fallback directory path: $OCP_MANIFESTS_DIR/$fallback_date-aws-$fallback_arch"
+        echo "Using fallback cluster name: tkaovila-$fallback_date-$fallback_arch"
+        
+        # Call the delete function with explicit cluster name
+        echo "Calling delete-ocp-aws-arm64 with fallback values"
+        delete-ocp-aws-arm64 "tkaovila-$fallback_date-$fallback_arch"
+        
+        # Restore original TODAY
+        TODAY=$original_today
+        
         return 1
     fi
 }
