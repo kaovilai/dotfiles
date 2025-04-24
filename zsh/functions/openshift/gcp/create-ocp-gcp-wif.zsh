@@ -35,6 +35,13 @@ znap function create-ocp-gcp-wif(){
     # openshift-install create install-config --dir $OCP_MANIFESTS_DIR/$TODAY-gcp-wif --log-level debug
     # https://docs.redhat.com/en/documentation/openshift_container_platform/4.17/html-single/installing_on_gcp/index#cco-ccoctl-configuring_installing-gcp-customizations
     # prompt and remove if exists already so user can interrupt if uninstall is needed.
+    
+    # Safety check - ensure TODAY is not empty
+    if [[ -z "$TODAY" ]]; then
+        echo "WARNING: TODAY variable is empty, using current date"
+        TODAY=$(date +%Y%m%d)
+    fi
+    
     OCP_CREATE_DIR=$OCP_MANIFESTS_DIR/$TODAY-gcp-wif
     CLUSTER_BASE_NAME=tkaovila-$TODAY-wif
     CLUSTER_NAME=$CLUSTER_BASE_NAME #max 21 char allowed

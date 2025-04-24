@@ -25,6 +25,12 @@ znap function delete-ocp-aws() {
         return 0
     fi
     
+    # Safety check - ensure TODAY is not empty
+    if [[ -z "$TODAY" ]]; then
+        echo "WARNING: TODAY variable is empty, using current date"
+        TODAY=$(date +%Y%m%d)
+    fi
+    
     OCP_CREATE_DIR=$OCP_MANIFESTS_DIR/$TODAY-aws-$ARCH_SUFFIX
     CLUSTER_NAME=tkaovila-$TODAY-$ARCH_SUFFIX
     
@@ -32,7 +38,28 @@ znap function delete-ocp-aws() {
         CLUSTER_NAME=$1
     fi
     
+    # Check if we need to clean up a cluster created with empty TODAY variable
+    local EMPTY_TODAY_DIR="$OCP_MANIFESTS_DIR/-aws-$ARCH_SUFFIX"
+    if [[ -d "$EMPTY_TODAY_DIR" && "$1" == "cleanup-legacy" ]]; then
+        echo "INFO: Cleaning up legacy $ARCH_SUFFIX cluster with empty TODAY variable at $EMPTY_TODAY_DIR"
+        local LEGACY_CLUSTER_NAME="tkaovila--$ARCH_SUFFIX"
+        
+        echo "Destroying AWS cluster in legacy directory: $EMPTY_TODAY_DIR"
+        $OPENSHIFT_INSTALL destroy cluster --dir $EMPTY_TODAY_DIR || echo "no existing cluster in legacy directory"
+        echo "Destroying AWS bootstrap in legacy directory: $EMPTY_TODAY_DIR"
+        $OPENSHIFT_INSTALL destroy bootstrap --dir $EMPTY_TODAY_DIR || echo "no existing bootstrap in legacy directory"
+        
+        ((rm -r $EMPTY_TODAY_DIR && echo "removed legacy create dir") || (true && echo "no legacy install dir")) || true
+        
+        # If we're only cleaning up legacy clusters, return here
+        if [[ "$1" == "cleanup-legacy" ]]; then
+            return 0
+        fi
+    fi
+    
+    echo "Destroying AWS cluster in directory: $OCP_CREATE_DIR"
     $OPENSHIFT_INSTALL destroy cluster --dir $OCP_CREATE_DIR || echo "no existing cluster"
+    echo "Destroying AWS bootstrap in directory: $OCP_CREATE_DIR"
     $OPENSHIFT_INSTALL destroy bootstrap --dir $OCP_CREATE_DIR || echo "no existing bootstrap"
     ((rm -r $OCP_CREATE_DIR && echo "removed existing create dir") || (true && echo "no existing install dir")) || return 1
 }

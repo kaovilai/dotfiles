@@ -53,6 +53,37 @@ znap function check-for-existing-clusters() {
                 fi
             fi
         done
+        
+        # Also check for legacy clusters with empty TODAY variable
+        # Check for -gcp-wif directory (empty TODAY with GCP WIF)
+        if [[ "$provider" == "all" || "$provider" == "gcp" ]]; then
+            local legacy_gcp_dir="$OCP_MANIFESTS_DIR/-gcp-wif"
+            if [[ -d "$legacy_gcp_dir" ]]; then
+                echo "Found legacy GCP WIF cluster with empty TODAY variable: $legacy_gcp_dir"
+                cluster_dirs+=("$legacy_gcp_dir")
+                cluster_names+=("-gcp-wif (legacy)")
+                found=true
+            fi
+        fi
+        
+        # Check for -aws-arm64 and -aws-amd64 directories (empty TODAY with AWS)
+        if [[ "$provider" == "all" || "$provider" == "aws" ]]; then
+            local legacy_aws_arm64_dir="$OCP_MANIFESTS_DIR/-aws-arm64"
+            if [[ -d "$legacy_aws_arm64_dir" ]]; then
+                echo "Found legacy AWS ARM64 cluster with empty TODAY variable: $legacy_aws_arm64_dir"
+                cluster_dirs+=("$legacy_aws_arm64_dir")
+                cluster_names+=("-aws-arm64 (legacy)")
+                found=true
+            fi
+            
+            local legacy_aws_amd64_dir="$OCP_MANIFESTS_DIR/-aws-amd64"
+            if [[ -d "$legacy_aws_amd64_dir" ]]; then
+                echo "Found legacy AWS AMD64 cluster with empty TODAY variable: $legacy_aws_amd64_dir"
+                cluster_dirs+=("$legacy_aws_amd64_dir")
+                cluster_names+=("-aws-amd64 (legacy)")
+                found=true
+            fi
+        fi
     fi
     
     # Check local clusters
@@ -98,7 +129,28 @@ znap function check-for-existing-clusters() {
             echo "Destroying existing cluster(s)..."
             for dir in "${cluster_dirs[@]}"; do
                 local dir_name=$(basename "$dir")
-                if [[ "$dir" == *"-aws-"* ]]; then
+                if [[ "$dir" == "$OCP_MANIFESTS_DIR/-aws-arm64" ]]; then
+                    echo "Destroying legacy AWS ARM64 cluster: $dir_name"
+                    if [ -d "$dir" ]; then
+                        delete-ocp-aws-arm64 "cleanup-legacy"
+                    else
+                        echo "WARNING: Directory $dir does not exist, skipping deletion"
+                    fi
+                elif [[ "$dir" == "$OCP_MANIFESTS_DIR/-aws-amd64" ]]; then
+                    echo "Destroying legacy AWS AMD64 cluster: $dir_name"
+                    if [ -d "$dir" ]; then
+                        delete-ocp-aws-amd64 "cleanup-legacy"
+                    else
+                        echo "WARNING: Directory $dir does not exist, skipping deletion"
+                    fi
+                elif [[ "$dir" == "$OCP_MANIFESTS_DIR/-gcp-wif" ]]; then
+                    echo "Destroying legacy GCP-WIF cluster: $dir_name"
+                    if [ -d "$dir" ]; then
+                        delete-ocp-gcp-wif "cleanup-legacy"
+                    else
+                        echo "WARNING: Directory $dir does not exist, skipping deletion"
+                    fi
+                elif [[ "$dir" == *"-aws-"* ]]; then
                     echo "Destroying AWS cluster: $dir_name"
                     # Ensure the directory exists before attempting to delete
                     if [ -d "$dir" ]; then

@@ -20,13 +20,45 @@ znap function delete-ocp-gcp-wif(){
         return 0
     fi
 
+    # Safety check - ensure TODAY is not empty
+    if [[ -z "$TODAY" ]]; then
+        echo "WARNING: TODAY variable is empty, using current date"
+        TODAY=$(date +%Y%m%d)
+    fi
+    
     OCP_CREATE_DIR=$OCP_MANIFESTS_DIR/$TODAY-gcp-wif
     CLUSTER_NAME=tkaovila-$TODAY-wif
     if [[ -n $1 ]]; then
         CLUSTER_NAME=$1
     fi
-    $OPENSHIFT_INSTALL destroy cluster --dir $OCP_CREATE_DIR || echo "no existing cluster"
-    $OPENSHIFT_INSTALL destroy bootstrap --dir $OCP_CREATE_DIR || echo "no existing bootstrap"
+    
+    # Check if we need to clean up a cluster created with empty TODAY variable
+    local EMPTY_TODAY_DIR="$OCP_MANIFESTS_DIR/-gcp-wif"
+    if [[ -d "$EMPTY_TODAY_DIR" && "$1" == "cleanup-legacy" ]]; then
+        echo "INFO: Cleaning up legacy cluster with empty TODAY variable at $EMPTY_TODAY_DIR"
+        local LEGACY_CLUSTER_NAME="tkaovila--wif"
+        
+        echo "Destroying GCP cluster in legacy directory: $EMPTY_TODAY_DIR"
+        $OPENSHIFT_INSTALL destroy cluster --dir $EMPTY_TODAY_DIR || echo "no existing cluster in legacy directory"
+        echo "Destroying GCP bootstrap in legacy directory: $EMPTY_TODAY_DIR"
+        $OPENSHIFT_INSTALL destroy bootstrap --dir $EMPTY_TODAY_DIR || echo "no existing bootstrap in legacy directory"
+        
+        (ccoctl gcp delete \
+        --name $LEGACY_CLUSTER_NAME \
+        --project $GCP_PROJECT_ID \
+        --credentials-requests-dir $EMPTY_TODAY_DIR/credentials-requests && echo "cleaned up legacy ccoctl gcp resources") || true
+        
+        ((rm -r $EMPTY_TODAY_DIR && echo "removed legacy create dir") || (true && echo "no legacy install dir")) || true
+        
+        # If we're only cleaning up legacy clusters, return here
+        if [[ "$1" == "cleanup-legacy" ]]; then
+            return 0
+        fi
+    fi
+echo "Destroying GCP cluster in directory: $OCP_CREATE_DIR"
+$OPENSHIFT_INSTALL destroy cluster --dir $OCP_CREATE_DIR || echo "no existing cluster"
+echo "Destroying GCP bootstrap in directory: $OCP_CREATE_DIR"
+$OPENSHIFT_INSTALL destroy bootstrap --dir $OCP_CREATE_DIR || echo "no existing bootstrap"
     (ccoctl gcp delete \
     --name $CLUSTER_NAME \
     --project $GCP_PROJECT_ID \
