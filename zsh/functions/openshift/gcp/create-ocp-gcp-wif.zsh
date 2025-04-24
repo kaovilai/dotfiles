@@ -121,7 +121,7 @@ znap function create-ocp-gcp-wif(){
     fi
 
     # Update pull-secret.txt with podman auth credentials if logged in
-    if podman login --get-login $BASE_RELEASE_IMAGE_REGISTRY &>/dev/null; then
+    if [[ "$BASE_RELEASE_IMAGE_REGISTRY" != "quay.io" ]] && podman login --get-login $BASE_RELEASE_IMAGE_REGISTRY &>/dev/null; then
       echo "INFO: Podman is logged into $BASE_RELEASE_IMAGE_REGISTRY, updating pull-secret.txt"
       
       # Get podman auth file location and extract credentials
