@@ -72,17 +72,26 @@ znap function create-ocp-gcp-wif(){
         done
     fi
     if [[ $1 == "gather" ]]; then
-        $OPENSHIFT_INSTALL gather bootstrap --dir $OCP_CREATE_DIR || return 1
+        if [[ -d "$OCP_CREATE_DIR" ]]; then
+            $OPENSHIFT_INSTALL gather bootstrap --dir $OCP_CREATE_DIR || return 1
+        else
+            echo "Directory $OCP_CREATE_DIR does not exist, cannot gather bootstrap logs"
+            return 1
+        fi
         return 0
     fi
     if [[ $1 != "no-delete" ]]; then
-        $OPENSHIFT_INSTALL destroy cluster --dir $OCP_CREATE_DIR || echo "no existing cluster"
-        $OPENSHIFT_INSTALL destroy bootstrap --dir $OCP_CREATE_DIR || echo "no existing bootstrap"
-        (ccoctl gcp delete \
-        --name $CLUSTER_NAME \
-        --project $GCP_PROJECT_ID \
-        --credentials-requests-dir $OCP_CREATE_DIR/credentials-requests && echo "cleaned up ccoctl gcp resources") || true
-        ((rm -r $OCP_CREATE_DIR && echo "removed existing create dir") || (true && echo "no existing install dir")) || return 1
+        if [[ -d "$OCP_CREATE_DIR" ]]; then
+            $OPENSHIFT_INSTALL destroy cluster --dir $OCP_CREATE_DIR || echo "no existing cluster"
+            $OPENSHIFT_INSTALL destroy bootstrap --dir $OCP_CREATE_DIR || echo "no existing bootstrap"
+            (ccoctl gcp delete \
+            --name $CLUSTER_NAME \
+            --project $GCP_PROJECT_ID \
+            --credentials-requests-dir $OCP_CREATE_DIR/credentials-requests && echo "cleaned up ccoctl gcp resources") || true
+            ((rm -r $OCP_CREATE_DIR && echo "removed existing create dir") || (true && echo "no existing install dir")) || return 1
+        else
+            echo "Directory $OCP_CREATE_DIR does not exist, nothing to delete"
+        fi
     fi
     # if param is delete then stop here
     if [[ $1 == "delete" ]]; then
