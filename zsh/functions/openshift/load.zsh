@@ -12,8 +12,10 @@ source ~/git/dotfiles/zsh/functions/openshift/cluster/list-and-use.zsh
 # Load provider-specific functions
 source ~/git/dotfiles/zsh/functions/openshift/aws/create-ocp-aws.zsh
 source ~/git/dotfiles/zsh/functions/openshift/aws/delete-ocp-aws.zsh
+source ~/git/dotfiles/zsh/functions/openshift/aws/use-ocp-aws.zsh
 source ~/git/dotfiles/zsh/functions/openshift/gcp/create-ocp-gcp-wif.zsh
 source ~/git/dotfiles/zsh/functions/openshift/gcp/delete-ocp-gcp-wif.zsh
+source ~/git/dotfiles/zsh/functions/openshift/gcp/use-ocp-gcp-wif.zsh
 source ~/git/dotfiles/zsh/functions/openshift/crc/crc-functions.zsh
 
 # Load utility functions
