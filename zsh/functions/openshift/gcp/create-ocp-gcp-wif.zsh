@@ -214,11 +214,12 @@ ccoctl gcp create-all \
     # Create the cluster
     $OPENSHIFT_INSTALL create cluster --dir $OCP_CREATE_DIR \
         --log-level=info || $OPENSHIFT_INSTALL gather bootstrap --dir $OCP_CREATE_DIR || return 1
-    
+    echo "workload-identity-pool: $CLUSTER_BASE_NAME"
+    echo "workload-identity-provider: $CLUSTER_BASE_NAME"
     # Unset the release image override after use
     echo "INFO: Unsetting OPENSHIFT_INSTALL_RELEASE_IMAGE_OVERRIDE=$OPENSHIFT_INSTALL_RELEASE_IMAGE_OVERRIDE"
     unset OPENSHIFT_INSTALL_RELEASE_IMAGE_OVERRIDE
-        
+
     # Reset the flag to avoid affecting future cluster creations
     if [[ -n "$PROCEED_WITH_EXISTING_CLUSTERS" ]]; then
         unset PROCEED_WITH_EXISTING_CLUSTERS
