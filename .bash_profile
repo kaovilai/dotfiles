@@ -15,7 +15,7 @@ if [ -d "$HOME/.local/bin" ] ; then
 fi
 
 # ===== Environment Variables =====
-export EDITOR=vim
+export EDITOR="code -w"
 export VISUAL=vim
 export PAGER=less
 
