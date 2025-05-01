@@ -54,3 +54,25 @@ alias activepieces-restart='
     podman compose -f /Users/tiger/OneDrive/activepieces/docker-compose.activepiecestailscale.yml up -d
 '
 alias makelintv2oadp='git checkout linterv2 Makefile .golangci.yaml && make lint-fix && git restore --staged Makefile .golangci.yaml && git restore Makefile .golangci.yaml'
+
+znap function vid2gif(){
+    local input="$1"
+    local output="$HOME/Downloads/$(basename "${input%.*}").gif"
+    
+    if [[ ! -f "$input" ]]; then
+        echo "Error: Input file '$input' not found"
+        return 1
+    fi
+    
+    if ! command -v ffmpeg &> /dev/null; then
+        echo "Error: ffmpeg is not installed"
+        return 1
+    fi
+    
+    echo "Converting $input to $output..."
+    ffmpeg -i "$input" -vf "fps=10,scale=480:-1:flags=lanczos,split[s0][s1];[s0]palettegen[p];[s1][p]paletteuse" "$output"
+    
+    if [[ $? -eq 0 ]]; then
+        echo "Conversion complete: $output"
+    fi
+}
