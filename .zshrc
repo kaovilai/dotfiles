@@ -23,6 +23,7 @@ source ~/git/dotfiles/zsh/colors.zsh
 
 # Essential exports and aliases for immediate shell usage
 alias edit-dotfiles='code ~/git/dotfiles/'
+alias claude="/Users/tiger/.claude/local/claude"
 source ~/git/dotfiles/zsh/alias.zsh
 # gpg tty
 export GPG_TTY=$(tty)
@@ -32,10 +33,8 @@ export BUILDX_ENABLED=true
 export BUILDX_PUSH=true
 export GCR_IMAGE_TAGS=""
 export BUILDX_PLATFORMS=linux/amd64,linux/arm64
-if [[ "$TERM_PROGRAM" != "vscode" ]]; then
-  # Load OS-specific essentials
-  [[ "$(uname -s)" = "Darwin" ]] && source ~/git/dotfiles/zsh/macos.zsh
-fi
+# Load OS-specific essentials (lightweight aliases always loaded)
+[[ "$(uname -s)" = "Darwin" ]] && source ~/git/dotfiles/zsh/macos.zsh
 # Essential utilities (needed for basic shell functionality)
 source ~/git/dotfiles/zsh/paths.zsh
 # source ~/git/dotfiles/zsh/command-cache.zsh

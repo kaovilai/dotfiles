@@ -1,3 +1,4 @@
 .vscode/
 **/*.zwc
 temp_extract
+.claude/settings.local.json
