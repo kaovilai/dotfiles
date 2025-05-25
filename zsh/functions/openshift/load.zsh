@@ -22,6 +22,7 @@ source ~/git/dotfiles/zsh/functions/openshift/gcp/use-ocp-gcp-wif.zsh
 source ~/git/dotfiles/zsh/functions/openshift/crc/crc-functions.zsh
 
 # Load utility functions
+source ~/git/dotfiles/zsh/functions/openshift/util/common-functions.zsh
 source ~/git/dotfiles/zsh/functions/openshift/util/ca-functions.zsh
 source ~/git/dotfiles/zsh/functions/openshift/util/install-tools.zsh
 source ~/git/dotfiles/zsh/functions/openshift/util/misc-functions.zsh

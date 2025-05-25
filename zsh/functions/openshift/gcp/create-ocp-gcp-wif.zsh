@@ -6,10 +6,9 @@ znap function create-ocp-gcp-wif(){
         unset SSH_AUTH_SOCK
     fi
     
-    # Use specified openshift-install or default to latest EC version
-    # local OPENSHIFT_INSTALL=./Downloads/openshift-install-mac-${OCP_LATEST_EC_VERSION}/openshift-install
-    local EC_VERSION=${OCP_LATEST_EC_VERSION:-$(get_latest_ec_version)}
-    local OPENSHIFT_INSTALL=${OPENSHIFT_INSTALL:-openshift-install-${EC_VERSION}}
+    # Get openshift-install binary
+    local OPENSHIFT_INSTALL=$(get_openshift_install)
+    [[ -z "$OPENSHIFT_INSTALL" ]] && return 1
     $OPENSHIFT_INSTALL version
     # Check if help is requested
     if [[ $1 == "help" ]]; then
@@ -48,35 +47,15 @@ znap function create-ocp-gcp-wif(){
         TODAY=$(date +%Y%m%d)
     fi
     
-    OCP_CREATE_DIR=$OCP_MANIFESTS_DIR/$TODAY-gcp-wif
-    CLUSTER_BASE_NAME=tkaovila-$TODAY-wif
-    CLUSTER_NAME=$CLUSTER_BASE_NAME #max 21 char allowed
+    # Set initial cluster name and directory
+    local CLUSTER_BASE_NAME="tkaovila-$TODAY-wif"
+    local OCP_CREATE_DIR_BASE="$OCP_MANIFESTS_DIR/$TODAY-gcp-wif"
     
-    # Check if we need to modify the cluster name to avoid conflicts
-    # This happens when option 3 (proceed alongside existing) was selected
-    if [[ -n "$PROCEED_WITH_EXISTING_CLUSTERS" && "$PROCEED_WITH_EXISTING_CLUSTERS" == "true" ]]; then
-        # Look for existing clusters with the same base name
-        local suffix_num=1
-        # Search for existing directories with similar names
-        while find "$OCP_MANIFESTS_DIR" -type d -name "*${CLUSTER_BASE_NAME}*" 2>/dev/null | grep -q .; do
-            # Try appending increasing numbers until we find a unique name
-            CLUSTER_NAME="${CLUSTER_BASE_NAME}-${suffix_num}"
-            echo "Found existing cluster with similar name, trying: $CLUSTER_NAME"
-            # Check if the new name exists
-            if ! find "$OCP_MANIFESTS_DIR" -type d -name "*${CLUSTER_NAME}*" 2>/dev/null | grep -q .; then
-                # Found a unique name
-                OCP_CREATE_DIR=$OCP_MANIFESTS_DIR/$TODAY-gcp-wif-$suffix_num
-                echo "Using unique cluster name: $CLUSTER_NAME and directory: $OCP_CREATE_DIR"
-                break
-            fi
-            ((suffix_num++))
-            # Safety check to avoid infinite loop
-            if [[ $suffix_num -gt 10 ]]; then
-                echo "ERROR: Cannot find a unique cluster name after 10 attempts"
-                return 1
-            fi
-        done
-    fi
+    # Generate unique cluster name if needed
+    local unique_result=$(generate_unique_cluster_name "$CLUSTER_BASE_NAME" "$OCP_CREATE_DIR_BASE")
+    [[ -z "$unique_result" ]] && return 1
+    local CLUSTER_NAME=$(echo "$unique_result" | grep "cluster_name:" | cut -d: -f2)
+    local OCP_CREATE_DIR=$(echo "$unique_result" | grep "cluster_dir:" | cut -d: -f2)
     if [[ $1 == "gather" ]]; then
         if [[ -d "$OCP_CREATE_DIR" ]]; then
             $OPENSHIFT_INSTALL gather bootstrap --dir $OCP_CREATE_DIR || return 1
@@ -104,76 +83,33 @@ znap function create-ocp-gcp-wif(){
         return 0
     fi
     
+    # Validate required GCP environment variables
+    validate_env_vars "gcp" \
+        GCP_PROJECT_ID \
+        GCP_REGION \
+        GCP_BASEDOMAIN || return 1
+    
     # Check for existing clusters before proceeding
     check-for-existing-clusters "gcp" || return 1
     
-    # Prompt for release stream selection
-    echo ""
-    echo "Select OpenShift release stream:"
-    echo "1) 4-dev-preview (Early Candidate) - Version: $OCP_LATEST_EC_VERSION"
-    echo "2) 4-stable (Release Candidate)   - Version: $OCP_LATEST_STABLE_VERSION"
-    echo ""
-    echo -n "Enter your choice (1 or 2): "
-    read stream_choice
-    
-    # Set the appropriate release image based on stream choice
-    if [[ "$stream_choice" == "2" ]]; then
-        echo "INFO: Using 4-stable release stream (version: $OCP_LATEST_STABLE_VERSION)"
-        RELEASE_IMAGE=$OCP_FUNCTIONS_RELEASE_IMAGE_STABLE_MULTI
-    else
-        echo "INFO: Using 4-dev-preview release stream (version: $OCP_LATEST_EC_VERSION)"
-        RELEASE_IMAGE=$OCP_FUNCTIONS_RELEASE_IMAGE_MULTI
-    fi
+    # Prompt for release stream selection and get release image
+    local stream=$(prompt_release_stream)
+    local RELEASE_IMAGE=$(get_release_image "$stream" "multi")
+    [[ -z "$RELEASE_IMAGE" ]] && return 1
     
     echo "INFO: Using release image: $RELEASE_IMAGE"
     # RELEASE_IMAGE=$($OPENSHIFT_INSTALL version | awk '/release image/ {print $3}')
     # make sure logged into registry since cco steps requires it.
     BASE_RELEASE_IMAGE_REGISTRY=$(echo $RELEASE_IMAGE | awk -F/ '{print $1}')
 
-    echo INFO checking if podman is logged into $BASE_RELEASE_IMAGE_REGISTRY
-    podman login $BASE_RELEASE_IMAGE_REGISTRY || if [ "$BASE_RELEASE_IMAGE_REGISTRY" = "registry.ci.openshift.org" ]; then
-      open "https://oauth-openshift.apps.ci.l2s4.p1.openshiftapps.com/oauth/authorize?client_id=openshift-browser-client&redirect_uri=https%3A%2F%2Foauth-openshift.apps.ci.l2s4.p1.openshiftapps.com%2Foauth%2Ftoken%2Fdisplay&response_type=code"
-      echo "Login URL opened in browser. Please copy the login command from the browser and paste it below:"
-      read login_command
-      echo "Executing login command..."
-      eval "$login_command"
-    fi
-
-    # Update pull-secret.txt with podman auth credentials if logged in
-    if [[ "$BASE_RELEASE_IMAGE_REGISTRY" != "quay.io" ]] && podman login --get-login $BASE_RELEASE_IMAGE_REGISTRY &>/dev/null; then
-      echo "INFO: Podman is logged into $BASE_RELEASE_IMAGE_REGISTRY, updating pull-secret.txt"
-      
-      # Get podman auth file location and extract credentials
-      PODMAN_AUTH_FILE="${XDG_RUNTIME_DIR}/containers/auth.json"
-      if [ ! -f "$PODMAN_AUTH_FILE" ]; then
-        PODMAN_AUTH_FILE="$HOME/.config/containers/auth.json"
-      fi
-      
-      if [ -f "$PODMAN_AUTH_FILE" ]; then
-        # Extract auth for the specific registry
-        REGISTRY_AUTH=$(jq -r --arg reg "$BASE_RELEASE_IMAGE_REGISTRY" '.auths[$reg] // empty' "$PODMAN_AUTH_FILE")
-        
-        if [ -n "$REGISTRY_AUTH" ]; then
-          # Read current pull secret
-          PULL_SECRET=$(cat ~/pull-secret.txt)
-          
-          # Update pull secret with the registry auth
-          UPDATED_PULL_SECRET=$(echo "$PULL_SECRET" | jq --arg reg "$BASE_RELEASE_IMAGE_REGISTRY" --argjson auth "$REGISTRY_AUTH" '.auths[$reg] = $auth')
-          
-          # Write back to pull-secret.txt
-          echo "$UPDATED_PULL_SECRET" > ~/pull-secret.txt
-          echo "INFO: Updated ~/pull-secret.txt with credentials for $BASE_RELEASE_IMAGE_REGISTRY"
-        else
-          echo "WARN: No auth found for $BASE_RELEASE_IMAGE_REGISTRY in podman auth file"
-        fi
-      else
-        echo "WARN: Podman auth file not found at expected locations"
-      fi
-    fi
-    mkdir -p $OCP_CREATE_DIR && \
-    echo "additionalTrustBundlePolicy: Proxyonly
-apiVersion: v1
-baseDomain: $GCP_BASEDOMAIN
+    # Handle registry login and pull secret update
+    handle_registry_login "$BASE_RELEASE_IMAGE_REGISTRY"
+    update_pull_secret_with_podman "$BASE_RELEASE_IMAGE_REGISTRY"
+    mkdir -p $OCP_CREATE_DIR || return 1
+    
+    {
+        create_install_config_header
+        echo "baseDomain: $GCP_BASEDOMAIN
 compute:
 - architecture: amd64
   hyperthreading: Enabled
@@ -203,11 +139,11 @@ platform:
     projectID: $GCP_PROJECT_ID
     region: $GCP_REGION
 publish: External
-credentialsMode: Manual # needed for WIF at the time of prior writing at https://github.com/openshift/oadp-operator/wiki/GCP-WIF-Authentication-on-OpenShift
-pullSecret: '$(cat ~/pull-secret.txt)'
-sshKey: |
-  $(cat ~/.ssh/id_rsa.pub)
-" > $OCP_CREATE_DIR/install-config.yaml && echo "created install-config.yaml" || return 1
+credentialsMode: Manual # needed for WIF"
+        add_credentials_to_install_config
+    } > $OCP_CREATE_DIR/install-config.yaml || return 1
+    
+    echo "created install-config.yaml"
 
 echo "INFO: Using AMD64 architecture release image for GCP: $RELEASE_IMAGE"
 
@@ -230,17 +166,16 @@ ccoctl gcp create-all \
     $OPENSHIFT_INSTALL create manifests --dir $OCP_CREATE_DIR || return 1
     cp $OCP_CREATE_DIR/credentials-requests/* $OCP_CREATE_DIR/manifests/ || return 1 # copy cred requests to manifests dir, ccoctl delete will delete cred requests in separate dir
     
-    # Create the cluster
-    $OPENSHIFT_INSTALL create cluster --dir $OCP_CREATE_DIR \
-        --log-level=info || $OPENSHIFT_INSTALL gather bootstrap --dir $OCP_CREATE_DIR || return 1
+    # Create the cluster with error handling
+    if ! $OPENSHIFT_INSTALL create cluster --dir $OCP_CREATE_DIR --log-level=info; then
+        cleanup_on_failure "$OCP_CREATE_DIR" "$CLUSTER_NAME" "gcp"
+        return 1
+    fi
+    
     echo "workload-identity-pool: $CLUSTER_BASE_NAME"
     echo "workload-identity-provider: $CLUSTER_BASE_NAME"
-    # Unset the release image override after use
-    echo "INFO: Unsetting OPENSHIFT_INSTALL_RELEASE_IMAGE_OVERRIDE=$OPENSHIFT_INSTALL_RELEASE_IMAGE_OVERRIDE"
+    
+    # Cleanup
     unset OPENSHIFT_INSTALL_RELEASE_IMAGE_OVERRIDE
-
-    # Reset the flag to avoid affecting future cluster creations
-    if [[ -n "$PROCEED_WITH_EXISTING_CLUSTERS" ]]; then
-        unset PROCEED_WITH_EXISTING_CLUSTERS
-    fi
+    [[ -n "$PROCEED_WITH_EXISTING_CLUSTERS" ]] && unset PROCEED_WITH_EXISTING_CLUSTERS
 }
