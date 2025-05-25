@@ -9,9 +9,9 @@ znap function create-ocp-aws() {
         unset SSH_AUTH_SOCK
     fi
     
-    # Use specified openshift-install or default to latest EC version
-    local EC_VERSION=${OCP_LATEST_EC_VERSION:-$(get_latest_ec_version)}
-    local OPENSHIFT_INSTALL=${OPENSHIFT_INSTALL:-openshift-install-${EC_VERSION}}
+    # Get openshift-install binary
+    local OPENSHIFT_INSTALL=$(get_openshift_install)
+    [[ -z "$OPENSHIFT_INSTALL" ]] && return 1
     local ARCHITECTURE=$2
     local ARCH_SUFFIX=${2}
     $OPENSHIFT_INSTALL version
@@ -53,6 +53,12 @@ znap function create-ocp-aws() {
         AWS_BASEDOMAIN="mg.dog8code.com"
     fi
     
+    # Validate AWS credentials are configured
+    if ! aws sts get-caller-identity &>/dev/null; then
+        echo "ERROR: AWS credentials not configured. Please run 'aws configure' or set AWS credentials"
+        return 1
+    fi
+    
     # Verify that the requested architecture is supported by the installer
     if ! $OPENSHIFT_INSTALL version | grep -q "release architecture $ARCHITECTURE"; then
         echo "WARN: $ARCHITECTURE architecture not supported in current release payload"
@@ -69,35 +75,15 @@ znap function create-ocp-aws() {
         TODAY=$(date +%Y%m%d)
     fi
     
-    OCP_CREATE_DIR=$OCP_MANIFESTS_DIR/$TODAY-aws-$ARCH_SUFFIX
-    CLUSTER_BASE_NAME=tkaovila-$TODAY-$ARCH_SUFFIX
-    CLUSTER_NAME=$CLUSTER_BASE_NAME #max 21 char allowed
+    # Set initial cluster name and directory
+    local CLUSTER_BASE_NAME="tkaovila-$TODAY-$ARCH_SUFFIX"
+    local OCP_CREATE_DIR_BASE="$OCP_MANIFESTS_DIR/$TODAY-aws-$ARCH_SUFFIX"
     
-    # Check if we need to modify the cluster name to avoid conflicts
-    # This happens when option 3 (proceed alongside existing) was selected
-    if [[ -n "$PROCEED_WITH_EXISTING_CLUSTERS" && "$PROCEED_WITH_EXISTING_CLUSTERS" == "true" ]]; then
-        # Look for existing clusters with the same base name
-        local suffix_num=1
-        # Search for existing directories with similar names
-        while find "$OCP_MANIFESTS_DIR" -type d -name "*${CLUSTER_BASE_NAME}*" 2>/dev/null | grep -q .; do
-            # Try appending increasing numbers until we find a unique name
-            CLUSTER_NAME="${CLUSTER_BASE_NAME}-${suffix_num}"
-            echo "Found existing cluster with similar name, trying: $CLUSTER_NAME"
-            # Check if the new name exists
-            if ! find "$OCP_MANIFESTS_DIR" -type d -name "*${CLUSTER_NAME}*" 2>/dev/null | grep -q .; then
-                # Found a unique name
-                OCP_CREATE_DIR=$OCP_MANIFESTS_DIR/$TODAY-aws-$ARCH_SUFFIX-$suffix_num
-                echo "Using unique cluster name: $CLUSTER_NAME and directory: $OCP_CREATE_DIR"
-                break
-            fi
-            ((suffix_num++))
-            # Safety check to avoid infinite loop
-            if [[ $suffix_num -gt 10 ]]; then
-                echo "ERROR: Cannot find a unique cluster name after 10 attempts"
-                return 1
-            fi
-        done
-    fi
+    # Generate unique cluster name if needed
+    local unique_result=$(generate_unique_cluster_name "$CLUSTER_BASE_NAME" "$OCP_CREATE_DIR_BASE")
+    [[ -z "$unique_result" ]] && return 1
+    local CLUSTER_NAME=$(echo "$unique_result" | grep "cluster_name:" | cut -d: -f2)
+    local OCP_CREATE_DIR=$(echo "$unique_result" | grep "cluster_dir:" | cut -d: -f2)
     
     if [[ $1 == "gather" ]]; then
         if [[ -d "$OCP_CREATE_DIR" ]]; then
@@ -127,41 +113,21 @@ znap function create-ocp-aws() {
     # Check for existing clusters before proceeding
     check-for-existing-clusters "aws" "$ARCH_SUFFIX" || return 1
     
-    # Prompt for release stream selection
-    echo ""
-    echo "Select OpenShift release stream:"
-    echo "1) 4-dev-preview (Early Candidate) - Version: $OCP_LATEST_EC_VERSION"
-    echo "2) 4-stable (Release Candidate)   - Version: $OCP_LATEST_STABLE_VERSION"
-    echo ""
-    echo -n "Enter your choice (1 or 2): "
-    read stream_choice
-    
-    # Set the appropriate release image based on architecture and stream choice
-    if [[ "$stream_choice" == "2" ]]; then
-        echo "INFO: Using 4-stable release stream (version: $OCP_LATEST_STABLE_VERSION)"
-        if [[ "$ARCHITECTURE" == "arm64" ]]; then
-            RELEASE_IMAGE=$OCP_FUNCTIONS_RELEASE_IMAGE_STABLE_ARM64
-        else
-            RELEASE_IMAGE=$OCP_FUNCTIONS_RELEASE_IMAGE_STABLE_AMD64
-        fi
-    else
-        echo "INFO: Using 4-dev-preview release stream (version: $OCP_LATEST_EC_VERSION)"
-        if [[ "$ARCHITECTURE" == "arm64" ]]; then
-            RELEASE_IMAGE=$OCP_FUNCTIONS_RELEASE_IMAGE_ARM64
-        else
-            RELEASE_IMAGE=$OCP_FUNCTIONS_RELEASE_IMAGE_AMD64
-        fi
-    fi
+    # Prompt for release stream selection and get release image
+    local stream=$(prompt_release_stream)
+    local RELEASE_IMAGE=$(get_release_image "$stream" "$ARCHITECTURE")
+    [[ -z "$RELEASE_IMAGE" ]] && return 1
     
     # Use the architecture-specific release image
     echo "INFO: Using architecture-specific release image for $ARCHITECTURE: $RELEASE_IMAGE"
     # Export the release image override
     export OPENSHIFT_INSTALL_RELEASE_IMAGE_OVERRIDE=$RELEASE_IMAGE
     echo "INFO: Exported OPENSHIFT_INSTALL_RELEASE_IMAGE_OVERRIDE=$RELEASE_IMAGE"
-    mkdir -p $OCP_CREATE_DIR && \
-    echo "additionalTrustBundlePolicy: Proxyonly
-apiVersion: v1
-baseDomain: $AWS_BASEDOMAIN
+    mkdir -p $OCP_CREATE_DIR || return 1
+    
+    {
+        create_install_config_header
+        echo "baseDomain: $AWS_BASEDOMAIN
 compute:
 - architecture: $ARCHITECTURE
   hyperthreading: Enabled
@@ -189,26 +155,23 @@ networking:
 platform:
   aws:
     region: $AWS_REGION
-publish: External
-pullSecret: '$(cat ~/pull-secret.txt)'
-sshKey: |
-  $(cat ~/.ssh/id_rsa.pub)
-" > $OCP_CREATE_DIR/install-config.yaml && echo "created install-config.yaml" || return 1
+publish: External"
+        add_credentials_to_install_config
+    } > $OCP_CREATE_DIR/install-config.yaml || return 1
+    
+    echo "created install-config.yaml"
     
     $OPENSHIFT_INSTALL create manifests --dir $OCP_CREATE_DIR || return 1
     
-    # Create the cluster
-    $OPENSHIFT_INSTALL create cluster --dir $OCP_CREATE_DIR \
-        --log-level=info || $OPENSHIFT_INSTALL gather bootstrap --dir $OCP_CREATE_DIR || return 1
-    
-    # Unset the release image override after use
-    echo "INFO: Unsetting OPENSHIFT_INSTALL_RELEASE_IMAGE_OVERRIDE"
-    unset OPENSHIFT_INSTALL_RELEASE_IMAGE_OVERRIDE
-        
-    # Reset the flag to avoid affecting future cluster creations
-    if [[ -n "$PROCEED_WITH_EXISTING_CLUSTERS" ]]; then
-        unset PROCEED_WITH_EXISTING_CLUSTERS
+    # Create the cluster with error handling
+    if ! $OPENSHIFT_INSTALL create cluster --dir $OCP_CREATE_DIR --log-level=info; then
+        cleanup_on_failure "$OCP_CREATE_DIR" "$CLUSTER_NAME" "aws"
+        return 1
     fi
+    
+    # Cleanup
+    unset OPENSHIFT_INSTALL_RELEASE_IMAGE_OVERRIDE
+    [[ -n "$PROCEED_WITH_EXISTING_CLUSTERS" ]] && unset PROCEED_WITH_EXISTING_CLUSTERS
 }
 
 znap function create-ocp-aws-arm64() {
