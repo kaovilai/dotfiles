@@ -4,8 +4,9 @@ znap function delete-ocp-azure-sts(){
         unset SSH_AUTH_SOCK
     fi
     
-    # Use specified openshift-install or default to 4.19.0-ec.4
-    local OPENSHIFT_INSTALL=${OPENSHIFT_INSTALL:-openshift-install-4.19.0-ec.4}
+    # Use specified openshift-install or default to latest EC version
+    local EC_VERSION=${OCP_LATEST_EC_VERSION:-$(get_latest_ec_version)}
+    local OPENSHIFT_INSTALL=${OPENSHIFT_INSTALL:-openshift-install-${EC_VERSION}}
 
     # Check if help is requested
     if [[ $1 == "help" ]]; then

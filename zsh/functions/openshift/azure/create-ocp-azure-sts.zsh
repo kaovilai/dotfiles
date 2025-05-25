@@ -6,8 +6,9 @@ znap function create-ocp-azure-sts(){
         unset SSH_AUTH_SOCK
     fi
     
-    # Use specified openshift-install or default to 4.19.0-ec.4
-    local OPENSHIFT_INSTALL=${OPENSHIFT_INSTALL:-openshift-install-4.19.0-ec.4}
+    # Use specified openshift-install or default to latest EC version
+    local EC_VERSION=${OCP_LATEST_EC_VERSION:-$(get_latest_ec_version)}
+    local OPENSHIFT_INSTALL=${OPENSHIFT_INSTALL:-openshift-install-${EC_VERSION}}
     $OPENSHIFT_INSTALL version
     # Check if help is requested
     if [[ $1 == "help" ]]; then
@@ -103,10 +104,56 @@ znap function create-ocp-azure-sts(){
         return 0
     fi
     
+    # Validate required Azure environment variables
+    if [[ -z "$AZURE_SUBSCRIPTION_ID" ]]; then
+        echo "ERROR: AZURE_SUBSCRIPTION_ID environment variable must be set"
+        return 1
+    fi
+    if [[ -z "$AZURE_TENANT_ID" ]]; then
+        echo "ERROR: AZURE_TENANT_ID environment variable must be set"
+        return 1
+    fi
+    if [[ -z "$AZURE_REGION" ]]; then
+        echo "ERROR: AZURE_REGION environment variable must be set"
+        return 1
+    fi
+    if [[ -z "$AZURE_BASEDOMAIN" ]]; then
+        echo "ERROR: AZURE_BASEDOMAIN environment variable must be set"
+        return 1
+    fi
+    if [[ -z "$AZURE_RESOURCE_GROUP" ]]; then
+        echo "ERROR: AZURE_RESOURCE_GROUP environment variable must be set"
+        return 1
+    fi
+    
+    # Set AZURE_BASEDOMAIN_RESOURCE_GROUP to AZURE_RESOURCE_GROUP if not set
+    if [[ -z "$AZURE_BASEDOMAIN_RESOURCE_GROUP" ]]; then
+        echo "INFO: AZURE_BASEDOMAIN_RESOURCE_GROUP not set, defaulting to AZURE_RESOURCE_GROUP ($AZURE_RESOURCE_GROUP)"
+        AZURE_BASEDOMAIN_RESOURCE_GROUP=$AZURE_RESOURCE_GROUP
+    fi
+    
     # Check for existing clusters before proceeding
     check-for-existing-clusters "azure" || return 1
-    # Azure supports multi-architecture, use the multi-arch release image
-    RELEASE_IMAGE=$OCP_FUNCTIONS_RELEASE_IMAGE_MULTI
+    
+    # Prompt for release stream selection
+    echo ""
+    echo "Select OpenShift release stream:"
+    echo "1) 4-dev-preview (Early Candidate) - Version: $OCP_LATEST_EC_VERSION"
+    echo "2) 4-stable (Release Candidate)   - Version: $OCP_LATEST_STABLE_VERSION"
+    echo ""
+    echo -n "Enter your choice (1 or 2): "
+    read stream_choice
+    
+    # Set the appropriate release image based on stream choice
+    if [[ "$stream_choice" == "2" ]]; then
+        echo "INFO: Using 4-stable release stream (version: $OCP_LATEST_STABLE_VERSION)"
+        RELEASE_IMAGE=$OCP_FUNCTIONS_RELEASE_IMAGE_STABLE_MULTI
+    else
+        echo "INFO: Using 4-dev-preview release stream (version: $OCP_LATEST_EC_VERSION)"
+        RELEASE_IMAGE=$OCP_FUNCTIONS_RELEASE_IMAGE_MULTI
+    fi
+    
+    echo "INFO: Using release image: $RELEASE_IMAGE"
     # make sure logged into registry since cco steps requires it.
     BASE_RELEASE_IMAGE_REGISTRY=$(echo $RELEASE_IMAGE | awk -F/ '{print $1}')
 
@@ -212,8 +259,9 @@ ccoctl azure create-all \
 --name $CLUSTER_NAME \
 --subscription-id $AZURE_SUBSCRIPTION_ID \
 --tenant-id $AZURE_TENANT_ID \
---resource-group $AZURE_RESOURCE_GROUP \
 --region $AZURE_REGION \
+--installation-resource-group-name $AZURE_RESOURCE_GROUP \
+--dnszone-resource-group-name $AZURE_BASEDOMAIN_RESOURCE_GROUP \
 --output-dir $OCP_CREATE_DIR \
 --credentials-requests-dir $OCP_CREATE_DIR/credentials-requests || return 1
 
