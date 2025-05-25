@@ -6,9 +6,10 @@ znap function create-ocp-gcp-wif(){
         unset SSH_AUTH_SOCK
     fi
     
-    # Use specified openshift-install or default to 4.19.0-ec.4
-    # local OPENSHIFT_INSTALL=./Downloads/openshift-install-mac-4.19.0-ec.4/openshift-install
-    local OPENSHIFT_INSTALL=${OPENSHIFT_INSTALL:-openshift-install-4.19.0-ec.4}
+    # Use specified openshift-install or default to latest EC version
+    # local OPENSHIFT_INSTALL=./Downloads/openshift-install-mac-${OCP_LATEST_EC_VERSION}/openshift-install
+    local EC_VERSION=${OCP_LATEST_EC_VERSION:-$(get_latest_ec_version)}
+    local OPENSHIFT_INSTALL=${OPENSHIFT_INSTALL:-openshift-install-${EC_VERSION}}
     $OPENSHIFT_INSTALL version
     # Check if help is requested
     if [[ $1 == "help" ]]; then
@@ -105,8 +106,26 @@ znap function create-ocp-gcp-wif(){
     
     # Check for existing clusters before proceeding
     check-for-existing-clusters "gcp" || return 1
-    # GCP only supports AMD64 architecture, so use the specific release image
-    RELEASE_IMAGE=$OCP_FUNCTIONS_RELEASE_IMAGE_MULTI
+    
+    # Prompt for release stream selection
+    echo ""
+    echo "Select OpenShift release stream:"
+    echo "1) 4-dev-preview (Early Candidate) - Version: $OCP_LATEST_EC_VERSION"
+    echo "2) 4-stable (Release Candidate)   - Version: $OCP_LATEST_STABLE_VERSION"
+    echo ""
+    echo -n "Enter your choice (1 or 2): "
+    read stream_choice
+    
+    # Set the appropriate release image based on stream choice
+    if [[ "$stream_choice" == "2" ]]; then
+        echo "INFO: Using 4-stable release stream (version: $OCP_LATEST_STABLE_VERSION)"
+        RELEASE_IMAGE=$OCP_FUNCTIONS_RELEASE_IMAGE_STABLE_MULTI
+    else
+        echo "INFO: Using 4-dev-preview release stream (version: $OCP_LATEST_EC_VERSION)"
+        RELEASE_IMAGE=$OCP_FUNCTIONS_RELEASE_IMAGE_MULTI
+    fi
+    
+    echo "INFO: Using release image: $RELEASE_IMAGE"
     # RELEASE_IMAGE=$($OPENSHIFT_INSTALL version | awk '/release image/ {print $3}')
     # make sure logged into registry since cco steps requires it.
     BASE_RELEASE_IMAGE_REGISTRY=$(echo $RELEASE_IMAGE | awk -F/ '{print $1}')

@@ -13,6 +13,9 @@ source ~/git/dotfiles/zsh/functions/openshift/cluster/list-and-use.zsh
 source ~/git/dotfiles/zsh/functions/openshift/aws/create-ocp-aws.zsh
 source ~/git/dotfiles/zsh/functions/openshift/aws/delete-ocp-aws.zsh
 source ~/git/dotfiles/zsh/functions/openshift/aws/use-ocp-aws.zsh
+source ~/git/dotfiles/zsh/functions/openshift/azure/create-ocp-azure-sts.zsh
+source ~/git/dotfiles/zsh/functions/openshift/azure/delete-ocp-azure-sts.zsh
+source ~/git/dotfiles/zsh/functions/openshift/azure/use-ocp-azure-sts.zsh
 source ~/git/dotfiles/zsh/functions/openshift/gcp/create-ocp-gcp-wif.zsh
 source ~/git/dotfiles/zsh/functions/openshift/gcp/delete-ocp-gcp-wif.zsh
 source ~/git/dotfiles/zsh/functions/openshift/gcp/use-ocp-gcp-wif.zsh
