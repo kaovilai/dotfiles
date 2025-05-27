@@ -1,43 +1,23 @@
-#!/bin/zsh
-# cached-commands.zsh - Pre-configured cached commands
+# Cache command existence checks to avoid repeated PATH lookups
+# This is sourced early in shell initialization
 
-# Check if command-cache.zsh is loaded
-if ! typeset -f cached_exec >/dev/null; then
-  echo "Warning: command-cache.zsh not loaded, skipping cached-commands.zsh"
-  return 1
-fi
+typeset -gA _command_cache
 
-# Cache duration constants
-CACHE_SHORT=300      # 5 minutes
-CACHE_MEDIUM=1800    # 30 minutes
-CACHE_LONG=3600      # 1 hour
-CACHE_VERY_LONG=86400 # 24 hours
+# Function to check if a command exists (cached)
+has_command() {
+    local cmd=$1
+    if [[ -z "${_command_cache[$cmd]+x}" ]]; then
+        if command -v "$cmd" >/dev/null 2>&1; then
+            _command_cache[$cmd]=1
+        else
+            _command_cache[$cmd]=0
+        fi
+    fi
+    return $(( 1 - $_command_cache[$cmd] ))
+}
 
-# ========== System Info Cached Commands ==========
-# Network interface info (rarely changes during a session)
-alias ipc='cache $CACHE_MEDIUM ip-info ifconfig'
-
-# Disk usage (cached)
-alias dfc='cache $CACHE_MEDIUM df-info df -h'
-
-# System info (rarely changes)
-alias sysc='cache $CACHE_VERY_LONG sys-info system_profiler SPHardwareDataType'
-
-# ========== IBM Cloud CLI Cached Commands ==========
-# if command -v ibmcloud &>/dev/null; then
-#   # List available regions (rarely changes)
-#   alias icreg='cache $CACHE_VERY_LONG ibm-regions ibmcloud regions'
-  
-#   # List resource groups
-#   alias icgroups='cache $CACHE_MEDIUM ibm-resource-groups ibmcloud resource groups'
-# fi
-
-# ========== Docker/Podman Cached Commands ==========
-# Helper for docker/podman image list (this changes frequently but can be cached briefly)
-# if command -v docker &>/dev/null; then
-#   alias dimagesc='cache $CACHE_SHORT docker-images docker images'
-# fi
-
-# if command -v podman &>/dev/null; then
-#   alias pimagesc='cache $CACHE_SHORT podman-images podman images'
-# fi
+# Pre-cache common commands during shell startup
+for cmd in docker podman kubectl oc gh aws gcloud rosa velero yq kind pipenv pyenv nvm; do
+    has_command "$cmd" &
+done
+wait

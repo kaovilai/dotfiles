@@ -12,8 +12,9 @@ completion_cache_expired() {
     return 0  # Cache expired (file doesn't exist)
   fi
 
-  # Get file modification time
-  local file_time=$(stat -f %m "$file")
+  # Get file modification time (cache stat result to avoid duplicate calls)
+  local file_stat=$(stat -f "%m %Sm" -t "%Y-%m-%d %H:%M:%S" "$file" 2>/dev/null) || return 0
+  local file_time=${file_stat%% *}
   local current_time=$(date +%s)
   local file_age=$((current_time - file_time))
 
@@ -29,13 +30,16 @@ completion_cache_expired() {
 # VS Code shell integration (if we're running in VS Code)
 [[ "$TERM_PROGRAM" == "vscode" ]] && . "$(code --locate-shell-integration-path zsh)"
 
+# Source command cache helper
+source ~/git/dotfiles/zsh/cached-commands.zsh
+
 # AWS uses its own completer mechanism (critical for AWS workflows)
-if [ "$(command -v aws_completer)" ]; then
+if has_command aws_completer; then
   complete -C aws_completer aws
 fi
 
 # Docker completion - use centralized cache location (most commonly used)
-if [ "$(command -v docker)" ]; then
+if has_command docker; then
   local docker_completion_file="$ZSH_COMPLETION_CACHE_DIR/_docker"
   if [[ -f "$docker_completion_file" ]]; then
     cat "$docker_completion_file" > "${fpath[1]}/_docker" &!
@@ -55,23 +59,35 @@ fi
 # Each completion is generated and written to fpath directly
 
 # OpenShift Install - uses cached file to avoid generating completion on every shell start
-if [ "$(command -v openshift-install)" ]; then
+if has_command openshift-install; then
   cat /Users/tiger/git/dotfiles/openshift-install-completion-zsh.txt > "${fpath[1]}/_openshift-install" &!
 fi
 
-# GitHub CLI completion
-if [ "$(command -v gh)" ]; then
-  gh completion -s zsh > "${fpath[1]}/_gh" &!
+# GitHub CLI completion - cache for stable tools
+if has_command gh; then
+  local gh_completion_cache="$ZSH_COMPLETION_CACHE_DIR/_gh_generated"
+  if completion_cache_expired "$gh_completion_cache" 604800; then  # 7 days
+    gh completion -s zsh > "$gh_completion_cache" 2>/dev/null
+  fi
+  [[ -f "$gh_completion_cache" ]] && cat "$gh_completion_cache" > "${fpath[1]}/_gh" &!
 fi
 
-# Kubernetes CLI
-if [ "$(command -v kubectl)" ]; then
-  kubectl completion zsh > "${fpath[1]}/_kubectl" &!
+# Kubernetes CLI - cache for stable tools
+if has_command kubectl; then
+  local kubectl_completion_cache="$ZSH_COMPLETION_CACHE_DIR/_kubectl_generated"
+  if completion_cache_expired "$kubectl_completion_cache" 604800; then  # 7 days
+    kubectl completion zsh > "$kubectl_completion_cache" 2>/dev/null
+  fi
+  [[ -f "$kubectl_completion_cache" ]] && cat "$kubectl_completion_cache" > "${fpath[1]}/_kubectl" &!
 fi
 
-# OpenShift Client
-if [ "$(command -v oc)" ]; then
-  oc completion zsh > "${fpath[1]}/_oc" &!
+# OpenShift Client - cache for stable tools
+if has_command oc; then
+  local oc_completion_cache="$ZSH_COMPLETION_CACHE_DIR/_oc_generated"
+  if completion_cache_expired "$oc_completion_cache" 604800; then  # 7 days
+    oc completion zsh > "$oc_completion_cache" 2>/dev/null
+  fi
+  [[ -f "$oc_completion_cache" ]] && cat "$oc_completion_cache" > "${fpath[1]}/_oc" &!
 fi
 
 # Podman completion - use centralized cache location
@@ -117,12 +133,15 @@ if [ "$(command -v kind)" ]; then
   kind completion zsh > "${fpath[1]}/_kind" &!
 fi
 
-# Google Cloud SDK configuration - loaded on demand
-if [ -f '/Users/tiger/google-cloud-sdk/path.zsh.inc' ]; then 
-  source '/Users/tiger/google-cloud-sdk/path.zsh.inc'
-fi
-if [ -f '/Users/tiger/google-cloud-sdk/completion.zsh.inc' ] && [ "$(command -v gcloud)" ]; then
-  gcloud completion zsh > "${fpath[1]}/_gcloud" &!
+# Google Cloud SDK configuration - lazy load only when gcloud is needed
+if [ -f '/Users/tiger/google-cloud-sdk/path.zsh.inc' ] && [ -f '/Users/tiger/google-cloud-sdk/completion.zsh.inc' ]; then
+  # Create a lazy-loading wrapper for gcloud
+  gcloud() {
+    unfunction gcloud
+    source '/Users/tiger/google-cloud-sdk/path.zsh.inc'
+    source '/Users/tiger/google-cloud-sdk/completion.zsh.inc'
+    gcloud "$@"
+  }
 fi
 
 # Pipenv

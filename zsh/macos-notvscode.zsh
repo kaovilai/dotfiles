@@ -38,11 +38,16 @@ znap function unsetSOCKSproxy(){
     networksetup -setsocksfirewallproxystate Wi-Fi off
 }
 
-# Wi-Fi and network-related setup
-WIFI_NAME=$(networksetup -getairportnetwork en0 | cut -d " " -f 4)
+# Wi-Fi and network-related setup - cache network name
 if [[ "$TERM_PROGRAM" != "vscode" ]]; then
+  # Get WiFi name once and cache it
+  WIFI_NAME=$(networksetup -getairportnetwork en0 2>/dev/null | cut -d " " -f 4)
+  
+  # Run home setup check in background
   eval $AT_HOME && (eval $DISPLAYLINK_CONNECTED || eval $RESTART_DISPLAYLINK) &!
-    if [[ "$WIFI_NAME" = "S23" ]]; then
+  
+  # Handle proxy setup based on network
+  if [[ "$WIFI_NAME" = "S23" ]]; then
         (curl --silent --socks5 $SOCKS_ROUTER_IP:$SOCKS_ROUTER_PROXY_PORT http://www.google.com && setSOCKSproxy) &!
     else
         unsetSOCKSproxy &!

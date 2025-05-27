@@ -14,8 +14,9 @@ command_cache_expired() {
     return 0  # Cache expired (file doesn't exist)
   fi
 
-  # Get file modification time
-  local file_time=$(stat -f %m "$file")
+  # Get file modification time (cache stat result to avoid duplicate calls)
+  local file_stat=$(stat -f "%m %Sm" -t "%Y-%m-%d %H:%M:%S" "$file" 2>/dev/null) || return 0
+  local file_time=${file_stat%% *}
   local current_time=$(date +%s)
   local file_age=$((current_time - file_time))
 
