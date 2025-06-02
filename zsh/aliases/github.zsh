@@ -1,5 +1,21 @@
 # GitHub CLI related aliases
 alias gh-pr-view='gh pr view --web'
+
+# Clone and open repo in VS Code
+ghcc() {
+  if [ -z "$1" ]; then
+    echo "Usage: ghcc <repo>"
+    echo "Example: ghcc owner/repo"
+    return 1
+  fi
+  
+  # Extract repo name from the argument (handles owner/repo format)
+  local repo_name=$(basename "$1")
+  
+  # Clone the repo
+  gh repo clone "$1" && cd "$repo_name" && code .
+}
+alias ghclone='ghcc'
 alias pr-view='gh pr view --web'
 alias pr-comment='gh pr comment --body'
 alias pr-label='gh pr label --add'
