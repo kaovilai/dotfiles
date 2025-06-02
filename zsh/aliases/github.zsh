@@ -5,15 +5,26 @@ alias gh-pr-view='gh pr view --web'
 ghcc() {
   if [ -z "$1" ]; then
     echo "Usage: ghcc <repo>"
-    echo "Example: ghcc owner/repo"
+    echo "Example: ghcc owner/repo or ghcc https://github.com/owner/repo"
     return 1
   fi
   
-  # Extract repo name from the argument (handles owner/repo format)
-  local repo_name=$(basename "$1")
+  local repo_spec="$1"
+  local repo_name
+  
+  # Handle full GitHub URLs
+  if [[ "$1" =~ ^https?://github\.com/(.+)$ ]]; then
+    # Extract owner/repo from URL
+    repo_spec="${BASH_REMATCH[1]}"
+    # Remove .git suffix if present
+    repo_spec="${repo_spec%.git}"
+  fi
+  
+  # Extract just the repo name for the directory
+  repo_name=$(basename "$repo_spec")
   
   # Clone the repo
-  gh repo clone "$1" && cd "$repo_name" && code .
+  gh repo clone "$repo_spec" && cd "$repo_name" && code .
 }
 alias ghclone='ghcc'
 alias pr-view='gh pr view --web'
