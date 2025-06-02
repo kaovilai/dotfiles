@@ -27,6 +27,33 @@ ghcc() {
   gh repo clone "$repo_spec" && cd "$repo_name" && code .
 }
 alias ghclone='ghcc'
+
+# Fork, clone and open repo in VS Code
+ghfc() {
+  if [ -z "$1" ]; then
+    echo "Usage: ghfc <repo>"
+    echo "Example: ghfc owner/repo or ghfc https://github.com/owner/repo"
+    return 1
+  fi
+  
+  local repo_spec="$1"
+  local repo_name
+  
+  # Handle full GitHub URLs
+  if [[ "$1" =~ ^https?://github\.com/(.+)$ ]]; then
+    # Extract owner/repo from URL
+    repo_spec="${BASH_REMATCH[1]}"
+    # Remove .git suffix if present
+    repo_spec="${repo_spec%.git}"
+  fi
+  
+  # Extract just the repo name for the directory
+  repo_name=$(basename "$repo_spec")
+  
+  # Fork the repo, then clone the fork and open in VS Code
+  gh repo fork "$repo_spec" --clone && cd "$repo_name" && code .
+}
+alias ghfork='ghfc'
 alias pr-view='gh pr view --web'
 alias pr-comment='gh pr comment --body'
 alias pr-label='gh pr label --add'
