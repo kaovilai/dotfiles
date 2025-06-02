@@ -59,8 +59,19 @@ znap function git-worktree-code() {
     git worktree add "$dir" "$1" && code "$dir"
   else
     # Branch doesn't exist, create it with the worktree
-    echo "Branch '$1' doesn't exist, creating it..."
-    git worktree add -b "$1" "$dir" && code "$dir"
+    # Determine the upstream branch to use
+    local upstream_branch=""
+    if git show-ref --verify --quiet refs/remotes/upstream/main; then
+      upstream_branch="upstream/main"
+    elif git show-ref --verify --quiet refs/remotes/upstream/master; then
+      upstream_branch="upstream/master"
+    else
+      echo "Error: No upstream/main or upstream/master branch found"
+      return 1
+    fi
+    
+    echo "Branch '$1' doesn't exist, creating it from $upstream_branch..."
+    git worktree add -b "$1" "$dir" "$upstream_branch" && code "$dir"
   fi
 }
 alias gwc='git-worktree-code'
