@@ -31,6 +31,13 @@ The main entry point is `.zshrc` which sources all the necessary files.
 - `push-dotfiles-from-zshrc`: Push changes to the dotfiles repository
 - `update-zshrc-from-dotfiles`: Update your local .zshrc from the dotfiles repo
 
+### Migration Commands
+
+- `migrate-to-new-laptop`: Set up a new laptop with your development environment
+- `export-wifi-credentials`: Export WiFi network names for migration
+- `import-wifi-credentials`: Import WiFi networks on new laptop
+- `list-wifi-networks`: List currently saved WiFi networks
+
 ## Features
 
 - Organized aliases by category for better maintainability

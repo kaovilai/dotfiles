@@ -23,7 +23,7 @@ source ~/git/dotfiles/zsh/colors.zsh
 
 # Essential exports and aliases for immediate shell usage
 alias edit-dotfiles='code ~/git/dotfiles/'
-alias claude="/Users/tiger/.claude/local/claude"
+alias claude="~/.claude/local/claude"
 source ~/git/dotfiles/zsh/alias.zsh
 # gpg tty
 export GPG_TTY=$(tty)
@@ -61,7 +61,7 @@ fi
   fi
 } &
 # # bun completions
-# [ -s "/Users/tiger/.bun/_bun" ] && source "/Users/tiger/.bun/_bun"
+# [ -s "~/.bun/_bun" ] && source "~/.bun/_bun"
 
 
 # # bun
@@ -70,7 +70,7 @@ fi
 
 # export PATH="$HOME/.local/bin:$PATH"
 
-# [ -f "/Users/tiger/.ghcup/env" ] && . "/Users/tiger/.ghcup/env" # ghcup-env
+# [ -f "~/.ghcup/env" ] && . "~/.ghcup/env" # ghcup-env
 
 # profiling end
 # zprof

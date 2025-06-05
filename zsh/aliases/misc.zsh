@@ -18,11 +18,11 @@ alias computer-use-claud='docker run \
     -p 6080:6080 \
     -p 8080:8080 \
     -it ghcr.io/anthropics/anthropic-quickstarts:computer-use-demo-latest'
-alias activepieces-start='podman compose -f /Users/tiger/OneDrive/activepieces/docker-compose.activepiecestailscale.yml up -d'
-alias activepieces-stop='podman compose -f /Users/tiger/OneDrive/activepieces/docker-compose.activepiecestailscale.yml down'
+alias activepieces-start='podman compose -f ~/OneDrive/activepieces/docker-compose.activepiecestailscale.yml up -d'
+alias activepieces-stop='podman compose -f ~/OneDrive/activepieces/docker-compose.activepiecestailscale.yml down'
 alias activepieces-restart='
     # First bring down the containers
-    podman compose -f /Users/tiger/OneDrive/activepieces/docker-compose.activepiecestailscale.yml down
+    podman compose -f ~/OneDrive/activepieces/docker-compose.activepiecestailscale.yml down
     
     # Clean up Tailscale machines if API key and tailnet are configured
     if [ -n "$TAILSCALE_API_KEY" ] && [ -n "$TAILSCALE_TAILNET" ]; then
@@ -51,7 +51,7 @@ alias activepieces-restart='
     fi
     
     # Finally, bring up the containers again
-    podman compose -f /Users/tiger/OneDrive/activepieces/docker-compose.activepiecestailscale.yml up -d
+    podman compose -f ~/OneDrive/activepieces/docker-compose.activepiecestailscale.yml up -d
 '
 alias makelintv2oadp='git checkout linterv2 Makefile .golangci.yaml && make lint-fix && git restore --staged Makefile .golangci.yaml && git restore Makefile .golangci.yaml'
 

@@ -26,5 +26,5 @@ FPATH="$(brew --prefix)/share/zsh/site-functions:${FPATH}"
 
 # Source heavy operations only when not in VS Code
 if [[ "$TERM_PROGRAM" != "vscode" ]]; then
-    source /Users/tiger/git/dotfiles/zsh/macos-notvscode.zsh
+    source ~/git/dotfiles/zsh/macos-notvscode.zsh
 fi

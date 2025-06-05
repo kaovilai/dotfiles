@@ -257,6 +257,221 @@ EOF
     echo "Run 'source ~/.zshrc' to reload your shell configuration"
 }
 
+# WiFi credential export/import functions
+export-wifi-credentials() {
+    local export_dir="${1:-$HOME/wifi-credentials-export}"
+    
+    progress "Exporting WiFi credentials..."
+    
+    # Create export directory
+    mkdir -p "$export_dir"
+    chmod 700 "$export_dir"
+    
+    # Export WiFi profiles
+    local wifi_file="$export_dir/wifi-networks.xml"
+    
+    # Get list of WiFi networks
+    progress "Finding saved WiFi networks..."
+    local networks=$(networksetup -listpreferredwirelessnetworks en0 2>/dev/null | tail -n +2 | sed 's/^[[:space:]]*//')
+    
+    if [[ -z "$networks" ]]; then
+        # Try en1 if en0 didn't work
+        networks=$(networksetup -listpreferredwirelessnetworks en1 2>/dev/null | tail -n +2 | sed 's/^[[:space:]]*//')
+    fi
+    
+    if [[ -z "$networks" ]]; then
+        error "No WiFi networks found"
+        return 1
+    fi
+    
+    # Create plist file with network information
+    cat > "$wifi_file" << 'EOF'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>WiFiNetworks</key>
+    <array>
+EOF
+    
+    # Export each network
+    echo "$networks" | while IFS= read -r network; do
+        if [[ -n "$network" ]]; then
+            echo "  Exporting: $network"
+            cat >> "$wifi_file" << EOF
+        <dict>
+            <key>SSID</key>
+            <string>$network</string>
+        </dict>
+EOF
+        fi
+    done
+    
+    cat >> "$wifi_file" << 'EOF'
+    </array>
+</dict>
+</plist>
+EOF
+    
+    # Create a script to help with importing
+    cat > "$export_dir/import-wifi.sh" << 'EOF'
+#!/bin/bash
+# Import WiFi networks on new laptop
+# Note: This will require manual password entry for each network
+
+echo "WiFi Network Import Helper"
+echo "========================="
+echo ""
+echo "This script will help you add the WiFi networks from your old laptop."
+echo "You'll need to enter the password for each network manually."
+echo ""
+
+# Read the network list
+networks=$(xmllint --xpath "//string/text()" wifi-networks.xml 2>/dev/null | sort -u)
+
+if [[ -z "$networks" ]]; then
+    echo "No networks found in wifi-networks.xml"
+    exit 1
+fi
+
+echo "Found networks:"
+echo "$networks" | nl -b a
+echo ""
+
+# Get the WiFi interface
+wifi_interface=$(networksetup -listallhardwareports | awk '/Wi-Fi|Airport/{getline; print $2}')
+
+if [[ -z "$wifi_interface" ]]; then
+    echo "Could not find WiFi interface"
+    exit 1
+fi
+
+echo "WiFi interface: $wifi_interface"
+echo ""
+
+# Process each network
+echo "$networks" | while IFS= read -r network; do
+    if [[ -n "$network" ]]; then
+        echo ""
+        echo "Network: $network"
+        read -p "Add this network? (y/n): " add_network
+        
+        if [[ "$add_network" == "y" ]]; then
+            # Prompt for password
+            echo "Enter the password for '$network' (or press Enter to skip):"
+            read -s password
+            echo ""
+            
+            if [[ -n "$password" ]]; then
+                # Add the network
+                networksetup -addpreferredwirelessnetworkatindex "$wifi_interface" "$network" 0 WPA2 "$password"
+                if [[ $? -eq 0 ]]; then
+                    echo "✓ Added $network"
+                else
+                    echo "✗ Failed to add $network"
+                fi
+            else
+                echo "Skipped $network (no password provided)"
+            fi
+        else
+            echo "Skipped $network"
+        fi
+    fi
+done
+
+echo ""
+echo "Import complete!"
+echo ""
+echo "To verify, run:"
+echo "networksetup -listpreferredwirelessnetworks $wifi_interface"
+EOF
+    
+    chmod +x "$export_dir/import-wifi.sh"
+    
+    # Create instructions
+    cat > "$export_dir/README.txt" << EOF
+WiFi Credentials Export
+======================
+Created: $(date)
+Machine: $(hostname)
+
+This directory contains:
+- wifi-networks.xml: List of saved WiFi networks
+- import-wifi.sh: Script to help import networks on new laptop
+
+To transfer to new laptop:
+1. Copy this entire directory to the new laptop
+2. On the new laptop, run: ./import-wifi.sh
+3. Enter the password for each network when prompted
+
+Alternative manual method:
+- Open System Preferences > Network > WiFi > Advanced
+- Add networks manually using the SSID names in wifi-networks.xml
+
+Security Note:
+- Passwords are NOT exported for security reasons
+- You'll need to enter passwords manually on the new laptop
+- Delete this directory after successful import
+EOF
+    
+    success "WiFi networks exported to $export_dir"
+    echo ""
+    echo "Found $(echo "$networks" | wc -l | tr -d ' ') networks"
+    echo ""
+    echo "${YELLOW}Next steps:${NC}"
+    echo "1. Copy $export_dir to your new laptop"
+    echo "2. Run the import script on the new laptop"
+    echo "3. Have your WiFi passwords ready"
+    
+    # Offer to create a compressed archive
+    echo ""
+    read -p "Create compressed archive? (y/n): " create_archive
+    if [[ "$create_archive" == "y" ]]; then
+        local archive_name="wifi-export-$(date +%Y%m%d-%H%M%S).tar.gz"
+        tar -czf "$HOME/$archive_name" -C "$export_dir" .
+        success "Created archive: $HOME/$archive_name"
+        echo "Transfer this file to your new laptop"
+    fi
+}
+
+# Function to import WiFi credentials
+import-wifi-credentials() {
+    local import_dir="${1:-$HOME/wifi-credentials-export}"
+    
+    if [[ ! -d "$import_dir" ]]; then
+        error "Import directory not found: $import_dir"
+        echo "Please specify the directory containing the WiFi export"
+        return 1
+    fi
+    
+    if [[ ! -f "$import_dir/import-wifi.sh" ]]; then
+        error "Import script not found in $import_dir"
+        return 1
+    fi
+    
+    progress "Starting WiFi import..."
+    cd "$import_dir"
+    ./import-wifi.sh
+}
+
+# Function to list current WiFi networks
+list-wifi-networks() {
+    progress "Current WiFi networks:"
+    
+    # Find WiFi interface
+    local wifi_interface=$(networksetup -listallhardwareports | awk '/Wi-Fi|Airport/{getline; print $2}')
+    
+    if [[ -z "$wifi_interface" ]]; then
+        error "Could not find WiFi interface"
+        return 1
+    fi
+    
+    echo "Interface: $wifi_interface"
+    echo ""
+    
+    networksetup -listpreferredwirelessnetworks "$wifi_interface"
+}
+
 # Function to verify migration
 verify-migration() {
     echo "${BLUE}Verifying migration setup...${NC}"
@@ -330,6 +545,10 @@ backup-before-migration() {
             cp -R "$item" "$backup_dir/" || warning "Failed to backup $item"
         fi
     done
+    
+    # Export WiFi credentials
+    progress "Exporting WiFi credentials..."
+    export-wifi-credentials "$backup_dir/wifi-credentials"
     
     # Create a manifest
     cat > "$backup_dir/MANIFEST.txt" << EOF

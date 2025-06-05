@@ -60,7 +60,7 @@ fi
 
 # OpenShift Install - uses cached file to avoid generating completion on every shell start
 if has_command openshift-install; then
-  cat /Users/tiger/git/dotfiles/openshift-install-completion-zsh.txt > "${fpath[1]}/_openshift-install" &!
+  cat ~/git/dotfiles/openshift-install-completion-zsh.txt > "${fpath[1]}/_openshift-install" &!
 fi
 
 # GitHub CLI completion - cache for stable tools
@@ -134,12 +134,12 @@ if [ "$(command -v kind)" ]; then
 fi
 
 # Google Cloud SDK configuration - lazy load only when gcloud is needed
-if [ -f '/Users/tiger/google-cloud-sdk/path.zsh.inc' ] && [ -f '/Users/tiger/google-cloud-sdk/completion.zsh.inc' ]; then
+if [ -f '~/google-cloud-sdk/path.zsh.inc' ] && [ -f '~/google-cloud-sdk/completion.zsh.inc' ]; then
   # Create a lazy-loading wrapper for gcloud
   gcloud() {
     unfunction gcloud
-    source '/Users/tiger/google-cloud-sdk/path.zsh.inc'
-    source '/Users/tiger/google-cloud-sdk/completion.zsh.inc'
+    source '~/google-cloud-sdk/path.zsh.inc'
+    source '~/google-cloud-sdk/completion.zsh.inc'
     gcloud "$@"
   }
 fi
