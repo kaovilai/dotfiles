@@ -38,6 +38,7 @@ ghfc() {
   
   local repo_spec="$1"
   local repo_name
+  local target_dir="${2:-$PWD}"  # Use second argument or current directory
   
   # Handle full GitHub URLs
   if [[ "$1" =~ ^https?://github\.com/(.+)$ ]]; then
@@ -50,8 +51,31 @@ ghfc() {
   # Extract just the repo name for the directory
   repo_name=$(basename "$repo_spec")
   
-  # Fork the repo, then clone the fork and open in VS Code
-  gh repo fork "$repo_spec" --clone && cd "$repo_name" && code .
+  # Fork the repo first (without cloning)
+  echo "Forking $repo_spec..."
+  if ! gh repo fork "$repo_spec" --remote=false; then
+    echo "Failed to fork repository"
+    return 1
+  fi
+  
+  # Get the current user's GitHub username
+  local gh_user=$(gh api user --jq .login)
+  
+  # Clone the forked repo
+  echo "Cloning fork..."
+  if gh repo clone "$gh_user/$repo_name" "$target_dir/$repo_name"; then
+    cd "$target_dir/$repo_name"
+    
+    # Add upstream remote
+    local upstream_url="https://github.com/$repo_spec.git"
+    git remote add upstream "$upstream_url"
+    echo "Added upstream remote: $upstream_url"
+    
+    code .
+  else
+    echo "Failed to clone forked repository"
+    return 1
+  fi
 }
 alias ghfork='ghfc'
 alias pr-view='gh pr view --web'
