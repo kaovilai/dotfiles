@@ -1,4 +1,5 @@
 # Git related aliases
+alias guw='git config user.email tkaovila@redhat.com'
 alias gcaf='git commit --amend --no-edit && git push --force'
 alias gcan='git commit --amend --no-edit'
 alias gca='git commit --amend'
