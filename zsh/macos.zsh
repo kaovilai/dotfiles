@@ -19,7 +19,7 @@ znap function install-pkg-from-url(){
     curl -L -o ~/Downloads/$(basename $1) $1 && install-pkg ~/Downloads/$(basename $1)
 }
 
-PATH=$PATH:/Library/Frameworks/Python.framework/Versions/Current/bin/
+PATH=$PATH:/Library/Frameworks/Python.framework/Versions/Current/bin
 
 # https://docs.brew.sh/Shell-Completion says need to be done before compinit which is in znap.zsh sourced right after this in .zshrc
 FPATH="$(brew --prefix)/share/zsh/site-functions:${FPATH}"
