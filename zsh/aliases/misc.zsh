@@ -10,6 +10,7 @@ alias go-install-kind='go install sigs.k8s.io/kind@latest'
 alias open-webui-serve='podman run -d -p 3000:8080 -v open-webui:/app/backend/data --name open-webui --restart always ghcr.io/open-webui/open-webui:main'
 alias open-webui-update='podman rm -f open-webui && podman pull ghcr.io/open-webui/open-webui:main && open-webui-serve'
 alias dsstore-rmall='find . -name ".DS_Store" -exec rm {} \;'
+alias claude="$XDG_CONFIG_HOME/claude/local/claude"
 alias computer-use-claud='docker run \
     -e ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY \
     -v $HOME/.anthropic:/home/computeruse/.anthropic \
