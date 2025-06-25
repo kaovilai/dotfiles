@@ -55,6 +55,9 @@ znap function create-ocp-azure-sts(){
     [[ -z "$unique_result" ]] && return 1
     local CLUSTER_NAME=$(echo "$unique_result" | grep "cluster_name:" | cut -d: -f2)
     local OCP_CREATE_DIR=$(echo "$unique_result" | grep "cluster_dir:" | cut -d: -f2)
+    
+    # Generate valid Azure storage account name (3-24 chars, lowercase letters and numbers only)
+    local STORAGE_ACCOUNT_NAME=$(echo "$CLUSTER_NAME" | tr -d '-' | tr '[:upper:]' '[:lower:]' | cut -c1-24)
     if [[ $1 == "gather" ]]; then
         if [[ -d "$OCP_CREATE_DIR" ]]; then
             $OPENSHIFT_INSTALL gather bootstrap --dir $OCP_CREATE_DIR || return 1
@@ -178,6 +181,7 @@ ccoctl azure create-all \
 --region $AZURE_REGION \
 --installation-resource-group-name $AZURE_RESOURCE_GROUP \
 --dnszone-resource-group-name $AZURE_BASEDOMAIN_RESOURCE_GROUP \
+--storage-account-name $STORAGE_ACCOUNT_NAME \
 --output-dir $OCP_CREATE_DIR \
 --credentials-requests-dir $OCP_CREATE_DIR/credentials-requests || return 1
 
