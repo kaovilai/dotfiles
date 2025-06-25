@@ -2,19 +2,19 @@
 
 # Function to prompt for release stream selection
 prompt_release_stream() {
-    echo ""
-    echo "Select OpenShift release stream:"
-    echo "1) 4-dev-preview (Early Candidate) - Version: $OCP_LATEST_EC_VERSION"
-    echo "2) 4-stable (Release Candidate)   - Version: $OCP_LATEST_STABLE_VERSION"
-    echo ""
-    echo -n "Enter your choice (1 or 2): "
+    echo "" >&2
+    echo "Select OpenShift release stream:" >&2
+    echo "1) 4-dev-preview (Early Candidate) - Version: $OCP_LATEST_EC_VERSION" >&2
+    echo "2) 4-stable (Release Candidate)   - Version: $OCP_LATEST_STABLE_VERSION" >&2
+    echo "" >&2
+    echo -n "Enter your choice (1 or 2): " >&2
     read stream_choice
     
     if [[ "$stream_choice" == "2" ]]; then
-        echo "INFO: Using 4-stable release stream (version: $OCP_LATEST_STABLE_VERSION)"
+        echo "INFO: Using 4-stable release stream (version: $OCP_LATEST_STABLE_VERSION)" >&2
         echo "stable"
     else
-        echo "INFO: Using 4-dev-preview release stream (version: $OCP_LATEST_EC_VERSION)"
+        echo "INFO: Using 4-dev-preview release stream (version: $OCP_LATEST_EC_VERSION)" >&2
         echo "dev-preview"
     fi
 }
@@ -107,8 +107,79 @@ get_openshift_install() {
         echo "openshift-install"
     else
         echo "ERROR: No openshift-install binary found" >&2
-        echo "Please install openshift-install or set OPENSHIFT_INSTALL variable" >&2
-        return 1
+        echo "" >&2
+        echo "Would you like to install openshift-install version ${ec_version}? (y/n)" >&2
+        read -r install_choice
+        
+        if [[ "$install_choice" == "y" || "$install_choice" == "Y" ]]; then
+            echo "Installing openshift-install ${ec_version}..." >&2
+            
+            # Detect architecture
+            local arch=""
+            case "$(uname -m)" in
+                "x86_64"|"amd64")
+                    arch="amd64"
+                    ;;
+                "arm64"|"aarch64")
+                    arch="arm64"
+                    ;;
+                *)
+                    echo "ERROR: Unsupported architecture: $(uname -m)" >&2
+                    return 1
+                    ;;
+            esac
+            
+            # Detect OS
+            local os=""
+            case "$(uname -s)" in
+                "Darwin")
+                    os="mac"
+                    ;;
+                "Linux")
+                    os="linux"
+                    ;;
+                *)
+                    echo "ERROR: Unsupported OS: $(uname -s)" >&2
+                    return 1
+                    ;;
+            esac
+            
+            # Download URL
+            local url="https://mirror.openshift.com/pub/openshift-v4/clients/ocp-dev-preview/${ec_version}/openshift-install-${os}-${arch}.tar.gz"
+            
+            # Create temporary directory
+            local temp_dir=$(mktemp -d)
+            
+            # Download and extract
+            echo "Downloading from: $url" >&2
+            if curl -sL "$url" -o "${temp_dir}/openshift-install.tar.gz"; then
+                tar -xzf "${temp_dir}/openshift-install.tar.gz" -C "${temp_dir}"
+                
+                # Install to /usr/local/bin with version suffix
+                if sudo mv "${temp_dir}/openshift-install" "/usr/local/bin/openshift-install-${ec_version}"; then
+                    sudo chmod +x "/usr/local/bin/openshift-install-${ec_version}"
+                    echo "Successfully installed openshift-install-${ec_version}" >&2
+                    
+                    # Clean up
+                    rm -rf "${temp_dir}"
+                    
+                    # Return the installed binary
+                    echo "openshift-install-${ec_version}"
+                    return 0
+                else
+                    echo "ERROR: Failed to install openshift-install to /usr/local/bin" >&2
+                    rm -rf "${temp_dir}"
+                    return 1
+                fi
+            else
+                echo "ERROR: Failed to download openshift-install" >&2
+                rm -rf "${temp_dir}"
+                return 1
+            fi
+        else
+            echo "Please install openshift-install or set OPENSHIFT_INSTALL variable" >&2
+            return 1
+        fi
     fi
 }
 
