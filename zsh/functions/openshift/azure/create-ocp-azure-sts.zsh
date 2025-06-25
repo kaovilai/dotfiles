@@ -74,9 +74,9 @@ znap function create-ocp-azure-sts(){
             (ccoctl azure delete \
             --name $CLUSTER_NAME \
             --subscription-id $AZURE_SUBSCRIPTION_ID \
-            --tenant-id $AZURE_TENANT_ID \
-            --resource-group $AZURE_RESOURCE_GROUP \
-            --credentials-requests-dir $OCP_CREATE_DIR/credentials-requests && echo "cleaned up ccoctl azure resources") || true
+            --region $AZURE_REGION \
+            --storage-account-name $STORAGE_ACCOUNT_NAME \
+            --delete-oidc-resource-group && echo "cleaned up ccoctl azure resources") || true
             ((rm -r $OCP_CREATE_DIR && echo "removed existing create dir") || (true && echo "no existing install dir")) || return 1
         else
             echo "Directory $OCP_CREATE_DIR does not exist, nothing to delete"
