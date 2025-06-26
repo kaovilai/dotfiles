@@ -71,7 +71,7 @@ znap function create-ocp-azure-sts(){
         if [[ -d "$OCP_CREATE_DIR" ]]; then
             $OPENSHIFT_INSTALL destroy cluster --dir $OCP_CREATE_DIR || echo "no existing cluster"
             $OPENSHIFT_INSTALL destroy bootstrap --dir $OCP_CREATE_DIR || echo "no existing bootstrap"
-            (ccoctl azure delete \
+            (retry_ccoctl_azure azure delete \
             --name $CLUSTER_NAME \
             --subscription-id $AZURE_SUBSCRIPTION_ID \
             --region $AZURE_REGION \
@@ -173,8 +173,9 @@ echo "extracting credential-requests" && oc adm release extract \
   --install-config=$OCP_CREATE_DIR/install-config.yaml \
   --to=$OCP_CREATE_DIR/credentials-requests || return 1 #credential requests are stored in credentials-requests dir
 
-# Create Azure service principal and credentials using ccoctl
-ccoctl azure create-all \
+# Create Azure service principal and credentials using ccoctl with retry logic
+echo "INFO: Running ccoctl azure create-all with retry logic for eventual consistency handling..."
+retry_ccoctl_azure azure create-all \
 --name $CLUSTER_NAME \
 --subscription-id $AZURE_SUBSCRIPTION_ID \
 --tenant-id $AZURE_TENANT_ID \
