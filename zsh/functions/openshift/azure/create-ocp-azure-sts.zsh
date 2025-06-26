@@ -84,7 +84,7 @@ znap function create-ocp-azure-sts(){
             --region $AZURE_REGION \
             --storage-account-name $STORAGE_ACCOUNT_NAME \
             --delete-oidc-resource-group && echo "cleaned up ccoctl azure resources") || true
-            ((rm -r $OCP_CREATE_DIR && echo "removed existing create dir") || (true && echo "no existing install dir")) || return 1
+            rm -rf $OCP_CREATE_DIR && echo "removed existing create dir" || echo "no existing install dir"
         else
             echo "Directory $OCP_CREATE_DIR does not exist, nothing to delete"
         fi
@@ -121,11 +121,42 @@ znap function create-ocp-azure-sts(){
     
     # Export Azure credentials for the installer to avoid prompts
     # The installer looks for these environment variables to skip interactive prompts
-    export AZURE_AUTH_LOCATION="${AZURE_AUTH_LOCATION:-$HOME/.azure/osServicePrincipal.json}"
+    # Check if AZURE_AUTH_LOCATION is set but empty
+    if [[ -z "$AZURE_AUTH_LOCATION" ]]; then
+        export AZURE_AUTH_LOCATION="$HOME/.azure/osServicePrincipal.json"
+    fi
     
-    # Check if service principal credentials file exists
+    # Check if service principal credentials file exists and contains valid JSON
+    local need_new_credentials=false
     if [[ ! -f "$AZURE_AUTH_LOCATION" ]]; then
         echo "INFO: Azure service principal credentials file not found at $AZURE_AUTH_LOCATION"
+        need_new_credentials=true
+    else
+        # Check if existing file contains valid JSON
+        if ! jq . "$AZURE_AUTH_LOCATION" >/dev/null 2>&1; then
+            echo "WARNING: Existing credentials file contains invalid JSON"
+            need_new_credentials=true
+        elif [[ ! -s "$AZURE_AUTH_LOCATION" ]]; then
+            echo "WARNING: Existing credentials file is empty"
+            need_new_credentials=true
+        else
+            # Check for required keys in the JSON
+            # The SDK auth format should have: clientId, clientSecret, subscriptionId, tenantId
+            local missing_keys=""
+            for key in clientId clientSecret subscriptionId tenantId; do
+                if ! jq -e ".$key" "$AZURE_AUTH_LOCATION" >/dev/null 2>&1; then
+                    missing_keys="$missing_keys $key"
+                fi
+            done
+            
+            if [[ -n "$missing_keys" ]]; then
+                echo "WARNING: Existing credentials file is missing required keys:$missing_keys"
+                need_new_credentials=true
+            fi
+        fi
+    fi
+    
+    if [[ "$need_new_credentials" == "true" ]]; then
         echo "INFO: Creating service principal to avoid authentication prompts..."
         
         # Get current Azure user to create a unique service principal name
@@ -143,24 +174,66 @@ znap function create-ocp-azure-sts(){
             echo "INFO: Recreating credentials file..."
             
             # Reset the service principal credentials in SDK format
-            az ad sp credential reset --id "$existing_sp" --sdk-auth > "$AZURE_AUTH_LOCATION" 2>/dev/null || {
+            echo "DEBUG: Running: az ad sp credential reset --id '$existing_sp' --sdk-auth"
+            local sp_creds=$(az ad sp credential reset --id "$existing_sp" --sdk-auth 2>&1)
+            local az_exit_code=$?
+            
+            if [[ $az_exit_code -ne 0 ]]; then
+                echo "ERROR: az command failed with exit code $az_exit_code"
+                echo "DEBUG: Output: $sp_creds"
+                return 1
+            fi
+            
+            if [[ -z "$sp_creds" ]] || [[ "$sp_creds" == "null" ]]; then
                 echo "ERROR: Failed to reset credentials for existing service principal"
                 echo "INFO: You may need to manually create the service principal"
                 return 1
-            }
+            fi
+            
+            # Validate JSON before writing
+            if ! echo "$sp_creds" | jq . >/dev/null 2>&1; then
+                echo "ERROR: Invalid JSON returned from credential reset"
+                echo "DEBUG: Response: $sp_creds"
+                return 1
+            fi
+            
+            echo "DEBUG: Writing credentials to: $AZURE_AUTH_LOCATION"
+            echo "$sp_creds" > "$AZURE_AUTH_LOCATION"
+            echo "DEBUG: File written successfully"
         else
             echo "INFO: Creating new service principal '$sp_name'..."
             
             # Create service principal with Contributor role in SDK format
-            az ad sp create-for-rbac \
+            echo "DEBUG: Running: az ad sp create-for-rbac --name '$sp_name' --role Contributor --scopes /subscriptions/$AZURE_SUBSCRIPTION_ID --sdk-auth"
+            local sp_creds=$(az ad sp create-for-rbac \
                 --name "$sp_name" \
                 --role Contributor \
                 --scopes /subscriptions/$AZURE_SUBSCRIPTION_ID \
-                --sdk-auth > "$AZURE_AUTH_LOCATION" 2>/dev/null || {
+                --sdk-auth 2>&1)
+            local az_exit_code=$?
+            
+            if [[ $az_exit_code -ne 0 ]]; then
+                echo "ERROR: az command failed with exit code $az_exit_code"
+                echo "DEBUG: Output: $sp_creds"
+                return 1
+            fi
+            
+            if [[ -z "$sp_creds" ]] || [[ "$sp_creds" == "null" ]]; then
                 echo "ERROR: Failed to create service principal"
                 echo "INFO: You may need appropriate permissions to create service principals"
                 return 1
-            }
+            fi
+            
+            # Validate JSON before writing
+            if ! echo "$sp_creds" | jq . >/dev/null 2>&1; then
+                echo "ERROR: Invalid JSON returned from service principal creation"
+                echo "DEBUG: Response: $sp_creds"
+                return 1
+            fi
+            
+            echo "DEBUG: Writing credentials to: $AZURE_AUTH_LOCATION"
+            echo "$sp_creds" > "$AZURE_AUTH_LOCATION"
+            echo "DEBUG: File written successfully"
         fi
         
         echo "INFO: Service principal credentials saved to $AZURE_AUTH_LOCATION"
@@ -238,7 +311,6 @@ echo "INFO: Using multi-architecture release image for Azure: $RELEASE_IMAGE"
 
 # Export the release image override
 export OPENSHIFT_INSTALL_RELEASE_IMAGE_OVERRIDE=$RELEASE_IMAGE
-echo "INFO: Exported OPENSHIFT_INSTALL_RELEASE_IMAGE_OVERRIDE=$RELEASE_IMAGE"
 # Extract the list of CredentialsRequest custom resources (CRs) from the OpenShift Container Platform release image by running the following command:
 echo "extracting credential-requests" && oc adm release extract \
   --from=$RELEASE_IMAGE \
