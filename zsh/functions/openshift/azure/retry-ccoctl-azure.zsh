@@ -1,0 +1,61 @@
+# Retry wrapper for ccoctl azure commands to handle eventual consistency issues
+# This addresses the Azure equivalent of OCPBUGS-44933 (which only fixed GCP)
+
+retry_ccoctl_azure() {
+    local max_retries=5
+    local retry_count=0
+    local wait_time=5
+    local exponential_factor=2
+    
+    # Execute the command and capture both stdout and stderr
+    local cmd_output
+    local cmd_exit_code
+    
+    while [[ $retry_count -lt $max_retries ]]; do
+        echo "INFO: Executing ccoctl azure command (attempt $((retry_count + 1))/$max_retries)..."
+        
+        # Run the command and capture output
+        cmd_output=$(ccoctl "$@" 2>&1)
+        cmd_exit_code=$?
+        
+        # Check if command succeeded
+        if [[ $cmd_exit_code -eq 0 ]]; then
+            echo "$cmd_output"
+            echo "INFO: ccoctl azure command completed successfully"
+            return 0
+        fi
+        
+        # Check if error is retryable (Azure eventual consistency issues)
+        if echo "$cmd_output" | grep -E "(ParentResourceNotFound|404.*not found|does not exist)" >/dev/null; then
+            echo "WARNING: Encountered Azure eventual consistency error:"
+            echo "$cmd_output" | grep -E "(ParentResourceNotFound|404.*not found|does not exist)" | head -5
+            
+            retry_count=$((retry_count + 1))
+            
+            if [[ $retry_count -lt $max_retries ]]; then
+                echo "INFO: Waiting ${wait_time}s before retry $((retry_count + 1))/$max_retries..."
+                sleep $wait_time
+                
+                # Exponential backoff
+                wait_time=$((wait_time * exponential_factor))
+                
+                # Cap maximum wait time at 60 seconds
+                if [[ $wait_time -gt 60 ]]; then
+                    wait_time=60
+                fi
+            else
+                echo "ERROR: Maximum retries ($max_retries) reached. Command failed."
+                echo "Full error output:"
+                echo "$cmd_output"
+                return 1
+            fi
+        else
+            # Non-retryable error
+            echo "ERROR: ccoctl azure command failed with non-retryable error:"
+            echo "$cmd_output"
+            return 1
+        fi
+    done
+    
+    return 1
+}
