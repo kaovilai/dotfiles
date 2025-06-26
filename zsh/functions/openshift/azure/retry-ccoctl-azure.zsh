@@ -32,14 +32,32 @@ retry_ccoctl_azure() {
             # Extract parameters from the original command to run destroy
             local destroy_args=()
             local i=1
+            local skip_next=false
             while [[ $i -le $# ]]; do
-                if [[ "${(P)i}" == "create-all" ]]; then
+                local arg="${(P)i}"
+                
+                # Skip if we're supposed to skip this argument (it was a value for a skipped flag)
+                if [[ "$skip_next" == "true" ]]; then
+                    skip_next=false
+                    i=$((i + 1))
+                    continue
+                fi
+                
+                # Replace create-all with delete
+                if [[ "$arg" == "create-all" ]]; then
                     destroy_args+=("delete")
+                # Skip flags that are not compatible with delete command
+                elif [[ "$arg" == "--tenant-id" || "$arg" == "--installation-resource-group-name" || "$arg" == "--dnszone-resource-group-name" || "$arg" == "--output-dir" || "$arg" == "--credentials-requests-dir" ]]; then
+                    # Skip this flag and its value
+                    skip_next=true
                 else
-                    destroy_args+=("${(P)i}")
+                    destroy_args+=("$arg")
                 fi
                 i=$((i + 1))
             done
+            
+            # Add --delete-oidc-resource-group flag for proper cleanup
+            destroy_args+=("--delete-oidc-resource-group")
             
             # Run destroy command
             echo "INFO: Running ccoctl azure destroy to clean up existing resources..."
