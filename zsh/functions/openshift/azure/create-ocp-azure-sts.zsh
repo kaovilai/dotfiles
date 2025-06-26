@@ -30,6 +30,13 @@ znap function create-ocp-azure-sts(){
         echo "  - SSH key must be added to the agent (ssh-add ~/.ssh/id_rsa)"
         echo "  - Pull secret must exist at ~/pull-secret.txt"
         echo "  - Azure CLI must be installed and logged in (az login)"
+        echo "  - Azure CLI must be set to the correct subscription"
+        echo ""
+        echo "Automatic service principal handling:"
+        echo "  - A service principal will be automatically created if needed (named: <username>-openshift-installer)"
+        echo "  - Credentials are saved to: ~/.azure/osServicePrincipal.json"
+        echo "  - Set AZURE_AUTH_LOCATION to use a different location"
+        echo "  - If the service principal already exists, credentials will be refreshed"
         echo ""
         echo "Directory:"
         echo "  Installation files will be created in: $OCP_MANIFESTS_DIR/$TODAY-azure-sts"
@@ -94,6 +101,70 @@ znap function create-ocp-azure-sts(){
         AZURE_REGION \
         AZURE_BASEDOMAIN \
         AZURE_RESOURCE_GROUP || return 1
+    
+    # Ensure Azure CLI is authenticated to avoid installer prompts
+    echo "INFO: Checking Azure CLI authentication status..."
+    if ! az account show &>/dev/null; then
+        echo "ERROR: Azure CLI is not authenticated. Please run 'az login' first."
+        return 1
+    fi
+    
+    # Verify we're using the correct subscription
+    local current_sub=$(az account show --query id -o tsv)
+    if [[ "$current_sub" != "$AZURE_SUBSCRIPTION_ID" ]]; then
+        echo "INFO: Switching to subscription $AZURE_SUBSCRIPTION_ID..."
+        az account set --subscription "$AZURE_SUBSCRIPTION_ID" || {
+            echo "ERROR: Failed to set Azure subscription. Please ensure you have access to subscription $AZURE_SUBSCRIPTION_ID"
+            return 1
+        }
+    fi
+    
+    # Export Azure credentials for the installer to avoid prompts
+    # The installer looks for these environment variables to skip interactive prompts
+    export AZURE_AUTH_LOCATION="${AZURE_AUTH_LOCATION:-$HOME/.azure/osServicePrincipal.json}"
+    
+    # Check if service principal credentials file exists
+    if [[ ! -f "$AZURE_AUTH_LOCATION" ]]; then
+        echo "INFO: Azure service principal credentials file not found at $AZURE_AUTH_LOCATION"
+        echo "INFO: Creating service principal to avoid authentication prompts..."
+        
+        # Get current Azure user to create a unique service principal name
+        local azure_user=$(az account show --query user.name -o tsv | cut -d@ -f1)
+        local sp_name="${azure_user}-openshift-installer"
+        
+        # Check if service principal already exists
+        local existing_sp=$(az ad sp list --filter "displayName eq '$sp_name'" --query "[0].appId" -o tsv 2>/dev/null)
+        
+        if [[ -n "$existing_sp" ]]; then
+            echo "INFO: Service principal '$sp_name' already exists (appId: $existing_sp)"
+            echo "INFO: Recreating credentials file..."
+            
+            # Reset the service principal credentials and save to file
+            az ad sp credential reset --id "$existing_sp" > "$AZURE_AUTH_LOCATION" 2>/dev/null || {
+                echo "ERROR: Failed to reset credentials for existing service principal"
+                echo "INFO: You may need to manually create the service principal"
+                return 1
+            }
+        else
+            echo "INFO: Creating new service principal '$sp_name'..."
+            
+            # Create service principal with Contributor role
+            az ad sp create-for-rbac \
+                --name "$sp_name" \
+                --role Contributor \
+                --scopes /subscriptions/$AZURE_SUBSCRIPTION_ID \
+                > "$AZURE_AUTH_LOCATION" 2>/dev/null || {
+                echo "ERROR: Failed to create service principal"
+                echo "INFO: You may need appropriate permissions to create service principals"
+                return 1
+            }
+        fi
+        
+        echo "INFO: Service principal credentials saved to $AZURE_AUTH_LOCATION"
+        echo "INFO: You may want to add 'export AZURE_AUTH_LOCATION=$AZURE_AUTH_LOCATION' to your shell profile"
+    else
+        echo "INFO: Using existing Azure service principal credentials from $AZURE_AUTH_LOCATION"
+    fi
     
     # Set AZURE_BASEDOMAIN_RESOURCE_GROUP to AZURE_RESOURCE_GROUP if not set
     if [[ -z "$AZURE_BASEDOMAIN_RESOURCE_GROUP" ]]; then
