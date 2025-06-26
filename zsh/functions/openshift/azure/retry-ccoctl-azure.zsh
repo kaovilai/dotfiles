@@ -74,36 +74,69 @@ retry_ccoctl_azure() {
                 echo "WARNING: Continuing with retry despite destroy failure"
             fi
             
-            # Extract storage account name and resource group from the arguments
+            # Extract storage account name and derive resource group from the arguments
             local storage_account=""
             local resource_group=""
+            local cluster_name=""
+            local oidc_resource_group_override=""
             local i=1
             while [[ $i -le $# ]]; do
                 local arg="${(P)i}"
                 if [[ "$arg" == "--storage-account-name" && $((i + 1)) -le $# ]]; then
                     i=$((i + 1))
                     storage_account="${(P)i}"
-                elif [[ "$arg" == "--installation-resource-group-name" && $((i + 1)) -le $# ]]; then
+                elif [[ "$arg" == "--name" && $((i + 1)) -le $# ]]; then
                     i=$((i + 1))
-                    # Storage account is created in the installation resource group
-                    resource_group="${(P)i}"
+                    cluster_name="${(P)i}"
+                elif [[ "$arg" == "--oidc-resource-group-name" && $((i + 1)) -le $# ]]; then
+                    i=$((i + 1))
+                    oidc_resource_group_override="${(P)i}"
                 fi
                 i=$((i + 1))
             done
             
+            # Determine the OIDC resource group name
+            # Note: The actual pattern seems to vary - could be <name>-oidc or <name>-wif-oidc
+            # Let's try to find the storage account in any resource group if the direct lookup fails
+            if [[ -n "$oidc_resource_group_override" ]]; then
+                resource_group="$oidc_resource_group_override"
+            elif [[ -n "$cluster_name" ]]; then
+                # CCO creates storage account in OIDC resource group: typically <name>-oidc
+                resource_group="${cluster_name}-oidc"
+            fi
+            
             # Use az CLI to ensure storage account is deleted
-            if [[ -n "$storage_account" && -n "$resource_group" ]]; then
+            if [[ -n "$storage_account" ]]; then
                 echo "INFO: Checking if storage account '$storage_account' still exists..."
-                echo "DEBUG: Command: az storage account show --name \"$storage_account\" --resource-group \"$resource_group\""
-                if az storage account show --name "$storage_account" --resource-group "$resource_group" &>/dev/null; then
-                    echo "INFO: Storage account still exists. Deleting with az CLI..."
+                
+                # First try with the derived resource group
+                if [[ -n "$resource_group" ]]; then
+                    echo "DEBUG: Command: az storage account show --name \"$storage_account\" --resource-group \"$resource_group\""
+                    if az storage account show --name "$storage_account" --resource-group "$resource_group" &>/dev/null; then
+                        echo "INFO: Found storage account in resource group '$resource_group'"
+                    else
+                        echo "INFO: Storage account not found in expected resource group '$resource_group'"
+                        # Try to find it in any resource group
+                        echo "INFO: Searching for storage account across all resource groups..."
+                        local found_rg=$(az storage account list --query "[?name=='$storage_account'].resourceGroup | [0]" -o tsv 2>/dev/null)
+                        if [[ -n "$found_rg" ]]; then
+                            echo "INFO: Found storage account in resource group '$found_rg'"
+                            resource_group="$found_rg"
+                        else
+                            echo "INFO: Storage account does not exist or is already deleted"
+                            resource_group=""
+                        fi
+                    fi
+                fi
+                
+                # Delete the storage account if we found it
+                if [[ -n "$resource_group" ]]; then
+                    echo "INFO: Deleting storage account '$storage_account' from resource group '$resource_group'..."
                     if az storage account delete --name "$storage_account" --resource-group "$resource_group" --yes &>/dev/null; then
                         echo "INFO: Successfully deleted storage account using az CLI"
                     else
                         echo "WARNING: Failed to delete storage account using az CLI"
                     fi
-                else
-                    echo "INFO: Storage account does not exist or is already deleted"
                 fi
             fi
             
