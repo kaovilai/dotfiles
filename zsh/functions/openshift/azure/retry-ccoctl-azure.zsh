@@ -140,9 +140,33 @@ retry_ccoctl_azure() {
                 fi
             fi
             
-            # Wait longer for Azure resources to be fully cleaned up
-            echo "INFO: Waiting 30 seconds for Azure resources to be fully cleaned up..."
-            sleep 30
+            # Wait for Azure resources to be fully cleaned up with exponential backoff
+            if [[ -n "$storage_account" ]]; then
+                echo "INFO: Waiting for storage account to be fully deleted..."
+                local wait_intervals=(2 4 8 16)  # Total max wait: 30 seconds
+                local deleted=false
+                
+                for interval in "${wait_intervals[@]}"; do
+                    echo "INFO: Checking if storage account is deleted (waiting ${interval}s)..."
+                    sleep $interval
+                    
+                    # Check if storage account still exists
+                    if ! az storage account list --query "[?name=='$storage_account'].name" -o tsv 2>/dev/null | grep -q "$storage_account"; then
+                        echo "INFO: Storage account has been deleted successfully"
+                        deleted=true
+                        break
+                    fi
+                    echo "INFO: Storage account still exists, continuing to wait..."
+                done
+                
+                if [[ "$deleted" == "false" ]]; then
+                    echo "WARNING: Storage account still exists after waiting, proceeding anyway..."
+                fi
+            else
+                # No storage account to check, just wait a bit for other resources
+                echo "INFO: Waiting 10 seconds for other Azure resources to be cleaned up..."
+                sleep 10
+            fi
             
             # Don't increment retry count here - give it another full attempt after cleanup
             echo "INFO: Retrying create command after cleanup (attempt $((retry_count + 1))/$max_retries)..."
