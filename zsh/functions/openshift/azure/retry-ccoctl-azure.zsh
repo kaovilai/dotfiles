@@ -13,6 +13,7 @@ retry_ccoctl_azure() {
     
     while [[ $retry_count -lt $max_retries ]]; do
         echo "INFO: Executing ccoctl azure command (attempt $((retry_count + 1))/$max_retries)..."
+        echo "DEBUG: Command: ccoctl $*"
         
         # Run the command and capture output
         cmd_output=$(ccoctl "$@" 2>&1)
@@ -61,21 +62,25 @@ retry_ccoctl_azure() {
             
             # Run destroy command
             echo "INFO: Running ccoctl azure destroy to clean up existing resources..."
-            ccoctl "${destroy_args[@]}" 2>&1 || echo "WARNING: Destroy command failed, but continuing with retry"
+            echo "DEBUG: Destroy command: ccoctl ${destroy_args[*]}"
+            local destroy_output=$(ccoctl "${destroy_args[@]}" 2>&1)
+            local destroy_exit_code=$?
             
-            # Wait a bit for resources to be cleaned up
-            echo "INFO: Waiting 10 seconds for resources to be cleaned up..."
-            sleep 10
-            
-            # Continue with retry logic
-            retry_count=$((retry_count + 1))
-            if [[ $retry_count -lt $max_retries ]]; then
-                echo "INFO: Retrying create command after cleanup..."
-                continue
+            if [[ $destroy_exit_code -eq 0 ]]; then
+                echo "INFO: Cleanup completed successfully"
             else
-                echo "ERROR: Maximum retries ($max_retries) reached after cleanup attempt."
-                return 1
+                echo "WARNING: Destroy command failed with exit code $destroy_exit_code"
+                echo "Destroy output: $destroy_output"
+                echo "WARNING: Continuing with retry despite destroy failure"
             fi
+            
+            # Wait longer for Azure resources to be fully cleaned up
+            echo "INFO: Waiting 30 seconds for Azure resources to be fully cleaned up..."
+            sleep 30
+            
+            # Don't increment retry count here - give it another full attempt after cleanup
+            echo "INFO: Retrying create command after cleanup (attempt $((retry_count + 1))/$max_retries)..."
+            continue
         fi
         
         # Check if error is retryable (Azure eventual consistency issues)
