@@ -139,8 +139,14 @@ znap function create-ocp-azure-sts(){
             echo "INFO: Service principal '$sp_name' already exists (appId: $existing_sp)"
             echo "INFO: Recreating credentials file..."
             
-            # Reset the service principal credentials and save to file
-            az ad sp credential reset --id "$existing_sp" > "$AZURE_AUTH_LOCATION" 2>/dev/null || {
+            # Reset the service principal credentials and transform to OpenShift installer format
+            az ad sp credential reset --id "$existing_sp" 2>/dev/null | \
+            jq --arg subId "$AZURE_SUBSCRIPTION_ID" '{
+                subscriptionId: $subId,
+                tenantId: .tenant,
+                clientId: .appId,
+                clientSecret: .password
+            }' > "$AZURE_AUTH_LOCATION" || {
                 echo "ERROR: Failed to reset credentials for existing service principal"
                 echo "INFO: You may need to manually create the service principal"
                 return 1
@@ -148,12 +154,17 @@ znap function create-ocp-azure-sts(){
         else
             echo "INFO: Creating new service principal '$sp_name'..."
             
-            # Create service principal with Contributor role
+            # Create service principal with Contributor role and transform to OpenShift installer format
             az ad sp create-for-rbac \
                 --name "$sp_name" \
                 --role Contributor \
-                --scopes /subscriptions/$AZURE_SUBSCRIPTION_ID \
-                > "$AZURE_AUTH_LOCATION" 2>/dev/null || {
+                --scopes /subscriptions/$AZURE_SUBSCRIPTION_ID 2>/dev/null | \
+            jq --arg subId "$AZURE_SUBSCRIPTION_ID" '{
+                subscriptionId: $subId,
+                tenantId: .tenant,
+                clientId: .appId,
+                clientSecret: .password
+            }' > "$AZURE_AUTH_LOCATION" || {
                 echo "ERROR: Failed to create service principal"
                 echo "INFO: You may need appropriate permissions to create service principals"
                 return 1
