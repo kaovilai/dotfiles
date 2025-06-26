@@ -112,7 +112,7 @@ znap function delete-ocp-azure-sts-dir() {
     # Extract date from directory name
     # Assuming format like 20250410-azure-sts
     # Also handle numbered suffixes like 20250410-azure-sts-1
-    if [[ $dir_basename =~ ([0-9]{8})-azure-sts(-[0-9]+)? ]]; then
+    if [[ $dir_basename =~ ^([0-9]{8})-azure-sts(-[0-9]+)?$ ]]; then
         local extracted_date=${BASH_REMATCH[1]}
         local extracted_suffix=${BASH_REMATCH[2]}
         
