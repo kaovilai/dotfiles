@@ -28,7 +28,7 @@ znap function create-ocp-azure-sts(){
         echo "  - AZURE_TENANT_ID environment variable must be set"
         echo "  - AZURE_REGION environment variable must be set"
         echo "  - AZURE_BASEDOMAIN environment variable must be set"
-        echo "  - AZURE_RESOURCE_GROUP environment variable must be set"
+        echo "  - AZURE_BASEDOMAIN_RESOURCE_GROUP environment variable must be set (contains DNS zone)"
         echo "  - SSH key must be added to the agent (ssh-add ~/.ssh/id_rsa)"
         echo "  - Pull secret must exist at ~/pull-secret.txt"
         echo "  - Azure CLI must be installed and logged in (az login)"
@@ -39,6 +39,11 @@ znap function create-ocp-azure-sts(){
         echo "  - Credentials are saved to: ~/.azure/osServicePrincipal.json"
         echo "  - Set AZURE_AUTH_LOCATION to use a different location"
         echo "  - If the service principal already exists, credentials will be refreshed"
+        echo ""
+        echo "Resource Groups:"
+        echo "  - A unique resource group will be created for each cluster: <cluster-name>-rg"
+        echo "  - The DNS zone resource group (AZURE_BASEDOMAIN_RESOURCE_GROUP) must exist and contain the DNS zone"
+        echo "  - Do NOT set AZURE_RESOURCE_GROUP - it will be auto-generated to avoid conflicts"
         echo ""
         echo "Directory:"
         echo "  Installation files will be created in: $OCP_MANIFESTS_DIR/$TODAY-azure-sts"
@@ -66,6 +71,10 @@ znap function create-ocp-azure-sts(){
     [[ -z "$unique_result" ]] && return 1
     local CLUSTER_NAME=$(echo "$unique_result" | grep "cluster_name:" | cut -d: -f2)
     local OCP_CREATE_DIR=$(echo "$unique_result" | grep "cluster_dir:" | cut -d: -f2)
+    
+    # Generate unique resource group name for the cluster
+    local CLUSTER_RESOURCE_GROUP="${CLUSTER_NAME}-rg"
+    echo "INFO: Cluster will be created in resource group: $CLUSTER_RESOURCE_GROUP"
     
     # Generate valid Azure storage account name (3-24 chars, lowercase letters and numbers only)
     local STORAGE_ACCOUNT_NAME=$(echo "$CLUSTER_NAME" | tr -d '-' | tr '[:upper:]' '[:lower:]' | cut -c1-24)
@@ -104,7 +113,7 @@ znap function create-ocp-azure-sts(){
         AZURE_TENANT_ID \
         AZURE_REGION \
         AZURE_BASEDOMAIN \
-        AZURE_RESOURCE_GROUP || return 1
+        AZURE_BASEDOMAIN_RESOURCE_GROUP || return 1
     
     # Ensure Azure CLI is authenticated to avoid installer prompts
     echo "INFO: Checking Azure CLI authentication status..."
@@ -292,11 +301,6 @@ znap function create-ocp-azure-sts(){
         echo "INFO: Using existing Azure service principal credentials from $AZURE_AUTH_LOCATION"
     fi
     
-    # Set AZURE_BASEDOMAIN_RESOURCE_GROUP to AZURE_RESOURCE_GROUP if not set
-    if [[ -z "$AZURE_BASEDOMAIN_RESOURCE_GROUP" ]]; then
-        echo "INFO: AZURE_BASEDOMAIN_RESOURCE_GROUP not set, defaulting to AZURE_RESOURCE_GROUP ($AZURE_RESOURCE_GROUP)"
-        AZURE_BASEDOMAIN_RESOURCE_GROUP=$AZURE_RESOURCE_GROUP
-    fi
     
     # Parse command line flags
     local force_new=false
@@ -378,7 +382,7 @@ networking:
 platform:
   azure:
     region: $AZURE_REGION
-    resourceGroupName: $AZURE_RESOURCE_GROUP
+    resourceGroupName: $CLUSTER_RESOURCE_GROUP
     baseDomainResourceGroupName: $AZURE_BASEDOMAIN_RESOURCE_GROUP
     networkResourceGroupName: $AZURE_NETWORK_RESOURCE_GROUP
     virtualNetwork: $AZURE_VIRTUAL_NETWORK
@@ -405,12 +409,13 @@ echo "extracting credential-requests" && oc adm release extract \
 
 # Create Azure service principal and credentials using ccoctl with retry logic
 echo "INFO: Running ccoctl azure create-all with retry logic for eventual consistency handling..."
+echo "INFO: Using installation resource group: $CLUSTER_RESOURCE_GROUP"
 retry_ccoctl_azure azure create-all \
 --name $CLUSTER_NAME \
 --subscription-id $AZURE_SUBSCRIPTION_ID \
 --tenant-id $AZURE_TENANT_ID \
 --region $AZURE_REGION \
---installation-resource-group-name $AZURE_RESOURCE_GROUP \
+--installation-resource-group-name $CLUSTER_RESOURCE_GROUP \
 --dnszone-resource-group-name $AZURE_BASEDOMAIN_RESOURCE_GROUP \
 --storage-account-name $STORAGE_ACCOUNT_NAME \
 --output-dir $OCP_CREATE_DIR \
@@ -427,7 +432,8 @@ retry_ccoctl_azure azure create-all \
     
     echo "azure-tenant-id: $AZURE_TENANT_ID"
     echo "azure-subscription-id: $AZURE_SUBSCRIPTION_ID"
-    echo "azure-resource-group: $AZURE_RESOURCE_GROUP"
+    echo "azure-resource-group: $CLUSTER_RESOURCE_GROUP"
+    echo "azure-basedomain-resource-group: $AZURE_BASEDOMAIN_RESOURCE_GROUP"
     
     # Cleanup
     unset OPENSHIFT_INSTALL_RELEASE_IMAGE_OVERRIDE
