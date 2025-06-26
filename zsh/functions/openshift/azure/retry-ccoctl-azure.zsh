@@ -25,6 +25,41 @@ retry_ccoctl_azure() {
             return 0
         fi
         
+        # Check if error is storage account already exists
+        if echo "$cmd_output" | grep -E "StorageAccountAlreadyExists" >/dev/null; then
+            echo "WARNING: Storage account already exists. Running destroy to clean up..."
+            
+            # Extract parameters from the original command to run destroy
+            local destroy_args=()
+            local i=1
+            while [[ $i -le $# ]]; do
+                if [[ "${(P)i}" == "create-all" ]]; then
+                    destroy_args+=("delete")
+                else
+                    destroy_args+=("${(P)i}")
+                fi
+                i=$((i + 1))
+            done
+            
+            # Run destroy command
+            echo "INFO: Running ccoctl azure destroy to clean up existing resources..."
+            ccoctl "${destroy_args[@]}" 2>&1 || echo "WARNING: Destroy command failed, but continuing with retry"
+            
+            # Wait a bit for resources to be cleaned up
+            echo "INFO: Waiting 10 seconds for resources to be cleaned up..."
+            sleep 10
+            
+            # Continue with retry logic
+            retry_count=$((retry_count + 1))
+            if [[ $retry_count -lt $max_retries ]]; then
+                echo "INFO: Retrying create command after cleanup..."
+                continue
+            else
+                echo "ERROR: Maximum retries ($max_retries) reached after cleanup attempt."
+                return 1
+            fi
+        fi
+        
         # Check if error is retryable (Azure eventual consistency issues)
         if echo "$cmd_output" | grep -E "(ParentResourceNotFound|404.*not found|does not exist)" >/dev/null; then
             echo "WARNING: Encountered Azure eventual consistency error:"
