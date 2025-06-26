@@ -135,3 +135,23 @@ alias pr-checkout-draft-head='gh pr checkout --draft --head'
 alias pr-checkout-draft-base='gh pr checkout --draft --base'
 alias pr-checkout-draft-target='gh pr checkout --draft --target'
 alias changelog-not-required='((gh pr view --json labels | jq .labels | grep -q "kind/changelog-not-required") || (gh pr comment --body "/kind changelog-not-required" && until (gh pr view --json labels | jq .labels | grep "kind/changelog-not-required"); do sleep 1; done && gh pr close $(gh pr view --json number | jq .number) && gh pr reopen $(gh pr view --json number | jq .number)))'
+
+# Set GitHub default repository to upstream
+gh-set-default-upstream() {
+  local upstream_url=$(git remote get-url upstream 2>/dev/null)
+  if [ -z "$upstream_url" ]; then
+    echo "Error: No upstream remote found"
+    return 1
+  fi
+  
+  # Extract owner/repo from the upstream URL
+  local repo_spec
+  if [[ "$upstream_url" =~ github\.com[:/]([^/]+/[^/]+)(\.git)?$ ]]; then
+    repo_spec="${BASH_REMATCH[1]}"
+    gh repo set-default "$repo_spec"
+  else
+    echo "Error: Could not parse upstream URL: $upstream_url"
+    return 1
+  fi
+}
+alias ghsdu='gh-set-default-upstream'
