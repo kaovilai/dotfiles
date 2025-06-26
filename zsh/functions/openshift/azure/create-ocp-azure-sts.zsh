@@ -173,29 +173,35 @@ znap function create-ocp-azure-sts(){
             echo "INFO: Service principal '$sp_name' already exists (appId: $existing_sp)"
             echo "INFO: Recreating credentials file..."
             
-            # Reset the service principal credentials in SDK format
-            echo "DEBUG: Running: az ad sp credential reset --id '$existing_sp' --sdk-auth"
-            local sp_creds=$(az ad sp credential reset --id "$existing_sp" --sdk-auth 2>&1)
+            # Reset the service principal credentials
+            echo "DEBUG: Running: az ad sp credential reset --id '$existing_sp'"
+            local sp_reset=$(az ad sp credential reset --id "$existing_sp" --query "{appId:appId, password:password, tenant:tenant}" -o json 2>&1)
             local az_exit_code=$?
             
             if [[ $az_exit_code -ne 0 ]]; then
                 echo "ERROR: az command failed with exit code $az_exit_code"
-                echo "DEBUG: Output: $sp_creds"
+                echo "DEBUG: Output: $sp_reset"
                 return 1
             fi
             
-            if [[ -z "$sp_creds" ]] || [[ "$sp_creds" == "null" ]]; then
+            if [[ -z "$sp_reset" ]] || [[ "$sp_reset" == "null" ]]; then
                 echo "ERROR: Failed to reset credentials for existing service principal"
                 echo "INFO: You may need to manually create the service principal"
                 return 1
             fi
             
-            # Validate JSON before writing
-            if ! echo "$sp_creds" | jq . >/dev/null 2>&1; then
-                echo "ERROR: Invalid JSON returned from credential reset"
-                echo "DEBUG: Response: $sp_creds"
-                return 1
-            fi
+            # Extract values from reset output
+            local app_id=$(echo "$sp_reset" | jq -r .appId)
+            local password=$(echo "$sp_reset" | jq -r .password)
+            local tenant=$(echo "$sp_reset" | jq -r .tenant)
+            
+            # Create SDK auth format JSON for OpenShift installer
+            local sp_creds=$(jq -n \
+                --arg clientId "$app_id" \
+                --arg clientSecret "$password" \
+                --arg subscriptionId "$AZURE_SUBSCRIPTION_ID" \
+                --arg tenantId "$tenant" \
+                '{clientId: $clientId, clientSecret: $clientSecret, subscriptionId: $subscriptionId, tenantId: $tenantId}')
             
             echo "DEBUG: Writing credentials to: $AZURE_AUTH_LOCATION"
             echo "$sp_creds" > "$AZURE_AUTH_LOCATION"
@@ -203,13 +209,13 @@ znap function create-ocp-azure-sts(){
         else
             echo "INFO: Creating new service principal '$sp_name'..."
             
-            # Create service principal with Contributor role in SDK format
-            echo "DEBUG: Running: az ad sp create-for-rbac --name '$sp_name' --role Contributor --scopes /subscriptions/$AZURE_SUBSCRIPTION_ID --sdk-auth"
+            # Create service principal with Contributor role using JSON auth format
+            echo "DEBUG: Running: az ad sp create-for-rbac --name '$sp_name' --role Contributor --scopes /subscriptions/$AZURE_SUBSCRIPTION_ID --json-auth"
             local sp_creds=$(az ad sp create-for-rbac \
                 --name "$sp_name" \
                 --role Contributor \
                 --scopes /subscriptions/$AZURE_SUBSCRIPTION_ID \
-                --sdk-auth 2>&1)
+                --json-auth 2>&1)
             local az_exit_code=$?
             
             if [[ $az_exit_code -ne 0 ]]; then
