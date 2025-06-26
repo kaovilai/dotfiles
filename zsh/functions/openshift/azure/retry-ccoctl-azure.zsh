@@ -94,6 +94,7 @@ retry_ccoctl_azure() {
             # Use az CLI to ensure storage account is deleted
             if [[ -n "$storage_account" && -n "$resource_group" ]]; then
                 echo "INFO: Checking if storage account '$storage_account' still exists..."
+                echo "DEBUG: Command: az storage account show --name \"$storage_account\" --resource-group \"$resource_group\""
                 if az storage account show --name "$storage_account" --resource-group "$resource_group" &>/dev/null; then
                     echo "INFO: Storage account still exists. Deleting with az CLI..."
                     if az storage account delete --name "$storage_account" --resource-group "$resource_group" --yes &>/dev/null; then
