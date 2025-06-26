@@ -39,6 +39,9 @@ znap function create-ocp-azure-sts(){
         echo "  - Credentials are saved to: ~/.azure/osServicePrincipal.json"
         echo "  - Set AZURE_AUTH_LOCATION to use a different location"
         echo "  - If the service principal already exists, credentials will be refreshed"
+        echo "  - Required roles (automatically assigned if missing):"
+        echo "    - Contributor: For managing Azure resources"
+        echo "    - User Access Administrator: For creating role assignments for managed identities"
         echo ""
         echo "Resource Groups:"
         echo "  - A unique resource group will be created for each cluster: <cluster-name>-rg"
@@ -300,6 +303,63 @@ znap function create-ocp-azure-sts(){
     else
         echo "INFO: Using existing Azure service principal credentials from $AZURE_AUTH_LOCATION"
     fi
+    
+    # Check and ensure service principal has required roles
+    echo "INFO: Checking service principal role assignments..."
+    local sp_client_id=$(jq -r .clientId "$AZURE_AUTH_LOCATION" 2>/dev/null)
+    if [[ -z "$sp_client_id" ]] || [[ "$sp_client_id" == "null" ]]; then
+        echo "ERROR: Failed to read service principal client ID from $AZURE_AUTH_LOCATION"
+        return 1
+    fi
+    
+    # Check current role assignments
+    local has_contributor=false
+    local has_user_access_admin=false
+    
+    echo "INFO: Checking roles for service principal: $sp_client_id"
+    local role_assignments=$(az role assignment list --assignee "$sp_client_id" --all --query "[].roleDefinitionName" -o tsv 2>/dev/null)
+    
+    while IFS= read -r role; do
+        case "$role" in
+            "Contributor")
+                has_contributor=true
+                ;;
+            "User Access Administrator")
+                has_user_access_admin=true
+                ;;
+        esac
+    done <<< "$role_assignments"
+    
+    # Assign missing roles
+    if [[ "$has_contributor" != "true" ]]; then
+        echo "INFO: Assigning Contributor role to service principal..."
+        az role assignment create \
+            --assignee "$sp_client_id" \
+            --role "Contributor" \
+            --scope "/subscriptions/$AZURE_SUBSCRIPTION_ID" || {
+            echo "ERROR: Failed to assign Contributor role"
+            return 1
+        }
+    else
+        echo "INFO: Service principal already has Contributor role"
+    fi
+    
+    if [[ "$has_user_access_admin" != "true" ]]; then
+        echo "INFO: Assigning User Access Administrator role to service principal..."
+        echo "INFO: This role is required for OpenShift to create role assignments for managed identities"
+        az role assignment create \
+            --assignee "$sp_client_id" \
+            --role "User Access Administrator" \
+            --scope "/subscriptions/$AZURE_SUBSCRIPTION_ID" || {
+            echo "ERROR: Failed to assign User Access Administrator role"
+            echo "ERROR: You may need to manually assign this role with appropriate permissions"
+            return 1
+        }
+    else
+        echo "INFO: Service principal already has User Access Administrator role"
+    fi
+    
+    echo "INFO: Service principal role verification complete"
     
     
     # Parse command line flags
