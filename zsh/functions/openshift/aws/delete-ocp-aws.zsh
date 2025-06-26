@@ -116,7 +116,7 @@ znap function delete-ocp-aws-dir() {
     # Extract date and architecture from directory name
     # Assuming format like 20250410-aws-arm64 or 20250410-aws-amd64
     # Also handle numbered suffixes like 20250410-aws-arm64-1
-    if [[ $dir_basename =~ ([0-9]{8})-aws-(arm64|amd64)(-[0-9]+)? ]]; then
+    if [[ $dir_basename =~ ^([0-9]{8})-aws-(arm64|amd64)(-[0-9]+)?$ ]]; then
         local extracted_date=${BASH_REMATCH[1]}
         local extracted_arch=${BASH_REMATCH[2]}
         local extracted_suffix=${BASH_REMATCH[3]}
