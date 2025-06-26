@@ -135,6 +135,9 @@ znap function create-ocp-azure-sts(){
         # Check if service principal already exists
         local existing_sp=$(az ad sp list --filter "displayName eq '$sp_name'" --query "[0].appId" -o tsv 2>/dev/null)
         
+        # Ensure the directory exists
+        mkdir -p "$(dirname "$AZURE_AUTH_LOCATION")"
+        
         if [[ -n "$existing_sp" ]]; then
             echo "INFO: Service principal '$sp_name' already exists (appId: $existing_sp)"
             echo "INFO: Recreating credentials file..."
