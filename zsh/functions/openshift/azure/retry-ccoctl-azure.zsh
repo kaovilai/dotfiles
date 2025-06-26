@@ -74,6 +74,38 @@ retry_ccoctl_azure() {
                 echo "WARNING: Continuing with retry despite destroy failure"
             fi
             
+            # Extract storage account name and resource group from the arguments
+            local storage_account=""
+            local resource_group=""
+            local i=1
+            while [[ $i -le $# ]]; do
+                local arg="${(P)i}"
+                if [[ "$arg" == "--storage-account-name" && $((i + 1)) -le $# ]]; then
+                    i=$((i + 1))
+                    storage_account="${(P)i}"
+                elif [[ "$arg" == "--installation-resource-group-name" && $((i + 1)) -le $# ]]; then
+                    i=$((i + 1))
+                    # Storage account is created in the installation resource group
+                    resource_group="${(P)i}"
+                fi
+                i=$((i + 1))
+            done
+            
+            # Use az CLI to ensure storage account is deleted
+            if [[ -n "$storage_account" && -n "$resource_group" ]]; then
+                echo "INFO: Checking if storage account '$storage_account' still exists..."
+                if az storage account show --name "$storage_account" --resource-group "$resource_group" &>/dev/null; then
+                    echo "INFO: Storage account still exists. Deleting with az CLI..."
+                    if az storage account delete --name "$storage_account" --resource-group "$resource_group" --yes &>/dev/null; then
+                        echo "INFO: Successfully deleted storage account using az CLI"
+                    else
+                        echo "WARNING: Failed to delete storage account using az CLI"
+                    fi
+                else
+                    echo "INFO: Storage account does not exist or is already deleted"
+                fi
+            fi
+            
             # Wait longer for Azure resources to be fully cleaned up
             echo "INFO: Waiting 30 seconds for Azure resources to be fully cleaned up..."
             sleep 30
