@@ -224,6 +224,16 @@ znap function check-for-existing-clusters() {
         fi
     done
     
+    # Check if force flag is set
+    if [[ "$FORCE_NEW_CLUSTER" == "true" ]]; then
+        echo ""
+        echo "Force flag detected. Automatically proceeding with creation alongside existing clusters."
+        echo "WARNING: This may cause resource conflicts or increased costs."
+        # Set a global flag that we're proceeding with existing clusters
+        export PROCEED_WITH_EXISTING_CLUSTERS="true"
+        return 0
+    fi
+    
     # Prompt for action
     echo ""
     echo "Options:"
