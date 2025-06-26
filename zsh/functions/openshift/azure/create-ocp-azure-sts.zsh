@@ -179,7 +179,8 @@ znap function create-ocp-azure-sts(){
             
             # Reset the service principal credentials
             echo "DEBUG: Running: az ad sp credential reset --id '$existing_sp'"
-            local sp_reset=$(az ad sp credential reset --id "$existing_sp" --query "{appId:appId, password:password, tenant:tenant}" -o json 2>&1)
+            # Capture only stdout, let stderr go to console for warnings
+            local sp_reset=$(az ad sp credential reset --id "$existing_sp" --query "{appId:appId, password:password, tenant:tenant}" -o json)
             local az_exit_code=$?
             
             if [[ $az_exit_code -ne 0 ]]; then
@@ -199,6 +200,20 @@ znap function create-ocp-azure-sts(){
             local password=$(echo "$sp_reset" | jq -r .password)
             local tenant=$(echo "$sp_reset" | jq -r .tenant)
             
+            # Debug: Check if values were extracted correctly
+            echo "DEBUG: Extracted values:"
+            echo "DEBUG: app_id='$app_id'"
+            echo "DEBUG: password='***' (hidden)"
+            echo "DEBUG: tenant='$tenant'"
+            echo "DEBUG: AZURE_SUBSCRIPTION_ID='$AZURE_SUBSCRIPTION_ID'"
+            
+            # Validate extracted values
+            if [[ -z "$app_id" ]] || [[ "$app_id" == "null" ]] || [[ -z "$password" ]] || [[ "$password" == "null" ]] || [[ -z "$tenant" ]] || [[ "$tenant" == "null" ]]; then
+                echo "ERROR: Failed to extract values from service principal reset output"
+                echo "DEBUG: Raw reset output: $sp_reset"
+                return 1
+            fi
+            
             # Create SDK auth format JSON for OpenShift installer
             local sp_creds=$(jq -n \
                 --arg clientId "$app_id" \
@@ -208,18 +223,31 @@ znap function create-ocp-azure-sts(){
                 '{clientId: $clientId, clientSecret: $clientSecret, subscriptionId: $subscriptionId, tenantId: $tenantId}')
             
             echo "DEBUG: Writing credentials to: $AZURE_AUTH_LOCATION"
+            echo "DEBUG: Credentials JSON (with hidden password):"
+            echo "$sp_creds" | jq '.clientSecret = "***"'
             echo "$sp_creds" > "$AZURE_AUTH_LOCATION"
             echo "DEBUG: File written successfully"
+            
+            # Verify the file was written correctly
+            if [[ -f "$AZURE_AUTH_LOCATION" ]]; then
+                local written_client_id=$(jq -r .clientId "$AZURE_AUTH_LOCATION" 2>/dev/null)
+                if [[ -z "$written_client_id" ]] || [[ "$written_client_id" == "null" ]]; then
+                    echo "ERROR: File was written but clientId is empty or null"
+                    echo "DEBUG: File contents:"
+                    jq '.clientSecret = "***"' "$AZURE_AUTH_LOCATION" 2>/dev/null || cat "$AZURE_AUTH_LOCATION"
+                fi
+            fi
         else
             echo "INFO: Creating new service principal '$sp_name'..."
             
             # Create service principal with Contributor role using JSON auth format
             echo "DEBUG: Running: az ad sp create-for-rbac --name '$sp_name' --role Contributor --scopes /subscriptions/$AZURE_SUBSCRIPTION_ID --json-auth"
+            # Capture only stdout, let stderr go to console for warnings
             local sp_creds=$(az ad sp create-for-rbac \
                 --name "$sp_name" \
                 --role Contributor \
                 --scopes /subscriptions/$AZURE_SUBSCRIPTION_ID \
-                --json-auth 2>&1)
+                --json-auth)
             local az_exit_code=$?
             
             if [[ $az_exit_code -ne 0 ]]; then
@@ -242,8 +270,20 @@ znap function create-ocp-azure-sts(){
             fi
             
             echo "DEBUG: Writing credentials to: $AZURE_AUTH_LOCATION"
+            echo "DEBUG: Credentials JSON (with hidden password):"
+            echo "$sp_creds" | jq '.clientSecret = "***"'
             echo "$sp_creds" > "$AZURE_AUTH_LOCATION"
             echo "DEBUG: File written successfully"
+            
+            # Verify the file was written correctly
+            if [[ -f "$AZURE_AUTH_LOCATION" ]]; then
+                local written_client_id=$(jq -r .clientId "$AZURE_AUTH_LOCATION" 2>/dev/null)
+                if [[ -z "$written_client_id" ]] || [[ "$written_client_id" == "null" ]]; then
+                    echo "ERROR: File was written but clientId is empty or null"
+                    echo "DEBUG: File contents:"
+                    jq '.clientSecret = "***"' "$AZURE_AUTH_LOCATION" 2>/dev/null || cat "$AZURE_AUTH_LOCATION"
+                fi
+            fi
         fi
         
         echo "INFO: Service principal credentials saved to $AZURE_AUTH_LOCATION"

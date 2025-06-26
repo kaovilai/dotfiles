@@ -1,11 +1,19 @@
 # Retry wrapper for ccoctl azure commands to handle eventual consistency issues
 # This addresses the Azure equivalent of OCPBUGS-44933 (which only fixed GCP)
+# Also handles role assignment timeouts that occur due to replication delays
 
 retry_ccoctl_azure() {
     local max_retries=5
     local retry_count=0
     local wait_time=5
     local exponential_factor=2
+    
+    # Check if this is likely to be a role assignment error and increase retries
+    if [[ "$*" =~ "create-all" ]]; then
+        # Role assignment errors typically need more retries
+        max_retries=10
+        echo "INFO: Using extended retry count ($max_retries) for create-all operation"
+    fi
     
     # Execute the command and capture both stdout and stderr
     local cmd_output
@@ -173,10 +181,17 @@ retry_ccoctl_azure() {
             continue
         fi
         
-        # Check if error is retryable (Azure eventual consistency issues)
-        if echo "$cmd_output" | grep -E "(ParentResourceNotFound|404.*not found|does not exist)" >/dev/null; then
-            echo "WARNING: Encountered Azure eventual consistency error:"
-            echo "$cmd_output" | grep -E "(ParentResourceNotFound|404.*not found|does not exist)" | head -5
+        # Check if error is retryable (Azure eventual consistency issues or role assignment timeouts)
+        if echo "$cmd_output" | grep -E "(ParentResourceNotFound|404.*not found|does not exist|please retry)" >/dev/null; then
+            echo "WARNING: Encountered Azure eventual consistency error or timeout:"
+            echo "$cmd_output" | grep -E "(ParentResourceNotFound|404.*not found|does not exist|please retry)" | head -5
+            
+            # Special handling for role assignment timeout errors
+            if echo "$cmd_output" | grep -q "please retry"; then
+                echo "INFO: Detected role assignment timeout error - this typically requires longer wait times"
+                # Use a fixed 10-second wait for role assignment errors (matching cloud-credential-operator behavior)
+                wait_time=10
+            fi
             
             retry_count=$((retry_count + 1))
             
@@ -184,12 +199,14 @@ retry_ccoctl_azure() {
                 echo "INFO: Waiting ${wait_time}s before retry $((retry_count + 1))/$max_retries..."
                 sleep $wait_time
                 
-                # Exponential backoff
-                wait_time=$((wait_time * exponential_factor))
-                
-                # Cap maximum wait time at 60 seconds
-                if [[ $wait_time -gt 60 ]]; then
-                    wait_time=60
+                # Exponential backoff (skip for role assignment errors which use fixed 10s)
+                if ! echo "$cmd_output" | grep -q "please retry"; then
+                    wait_time=$((wait_time * exponential_factor))
+                    
+                    # Cap maximum wait time at 60 seconds
+                    if [[ $wait_time -gt 60 ]]; then
+                        wait_time=60
+                    fi
                 fi
             else
                 echo "ERROR: Maximum retries ($max_retries) reached. Command failed."
