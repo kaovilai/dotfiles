@@ -49,12 +49,14 @@ znap function delete-ocp-azure-sts(){
         echo "Destroying Azure bootstrap in legacy directory: $EMPTY_TODAY_DIR"
         $OPENSHIFT_INSTALL destroy bootstrap --dir $EMPTY_TODAY_DIR || echo "no existing bootstrap in legacy directory"
         
+        # Generate storage account name same way as create function
+        local LEGACY_STORAGE_ACCOUNT_NAME=$(echo "$LEGACY_CLUSTER_NAME" | tr -d '-' | tr '[:upper:]' '[:lower:]' | cut -c1-24)
         (ccoctl azure delete \
         --name $LEGACY_CLUSTER_NAME \
         --subscription-id $AZURE_SUBSCRIPTION_ID \
-        --tenant-id $AZURE_TENANT_ID \
-        --resource-group $AZURE_RESOURCE_GROUP \
-        --credentials-requests-dir $EMPTY_TODAY_DIR/credentials-requests && echo "cleaned up legacy ccoctl azure resources") || true
+        --region $AZURE_REGION \
+        --storage-account-name $LEGACY_STORAGE_ACCOUNT_NAME \
+        --delete-oidc-resource-group && echo "cleaned up legacy ccoctl azure resources") || true
         
         ((rm -r $EMPTY_TODAY_DIR && echo "removed legacy create dir") || (true && echo "no legacy install dir")) || true
         
@@ -67,12 +69,14 @@ echo "Destroying Azure cluster in directory: $OCP_CREATE_DIR"
 $OPENSHIFT_INSTALL destroy cluster --dir $OCP_CREATE_DIR || echo "no existing cluster"
 echo "Destroying Azure bootstrap in directory: $OCP_CREATE_DIR"
 $OPENSHIFT_INSTALL destroy bootstrap --dir $OCP_CREATE_DIR || echo "no existing bootstrap"
+    # Generate storage account name same way as create function
+    local STORAGE_ACCOUNT_NAME=$(echo "$CLUSTER_NAME" | tr -d '-' | tr '[:upper:]' '[:lower:]' | cut -c1-24)
     (ccoctl azure delete \
     --name $CLUSTER_NAME \
     --subscription-id $AZURE_SUBSCRIPTION_ID \
-    --tenant-id $AZURE_TENANT_ID \
-    --resource-group $AZURE_RESOURCE_GROUP \
-    --credentials-requests-dir $OCP_CREATE_DIR/credentials-requests && echo "cleaned up ccoctl azure resources") || true
+    --region $AZURE_REGION \
+    --storage-account-name $STORAGE_ACCOUNT_NAME \
+    --delete-oidc-resource-group && echo "cleaned up ccoctl azure resources") || true
     ((rm -r $OCP_CREATE_DIR && echo "removed existing create dir") || (true && echo "no existing install dir")) || return 1
 }
 
