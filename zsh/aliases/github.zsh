@@ -155,3 +155,4 @@ gh-set-default-upstream() {
   fi
 }
 alias ghsdu='gh-set-default-upstream'
+alias gh-set-upstream-default='gh-set-default-upstream'
