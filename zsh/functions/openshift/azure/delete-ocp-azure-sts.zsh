@@ -131,23 +131,22 @@ znap function delete-ocp-azure-sts-dir() {
         
         # If we have a numbered suffix, adjust the directory and cluster name
         if [[ -n "$extracted_suffix" ]]; then
-            # Override the directory path to include the suffix
-            export OCP_CREATE_DIR="$OCP_MANIFESTS_DIR/$extracted_date-azure-sts$extracted_suffix"
-            # Override the cluster name to include the suffix
-            export CLUSTER_NAME="tkaovila-$extracted_date-sts$extracted_suffix"
-            echo "Using directory path: $OCP_CREATE_DIR"
-            echo "Using cluster name: $CLUSTER_NAME"
+            # Use local variables to avoid polluting the global environment
+            local ocp_create_dir="$OCP_MANIFESTS_DIR/$extracted_date-azure-sts$extracted_suffix"
+            local cluster_name="tkaovila-$extracted_date-sts$extracted_suffix"
+            echo "Using directory path: $ocp_create_dir"
+            echo "Using cluster name: $cluster_name"
         else
-            # Explicitly set the directory path and cluster name for clarity
-            export OCP_CREATE_DIR="$OCP_MANIFESTS_DIR/$extracted_date-azure-sts"
-            export CLUSTER_NAME="tkaovila-$extracted_date-sts"
-            echo "Using directory path: $OCP_CREATE_DIR"
-            echo "Using cluster name: $CLUSTER_NAME"
+            # Use local variables to avoid polluting the global environment
+            local ocp_create_dir="$OCP_MANIFESTS_DIR/$extracted_date-azure-sts"
+            local cluster_name="tkaovila-$extracted_date-sts"
+            echo "Using directory path: $ocp_create_dir"
+            echo "Using cluster name: $cluster_name"
         fi
         
-        # Call the delete function
+        # Call the delete function with explicit parameters
         echo "Calling delete-ocp-azure-sts"
-        delete-ocp-azure-sts "$CLUSTER_NAME"
+        OCP_CREATE_DIR="$ocp_create_dir" CLUSTER_NAME="$cluster_name" delete-ocp-azure-sts "$cluster_name"
         
         # Restore original TODAY
         TODAY=$original_today
@@ -161,12 +160,14 @@ znap function delete-ocp-azure-sts-dir() {
         local original_today=$TODAY
         TODAY=$fallback_date
         
-        echo "Using fallback directory path: $OCP_MANIFESTS_DIR/$fallback_date-azure-sts"
-        echo "Using fallback cluster name: tkaovila-$fallback_date-sts"
+        local fallback_dir="$OCP_MANIFESTS_DIR/$fallback_date-azure-sts"
+        local fallback_cluster="tkaovila-$fallback_date-sts"
+        echo "Using fallback directory path: $fallback_dir"
+        echo "Using fallback cluster name: $fallback_cluster"
         
-        # Call the delete function with explicit cluster name
+        # Call the delete function with explicit cluster name and local variables
         echo "Calling delete-ocp-azure-sts with fallback values"
-        delete-ocp-azure-sts "tkaovila-$fallback_date-sts"
+        OCP_CREATE_DIR="$fallback_dir" CLUSTER_NAME="$fallback_cluster" delete-ocp-azure-sts "$fallback_cluster"
         
         # Restore original TODAY
         TODAY=$original_today
