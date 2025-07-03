@@ -499,3 +499,124 @@ retry_ccoctl_azure azure create-all \
     unset OPENSHIFT_INSTALL_RELEASE_IMAGE_OVERRIDE
     [[ -n "$PROCEED_WITH_EXISTING_CLUSTERS" ]] && unset PROCEED_WITH_EXISTING_CLUSTERS
 }
+
+# Function to create Velero identity for current Azure OpenShift cluster
+# run this after creation above is successful to get vars for velero install for oadp with `make deploy-olm-stsflow-azure`
+create-velero-identity-for-azure-cluster() {
+    # Get cluster API URL
+    local API_URL=$(oc whoami --show-server)
+    
+    # Extract cluster name from API URL
+    # Format: https://api.cluster-name.basedomain:6443
+    local CLUSTER_NAME=$(echo "$API_URL" | sed 's|https://api\.||' | sed 's|\..*||')
+    
+    if [[ -z "$CLUSTER_NAME" ]]; then
+        echo "ERROR: Could not determine cluster name from API URL: $API_URL"
+        return 1
+    fi
+    
+    echo "Creating Velero identity for cluster: $CLUSTER_NAME"
+    
+    # Check if this is an Azure cluster by looking for the OIDC resource group
+    local AZURE_RESOURCE_GROUP="${CLUSTER_NAME}-oidc"
+    if ! az group show --name "$AZURE_RESOURCE_GROUP" &>/dev/null; then
+        echo "ERROR: Resource group $AZURE_RESOURCE_GROUP not found. Is this an Azure STS cluster?"
+        return 1
+    fi
+    
+    local IDENTITY_NAME="velero"
+    
+    # Get subscription and tenant from current az login
+    local AZURE_SUBSCRIPTION_ID=$(az account show --query id -o tsv)
+    local AZURE_TENANT_ID=$(az account show --query tenantId -o tsv)
+    
+    echo "Using subscription: $AZURE_SUBSCRIPTION_ID"
+    echo "Using tenant: $AZURE_TENANT_ID"
+    
+    # Check if identity already exists
+    local IDENTITY_EXISTS=false
+    if az identity show -g "$AZURE_RESOURCE_GROUP" -n "$IDENTITY_NAME" &>/dev/null; then
+        echo "Identity $IDENTITY_NAME already exists in $AZURE_RESOURCE_GROUP"
+        IDENTITY_EXISTS=true
+        local IDENTITY_CLIENT_ID=$(az identity show -g "$AZURE_RESOURCE_GROUP" -n "$IDENTITY_NAME" --query clientId -otsv)
+        local IDENTITY_PRINCIPAL_ID=$(az identity show -g "$AZURE_RESOURCE_GROUP" -n "$IDENTITY_NAME" --query principalId -otsv)
+    else
+        echo "Creating managed identity..."
+        az identity create \
+            --subscription "$AZURE_SUBSCRIPTION_ID" \
+            --resource-group "$AZURE_RESOURCE_GROUP" \
+            --name "$IDENTITY_NAME"
+        
+        local IDENTITY_CLIENT_ID=$(az identity show -g "$AZURE_RESOURCE_GROUP" -n "$IDENTITY_NAME" --query clientId -otsv)
+        local IDENTITY_PRINCIPAL_ID=$(az identity show -g "$AZURE_RESOURCE_GROUP" -n "$IDENTITY_NAME" --query principalId -otsv)
+        
+        # Wait for identity to propagate in Azure AD
+        echo "Waiting for identity to propagate in Azure AD..."
+        sleep 30
+    fi
+    
+    # Check and assign roles if not already assigned
+    echo "Checking role assignments..."
+    
+    # Check for Contributor role
+    if ! az role assignment list --assignee "$IDENTITY_PRINCIPAL_ID" --role "Contributor" --scope "/subscriptions/$AZURE_SUBSCRIPTION_ID" --query "[0]" &>/dev/null; then
+        echo "Assigning Contributor role..."
+        az role assignment create --role "Contributor" --assignee "$IDENTITY_PRINCIPAL_ID" --scope "/subscriptions/$AZURE_SUBSCRIPTION_ID"
+    else
+        echo "Contributor role already assigned"
+    fi
+    
+    # Check for Storage Blob Data Contributor role
+    if ! az role assignment list --assignee "$IDENTITY_PRINCIPAL_ID" --role "Storage Blob Data Contributor" --scope "/subscriptions/$AZURE_SUBSCRIPTION_ID" --query "[0]" &>/dev/null; then
+        echo "Assigning Storage Blob Data Contributor role..."
+        az role assignment create --assignee "$IDENTITY_PRINCIPAL_ID" --role "Storage Blob Data Contributor" --scope "/subscriptions/$AZURE_SUBSCRIPTION_ID"
+    else
+        echo "Storage Blob Data Contributor role already assigned"
+    fi
+    
+    # Get OIDC issuer URL from the cluster
+    echo "Getting cluster OIDC issuer URL..."
+    local SERVICE_ACCOUNT_ISSUER=$(oc get authentication.config.openshift.io cluster -o json | jq -r .spec.serviceAccountIssuer)
+    
+    if [[ -z "$SERVICE_ACCOUNT_ISSUER" || "$SERVICE_ACCOUNT_ISSUER" == "null" ]]; then
+        echo "ERROR: Could not get OIDC issuer URL from cluster"
+        return 1
+    fi
+    
+    # Check if federated credential already exists
+    local FED_CRED_NAME="kubernetes-federated-credential"
+    if ! az identity federated-credential show \
+        --name "$FED_CRED_NAME" \
+        --identity-name "$IDENTITY_NAME" \
+        --resource-group "$AZURE_RESOURCE_GROUP" &>/dev/null; then
+        
+        echo "Creating federated identity credential..."
+        az identity federated-credential create \
+            --name "$FED_CRED_NAME" \
+            --identity-name "$IDENTITY_NAME" \
+            --resource-group "$AZURE_RESOURCE_GROUP" \
+            --issuer "$SERVICE_ACCOUNT_ISSUER" \
+            --subject "system:serviceaccount:velero:velero" \
+            --audiences "openshift"
+    else
+        echo "Federated credential $FED_CRED_NAME already exists"
+    fi
+    
+    echo ""
+    echo "Velero identity setup complete!"
+    echo ""
+    echo "Export these variables for the OADP Makefile:"
+    echo "export AZURE_CLIENT_ID=$IDENTITY_CLIENT_ID"
+    echo "export AZURE_TENANT_ID=$AZURE_TENANT_ID"
+    echo "export AZURE_SUBSCRIPTION_ID=$AZURE_SUBSCRIPTION_ID"
+    echo ""
+    echo "Or run the OADP deployment directly with:"
+    echo "make deploy-olm-stsflow-azure AZURE_CLIENT_ID=$IDENTITY_CLIENT_ID AZURE_TENANT_ID=$AZURE_TENANT_ID AZURE_SUBSCRIPTION_ID=$AZURE_SUBSCRIPTION_ID"
+    echo ""
+    echo "To create Velero credentials file for the instructions:"
+    echo "cat << EOF > ./credentials-velero"
+    echo "AZURE_SUBSCRIPTION_ID=${AZURE_SUBSCRIPTION_ID}"
+    echo "AZURE_RESOURCE_GROUP=${AZURE_RESOURCE_GROUP%-oidc}"
+    echo "AZURE_CLOUD_NAME=AzurePublicCloud"
+    echo "EOF"
+}
