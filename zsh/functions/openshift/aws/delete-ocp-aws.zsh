@@ -143,27 +143,26 @@ znap function delete-ocp-aws-dir() {
         
         # If we have a numbered suffix, adjust the directory and cluster name
         if [[ -n "$extracted_suffix" ]]; then
-            # Override the directory path to include the suffix
-            export OCP_CREATE_DIR="$OCP_MANIFESTS_DIR/$extracted_date-aws-$extracted_arch$extracted_suffix"
-            # Override the cluster name to include the suffix
-            export CLUSTER_NAME="tkaovila-$extracted_date-$extracted_arch$extracted_suffix"
-            echo "Using directory path: $OCP_CREATE_DIR"
-            echo "Using cluster name: $CLUSTER_NAME"
+            # Use local variables to avoid polluting the global environment
+            local ocp_create_dir="$OCP_MANIFESTS_DIR/$extracted_date-aws-$extracted_arch$extracted_suffix"
+            local cluster_name="tkaovila-$extracted_date-$extracted_arch$extracted_suffix"
+            echo "Using directory path: $ocp_create_dir"
+            echo "Using cluster name: $cluster_name"
         else
-            # Explicitly set the directory path and cluster name for clarity
-            export OCP_CREATE_DIR="$OCP_MANIFESTS_DIR/$extracted_date-aws-$extracted_arch"
-            export CLUSTER_NAME="tkaovila-$extracted_date-$extracted_arch"
-            echo "Using directory path: $OCP_CREATE_DIR"
-            echo "Using cluster name: $CLUSTER_NAME"
+            # Use local variables to avoid polluting the global environment
+            local ocp_create_dir="$OCP_MANIFESTS_DIR/$extracted_date-aws-$extracted_arch"
+            local cluster_name="tkaovila-$extracted_date-$extracted_arch"
+            echo "Using directory path: $ocp_create_dir"
+            echo "Using cluster name: $cluster_name"
         fi
         
         # Call the appropriate delete function based on the architecture
         if [[ "$extracted_arch" == "arm64" ]]; then
             echo "Calling delete-ocp-aws-arm64"
-            delete-ocp-aws-arm64 "$CLUSTER_NAME"
+            OCP_CREATE_DIR="$ocp_create_dir" CLUSTER_NAME="$cluster_name" delete-ocp-aws-arm64 "$cluster_name"
         elif [[ "$extracted_arch" == "amd64" ]]; then
             echo "Calling delete-ocp-aws-amd64"
-            delete-ocp-aws-amd64 "$CLUSTER_NAME"
+            OCP_CREATE_DIR="$ocp_create_dir" CLUSTER_NAME="$cluster_name" delete-ocp-aws-amd64 "$cluster_name"
         else
             echo "ERROR: Unknown architecture: $extracted_arch"
             # Restore original TODAY
@@ -184,12 +183,14 @@ znap function delete-ocp-aws-dir() {
         local original_today=$TODAY
         TODAY=$fallback_date
         
-        echo "Using fallback directory path: $OCP_MANIFESTS_DIR/$fallback_date-aws-$fallback_arch"
-        echo "Using fallback cluster name: tkaovila-$fallback_date-$fallback_arch"
+        local fallback_dir="$OCP_MANIFESTS_DIR/$fallback_date-aws-$fallback_arch"
+        local fallback_cluster="tkaovila-$fallback_date-$fallback_arch"
+        echo "Using fallback directory path: $fallback_dir"
+        echo "Using fallback cluster name: $fallback_cluster"
         
-        # Call the delete function with explicit cluster name
+        # Call the delete function with explicit cluster name and local variables
         echo "Calling delete-ocp-aws-arm64 with fallback values"
-        delete-ocp-aws-arm64 "tkaovila-$fallback_date-$fallback_arch"
+        OCP_CREATE_DIR="$fallback_dir" CLUSTER_NAME="$fallback_cluster" delete-ocp-aws-arm64 "$fallback_cluster"
         
         # Restore original TODAY
         TODAY=$original_today
