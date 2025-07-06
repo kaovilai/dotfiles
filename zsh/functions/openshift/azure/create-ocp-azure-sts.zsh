@@ -620,3 +620,140 @@ create-velero-identity-for-azure-cluster() {
     echo "AZURE_CLOUD_NAME=AzurePublicCloud"
     echo "EOF"
 }
+
+# Function to create Azure storage container for Velero backups
+create-velero-container-for-azure-cluster() {
+    # Get cluster API URL
+    local API_URL=$(oc whoami --show-server)
+    
+    # Extract cluster name from API URL
+    # Format: https://api.cluster-name.basedomain:6443
+    local CLUSTER_NAME=$(echo "$API_URL" | sed 's|https://api\.||' | sed 's|\..*||')
+    
+    if [[ -z "$CLUSTER_NAME" ]]; then
+        echo "ERROR: Could not determine cluster name from API URL: $API_URL"
+        return 1
+    fi
+    
+    echo "Creating Velero storage container for cluster: $CLUSTER_NAME"
+    
+    # Check if this is an Azure cluster by looking for the cluster resource group
+    local AZURE_RESOURCE_GROUP="${CLUSTER_NAME}-rg"
+    if ! az group show --name "$AZURE_RESOURCE_GROUP" &>/dev/null; then
+        echo "ERROR: Resource group $AZURE_RESOURCE_GROUP not found. Is this an Azure STS cluster?"
+        return 1
+    fi
+    
+    # Get subscription from current az login
+    local AZURE_SUBSCRIPTION_ID=$(az account show --query id -o tsv)
+    
+    echo "Using subscription: $AZURE_SUBSCRIPTION_ID"
+    echo "Using resource group: $AZURE_RESOURCE_GROUP"
+    
+    # Storage account name - use same pattern as cluster creation
+    local STORAGE_ACCOUNT_NAME=$(echo "$CLUSTER_NAME" | tr -d '-' | tr '[:upper:]' '[:lower:]' | cut -c1-24)
+    local CONTAINER_NAME="velero"
+    
+    # Check if storage account exists anywhere in the subscription
+    local EXISTING_RG=$(az storage account show --name "$STORAGE_ACCOUNT_NAME" --query resourceGroup -o tsv 2>/dev/null)
+    
+    if [[ -n "$EXISTING_RG" ]]; then
+        echo "Storage account $STORAGE_ACCOUNT_NAME already exists in resource group: $EXISTING_RG"
+        
+        # Check if it's in the expected resource group
+        if [[ "$EXISTING_RG" != "$AZURE_RESOURCE_GROUP" ]]; then
+            echo "WARNING: Storage account exists in a different resource group than expected"
+            echo "Expected: $AZURE_RESOURCE_GROUP"
+            echo "Actual: $EXISTING_RG"
+            echo "Using the existing storage account from resource group: $EXISTING_RG"
+            AZURE_RESOURCE_GROUP="$EXISTING_RG"
+        fi
+    else
+        echo "Creating storage account: $STORAGE_ACCOUNT_NAME in resource group: $AZURE_RESOURCE_GROUP"
+        if ! az storage account create \
+            --name "$STORAGE_ACCOUNT_NAME" \
+            --resource-group "$AZURE_RESOURCE_GROUP" \
+            --sku Standard_LRS \
+            --encryption-services blob \
+            --https-only true \
+            --kind StorageV2 \
+            --access-tier Hot; then
+            echo "ERROR: Failed to create storage account"
+            return 1
+        fi
+        
+        # Wait for storage account to be ready
+        echo "Waiting for storage account to be ready..."
+        sleep 10
+    fi
+    
+    # Get storage account key (keys are automatically created with the storage account)
+    echo "Retrieving storage account access key..."
+    local STORAGE_ACCOUNT_KEY=$(az storage account keys list \
+        --account-name "$STORAGE_ACCOUNT_NAME" \
+        --resource-group "$AZURE_RESOURCE_GROUP" \
+        --query "[0].value" -o tsv 2>/dev/null)
+    
+    if [[ -z "$STORAGE_ACCOUNT_KEY" ]]; then
+        echo "ERROR: Could not retrieve storage account key"
+        echo "This might be due to insufficient permissions or the storage account not being fully provisioned"
+        echo "Attempting to regenerate key..."
+        
+        # Try to regenerate the key
+        if az storage account keys renew \
+            --account-name "$STORAGE_ACCOUNT_NAME" \
+            --resource-group "$AZURE_RESOURCE_GROUP" \
+            --key primary &>/dev/null; then
+            
+            # Try to get the key again
+            STORAGE_ACCOUNT_KEY=$(az storage account keys list \
+                --account-name "$STORAGE_ACCOUNT_NAME" \
+                --resource-group "$AZURE_RESOURCE_GROUP" \
+                --query "[0].value" -o tsv 2>/dev/null)
+        fi
+        
+        if [[ -z "$STORAGE_ACCOUNT_KEY" ]]; then
+            echo "ERROR: Still unable to retrieve storage account key after regeneration attempt"
+            return 1
+        fi
+    fi
+    
+    # Check if container exists
+    if az storage container show \
+        --name "$CONTAINER_NAME" \
+        --account-name "$STORAGE_ACCOUNT_NAME" \
+        --account-key "$STORAGE_ACCOUNT_KEY" &>/dev/null; then
+        echo "Container $CONTAINER_NAME already exists in storage account $STORAGE_ACCOUNT_NAME"
+    else
+        echo "Creating container: $CONTAINER_NAME"
+        az storage container create \
+            --name "$CONTAINER_NAME" \
+            --account-name "$STORAGE_ACCOUNT_NAME" \
+            --account-key "$STORAGE_ACCOUNT_KEY" \
+            --public-access off
+    fi
+    
+    echo ""
+    echo "Velero storage container setup complete!"
+    echo ""
+    echo "Storage configuration:"
+    echo "  Storage Account: $STORAGE_ACCOUNT_NAME"
+    echo "  Container: $CONTAINER_NAME"
+    echo "  Resource Group: $AZURE_RESOURCE_GROUP"
+    echo ""
+    echo "To configure Velero with this storage:"
+    echo "1. Ensure you have run 'create-velero-identity-for-azure-cluster' first"
+    echo "2. Use the following in your BackupStorageLocation:"
+    echo "   storageAccount: $STORAGE_ACCOUNT_NAME"
+    echo "   resourceGroup: $AZURE_RESOURCE_GROUP"
+    echo "   container: $CONTAINER_NAME"
+    echo ""
+    echo "To retrieve the storage account key later:"
+    echo "  az storage account keys list \\"
+    echo "    --account-name $STORAGE_ACCOUNT_NAME \\"
+    echo "    --resource-group $AZURE_RESOURCE_GROUP \\"
+    echo "    --query \"[0].value\" -o tsv"
+    echo ""
+    echo "To show the current key:"
+    echo "  export AZURE_STORAGE_ACCOUNT_KEY=\"\$(az storage account keys list --account-name $STORAGE_ACCOUNT_NAME --resource-group $AZURE_RESOURCE_GROUP --query '[0].value' -o tsv)\""
+}
