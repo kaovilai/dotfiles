@@ -926,12 +926,12 @@ create-velero-dpa-for-azure-cluster() {
     
     # Check if velero identity exists and get client ID
     local IDENTITY_NAME="velero"
-    local OIDC_RG="${CLUSTER_NAME}-oidc"
+    local CLUSTER_RESOURCE_GROUP="${CLUSTER_NAME}-rg"
     
-    local IDENTITY_CLIENT_ID=$(az identity show -g "$OIDC_RG" -n "$IDENTITY_NAME" --query clientId -o tsv 2>/dev/null)
+    local IDENTITY_CLIENT_ID=$(az identity show -g "$CLUSTER_RESOURCE_GROUP" -n "$IDENTITY_NAME" --query clientId -o tsv 2>/dev/null)
     
     if [[ -z "$IDENTITY_CLIENT_ID" ]]; then
-        echo "ERROR: Velero identity not found in resource group $OIDC_RG"
+        echo "ERROR: Velero identity not found in resource group $CLUSTER_RESOURCE_GROUP"
         echo "Please run 'create-velero-identity-for-azure-cluster' first"
         return 1
     fi
