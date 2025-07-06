@@ -827,10 +827,10 @@ create-velero-bsl-for-azure-cluster() {
     
     # Check if velero identity exists
     local IDENTITY_NAME="velero"
-    local OIDC_RG="${CLUSTER_NAME}-oidc"
+    local CLUSTER_RESOURCE_GROUP="${CLUSTER_NAME}-rg"
     
-    if ! az identity show -g "$OIDC_RG" -n "$IDENTITY_NAME" &>/dev/null; then
-        echo "ERROR: Velero identity not found in resource group $OIDC_RG"
+    if ! az identity show -g "$CLUSTER_RESOURCE_GROUP" -n "$IDENTITY_NAME" &>/dev/null; then
+        echo "ERROR: Velero identity not found in resource group $CLUSTER_RESOURCE_GROUP"
         echo "Please run 'create-velero-identity-for-azure-cluster' first"
         return 1
     fi
@@ -879,7 +879,7 @@ EOF
     echo "Prerequisites checklist:"
     echo "✓ Storage account: $STORAGE_ACCOUNT_NAME (in resource group: $STORAGE_RG)"
     echo "✓ Container: $CONTAINER_NAME"
-    echo "✓ Velero identity: $IDENTITY_NAME (in resource group: $OIDC_RG)"
+    echo "✓ Velero identity: $IDENTITY_NAME (in resource group: $CLUSTER_RESOURCE_GROUP)"
     echo ""
     echo "To apply this BackupStorageLocation:"
     echo "  kubectl apply -f $BSL_FILE"
