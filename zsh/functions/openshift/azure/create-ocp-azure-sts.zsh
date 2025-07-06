@@ -517,10 +517,10 @@ create-velero-identity-for-azure-cluster() {
     
     echo "Creating Velero identity for cluster: $CLUSTER_NAME"
     
-    # Check if this is an Azure cluster by looking for the OIDC resource group
-    local AZURE_RESOURCE_GROUP="${CLUSTER_NAME}-oidc"
-    if ! az group show --name "$AZURE_RESOURCE_GROUP" &>/dev/null; then
-        echo "ERROR: Resource group $AZURE_RESOURCE_GROUP not found. Is this an Azure STS cluster?"
+    # Check if this is an Azure cluster by looking for the cluster resource group
+    local CLUSTER_RESOURCE_GROUP="${CLUSTER_NAME}-rg"
+    if ! az group show --name "$CLUSTER_RESOURCE_GROUP" &>/dev/null; then
+        echo "ERROR: Resource group $CLUSTER_RESOURCE_GROUP not found. Is this an Azure STS cluster?"
         return 1
     fi
     
@@ -535,20 +535,20 @@ create-velero-identity-for-azure-cluster() {
     
     # Check if identity already exists
     local IDENTITY_EXISTS=false
-    if az identity show -g "$AZURE_RESOURCE_GROUP" -n "$IDENTITY_NAME" &>/dev/null; then
-        echo "Identity $IDENTITY_NAME already exists in $AZURE_RESOURCE_GROUP"
+    if az identity show -g "$CLUSTER_RESOURCE_GROUP" -n "$IDENTITY_NAME" &>/dev/null; then
+        echo "Identity $IDENTITY_NAME already exists in $CLUSTER_RESOURCE_GROUP"
         IDENTITY_EXISTS=true
-        local IDENTITY_CLIENT_ID=$(az identity show -g "$AZURE_RESOURCE_GROUP" -n "$IDENTITY_NAME" --query clientId -otsv)
-        local IDENTITY_PRINCIPAL_ID=$(az identity show -g "$AZURE_RESOURCE_GROUP" -n "$IDENTITY_NAME" --query principalId -otsv)
+        local IDENTITY_CLIENT_ID=$(az identity show -g "$CLUSTER_RESOURCE_GROUP" -n "$IDENTITY_NAME" --query clientId -otsv)
+        local IDENTITY_PRINCIPAL_ID=$(az identity show -g "$CLUSTER_RESOURCE_GROUP" -n "$IDENTITY_NAME" --query principalId -otsv)
     else
         echo "Creating managed identity..."
         az identity create \
             --subscription "$AZURE_SUBSCRIPTION_ID" \
-            --resource-group "$AZURE_RESOURCE_GROUP" \
+            --resource-group "$CLUSTER_RESOURCE_GROUP" \
             --name "$IDENTITY_NAME"
         
-        local IDENTITY_CLIENT_ID=$(az identity show -g "$AZURE_RESOURCE_GROUP" -n "$IDENTITY_NAME" --query clientId -otsv)
-        local IDENTITY_PRINCIPAL_ID=$(az identity show -g "$AZURE_RESOURCE_GROUP" -n "$IDENTITY_NAME" --query principalId -otsv)
+        local IDENTITY_CLIENT_ID=$(az identity show -g "$CLUSTER_RESOURCE_GROUP" -n "$IDENTITY_NAME" --query clientId -otsv)
+        local IDENTITY_PRINCIPAL_ID=$(az identity show -g "$CLUSTER_RESOURCE_GROUP" -n "$IDENTITY_NAME" --query principalId -otsv)
         
         # Wait for identity to propagate in Azure AD
         echo "Waiting for identity to propagate in Azure AD..."
@@ -588,15 +588,15 @@ create-velero-identity-for-azure-cluster() {
     if ! az identity federated-credential show \
         --name "$FED_CRED_NAME" \
         --identity-name "$IDENTITY_NAME" \
-        --resource-group "$AZURE_RESOURCE_GROUP" &>/dev/null; then
+        --resource-group "$CLUSTER_RESOURCE_GROUP" &>/dev/null; then
         
         echo "Creating federated identity credential..."
         az identity federated-credential create \
             --name "$FED_CRED_NAME" \
             --identity-name "$IDENTITY_NAME" \
-            --resource-group "$AZURE_RESOURCE_GROUP" \
+            --resource-group "$CLUSTER_RESOURCE_GROUP" \
             --issuer "$SERVICE_ACCOUNT_ISSUER" \
-            --subject "system:serviceaccount:velero:velero" \
+            --subject "system:serviceaccount:openshift-adp:velero" \
             --audiences "openshift"
     else
         echo "Federated credential $FED_CRED_NAME already exists"
@@ -616,7 +616,7 @@ create-velero-identity-for-azure-cluster() {
     echo "To create Velero credentials file for the instructions:"
     echo "cat << EOF > ./credentials-velero"
     echo "AZURE_SUBSCRIPTION_ID=${AZURE_SUBSCRIPTION_ID}"
-    echo "AZURE_RESOURCE_GROUP=${AZURE_RESOURCE_GROUP%-oidc}"
+    echo "AZURE_RESOURCE_GROUP=${CLUSTER_RESOURCE_GROUP}"
     echo "AZURE_CLOUD_NAME=AzurePublicCloud"
     echo "EOF"
 }
@@ -638,9 +638,9 @@ create-velero-container-for-azure-cluster() {
     echo "Creating Velero storage container for cluster: $CLUSTER_NAME"
     
     # Check if this is an Azure cluster by looking for the cluster resource group
-    local AZURE_RESOURCE_GROUP="${CLUSTER_NAME}-rg"
-    if ! az group show --name "$AZURE_RESOURCE_GROUP" &>/dev/null; then
-        echo "ERROR: Resource group $AZURE_RESOURCE_GROUP not found. Is this an Azure STS cluster?"
+    local CLUSTER_RESOURCE_GROUP="${CLUSTER_NAME}-rg"
+    if ! az group show --name "$CLUSTER_RESOURCE_GROUP" &>/dev/null; then
+        echo "ERROR: Resource group $CLUSTER_RESOURCE_GROUP not found. Is this an Azure STS cluster?"
         return 1
     fi
     
@@ -648,10 +648,10 @@ create-velero-container-for-azure-cluster() {
     local AZURE_SUBSCRIPTION_ID=$(az account show --query id -o tsv)
     
     echo "Using subscription: $AZURE_SUBSCRIPTION_ID"
-    echo "Using resource group: $AZURE_RESOURCE_GROUP"
+    echo "Using resource group: $CLUSTER_RESOURCE_GROUP"
     
-    # Storage account name - use same pattern as cluster creation
-    local STORAGE_ACCOUNT_NAME=$(echo "$CLUSTER_NAME" | tr -d '-' | tr '[:upper:]' '[:lower:]' | cut -c1-24)
+    # Storage account name - include 'velero' prefix and ensure it fits in 24 chars
+    local STORAGE_ACCOUNT_NAME=$(echo "velero${CLUSTER_NAME}" | tr -d '-' | tr '[:upper:]' '[:lower:]' | cut -c1-24)
     local CONTAINER_NAME="velero"
     
     # Check if storage account exists anywhere in the subscription
@@ -661,18 +661,38 @@ create-velero-container-for-azure-cluster() {
         echo "Storage account $STORAGE_ACCOUNT_NAME already exists in resource group: $EXISTING_RG"
         
         # Check if it's in the expected resource group
-        if [[ "$EXISTING_RG" != "$AZURE_RESOURCE_GROUP" ]]; then
+        if [[ "$EXISTING_RG" != "$CLUSTER_RESOURCE_GROUP" ]]; then
             echo "WARNING: Storage account exists in a different resource group than expected"
-            echo "Expected: $AZURE_RESOURCE_GROUP"
+            echo "Expected: $CLUSTER_RESOURCE_GROUP"
             echo "Actual: $EXISTING_RG"
-            echo "Using the existing storage account from resource group: $EXISTING_RG"
-            AZURE_RESOURCE_GROUP="$EXISTING_RG"
+            echo ""
+            echo "Do you want to delete the existing storage account and recreate it in the correct resource group?"
+            echo -n "Type 'yes' to delete and recreate, or any other key to exit: "
+            read -r CONFIRM_DELETE
+            
+            if [[ "$CONFIRM_DELETE" == "yes" ]]; then
+                echo "Deleting storage account $STORAGE_ACCOUNT_NAME from resource group $EXISTING_RG..."
+                if az storage account delete --name "$STORAGE_ACCOUNT_NAME" --resource-group "$EXISTING_RG" --yes; then
+                    echo "Storage account deleted successfully"
+                    # Set flag to create new storage account
+                    EXISTING_RG=""
+                else
+                    echo "ERROR: Failed to delete storage account"
+                    return 1
+                fi
+            else
+                echo "Exiting without making changes"
+                return 1
+            fi
         fi
-    else
-        echo "Creating storage account: $STORAGE_ACCOUNT_NAME in resource group: $AZURE_RESOURCE_GROUP"
+    fi
+    
+    # Create storage account if it doesn't exist or was deleted
+    if [[ -z "$EXISTING_RG" ]]; then
+        echo "Creating storage account: $STORAGE_ACCOUNT_NAME in resource group: $CLUSTER_RESOURCE_GROUP"
         if ! az storage account create \
             --name "$STORAGE_ACCOUNT_NAME" \
-            --resource-group "$AZURE_RESOURCE_GROUP" \
+            --resource-group "$CLUSTER_RESOURCE_GROUP" \
             --sku Standard_LRS \
             --encryption-services blob \
             --https-only true \
@@ -691,7 +711,7 @@ create-velero-container-for-azure-cluster() {
     echo "Retrieving storage account access key..."
     local STORAGE_ACCOUNT_KEY=$(az storage account keys list \
         --account-name "$STORAGE_ACCOUNT_NAME" \
-        --resource-group "$AZURE_RESOURCE_GROUP" \
+        --resource-group "$CLUSTER_RESOURCE_GROUP" \
         --query "[0].value" -o tsv 2>/dev/null)
     
     if [[ -z "$STORAGE_ACCOUNT_KEY" ]]; then
@@ -702,13 +722,13 @@ create-velero-container-for-azure-cluster() {
         # Try to regenerate the key
         if az storage account keys renew \
             --account-name "$STORAGE_ACCOUNT_NAME" \
-            --resource-group "$AZURE_RESOURCE_GROUP" \
+            --resource-group "$CLUSTER_RESOURCE_GROUP" \
             --key primary &>/dev/null; then
             
             # Try to get the key again
             STORAGE_ACCOUNT_KEY=$(az storage account keys list \
                 --account-name "$STORAGE_ACCOUNT_NAME" \
-                --resource-group "$AZURE_RESOURCE_GROUP" \
+                --resource-group "$CLUSTER_RESOURCE_GROUP" \
                 --query "[0].value" -o tsv 2>/dev/null)
         fi
         
@@ -739,21 +759,283 @@ create-velero-container-for-azure-cluster() {
     echo "Storage configuration:"
     echo "  Storage Account: $STORAGE_ACCOUNT_NAME"
     echo "  Container: $CONTAINER_NAME"
-    echo "  Resource Group: $AZURE_RESOURCE_GROUP"
+    echo "  Resource Group: $CLUSTER_RESOURCE_GROUP"
     echo ""
     echo "To configure Velero with this storage:"
     echo "1. Ensure you have run 'create-velero-identity-for-azure-cluster' first"
     echo "2. Use the following in your BackupStorageLocation:"
     echo "   storageAccount: $STORAGE_ACCOUNT_NAME"
-    echo "   resourceGroup: $AZURE_RESOURCE_GROUP"
+    echo "   resourceGroup: $CLUSTER_RESOURCE_GROUP"
     echo "   container: $CONTAINER_NAME"
     echo ""
     echo "To retrieve the storage account key later:"
     echo "  az storage account keys list \\"
     echo "    --account-name $STORAGE_ACCOUNT_NAME \\"
-    echo "    --resource-group $AZURE_RESOURCE_GROUP \\"
+    echo "    --resource-group $CLUSTER_RESOURCE_GROUP \\"
     echo "    --query \"[0].value\" -o tsv"
     echo ""
     echo "To show the current key:"
-    echo "  export AZURE_STORAGE_ACCOUNT_KEY=\"\$(az storage account keys list --account-name $STORAGE_ACCOUNT_NAME --resource-group $AZURE_RESOURCE_GROUP --query '[0].value' -o tsv)\""
+    echo "  export AZURE_STORAGE_ACCOUNT_KEY=\"\$(az storage account keys list --account-name $STORAGE_ACCOUNT_NAME --resource-group $CLUSTER_RESOURCE_GROUP --query '[0].value' -o tsv)\""
+}
+
+# Function to create BackupStorageLocation YAML for Velero with Azure Workload Identity
+create-velero-bsl-for-azure-cluster() {
+    # Get cluster API URL
+    local API_URL=$(oc whoami --show-server)
+    
+    # Extract cluster name from API URL
+    # Format: https://api.cluster-name.basedomain:6443
+    local CLUSTER_NAME=$(echo "$API_URL" | sed 's|https://api\.||' | sed 's|\..*||')
+    
+    if [[ -z "$CLUSTER_NAME" ]]; then
+        echo "ERROR: Could not determine cluster name from API URL: $API_URL"
+        return 1
+    fi
+    
+    echo "Creating Velero BackupStorageLocation for cluster: $CLUSTER_NAME"
+    
+    # Get subscription from current az login
+    local AZURE_SUBSCRIPTION_ID=$(az account show --query id -o tsv)
+    
+    # Storage account name - include 'velero' prefix and ensure it fits in 24 chars
+    local STORAGE_ACCOUNT_NAME=$(echo "velero${CLUSTER_NAME}" | tr -d '-' | tr '[:upper:]' '[:lower:]' | cut -c1-24)
+    local CONTAINER_NAME="velero"
+    
+    # Find which resource group the storage account is in
+    local STORAGE_RG=$(az storage account show --name "$STORAGE_ACCOUNT_NAME" --query resourceGroup -o tsv 2>/dev/null)
+    
+    if [[ -z "$STORAGE_RG" ]]; then
+        echo "ERROR: Storage account $STORAGE_ACCOUNT_NAME not found"
+        echo "Please run 'create-velero-container-for-azure-cluster' first"
+        return 1
+    fi
+    
+    # Check if container exists
+    local STORAGE_ACCOUNT_KEY=$(az storage account keys list \
+        --account-name "$STORAGE_ACCOUNT_NAME" \
+        --resource-group "$STORAGE_RG" \
+        --query "[0].value" -o tsv 2>/dev/null)
+    
+    if ! az storage container show \
+        --name "$CONTAINER_NAME" \
+        --account-name "$STORAGE_ACCOUNT_NAME" \
+        --account-key "$STORAGE_ACCOUNT_KEY" &>/dev/null; then
+        echo "ERROR: Container $CONTAINER_NAME not found in storage account $STORAGE_ACCOUNT_NAME"
+        echo "Please run 'create-velero-container-for-azure-cluster' first"
+        return 1
+    fi
+    
+    # Check if velero identity exists
+    local IDENTITY_NAME="velero"
+    local OIDC_RG="${CLUSTER_NAME}-oidc"
+    
+    if ! az identity show -g "$OIDC_RG" -n "$IDENTITY_NAME" &>/dev/null; then
+        echo "ERROR: Velero identity not found in resource group $OIDC_RG"
+        echo "Please run 'create-velero-identity-for-azure-cluster' first"
+        return 1
+    fi
+    
+    # Create BSL YAML file
+    local BSL_FILE="velero-bsl-${CLUSTER_NAME}.yaml"
+    
+    echo "Creating BackupStorageLocation YAML: $BSL_FILE"
+    
+    cat > "$BSL_FILE" << EOF
+apiVersion: velero.io/v1
+kind: BackupStorageLocation
+metadata:
+  name: default
+  namespace: openshift-adp
+spec:
+  # Name of the object store plugin to use to connect to this location.
+  provider: velero.io/azure
+
+  objectStorage:
+    # The bucket/blob container in which to store backups.
+    bucket: $CONTAINER_NAME
+
+    # The prefix within the bucket under which to store backups.
+    prefix: $CLUSTER_NAME
+
+  config:
+    # Name of the resource group containing the storage account for this backup storage location.
+    resourceGroup: $STORAGE_RG
+
+    # Name of the storage account for this backup storage location.
+    storageAccount: $STORAGE_ACCOUNT_NAME
+
+    # ID of the subscription for this backup storage location.
+    subscriptionId: $AZURE_SUBSCRIPTION_ID
+
+    # Boolean parameter to use Azure AD Workload Identity for authentication
+    # This requires that the velero service account has the proper annotations
+    # and federated identity credential is configured
+    useAAD: "true"
+EOF
+
+    echo ""
+    echo "BackupStorageLocation YAML created: $BSL_FILE"
+    echo ""
+    echo "Prerequisites checklist:"
+    echo "✓ Storage account: $STORAGE_ACCOUNT_NAME (in resource group: $STORAGE_RG)"
+    echo "✓ Container: $CONTAINER_NAME"
+    echo "✓ Velero identity: $IDENTITY_NAME (in resource group: $OIDC_RG)"
+    echo ""
+    echo "To apply this BackupStorageLocation:"
+    echo "  kubectl apply -f $BSL_FILE"
+    echo ""
+    echo "Make sure you have:"
+    echo "1. OADP (OpenShift API for Data Protection) installed"
+    echo "2. Service account 'velero' in 'openshift-adp' namespace with workload identity annotation"
+    echo "3. Federated identity credential configured for 'system:serviceaccount:openshift-adp:velero'"
+    echo ""
+    echo "Note: This BSL is configured for the 'openshift-adp' namespace used by OADP"
+}
+
+# Function to create DataProtectionApplication YAML for OADP with Azure Workload Identity
+create-velero-dpa-for-azure-cluster() {
+    # Get cluster API URL
+    local API_URL=$(oc whoami --show-server)
+    
+    # Extract cluster name from API URL
+    # Format: https://api.cluster-name.basedomain:6443
+    local CLUSTER_NAME=$(echo "$API_URL" | sed 's|https://api\.||' | sed 's|\..*||')
+    
+    if [[ -z "$CLUSTER_NAME" ]]; then
+        echo "ERROR: Could not determine cluster name from API URL: $API_URL"
+        return 1
+    fi
+    
+    echo "Creating DataProtectionApplication for cluster: $CLUSTER_NAME"
+    
+    # Get subscription from current az login
+    local AZURE_SUBSCRIPTION_ID=$(az account show --query id -o tsv)
+    
+    # Storage account name - include 'velero' prefix and ensure it fits in 24 chars
+    local STORAGE_ACCOUNT_NAME=$(echo "velero${CLUSTER_NAME}" | tr -d '-' | tr '[:upper:]' '[:lower:]' | cut -c1-24)
+    local CONTAINER_NAME="velero"
+    
+    # Find which resource group the storage account is in
+    local STORAGE_RG=$(az storage account show --name "$STORAGE_ACCOUNT_NAME" --query resourceGroup -o tsv 2>/dev/null)
+    
+    if [[ -z "$STORAGE_RG" ]]; then
+        echo "ERROR: Storage account $STORAGE_ACCOUNT_NAME not found"
+        echo "Please run 'create-velero-container-for-azure-cluster' first"
+        return 1
+    fi
+    
+    # Check if velero identity exists and get client ID
+    local IDENTITY_NAME="velero"
+    local OIDC_RG="${CLUSTER_NAME}-oidc"
+    
+    local IDENTITY_CLIENT_ID=$(az identity show -g "$OIDC_RG" -n "$IDENTITY_NAME" --query clientId -o tsv 2>/dev/null)
+    
+    if [[ -z "$IDENTITY_CLIENT_ID" ]]; then
+        echo "ERROR: Velero identity not found in resource group $OIDC_RG"
+        echo "Please run 'create-velero-identity-for-azure-cluster' first"
+        return 1
+    fi
+    
+    # Create DPA YAML file
+    local DPA_FILE="velero-dpa-${CLUSTER_NAME}.yaml"
+    
+    echo "Creating DataProtectionApplication YAML: $DPA_FILE"
+    
+    cat > "$DPA_FILE" << EOF
+apiVersion: oadp.openshift.io/v1alpha1
+kind: DataProtectionApplication
+metadata:
+  name: dpa
+  namespace: openshift-adp
+spec:
+  configuration:
+    velero:
+      # Use OpenShift plugin for OpenShift-specific features
+      defaultPlugins:
+        - openshift
+        - azure
+        - csi
+      # Resource requests/limits for Velero pod
+      resourceAllocations:
+        limits:
+          cpu: 1000m
+          memory: 512Mi
+        requests:
+          cpu: 500m
+          memory: 256Mi
+      # Pod configuration for workload identity
+      podConfig:
+        labels:
+          azure.workload.identity/use: "true"
+    # Node agent configuration (formerly Restic)
+    nodeAgent:
+      enable: true
+      uploaderType: kopia
+      # Configure the DaemonSet node selector
+      nodeSelector:
+        node-role.kubernetes.io/worker: ""
+      # Pod configuration for workload identity
+      podConfig:
+        labels:
+          azure.workload.identity/use: "true"
+  backupLocations:
+    - name: default
+      velero:
+        # Azure provider configuration
+        provider: velero.io/azure
+        default: true
+        # Credential secret reference
+        credential:
+          name: cloud-credentials-azure
+          key: azurekey
+        # Storage configuration
+        objectStorage:
+          bucket: $CONTAINER_NAME
+          prefix: $CLUSTER_NAME
+        config:
+          resourceGroup: $STORAGE_RG
+          storageAccount: $STORAGE_ACCOUNT_NAME
+          subscriptionId: $AZURE_SUBSCRIPTION_ID
+          # Use Azure AD Workload Identity for authentication
+          useAAD: "true"
+  # Volume snapshot locations for Azure snapshots
+  snapshotLocations:
+    - name: default
+      velero:
+        provider: azure
+        # Credential secret reference
+        credential:
+          name: cloud-credentials-azure
+          key: azurekey
+        config:
+          resourceGroup: $STORAGE_RG
+          subscriptionId: $AZURE_SUBSCRIPTION_ID
+EOF
+
+    echo ""
+    echo "DataProtectionApplication YAML created: $DPA_FILE"
+    echo ""
+    echo "Prerequisites checklist:"
+    echo "✓ Storage account: $STORAGE_ACCOUNT_NAME (in resource group: $STORAGE_RG)"
+    echo "✓ Container: $CONTAINER_NAME"
+    echo "✓ Velero identity: $IDENTITY_NAME (Client ID: $IDENTITY_CLIENT_ID)"
+    echo ""
+    echo "IMPORTANT: Before applying the DPA, annotate the Velero service account:"
+    echo "  kubectl annotate serviceaccount velero -n openshift-adp azure.workload.identity/client-id=$IDENTITY_CLIENT_ID --overwrite"
+    echo ""
+    echo "To apply this DataProtectionApplication:"
+    echo "  kubectl apply -f $DPA_FILE"
+    echo ""
+    echo "Make sure you have:"
+    echo "1. OADP operator installed in 'openshift-adp' namespace"
+    echo "2. Completed the STS configuration flow (the operator will create the cloud-credentials-azure secret)"
+    echo "3. The velero service account annotated with workload identity (done by OADP operator)"
+    echo ""
+    echo "After applying the DPA, check the status with:"
+    echo "  kubectl get dpa dpa -n openshift-adp -o yaml"
+    echo ""
+    echo "Verify the deployment:"
+    echo "  kubectl get secret cloud-credentials-azure -n openshift-adp"
+    echo "  kubectl get pods -n openshift-adp"
+    echo "  velero version"
 }
