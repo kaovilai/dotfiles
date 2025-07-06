@@ -978,6 +978,8 @@ spec:
       podConfig:
         labels:
           azure.workload.identity/use: "true"
+  # TODO: fix - backupImages should be enabled once image backup is properly configured
+  backupImages: false
   backupLocations:
     - name: default
       velero:
