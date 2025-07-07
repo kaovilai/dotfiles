@@ -874,22 +874,48 @@ create-velero-container-for-azure-cluster() {
             --public-access off
     fi
     
-    # Grant Azure AD app access to the storage account
+    # Grant access to the storage account for both managed identity and Azure AD app
     echo ""
-    echo "Granting Azure AD app access to the storage account..."
+    echo "Granting access to the storage account..."
     
-    # Get the Azure AD app ID for Velero if it exists
+    # Get storage account resource ID
+    local STORAGE_ACCOUNT_ID=$(az storage account show \
+        --name "$STORAGE_ACCOUNT_NAME" \
+        --resource-group "$CLUSTER_RESOURCE_GROUP" \
+        --query id -o tsv)
+    
+    # Grant access to managed identity if it exists
+    local IDENTITY_NAME="velero"
+    local IDENTITY_CLIENT_ID=$(az identity show -g "$CLUSTER_RESOURCE_GROUP" -n "$IDENTITY_NAME" --query clientId -o tsv 2>/dev/null)
+    
+    if [[ -n "$IDENTITY_CLIENT_ID" ]] && [[ "$IDENTITY_CLIENT_ID" != "null" ]]; then
+        echo "Found managed identity: $IDENTITY_NAME (Client ID: $IDENTITY_CLIENT_ID)"
+        
+        # Check if Storage Blob Data Contributor role is already assigned at storage account level
+        if ! az role assignment list \
+            --assignee "$IDENTITY_CLIENT_ID" \
+            --role "Storage Blob Data Contributor" \
+            --scope "$STORAGE_ACCOUNT_ID" \
+            --query "[0]" &>/dev/null; then
+            
+            echo "Assigning Storage Blob Data Contributor role to managed identity at storage account level..."
+            az role assignment create \
+                --assignee "$IDENTITY_CLIENT_ID" \
+                --role "Storage Blob Data Contributor" \
+                --scope "$STORAGE_ACCOUNT_ID"
+        else
+            echo "Storage Blob Data Contributor role already assigned to managed identity at storage account level"
+        fi
+    else
+        echo "Managed identity not found. Run 'create-velero-identity-for-azure-cluster' to create it."
+    fi
+    
+    # Grant access to Azure AD app if it exists
     local APP_NAME="velero-${CLUSTER_NAME}"
     local APP_ID=$(az ad app list --filter "displayName eq '$APP_NAME'" --query "[0].appId" -o tsv 2>/dev/null)
     
     if [[ -n "$APP_ID" ]] && [[ "$APP_ID" != "null" ]]; then
         echo "Found Azure AD app: $APP_NAME (App ID: $APP_ID)"
-        
-        # Get storage account resource ID
-        local STORAGE_ACCOUNT_ID=$(az storage account show \
-            --name "$STORAGE_ACCOUNT_NAME" \
-            --resource-group "$CLUSTER_RESOURCE_GROUP" \
-            --query id -o tsv)
         
         # Check if Storage Blob Data Contributor role is already assigned at storage account level
         if ! az role assignment list \
@@ -917,8 +943,13 @@ create-velero-container-for-azure-cluster() {
     echo "  Storage Account: $STORAGE_ACCOUNT_NAME"
     echo "  Container: $CONTAINER_NAME"
     echo "  Resource Group: $CLUSTER_RESOURCE_GROUP"
+    echo ""
+    echo "Access granted to:"
+    if [[ -n "$IDENTITY_CLIENT_ID" ]] && [[ "$IDENTITY_CLIENT_ID" != "null" ]]; then
+        echo "  ✓ Managed Identity: $IDENTITY_NAME (Client ID: $IDENTITY_CLIENT_ID)"
+    fi
     if [[ -n "$APP_ID" ]] && [[ "$APP_ID" != "null" ]]; then
-        echo "  Azure AD App Access: ✓ Granted (App ID: $APP_ID)"
+        echo "  ✓ Azure AD App: $APP_NAME (App ID: $APP_ID)"
     fi
     echo ""
     echo "To configure Velero with this storage:"

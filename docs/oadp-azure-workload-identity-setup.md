@@ -181,12 +181,19 @@ az storage container create \
     --account-key "$STORAGE_ACCOUNT_KEY" \
     --public-access off
 
-# Grant app access to storage account
+# Grant both managed identity and app access to storage account
 export STORAGE_ACCOUNT_ID=$(az storage account show \
     --name "$STORAGE_ACCOUNT_NAME" \
     --resource-group "$CLUSTER_RESOURCE_GROUP" \
     --query id -o tsv)
 
+# Grant access to managed identity
+az role assignment create \
+    --assignee "$IDENTITY_CLIENT_ID" \
+    --role "Storage Blob Data Contributor" \
+    --scope "$STORAGE_ACCOUNT_ID"
+
+# Grant access to Azure AD app
 az role assignment create \
     --assignee "$APP_ID" \
     --role "Storage Blob Data Contributor" \
