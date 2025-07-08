@@ -777,6 +777,7 @@ create-velero-container-for-azure-cluster() {
     
     # Check if storage account exists anywhere in the subscription
     local EXISTING_RG=$(az storage account show --name "$STORAGE_ACCOUNT_NAME" --query resourceGroup -o tsv 2>/dev/null)
+    local STORAGE_RESOURCE_GROUP=""
     
     if [[ -n "$EXISTING_RG" ]]; then
         echo "Storage account $STORAGE_ACCOUNT_NAME already exists in resource group: $EXISTING_RG"
@@ -802,9 +803,12 @@ create-velero-container-for-azure-cluster() {
                     return 1
                 fi
             else
-                echo "Exiting without making changes"
-                return 1
+                echo "Using existing storage account in resource group: $EXISTING_RG"
+                STORAGE_RESOURCE_GROUP="$EXISTING_RG"
             fi
+        else
+            # Storage account is in the expected resource group
+            STORAGE_RESOURCE_GROUP="$CLUSTER_RESOURCE_GROUP"
         fi
     fi
     
@@ -826,13 +830,15 @@ create-velero-container-for-azure-cluster() {
         # Wait for storage account to be ready
         echo "Waiting for storage account to be ready..."
         sleep 10
+        # Set the storage resource group for new accounts
+        STORAGE_RESOURCE_GROUP="$CLUSTER_RESOURCE_GROUP"
     fi
     
     # Get storage account key (keys are automatically created with the storage account)
     echo "Retrieving storage account access key..."
     local STORAGE_ACCOUNT_KEY=$(az storage account keys list \
         --account-name "$STORAGE_ACCOUNT_NAME" \
-        --resource-group "$CLUSTER_RESOURCE_GROUP" \
+        --resource-group "$STORAGE_RESOURCE_GROUP" \
         --query "[0].value" -o tsv 2>/dev/null)
     
     if [[ -z "$STORAGE_ACCOUNT_KEY" ]]; then
@@ -843,13 +849,13 @@ create-velero-container-for-azure-cluster() {
         # Try to regenerate the key
         if az storage account keys renew \
             --account-name "$STORAGE_ACCOUNT_NAME" \
-            --resource-group "$CLUSTER_RESOURCE_GROUP" \
+            --resource-group "$STORAGE_RESOURCE_GROUP" \
             --key primary &>/dev/null; then
             
             # Try to get the key again
             STORAGE_ACCOUNT_KEY=$(az storage account keys list \
                 --account-name "$STORAGE_ACCOUNT_NAME" \
-                --resource-group "$CLUSTER_RESOURCE_GROUP" \
+                --resource-group "$STORAGE_RESOURCE_GROUP" \
                 --query "[0].value" -o tsv 2>/dev/null)
         fi
         
@@ -881,7 +887,7 @@ create-velero-container-for-azure-cluster() {
     # Get storage account resource ID
     local STORAGE_ACCOUNT_ID=$(az storage account show \
         --name "$STORAGE_ACCOUNT_NAME" \
-        --resource-group "$CLUSTER_RESOURCE_GROUP" \
+        --resource-group "$STORAGE_RESOURCE_GROUP" \
         --query id -o tsv)
     
     # Grant access to managed identity if it exists
@@ -942,7 +948,7 @@ create-velero-container-for-azure-cluster() {
     echo "Storage configuration:"
     echo "  Storage Account: $STORAGE_ACCOUNT_NAME"
     echo "  Container: $CONTAINER_NAME"
-    echo "  Resource Group: $CLUSTER_RESOURCE_GROUP"
+    echo "  Resource Group: $STORAGE_RESOURCE_GROUP"
     echo ""
     echo "Access granted to:"
     if [[ -n "$IDENTITY_CLIENT_ID" ]] && [[ "$IDENTITY_CLIENT_ID" != "null" ]]; then
@@ -956,17 +962,17 @@ create-velero-container-for-azure-cluster() {
     echo "1. Ensure you have run 'create-velero-identity-for-azure-cluster' first"
     echo "2. Use the following in your BackupStorageLocation:"
     echo "   storageAccount: $STORAGE_ACCOUNT_NAME"
-    echo "   resourceGroup: $CLUSTER_RESOURCE_GROUP"
+    echo "   resourceGroup: $STORAGE_RESOURCE_GROUP"
     echo "   container: $CONTAINER_NAME"
     echo ""
     echo "To retrieve the storage account key later:"
     echo "  az storage account keys list \\"
     echo "    --account-name $STORAGE_ACCOUNT_NAME \\"
-    echo "    --resource-group $CLUSTER_RESOURCE_GROUP \\"
+    echo "    --resource-group $STORAGE_RESOURCE_GROUP \\"
     echo "    --query \"[0].value\" -o tsv"
     echo ""
     echo "To show the current key:"
-    echo "  export AZURE_STORAGE_ACCOUNT_KEY=\"\$(az storage account keys list --account-name $STORAGE_ACCOUNT_NAME --resource-group $CLUSTER_RESOURCE_GROUP --query '[0].value' -o tsv)\""
+    echo "  export AZURE_STORAGE_ACCOUNT_KEY=\"\$(az storage account keys list --account-name $STORAGE_ACCOUNT_NAME --resource-group $STORAGE_RESOURCE_GROUP --query '[0].value' -o tsv)\""
 }
 
 # Function to create BackupStorageLocation YAML for Velero with Azure Workload Identity
@@ -1256,4 +1262,241 @@ EOF
     echo "  kubectl get secret cloud-credentials-azure -n openshift-adp"
     echo "  kubectl get pods -n openshift-adp"
     echo "  velero version"
+}
+
+# Function to validate role assignments for Velero Azure resources
+validate-velero-role-assignments-for-azure-cluster() {
+    # Get cluster API URL
+    local API_URL=$(oc whoami --show-server 2>/dev/null)
+    
+    if [[ -z "$API_URL" ]]; then
+        echo "ERROR: Not connected to an OpenShift cluster. Please login first."
+        return 1
+    fi
+    
+    # Extract cluster name from API URL
+    # Format: https://api.cluster-name.basedomain:6443
+    local CLUSTER_NAME=$(echo "$API_URL" | sed 's|https://api\.||' | sed 's|\..*||')
+    
+    if [[ -z "$CLUSTER_NAME" ]]; then
+        echo "ERROR: Could not determine cluster name from API URL: $API_URL"
+        return 1
+    fi
+    
+    echo "Validating Velero role assignments for cluster: $CLUSTER_NAME"
+    echo "================================================================"
+    
+    # Get subscription from current az login
+    local AZURE_SUBSCRIPTION_ID=$(az account show --query id -o tsv)
+    local AZURE_TENANT_ID=$(az account show --query tenantId -o tsv)
+    
+    echo "Subscription: $AZURE_SUBSCRIPTION_ID"
+    echo "Tenant: $AZURE_TENANT_ID"
+    echo ""
+    
+    # Storage account name - include 'velero' prefix and ensure it fits in 24 chars
+    local STORAGE_ACCOUNT_NAME=$(echo "velero${CLUSTER_NAME}" | tr -d '-' | tr '[:upper:]' '[:lower:]' | cut -c1-24)
+    
+    # Find which resource group the storage account is in
+    local STORAGE_RG=$(az storage account show --name "$STORAGE_ACCOUNT_NAME" --query resourceGroup -o tsv 2>/dev/null)
+    
+    if [[ -z "$STORAGE_RG" ]]; then
+        echo "ERROR: Storage account $STORAGE_ACCOUNT_NAME not found"
+        echo "Please run 'create-velero-container-for-azure-cluster' first"
+        return 1
+    fi
+    
+    echo "Storage Account: $STORAGE_ACCOUNT_NAME"
+    echo "Storage Resource Group: $STORAGE_RG"
+    
+    # Get storage account resource ID
+    local STORAGE_ACCOUNT_ID=$(az storage account show \
+        --name "$STORAGE_ACCOUNT_NAME" \
+        --resource-group "$STORAGE_RG" \
+        --query id -o tsv)
+    
+    echo "Storage Account ID: $STORAGE_ACCOUNT_ID"
+    echo ""
+    
+    # Check managed identity
+    local CLUSTER_RESOURCE_GROUP="${CLUSTER_NAME}-rg"
+    local IDENTITY_NAME="velero-${CLUSTER_NAME}"
+    
+    echo "Checking Managed Identity: $IDENTITY_NAME"
+    echo "----------------------------------------"
+    
+    local IDENTITY_INFO=$(az identity show -g "$CLUSTER_RESOURCE_GROUP" -n "$IDENTITY_NAME" 2>/dev/null)
+    if [[ -n "$IDENTITY_INFO" ]]; then
+        local IDENTITY_CLIENT_ID=$(echo "$IDENTITY_INFO" | jq -r '.clientId')
+        local IDENTITY_PRINCIPAL_ID=$(echo "$IDENTITY_INFO" | jq -r '.principalId')
+        
+        echo "✓ Found Managed Identity"
+        echo "  Client ID: $IDENTITY_CLIENT_ID"
+        echo "  Principal ID: $IDENTITY_PRINCIPAL_ID"
+        echo ""
+        
+        echo "Role Assignments for Managed Identity:"
+        # Get all role assignments for the managed identity
+        local MI_ASSIGNMENTS=$(az role assignment list --assignee "$IDENTITY_PRINCIPAL_ID" --all -o json)
+        
+        # Check subscription-level roles
+        echo ""
+        echo "  Subscription-level roles:"
+        echo "$MI_ASSIGNMENTS" | jq -r --arg sub_id "/subscriptions/$AZURE_SUBSCRIPTION_ID" \
+            '.[] | select(.scope == $sub_id) | "    - \(.roleDefinitionName)"' | sort -u
+        
+        # Check storage account-level roles
+        echo ""
+        echo "  Storage account-level roles:"
+        echo "$MI_ASSIGNMENTS" | jq -r --arg storage_id "$STORAGE_ACCOUNT_ID" \
+            '.[] | select(.scope == $storage_id) | "    - \(.roleDefinitionName) (on storage account)"' | sort -u
+        
+        # Count total assignments
+        local MI_TOTAL=$(echo "$MI_ASSIGNMENTS" | jq '. | length')
+        echo ""
+        echo "  Total role assignments: $MI_TOTAL"
+    else
+        echo "✗ Managed Identity not found"
+        echo "  Run 'create-velero-identity-for-azure-cluster' to create it"
+    fi
+    
+    echo ""
+    
+    # Check Azure AD app
+    local APP_NAME="velero-${CLUSTER_NAME}"
+    echo "Checking Azure AD App: $APP_NAME"
+    echo "----------------------------------------"
+    
+    local APP_INFO=$(az ad app list --filter "displayName eq '$APP_NAME'" --query "[0]" -o json 2>/dev/null)
+    if [[ -n "$APP_INFO" ]] && [[ "$APP_INFO" != "null" ]]; then
+        local APP_ID=$(echo "$APP_INFO" | jq -r '.appId')
+        local APP_OBJECT_ID=$(echo "$APP_INFO" | jq -r '.id')
+        
+        echo "✓ Found Azure AD App"
+        echo "  App ID: $APP_ID"
+        echo "  Object ID: $APP_OBJECT_ID"
+        
+        # Get service principal info
+        local SP_INFO=$(az ad sp list --filter "appId eq '$APP_ID'" --query "[0]" -o json 2>/dev/null)
+        if [[ -n "$SP_INFO" ]] && [[ "$SP_INFO" != "null" ]]; then
+            local SP_OBJECT_ID=$(echo "$SP_INFO" | jq -r '.id')
+            echo "  Service Principal Object ID: $SP_OBJECT_ID"
+        fi
+        
+        echo ""
+        echo "Role Assignments for Azure AD App:"
+        # Get all role assignments for the app
+        local APP_ASSIGNMENTS=$(az role assignment list --assignee "$APP_ID" --all -o json)
+        
+        # Check subscription-level roles
+        echo ""
+        echo "  Subscription-level roles:"
+        echo "$APP_ASSIGNMENTS" | jq -r --arg sub_id "/subscriptions/$AZURE_SUBSCRIPTION_ID" \
+            '.[] | select(.scope == $sub_id) | "    - \(.roleDefinitionName)"' | sort -u
+        
+        # Check storage account-level roles
+        echo ""
+        echo "  Storage account-level roles:"
+        echo "$APP_ASSIGNMENTS" | jq -r --arg storage_id "$STORAGE_ACCOUNT_ID" \
+            '.[] | select(.scope == $storage_id) | "    - \(.roleDefinitionName) (on storage account)"' | sort -u
+        
+        # Count total assignments
+        local APP_TOTAL=$(echo "$APP_ASSIGNMENTS" | jq '. | length')
+        echo ""
+        echo "  Total role assignments: $APP_TOTAL"
+        
+        # Check federated credentials
+        echo ""
+        echo "Federated Credentials:"
+        local FED_CREDS=$(az ad app federated-credential list --id "$APP_OBJECT_ID" -o json 2>/dev/null)
+        if [[ -n "$FED_CREDS" ]] && [[ "$FED_CREDS" != "[]" ]]; then
+            echo "$FED_CREDS" | jq -r '.[] | "  - \(.name): \(.subject)"'
+        else
+            echo "  No federated credentials found"
+        fi
+    else
+        echo "✗ Azure AD App not found"
+        echo "  Run 'create-velero-identity-for-azure-cluster' to create it"
+    fi
+    
+    echo ""
+    echo "================================================================"
+    echo "Validation Summary:"
+    echo ""
+    
+    # Summary checks
+    local ISSUES=0
+    
+    # Check if managed identity exists and has required roles
+    if [[ -n "$IDENTITY_INFO" ]]; then
+        # Check for required roles
+        local HAS_CONTRIBUTOR=$(echo "$MI_ASSIGNMENTS" | jq -r --arg sub_id "/subscriptions/$AZURE_SUBSCRIPTION_ID" \
+            '[.[] | select(.scope == $sub_id and .roleDefinitionName == "Contributor")] | length')
+        local HAS_STORAGE_BLOB=$(echo "$MI_ASSIGNMENTS" | jq -r \
+            '[.[] | select(.roleDefinitionName == "Storage Blob Data Contributor")] | length')
+        local HAS_DISK_SNAPSHOT=$(echo "$MI_ASSIGNMENTS" | jq -r \
+            '[.[] | select(.roleDefinitionName == "Disk Snapshot Contributor")] | length')
+        
+        if [[ "$HAS_CONTRIBUTOR" -eq 0 ]]; then
+            echo "⚠️  Managed Identity missing 'Contributor' role at subscription level"
+            ((ISSUES++))
+        fi
+        if [[ "$HAS_STORAGE_BLOB" -eq 0 ]]; then
+            echo "⚠️  Managed Identity missing 'Storage Blob Data Contributor' role"
+            ((ISSUES++))
+        fi
+        if [[ "$HAS_DISK_SNAPSHOT" -eq 0 ]]; then
+            echo "⚠️  Managed Identity missing 'Disk Snapshot Contributor' role"
+            ((ISSUES++))
+        fi
+    else
+        echo "⚠️  Managed Identity not found"
+        ((ISSUES++))
+    fi
+    
+    # Check if Azure AD app exists and has required roles
+    if [[ -n "$APP_INFO" ]] && [[ "$APP_INFO" != "null" ]]; then
+        # Check for required roles
+        local APP_HAS_STORAGE_BLOB=$(echo "$APP_ASSIGNMENTS" | jq -r \
+            '[.[] | select(.roleDefinitionName == "Storage Blob Data Contributor")] | length')
+        local APP_HAS_DISK_SNAPSHOT=$(echo "$APP_ASSIGNMENTS" | jq -r \
+            '[.[] | select(.roleDefinitionName == "Disk Snapshot Contributor")] | length')
+        
+        if [[ "$APP_HAS_STORAGE_BLOB" -eq 0 ]]; then
+            echo "⚠️  Azure AD App missing 'Storage Blob Data Contributor' role"
+            ((ISSUES++))
+        fi
+        if [[ "$APP_HAS_DISK_SNAPSHOT" -eq 0 ]]; then
+            echo "⚠️  Azure AD App missing 'Disk Snapshot Contributor' role"
+            ((ISSUES++))
+        fi
+        
+        # Check federated credentials
+        if [[ -z "$FED_CREDS" ]] || [[ "$FED_CREDS" == "[]" ]]; then
+            echo "⚠️  Azure AD App missing federated credentials"
+            ((ISSUES++))
+        fi
+    else
+        echo "⚠️  Azure AD App not found"
+        ((ISSUES++))
+    fi
+    
+    if [[ $ISSUES -eq 0 ]]; then
+        echo "✅ All role assignments appear to be correctly configured!"
+    else
+        echo ""
+        echo "❌ Found $ISSUES issue(s) with role assignments"
+        echo ""
+        echo "To fix these issues, run:"
+        echo "  create-velero-identity-for-azure-cluster"
+        echo "  create-velero-container-for-azure-cluster"
+    fi
+    
+    echo ""
+    echo "To see detailed role assignment information in JSON format:"
+    echo "  # For managed identity:"
+    echo "  az role assignment list --assignee $IDENTITY_CLIENT_ID --all -o json"
+    echo ""
+    echo "  # For Azure AD app:"
+    echo "  az role assignment list --assignee $APP_ID --all -o json"
 }
