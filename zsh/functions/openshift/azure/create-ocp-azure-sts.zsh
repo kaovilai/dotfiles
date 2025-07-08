@@ -559,25 +559,40 @@ create-velero-identity-for-azure-cluster() {
     echo "Checking role assignments for managed identity..."
     
     # Check for Contributor role
-    if ! az role assignment list --assignee "$IDENTITY_PRINCIPAL_ID" --role "Contributor" --scope "/subscriptions/$AZURE_SUBSCRIPTION_ID" --query "[0]" &>/dev/null; then
+    local has_contributor=$(az role assignment list --assignee "$IDENTITY_PRINCIPAL_ID" --role "Contributor" --scope "/subscriptions/$AZURE_SUBSCRIPTION_ID" --query "[?roleDefinitionName=='Contributor'] | length(@)" -o tsv 2>/dev/null || echo "0")
+    if [[ "$has_contributor" -eq 0 ]]; then
         echo "Assigning Contributor role..."
-        az role assignment create --role "Contributor" --assignee "$IDENTITY_PRINCIPAL_ID" --scope "/subscriptions/$AZURE_SUBSCRIPTION_ID"
+        if az role assignment create --role "Contributor" --assignee "$IDENTITY_PRINCIPAL_ID" --scope "/subscriptions/$AZURE_SUBSCRIPTION_ID"; then
+            echo "Successfully assigned Contributor role"
+        else
+            echo "WARNING: Failed to assign Contributor role - it may already exist or you may lack permissions"
+        fi
     else
         echo "Contributor role already assigned"
     fi
     
     # Check for Storage Blob Data Contributor role
-    if ! az role assignment list --assignee "$IDENTITY_PRINCIPAL_ID" --role "Storage Blob Data Contributor" --scope "/subscriptions/$AZURE_SUBSCRIPTION_ID" --query "[0]" &>/dev/null; then
+    local has_storage_blob=$(az role assignment list --assignee "$IDENTITY_PRINCIPAL_ID" --role "Storage Blob Data Contributor" --scope "/subscriptions/$AZURE_SUBSCRIPTION_ID" --query "[?roleDefinitionName=='Storage Blob Data Contributor'] | length(@)" -o tsv 2>/dev/null || echo "0")
+    if [[ "$has_storage_blob" -eq 0 ]]; then
         echo "Assigning Storage Blob Data Contributor role..."
-        az role assignment create --assignee "$IDENTITY_PRINCIPAL_ID" --role "Storage Blob Data Contributor" --scope "/subscriptions/$AZURE_SUBSCRIPTION_ID"
+        if az role assignment create --assignee "$IDENTITY_PRINCIPAL_ID" --role "Storage Blob Data Contributor" --scope "/subscriptions/$AZURE_SUBSCRIPTION_ID"; then
+            echo "Successfully assigned Storage Blob Data Contributor role"
+        else
+            echo "WARNING: Failed to assign Storage Blob Data Contributor role - it may already exist or you may lack permissions"
+        fi
     else
         echo "Storage Blob Data Contributor role already assigned"
     fi
     
     # Check for Disk Snapshot Contributor role
-    if ! az role assignment list --assignee "$IDENTITY_PRINCIPAL_ID" --role "Disk Snapshot Contributor" --scope "/subscriptions/$AZURE_SUBSCRIPTION_ID" --query "[0]" &>/dev/null; then
+    local has_disk_snapshot=$(az role assignment list --assignee "$IDENTITY_PRINCIPAL_ID" --role "Disk Snapshot Contributor" --scope "/subscriptions/$AZURE_SUBSCRIPTION_ID" --query "[?roleDefinitionName=='Disk Snapshot Contributor'] | length(@)" -o tsv 2>/dev/null || echo "0")
+    if [[ "$has_disk_snapshot" -eq 0 ]]; then
         echo "Assigning Disk Snapshot Contributor role..."
-        az role assignment create --assignee "$IDENTITY_PRINCIPAL_ID" --role "Disk Snapshot Contributor" --scope "/subscriptions/$AZURE_SUBSCRIPTION_ID"
+        if az role assignment create --assignee "$IDENTITY_PRINCIPAL_ID" --role "Disk Snapshot Contributor" --scope "/subscriptions/$AZURE_SUBSCRIPTION_ID"; then
+            echo "Successfully assigned Disk Snapshot Contributor role"
+        else
+            echo "WARNING: Failed to assign Disk Snapshot Contributor role - it may already exist or you may lack permissions"
+        fi
     else
         echo "Disk Snapshot Contributor role already assigned"
     fi
@@ -658,17 +673,27 @@ create-velero-identity-for-azure-cluster() {
     echo "Checking role assignments for app service principal..."
     
     # Check for Storage Blob Data Contributor role
-    if ! az role assignment list --assignee "$APP_ID" --role "Storage Blob Data Contributor" --scope "/subscriptions/$AZURE_SUBSCRIPTION_ID" --query "[0]" &>/dev/null; then
+    local app_has_storage_blob=$(az role assignment list --assignee "$APP_ID" --role "Storage Blob Data Contributor" --scope "/subscriptions/$AZURE_SUBSCRIPTION_ID" --query "[?roleDefinitionName=='Storage Blob Data Contributor'] | length(@)" -o tsv 2>/dev/null || echo "0")
+    if [[ "$app_has_storage_blob" -eq 0 ]]; then
         echo "Assigning Storage Blob Data Contributor role to app..."
-        az role assignment create --assignee "$APP_ID" --role "Storage Blob Data Contributor" --scope "/subscriptions/$AZURE_SUBSCRIPTION_ID"
+        if az role assignment create --assignee "$APP_ID" --role "Storage Blob Data Contributor" --scope "/subscriptions/$AZURE_SUBSCRIPTION_ID"; then
+            echo "Successfully assigned Storage Blob Data Contributor role to app"
+        else
+            echo "WARNING: Failed to assign Storage Blob Data Contributor role to app - it may already exist or you may lack permissions"
+        fi
     else
         echo "Storage Blob Data Contributor role already assigned to app"
     fi
     
     # Check for Disk Snapshot Contributor role
-    if ! az role assignment list --assignee "$APP_ID" --role "Disk Snapshot Contributor" --scope "/subscriptions/$AZURE_SUBSCRIPTION_ID" --query "[0]" &>/dev/null; then
+    local app_has_disk_snapshot=$(az role assignment list --assignee "$APP_ID" --role "Disk Snapshot Contributor" --scope "/subscriptions/$AZURE_SUBSCRIPTION_ID" --query "[?roleDefinitionName=='Disk Snapshot Contributor'] | length(@)" -o tsv 2>/dev/null || echo "0")
+    if [[ "$app_has_disk_snapshot" -eq 0 ]]; then
         echo "Assigning Disk Snapshot Contributor role to app..."
-        az role assignment create --assignee "$APP_ID" --role "Disk Snapshot Contributor" --scope "/subscriptions/$AZURE_SUBSCRIPTION_ID"
+        if az role assignment create --assignee "$APP_ID" --role "Disk Snapshot Contributor" --scope "/subscriptions/$AZURE_SUBSCRIPTION_ID"; then
+            echo "Successfully assigned Disk Snapshot Contributor role to app"
+        else
+            echo "WARNING: Failed to assign Disk Snapshot Contributor role to app - it may already exist or you may lack permissions"
+        fi
     else
         echo "Disk Snapshot Contributor role already assigned to app"
     fi
@@ -897,18 +922,26 @@ create-velero-container-for-azure-cluster() {
     if [[ -n "$IDENTITY_CLIENT_ID" ]] && [[ "$IDENTITY_CLIENT_ID" != "null" ]]; then
         echo "Found managed identity: $IDENTITY_NAME (Client ID: $IDENTITY_CLIENT_ID)"
         
+        # Get the principal ID for the managed identity
+        local IDENTITY_PRINCIPAL_ID=$(az identity show -g "$CLUSTER_RESOURCE_GROUP" -n "$IDENTITY_NAME" --query principalId -o tsv 2>/dev/null)
+        
         # Check if Storage Blob Data Contributor role is already assigned at storage account level
-        if ! az role assignment list \
-            --assignee "$IDENTITY_CLIENT_ID" \
+        local mi_has_storage_access=$(az role assignment list \
+            --assignee "$IDENTITY_PRINCIPAL_ID" \
             --role "Storage Blob Data Contributor" \
             --scope "$STORAGE_ACCOUNT_ID" \
-            --query "[0]" &>/dev/null; then
-            
+            --query "[?roleDefinitionName=='Storage Blob Data Contributor'] | length(@)" -o tsv 2>/dev/null || echo "0")
+        
+        if [[ "$mi_has_storage_access" -eq 0 ]]; then
             echo "Assigning Storage Blob Data Contributor role to managed identity at storage account level..."
-            az role assignment create \
-                --assignee "$IDENTITY_CLIENT_ID" \
+            if az role assignment create \
+                --assignee "$IDENTITY_PRINCIPAL_ID" \
                 --role "Storage Blob Data Contributor" \
-                --scope "$STORAGE_ACCOUNT_ID"
+                --scope "$STORAGE_ACCOUNT_ID"; then
+                echo "Successfully assigned Storage Blob Data Contributor role at storage account level"
+            else
+                echo "WARNING: Failed to assign role - it may already exist or you may lack permissions"
+            fi
         else
             echo "Storage Blob Data Contributor role already assigned to managed identity at storage account level"
         fi
@@ -924,17 +957,22 @@ create-velero-container-for-azure-cluster() {
         echo "Found Azure AD app: $APP_NAME (App ID: $APP_ID)"
         
         # Check if Storage Blob Data Contributor role is already assigned at storage account level
-        if ! az role assignment list \
+        local app_has_storage_access=$(az role assignment list \
             --assignee "$APP_ID" \
             --role "Storage Blob Data Contributor" \
             --scope "$STORAGE_ACCOUNT_ID" \
-            --query "[0]" &>/dev/null; then
-            
+            --query "[?roleDefinitionName=='Storage Blob Data Contributor'] | length(@)" -o tsv 2>/dev/null || echo "0")
+        
+        if [[ "$app_has_storage_access" -eq 0 ]]; then
             echo "Assigning Storage Blob Data Contributor role to app at storage account level..."
-            az role assignment create \
+            if az role assignment create \
                 --assignee "$APP_ID" \
                 --role "Storage Blob Data Contributor" \
-                --scope "$STORAGE_ACCOUNT_ID"
+                --scope "$STORAGE_ACCOUNT_ID"; then
+                echo "Successfully assigned Storage Blob Data Contributor role at storage account level"
+            else
+                echo "WARNING: Failed to assign role - it may already exist or you may lack permissions"
+            fi
         else
             echo "Storage Blob Data Contributor role already assigned to app at storage account level"
         fi
