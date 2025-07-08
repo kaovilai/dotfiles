@@ -524,7 +524,7 @@ create-velero-identity-for-azure-cluster() {
         return 1
     fi
     
-    local IDENTITY_NAME="velero"
+    local IDENTITY_NAME="velero-${CLUSTER_NAME}"
     
     # Get subscription and tenant from current az login
     local AZURE_SUBSCRIPTION_ID=$(az account show --query id -o tsv)
@@ -885,7 +885,7 @@ create-velero-container-for-azure-cluster() {
         --query id -o tsv)
     
     # Grant access to managed identity if it exists
-    local IDENTITY_NAME="velero"
+    local IDENTITY_NAME="velero-${CLUSTER_NAME}"
     local IDENTITY_CLIENT_ID=$(az identity show -g "$CLUSTER_RESOURCE_GROUP" -n "$IDENTITY_NAME" --query clientId -o tsv 2>/dev/null)
     
     if [[ -n "$IDENTITY_CLIENT_ID" ]] && [[ "$IDENTITY_CLIENT_ID" != "null" ]]; then
@@ -1017,7 +1017,7 @@ create-velero-bsl-for-azure-cluster() {
     fi
     
     # Check if velero identity exists
-    local IDENTITY_NAME="velero"
+    local IDENTITY_NAME="velero-${CLUSTER_NAME}"
     local CLUSTER_RESOURCE_GROUP="${CLUSTER_NAME}-rg"
     
     if ! az identity show -g "$CLUSTER_RESOURCE_GROUP" -n "$IDENTITY_NAME" &>/dev/null; then
@@ -1127,7 +1127,7 @@ create-velero-dpa-for-azure-cluster() {
     fi
     
     # Check if velero identity exists and get client ID
-    local IDENTITY_NAME="velero"
+    local IDENTITY_NAME="velero-${CLUSTER_NAME}"
     local CLUSTER_RESOURCE_GROUP="${CLUSTER_NAME}-rg"
     
     local IDENTITY_CLIENT_ID=$(az identity show -g "$CLUSTER_RESOURCE_GROUP" -n "$IDENTITY_NAME" --query clientId -o tsv 2>/dev/null)
