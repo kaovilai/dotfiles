@@ -1479,3 +1479,4 @@ setup-velero-oadp-for-azure-cluster() {
 
 # Alias for convenience
 alias setup-velero-azure='setup-velero-oadp-for-azure-cluster'
+alias setup-cluster-with-oadp-azure='create-ocp-azure-sts && use-ocp-azure-sts && create-velero-identity-for-azure-cluster && create-velero-container-for-azure-cluster && make deploy-olm-stsflow-azure && create-velero-dpa-for-azure-cluster && oc apply -f velero-dpa-tkaovila-${TODAY}-sts.yaml'
