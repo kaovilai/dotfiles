@@ -625,133 +625,29 @@ create-velero-identity-for-azure-cluster() {
         echo "Federated credential $FED_CRED_NAME already exists for managed identity"
     fi
     
-    echo ""
-    echo "Setting up Azure AD app registration for Velero..."
-    
-    # Create or get Azure AD app registration
-    local APP_NAME="velero-${CLUSTER_NAME}"
-    local APP_ID=""
-    local APP_OBJECT_ID=""
-    
-    # Check if app already exists
-    local EXISTING_APP=$(az ad app list --filter "displayName eq '$APP_NAME'" --query "[0]" -o json)
-    
-    if [[ -n "$EXISTING_APP" ]] && [[ "$EXISTING_APP" != "null" ]]; then
-        APP_ID=$(echo "$EXISTING_APP" | jq -r '.appId')
-        APP_OBJECT_ID=$(echo "$EXISTING_APP" | jq -r '.id')
-        echo "Azure AD app '$APP_NAME' already exists (App ID: $APP_ID)"
-    else
-        echo "Creating Azure AD app registration: $APP_NAME"
-        local APP_CREATE_RESULT=$(az ad app create --display-name "$APP_NAME" --sign-in-audience "AzureADMyOrg")
-        APP_ID=$(echo "$APP_CREATE_RESULT" | jq -r '.appId')
-        APP_OBJECT_ID=$(echo "$APP_CREATE_RESULT" | jq -r '.id')
-        echo "Created Azure AD app with App ID: $APP_ID"
-        
-        # Wait for app to propagate
-        echo "Waiting for app registration to propagate in Azure AD..."
-        sleep 10
-    fi
-    
-    # Create or update service principal for the app
-    local SP_OBJECT_ID=""
-    local EXISTING_SP=$(az ad sp list --filter "appId eq '$APP_ID'" --query "[0]" -o json)
-    
-    if [[ -n "$EXISTING_SP" ]] && [[ "$EXISTING_SP" != "null" ]]; then
-        SP_OBJECT_ID=$(echo "$EXISTING_SP" | jq -r '.id')
-        echo "Service principal already exists for app (Object ID: $SP_OBJECT_ID)"
-    else
-        echo "Creating service principal for app..."
-        local SP_CREATE_RESULT=$(az ad sp create --id "$APP_ID")
-        SP_OBJECT_ID=$(echo "$SP_CREATE_RESULT" | jq -r '.id')
-        echo "Created service principal with Object ID: $SP_OBJECT_ID"
-        
-        # Wait for service principal to propagate
-        sleep 10
-    fi
-    
-    # Assign roles to the app's service principal
-    echo "Checking role assignments for app service principal..."
-    
-    # Check for Storage Blob Data Contributor role
-    local app_has_storage_blob=$(az role assignment list --assignee "$APP_ID" --role "Storage Blob Data Contributor" --scope "/subscriptions/$AZURE_SUBSCRIPTION_ID" --query "[?roleDefinitionName=='Storage Blob Data Contributor'] | length(@)" -o tsv 2>/dev/null || echo "0")
-    if [[ "$app_has_storage_blob" -eq 0 ]]; then
-        echo "Assigning Storage Blob Data Contributor role to app..."
-        if az role assignment create --assignee "$APP_ID" --role "Storage Blob Data Contributor" --scope "/subscriptions/$AZURE_SUBSCRIPTION_ID"; then
-            echo "Successfully assigned Storage Blob Data Contributor role to app"
-        else
-            echo "WARNING: Failed to assign Storage Blob Data Contributor role to app - it may already exist or you may lack permissions"
-        fi
-    else
-        echo "Storage Blob Data Contributor role already assigned to app"
-    fi
-    
-    # Check for Disk Snapshot Contributor role
-    local app_has_disk_snapshot=$(az role assignment list --assignee "$APP_ID" --role "Disk Snapshot Contributor" --scope "/subscriptions/$AZURE_SUBSCRIPTION_ID" --query "[?roleDefinitionName=='Disk Snapshot Contributor'] | length(@)" -o tsv 2>/dev/null || echo "0")
-    if [[ "$app_has_disk_snapshot" -eq 0 ]]; then
-        echo "Assigning Disk Snapshot Contributor role to app..."
-        if az role assignment create --assignee "$APP_ID" --role "Disk Snapshot Contributor" --scope "/subscriptions/$AZURE_SUBSCRIPTION_ID"; then
-            echo "Successfully assigned Disk Snapshot Contributor role to app"
-        else
-            echo "WARNING: Failed to assign Disk Snapshot Contributor role to app - it may already exist or you may lack permissions"
-        fi
-    else
-        echo "Disk Snapshot Contributor role already assigned to app"
-    fi
-    
-    # Create federated credential for the app
-    local APP_FED_CRED_NAME="velero-kubernetes-credential"
-    
-    # Check if federated credential exists for the app
-    local EXISTING_APP_FED_CRED=$(az ad app federated-credential list --id "$APP_OBJECT_ID" --query "[?name=='$APP_FED_CRED_NAME']" -o json)
-    
-    if [[ -z "$EXISTING_APP_FED_CRED" ]] || [[ "$EXISTING_APP_FED_CRED" == "[]" ]]; then
-        echo "Creating federated credential for Azure AD app..."
-        
-        # Create the federated credential JSON
-        local FED_CRED_PARAMS=$(cat <<EOF
-{
-    "name": "$APP_FED_CRED_NAME",
-    "issuer": "$SERVICE_ACCOUNT_ISSUER",
-    "subject": "system:serviceaccount:openshift-adp:velero",
-    "description": "Federated credential for Velero backup and restore operations",
-    "audiences": ["openshift"]
-}
-EOF
-)
-        
-        # Create temporary file for parameters
-        local TEMP_PARAMS_FILE=$(mktemp)
-        echo "$FED_CRED_PARAMS" > "$TEMP_PARAMS_FILE"
-        
-        # Create the federated credential
-        az ad app federated-credential create --id "$APP_OBJECT_ID" --parameters "@$TEMP_PARAMS_FILE"
-        
-        # Clean up temp file
-        rm -f "$TEMP_PARAMS_FILE"
-        
-        echo "Created federated credential for Azure AD app"
-    else
-        echo "Federated credential $APP_FED_CRED_NAME already exists for Azure AD app"
-    fi
     
     echo ""
     echo "Velero identity setup complete!"
     echo ""
     echo "Identity Configuration Summary:"
+    echo "  Managed Identity Name: $IDENTITY_NAME"
     echo "  Managed Identity Client ID: $IDENTITY_CLIENT_ID"
-    echo "  Azure AD App ID: $APP_ID"
     echo "  Tenant ID: $AZURE_TENANT_ID"
     echo "  Subscription ID: $AZURE_SUBSCRIPTION_ID"
     echo ""
-    echo "Both managed identity and Azure AD app have been configured with:"
+    echo "Managed identity has been configured with:"
+    echo "  ✓ Contributor role (for resource management)"
     echo "  ✓ Storage Blob Data Contributor role (for backup storage)"
     echo "  ✓ Disk Snapshot Contributor role (for volume snapshots)"
     echo "  ✓ Federated credentials for OpenShift workload identity"
     echo ""
     echo "Export these variables for the OADP Makefile:"
-    echo "export AZURE_CLIENT_ID=$IDENTITY_CLIENT_ID  # Using managed identity client ID"
+    echo "export AZURE_CLIENT_ID=$IDENTITY_CLIENT_ID"
     echo "export AZURE_TENANT_ID=$AZURE_TENANT_ID"
     echo "export AZURE_SUBSCRIPTION_ID=$AZURE_SUBSCRIPTION_ID"
+    export AZURE_CLIENT_ID=$IDENTITY_CLIENT_ID
+    export AZURE_TENANT_ID=$AZURE_TENANT_ID
+    export AZURE_SUBSCRIPTION_ID=$AZURE_SUBSCRIPTION_ID
     echo ""
     echo "Or run the OADP deployment directly with:"
     echo "make deploy-olm-stsflow-azure AZURE_CLIENT_ID=$IDENTITY_CLIENT_ID AZURE_TENANT_ID=$AZURE_TENANT_ID AZURE_SUBSCRIPTION_ID=$AZURE_SUBSCRIPTION_ID"
@@ -763,8 +659,8 @@ EOF
     echo "AZURE_CLOUD_NAME=AzurePublicCloud"
     echo "EOF"
     echo ""
-    echo "Note: The Azure AD app registration ($APP_ID) provides enhanced permissions"
-    echo "for storage and snapshot operations compared to managed identity alone."
+    echo "IMPORTANT: When annotating the Velero service account, use:"
+    echo "kubectl annotate serviceaccount velero -n openshift-adp azure.workload.identity/client-id=$IDENTITY_CLIENT_ID --overwrite"
 }
 
 # Function to create Azure storage container for Velero backups
@@ -949,36 +845,6 @@ create-velero-container-for-azure-cluster() {
         echo "Managed identity not found. Run 'create-velero-identity-for-azure-cluster' to create it."
     fi
     
-    # Grant access to Azure AD app if it exists
-    local APP_NAME="velero-${CLUSTER_NAME}"
-    local APP_ID=$(az ad app list --filter "displayName eq '$APP_NAME'" --query "[0].appId" -o tsv 2>/dev/null)
-    
-    if [[ -n "$APP_ID" ]] && [[ "$APP_ID" != "null" ]]; then
-        echo "Found Azure AD app: $APP_NAME (App ID: $APP_ID)"
-        
-        # Check if Storage Blob Data Contributor role is already assigned at storage account level
-        local app_has_storage_access=$(az role assignment list \
-            --assignee "$APP_ID" \
-            --role "Storage Blob Data Contributor" \
-            --scope "$STORAGE_ACCOUNT_ID" \
-            --query "[?roleDefinitionName=='Storage Blob Data Contributor'] | length(@)" -o tsv 2>/dev/null || echo "0")
-        
-        if [[ "$app_has_storage_access" -eq 0 ]]; then
-            echo "Assigning Storage Blob Data Contributor role to app at storage account level..."
-            if az role assignment create \
-                --assignee "$APP_ID" \
-                --role "Storage Blob Data Contributor" \
-                --scope "$STORAGE_ACCOUNT_ID"; then
-                echo "Successfully assigned Storage Blob Data Contributor role at storage account level"
-            else
-                echo "WARNING: Failed to assign role - it may already exist or you may lack permissions"
-            fi
-        else
-            echo "Storage Blob Data Contributor role already assigned to app at storage account level"
-        fi
-    else
-        echo "Azure AD app not found. Run 'create-velero-identity-for-azure-cluster' to create it."
-    fi
     
     echo ""
     echo "Velero storage container setup complete!"
@@ -988,12 +854,10 @@ create-velero-container-for-azure-cluster() {
     echo "  Container: $CONTAINER_NAME"
     echo "  Resource Group: $STORAGE_RESOURCE_GROUP"
     echo ""
-    echo "Access granted to:"
     if [[ -n "$IDENTITY_CLIENT_ID" ]] && [[ "$IDENTITY_CLIENT_ID" != "null" ]]; then
+        echo "Access granted to:"
         echo "  ✓ Managed Identity: $IDENTITY_NAME (Client ID: $IDENTITY_CLIENT_ID)"
-    fi
-    if [[ -n "$APP_ID" ]] && [[ "$APP_ID" != "null" ]]; then
-        echo "  ✓ Azure AD App: $APP_NAME (App ID: $APP_ID)"
+        echo "  ✓ Storage Blob Data Contributor role at storage account level"
     fi
     echo ""
     echo "To configure Velero with this storage:"
@@ -1070,15 +934,6 @@ create-velero-bsl-for-azure-cluster() {
         return 1
     fi
     
-    # Check if Azure AD app exists
-    local APP_NAME="velero-${CLUSTER_NAME}"
-    local APP_ID=$(az ad app list --filter "displayName eq '$APP_NAME'" --query "[0].appId" -o tsv 2>/dev/null)
-    
-    if [[ -z "$APP_ID" ]] || [[ "$APP_ID" == "null" ]]; then
-        echo "ERROR: Azure AD app '$APP_NAME' not found"
-        echo "Please run 'create-velero-identity-for-azure-cluster' first"
-        return 1
-    fi
     
     # Create BSL YAML file
     local BSL_FILE="velero-bsl-${CLUSTER_NAME}.yaml"
@@ -1124,8 +979,8 @@ EOF
     echo "Prerequisites checklist:"
     echo "✓ Storage account: $STORAGE_ACCOUNT_NAME (in resource group: $STORAGE_RG)"
     echo "✓ Container: $CONTAINER_NAME"
-    echo "✓ Velero identity: $IDENTITY_NAME (in resource group: $CLUSTER_RESOURCE_GROUP)"
-    echo "✓ Azure AD app: $APP_NAME (App ID: $APP_ID)"
+    echo "✓ Velero managed identity: $IDENTITY_NAME (in resource group: $CLUSTER_RESOURCE_GROUP)"
+    echo "✓ Managed identity client ID: $IDENTITY_CLIENT_ID"
     echo ""
     echo "To apply this BackupStorageLocation:"
     echo "  kubectl apply -f $BSL_FILE"
@@ -1182,15 +1037,6 @@ create-velero-dpa-for-azure-cluster() {
         return 1
     fi
     
-    # Check if Azure AD app exists and get app ID
-    local APP_NAME="velero-${CLUSTER_NAME}"
-    local APP_ID=$(az ad app list --filter "displayName eq '$APP_NAME'" --query "[0].appId" -o tsv 2>/dev/null)
-    
-    if [[ -z "$APP_ID" ]] || [[ "$APP_ID" == "null" ]]; then
-        echo "ERROR: Azure AD app '$APP_NAME' not found"
-        echo "Please run 'create-velero-identity-for-azure-cluster' first"
-        return 1
-    fi
     
     # Create DPA YAML file
     local DPA_FILE="velero-dpa-${CLUSTER_NAME}.yaml"
@@ -1277,13 +1123,9 @@ EOF
     echo "✓ Storage account: $STORAGE_ACCOUNT_NAME (in resource group: $STORAGE_RG)"
     echo "✓ Container: $CONTAINER_NAME"
     echo "✓ Velero managed identity: $IDENTITY_NAME (Client ID: $IDENTITY_CLIENT_ID)"
-    echo "✓ Azure AD app: $APP_NAME (App ID: $APP_ID)"
     echo ""
-    echo "IMPORTANT: Before applying the DPA, annotate the Velero service account with the App ID:"
-    echo "  kubectl annotate serviceaccount velero -n openshift-adp azure.workload.identity/client-id=$APP_ID --overwrite"
-    echo ""
-    echo "Note: Using the Azure AD app ID ($APP_ID) instead of managed identity"
-    echo "provides enhanced permissions for storage and snapshot operations."
+    echo "IMPORTANT: Before applying the DPA, annotate the Velero service account with the managed identity client ID:"
+    echo "  kubectl annotate serviceaccount velero -n openshift-adp azure.workload.identity/client-id=$IDENTITY_CLIENT_ID --overwrite"
     echo ""
     echo "To apply this DataProtectionApplication:"
     echo "  kubectl apply -f $DPA_FILE"
@@ -1398,64 +1240,6 @@ validate-velero-role-assignments-for-azure-cluster() {
         echo "  Run 'create-velero-identity-for-azure-cluster' to create it"
     fi
     
-    echo ""
-    
-    # Check Azure AD app
-    local APP_NAME="velero-${CLUSTER_NAME}"
-    echo "Checking Azure AD App: $APP_NAME"
-    echo "----------------------------------------"
-    
-    local APP_INFO=$(az ad app list --filter "displayName eq '$APP_NAME'" --query "[0]" -o json 2>/dev/null)
-    if [[ -n "$APP_INFO" ]] && [[ "$APP_INFO" != "null" ]]; then
-        local APP_ID=$(echo "$APP_INFO" | jq -r '.appId')
-        local APP_OBJECT_ID=$(echo "$APP_INFO" | jq -r '.id')
-        
-        echo "✓ Found Azure AD App"
-        echo "  App ID: $APP_ID"
-        echo "  Object ID: $APP_OBJECT_ID"
-        
-        # Get service principal info
-        local SP_INFO=$(az ad sp list --filter "appId eq '$APP_ID'" --query "[0]" -o json 2>/dev/null)
-        if [[ -n "$SP_INFO" ]] && [[ "$SP_INFO" != "null" ]]; then
-            local SP_OBJECT_ID=$(echo "$SP_INFO" | jq -r '.id')
-            echo "  Service Principal Object ID: $SP_OBJECT_ID"
-        fi
-        
-        echo ""
-        echo "Role Assignments for Azure AD App:"
-        # Get all role assignments for the app
-        local APP_ASSIGNMENTS=$(az role assignment list --assignee "$APP_ID" --all -o json)
-        
-        # Check subscription-level roles
-        echo ""
-        echo "  Subscription-level roles:"
-        echo "$APP_ASSIGNMENTS" | jq -r --arg sub_id "/subscriptions/$AZURE_SUBSCRIPTION_ID" \
-            '.[] | select(.scope == $sub_id) | "    - \(.roleDefinitionName)"' | sort -u
-        
-        # Check storage account-level roles
-        echo ""
-        echo "  Storage account-level roles:"
-        echo "$APP_ASSIGNMENTS" | jq -r --arg storage_id "$STORAGE_ACCOUNT_ID" \
-            '.[] | select(.scope == $storage_id) | "    - \(.roleDefinitionName) (on storage account)"' | sort -u
-        
-        # Count total assignments
-        local APP_TOTAL=$(echo "$APP_ASSIGNMENTS" | jq '. | length')
-        echo ""
-        echo "  Total role assignments: $APP_TOTAL"
-        
-        # Check federated credentials
-        echo ""
-        echo "Federated Credentials:"
-        local FED_CREDS=$(az ad app federated-credential list --id "$APP_OBJECT_ID" -o json 2>/dev/null)
-        if [[ -n "$FED_CREDS" ]] && [[ "$FED_CREDS" != "[]" ]]; then
-            echo "$FED_CREDS" | jq -r '.[] | "  - \(.name): \(.subject)"'
-        else
-            echo "  No federated credentials found"
-        fi
-    else
-        echo "✗ Azure AD App not found"
-        echo "  Run 'create-velero-identity-for-azure-cluster' to create it"
-    fi
     
     echo ""
     echo "================================================================"
@@ -1492,32 +1276,6 @@ validate-velero-role-assignments-for-azure-cluster() {
         ((ISSUES++))
     fi
     
-    # Check if Azure AD app exists and has required roles
-    if [[ -n "$APP_INFO" ]] && [[ "$APP_INFO" != "null" ]]; then
-        # Check for required roles
-        local APP_HAS_STORAGE_BLOB=$(echo "$APP_ASSIGNMENTS" | jq -r \
-            '[.[] | select(.roleDefinitionName == "Storage Blob Data Contributor")] | length')
-        local APP_HAS_DISK_SNAPSHOT=$(echo "$APP_ASSIGNMENTS" | jq -r \
-            '[.[] | select(.roleDefinitionName == "Disk Snapshot Contributor")] | length')
-        
-        if [[ "$APP_HAS_STORAGE_BLOB" -eq 0 ]]; then
-            echo "⚠️  Azure AD App missing 'Storage Blob Data Contributor' role"
-            ((ISSUES++))
-        fi
-        if [[ "$APP_HAS_DISK_SNAPSHOT" -eq 0 ]]; then
-            echo "⚠️  Azure AD App missing 'Disk Snapshot Contributor' role"
-            ((ISSUES++))
-        fi
-        
-        # Check federated credentials
-        if [[ -z "$FED_CREDS" ]] || [[ "$FED_CREDS" == "[]" ]]; then
-            echo "⚠️  Azure AD App missing federated credentials"
-            ((ISSUES++))
-        fi
-    else
-        echo "⚠️  Azure AD App not found"
-        ((ISSUES++))
-    fi
     
     if [[ $ISSUES -eq 0 ]]; then
         echo "✅ All role assignments appear to be correctly configured!"
@@ -1532,9 +1290,6 @@ validate-velero-role-assignments-for-azure-cluster() {
     
     echo ""
     echo "To see detailed role assignment information in JSON format:"
-    echo "  # For managed identity:"
-    echo "  az role assignment list --assignee $IDENTITY_CLIENT_ID --all -o json"
-    echo ""
-    echo "  # For Azure AD app:"
-    echo "  az role assignment list --assignee $APP_ID --all -o json"
+    echo "  # Using principal ID for managed identity:"
+    echo "  az role assignment list --assignee $IDENTITY_PRINCIPAL_ID --all -o json"
 }
