@@ -1293,3 +1293,189 @@ validate-velero-role-assignments-for-azure-cluster() {
     echo "  # Using principal ID for managed identity:"
     echo "  az role assignment list --assignee $IDENTITY_PRINCIPAL_ID --all -o json"
 }
+
+# Function to setup complete Velero/OADP for current Azure OpenShift cluster
+setup-velero-oadp-for-azure-cluster() {
+    echo "Starting complete Velero/OADP setup for Azure OpenShift cluster..."
+    echo "================================================================"
+    
+    # Get cluster API URL
+    local API_URL=$(oc whoami --show-server 2>/dev/null)
+    
+    if [[ -z "$API_URL" ]]; then
+        echo "ERROR: Not connected to an OpenShift cluster. Please login first."
+        return 1
+    fi
+    
+    # Extract cluster name from API URL
+    local CLUSTER_NAME=$(echo "$API_URL" | sed 's|https://api\.||' | sed 's|\..*||')
+    
+    if [[ -z "$CLUSTER_NAME" ]]; then
+        echo "ERROR: Could not determine cluster name from API URL: $API_URL"
+        return 1
+    fi
+    
+    echo "Cluster: $CLUSTER_NAME"
+    echo ""
+    
+    # Step 1: Create Velero identity
+    echo "Step 1: Creating Velero identity..."
+    echo "-----------------------------------"
+    if ! create-velero-identity-for-azure-cluster; then
+        echo "ERROR: Failed to create Velero identity"
+        return 1
+    fi
+    echo ""
+    
+    # Step 2: Create storage container
+    echo "Step 2: Creating Velero storage container..."
+    echo "-------------------------------------------"
+    if ! create-velero-container-for-azure-cluster; then
+        echo "ERROR: Failed to create Velero storage container"
+        return 1
+    fi
+    echo ""
+    
+    # Step 3: Deploy OADP operator with STS flow
+    echo "Step 3: Deploying OADP operator with STS flow..."
+    echo "------------------------------------------------"
+    
+    # Check if we're in an OADP repo directory
+    if [[ -f "Makefile" ]] && grep -q "deploy-olm-stsflow-azure" Makefile 2>/dev/null; then
+        echo "Found OADP Makefile in current directory"
+    else
+        echo "WARNING: Not in OADP operator directory. Please ensure you're in the correct directory."
+        echo "You can clone it with: git clone https://github.com/openshift/oadp-operator.git"
+        echo ""
+        echo "Would you like to continue anyway? (y/N)"
+        read -r response
+        if [[ ! "$response" =~ ^[Yy]$ ]]; then
+            echo "Aborting setup"
+            return 1
+        fi
+    fi
+    
+    # The variables should already be exported by create-velero-identity-for-azure-cluster
+    if [[ -z "$AZURE_CLIENT_ID" ]] || [[ -z "$AZURE_TENANT_ID" ]] || [[ -z "$AZURE_SUBSCRIPTION_ID" ]]; then
+        echo "ERROR: Azure environment variables not set. This should have been done by create-velero-identity-for-azure-cluster"
+        return 1
+    fi
+    
+    echo "Running: make deploy-olm-stsflow-azure"
+    if ! make deploy-olm-stsflow-azure; then
+        echo "ERROR: Failed to deploy OADP operator"
+        echo "Please check the output above for errors"
+        return 1
+    fi
+    echo ""
+    
+    # Wait for operator to be ready
+    echo "Waiting for OADP operator to be ready..."
+    local retries=30
+    while [[ $retries -gt 0 ]]; do
+        if oc get pods -n openshift-adp 2>/dev/null | grep -q "oadp-operator.*Running"; then
+            echo "OADP operator is running"
+            break
+        fi
+        echo -n "."
+        sleep 5
+        ((retries--))
+    done
+    
+    if [[ $retries -eq 0 ]]; then
+        echo ""
+        echo "WARNING: OADP operator may not be fully ready yet"
+    fi
+    echo ""
+    
+    # Step 4: Create and apply DataProtectionApplication
+    echo "Step 4: Creating and applying DataProtectionApplication..."
+    echo "---------------------------------------------------------"
+    if ! create-velero-dpa-for-azure-cluster; then
+        echo "ERROR: Failed to create DataProtectionApplication YAML"
+        return 1
+    fi
+    
+    # Get the DPA file name
+    local DPA_FILE="velero-dpa-${CLUSTER_NAME}.yaml"
+    
+    if [[ ! -f "$DPA_FILE" ]]; then
+        echo "ERROR: DataProtectionApplication file not found: $DPA_FILE"
+        return 1
+    fi
+    
+    echo "Applying DataProtectionApplication..."
+    if ! oc apply -f "$DPA_FILE"; then
+        echo "ERROR: Failed to apply DataProtectionApplication"
+        return 1
+    fi
+    echo ""
+    
+    # Step 5: Wait for Velero to be ready
+    echo "Step 5: Waiting for Velero deployment to be ready..."
+    echo "---------------------------------------------------"
+    local velero_ready=false
+    retries=60  # 5 minutes timeout
+    
+    while [[ $retries -gt 0 ]]; do
+        if oc get pods -n openshift-adp -l app.kubernetes.io/name=velero 2>/dev/null | grep -q "velero.*Running"; then
+            velero_ready=true
+            break
+        fi
+        echo -n "."
+        sleep 5
+        ((retries--))
+    done
+    
+    echo ""
+    
+    if [[ "$velero_ready" == "true" ]]; then
+        echo "✓ Velero is running"
+    else
+        echo "⚠️  Velero may not be fully ready yet"
+    fi
+    
+    # Step 6: Validate setup
+    echo ""
+    echo "Step 6: Validating Velero setup..."
+    echo "----------------------------------"
+    
+    # Check Velero version
+    if command -v velero &>/dev/null; then
+        echo "Velero CLI version:"
+        velero version --client-only
+    else
+        echo "Velero CLI not found. Install it from: https://velero.io/docs/main/basic-install/#install-the-cli"
+    fi
+    
+    # Check DPA status
+    echo ""
+    echo "DataProtectionApplication status:"
+    oc get dpa dpa -n openshift-adp -o jsonpath='{.status.conditions[?(@.type=="Reconciled")]}' | jq '.' 2>/dev/null || echo "Status not yet available"
+    
+    # Check pods
+    echo ""
+    echo "OADP/Velero pods:"
+    oc get pods -n openshift-adp
+    
+    # Final summary
+    echo ""
+    echo "================================================================"
+    echo "Velero/OADP Setup Complete!"
+    echo "================================================================"
+    echo ""
+    echo "Next steps:"
+    echo "1. Verify the setup with: oc get all -n openshift-adp"
+    echo "2. Check backup storage location: oc get backupstoragelocation -n openshift-adp"
+    echo "3. Create your first backup: velero backup create test-backup --include-namespaces=<namespace>"
+    echo ""
+    echo "DataProtectionApplication file saved as: $DPA_FILE"
+    echo ""
+    echo "To troubleshoot issues:"
+    echo "- Check DPA status: oc describe dpa dpa -n openshift-adp"
+    echo "- Check Velero logs: oc logs -n openshift-adp -l app.kubernetes.io/name=velero"
+    echo "- Validate role assignments: validate-velero-role-assignments-for-azure-cluster"
+}
+
+# Alias for convenience
+alias setup-velero-azure='setup-velero-oadp-for-azure-cluster'
