@@ -1065,10 +1065,6 @@ spec:
         requests:
           cpu: 500m
           memory: 256Mi
-      # Pod configuration for workload identity
-      podConfig:
-        labels:
-          azure.workload.identity/use: "true"
     # Node agent configuration (formerly Restic)
     nodeAgent:
       enable: true
@@ -1076,10 +1072,6 @@ spec:
       # Configure the DaemonSet node selector
       nodeSelector:
         node-role.kubernetes.io/worker: ""
-      # Pod configuration for workload identity
-      podConfig:
-        labels:
-          azure.workload.identity/use: "true"
   # TODO: fix - backupImages should be enabled once image backup is properly configured
   backupImages: false
   backupLocations:
