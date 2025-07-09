@@ -11,3 +11,24 @@ alias cluster-arch="kubectl get nodes -o jsonpath='{range .items[0]}{.status.nod
 alias cluster-arch-only="kubectl get nodes -o jsonpath='{range .items[0]}{.status.nodeInfo.architecture}{end}'"
 alias ocregistry_tag='echo $(oc-registry-route)/$(basename $PWD):$(current-branch)'
 alias ocregistry_notag='echo $(oc-registry-route)/$(basename $PWD)'
+
+# Wait for deployments and follow logs
+logs-velero() {
+  local ns="${1:-$(oc config view --minify -o jsonpath='{.contexts[0].context.namespace}')}"
+  until oc get deployment/velero -n "$ns" &>/dev/null; do 
+    echo "Waiting for velero deployment to exist in namespace $ns..."
+    sleep 2
+  done && \
+  oc wait --for=condition=available deployment/velero -n "$ns" --timeout=300s && \
+  oc logs deploy/velero -n "$ns" -f
+}
+
+logs-oadp() {
+  local ns="${1:-$(oc config view --minify -o jsonpath='{.contexts[0].context.namespace}')}"
+  until oc get deployment/openshift-adp-controller-manager -n "$ns" &>/dev/null; do 
+    echo "Waiting for openshift-adp-controller-manager deployment to exist in namespace $ns..."
+    sleep 2
+  done && \
+  oc wait --for=condition=available deployment/openshift-adp-controller-manager -n "$ns" --timeout=300s && \
+  oc logs deploy/openshift-adp-controller-manager -n "$ns" -f
+}
