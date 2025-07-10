@@ -213,6 +213,49 @@ ccoctl gcp create-all \
     echo "workload-identity-pool: $CLUSTER_BASE_NAME"
     echo "workload-identity-provider: $CLUSTER_BASE_NAME"
     
+    # Update or remind about secrets.zsh
+    echo ""
+    echo "Would you like to automatically update ~/secrets.zsh with the WIF values? (y/n)"
+    read -r update_secrets
+    
+    if [[ "$update_secrets" == "y" ]]; then
+        # Check if secrets.zsh exists
+        if [[ -f ~/secrets.zsh ]]; then
+            # Create backup
+            cp ~/secrets.zsh ~/secrets.zsh.bak.$(date +%Y%m%d_%H%M%S)
+            
+            # Check if GCP_POOL_ID and GCP_PROVIDER_ID already exist
+            if grep -q "^export GCP_POOL_ID=" ~/secrets.zsh && grep -q "^export GCP_PROVIDER_ID=" ~/secrets.zsh; then
+                # Update existing values
+                sed -i.tmp "s/^export GCP_POOL_ID=.*/export GCP_POOL_ID='$CLUSTER_BASE_NAME'/" ~/secrets.zsh
+                sed -i.tmp "s/^export GCP_PROVIDER_ID=.*/export GCP_PROVIDER_ID='$CLUSTER_BASE_NAME'/" ~/secrets.zsh
+                rm -f ~/secrets.zsh.tmp
+                echo "Updated existing GCP_POOL_ID and GCP_PROVIDER_ID in ~/secrets.zsh"
+            else
+                # Append new values
+                echo "" >> ~/secrets.zsh
+                echo "#For WIF work on cluster $CLUSTER_BASE_NAME" >> ~/secrets.zsh
+                echo "export GCP_POOL_ID='$CLUSTER_BASE_NAME'" >> ~/secrets.zsh
+                echo "export GCP_PROVIDER_ID='$CLUSTER_BASE_NAME'" >> ~/secrets.zsh
+                echo "Added GCP_POOL_ID and GCP_PROVIDER_ID to ~/secrets.zsh"
+            fi
+            
+            echo "Backup created at: ~/secrets.zsh.bak.$(date +%Y%m%d_%H%M%S)"
+            echo ""
+            echo "To apply the changes, run: source ~/secrets.zsh"
+        else
+            echo "ERROR: ~/secrets.zsh not found. Creating it with the WIF values..."
+            echo "#For WIF work on cluster $CLUSTER_BASE_NAME" > ~/secrets.zsh
+            echo "export GCP_POOL_ID='$CLUSTER_BASE_NAME'" >> ~/secrets.zsh
+            echo "export GCP_PROVIDER_ID='$CLUSTER_BASE_NAME'" >> ~/secrets.zsh
+            echo "Created ~/secrets.zsh with WIF values"
+        fi
+    else
+        echo "Manual update required. Add the following to ~/secrets.zsh:"
+        echo "  export GCP_POOL_ID='$CLUSTER_BASE_NAME'"
+        echo "  export GCP_PROVIDER_ID='$CLUSTER_BASE_NAME'"
+    fi
+    
     # Cleanup
     unset OPENSHIFT_INSTALL_RELEASE_IMAGE_OVERRIDE
     [[ -n "$PROCEED_WITH_EXISTING_CLUSTERS" ]] && unset PROCEED_WITH_EXISTING_CLUSTERS
