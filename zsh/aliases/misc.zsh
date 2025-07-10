@@ -55,6 +55,7 @@ alias activepieces-restart='
     podman compose -f ~/OneDrive/activepieces/docker-compose.activepiecestailscale.yml up -d
 '
 alias makelintv2oadp='git checkout linterv2 Makefile .golangci.yaml && make lint-fix && git restore --staged Makefile .golangci.yaml && git restore Makefile .golangci.yaml'
+alias term='open -Fna Terminal .'
 
 znap function vid2gif(){
     local input="$1"
