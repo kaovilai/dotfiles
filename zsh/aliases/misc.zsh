@@ -56,6 +56,7 @@ alias activepieces-restart='
 '
 alias makelintv2oadp='git checkout linterv2 Makefile .golangci.yaml && make lint-fix && git restore --staged Makefile .golangci.yaml && git restore Makefile .golangci.yaml'
 alias term='open -Fna Terminal .'
+alias termc='osascript -e "tell app \"Terminal\" to do script \"cd $(pwd) && claude\""'
 
 znap function vid2gif(){
     local input="$1"
