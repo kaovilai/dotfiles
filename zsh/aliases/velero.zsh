@@ -75,7 +75,7 @@ alias oadp-set-reviewers='set-oadp-pr-review-users'
 
 # Review PRs from a specific author
 pr-review-user() {
-  local user="${1:-sseago}"
+  local user="${1:-kaovilai}"
   local repo="${2:-vmware-tanzu/velero}"
   gh pr list --repo "$repo" --author "$user" --state open --json url --jq '.[].url' | xargs -I {} zsh -ic 'claude-review {}'
 }
@@ -98,3 +98,49 @@ pr-review-all-users() {
     pr-review-user "$user" "$repo"
   done
 }
+
+# Review all Velero maintainer PRs without setting environment variable
+review-velero-maintainer-prs() {
+  echo "Fetching Velero maintainers..."
+  local maintainers_url="https://raw.githubusercontent.com/vmware-tanzu/velero/main/MAINTAINERS.md"
+  local maintainers=$(curl -s "$maintainers_url" | grep -E '@[a-zA-Z0-9_-]+' | grep -v -i 'emeritus' | sed -E 's/.*@([a-zA-Z0-9_-]+).*/\1/' | sort -u)
+  
+  if [[ -z "$maintainers" ]]; then
+    echo "Error: Could not fetch Velero maintainers"
+    return 1
+  fi
+  
+  echo "Found maintainers: $(echo $maintainers | tr '\n' ' ')"
+  echo ""
+  
+  # Loop through each maintainer
+  for user in ${=maintainers}; do
+    echo "Reviewing PRs from $user..."
+    pr-review-user "$user" "vmware-tanzu/velero"
+  done
+}
+
+# Review all OADP owner PRs without setting environment variable
+review-oadp-owner-prs() {
+  echo "Fetching OADP owners..."
+  local owners_url="https://raw.githubusercontent.com/openshift/oadp-operator/master/OWNERS"
+  local owners=$(curl -s "$owners_url" | grep -E '^\s*-\s+[a-zA-Z0-9_-]+\s*$' | sed -E 's/^\s*-\s+([a-zA-Z0-9_-]+)\s*$/\1/' | sort -u)
+  
+  if [[ -z "$owners" ]]; then
+    echo "Error: Could not fetch OADP owners"
+    return 1
+  fi
+  
+  echo "Found owners: $(echo $owners | tr '\n' ' ')"
+  echo ""
+  
+  # Loop through each owner
+  for user in ${=owners}; do
+    echo "Reviewing PRs from $user..."
+    pr-review-user "$user" "openshift/oadp-operator"
+  done
+}
+
+# Aliases for convenience
+alias velero-review-all='review-velero-maintainer-prs'
+alias oadp-review-all='review-oadp-owner-prs'
