@@ -1,9 +1,9 @@
 znap function use-rosa-sts() {
     # Configure kubectl to use a ROSA STS cluster
     # Parameters:
-    #   $1 - Architecture suffix (arm64 or amd64)
+    #   $1 - Architecture suffix (arm64 or amd64, defaults to amd64)
     
-    local ARCH_SUFFIX=$1
+    local ARCH_SUFFIX=${1:-amd64}
     
     # Safety check - ensure TODAY is not empty
     if [[ -z "$TODAY" ]]; then
