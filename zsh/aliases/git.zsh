@@ -51,13 +51,19 @@ znap function git-worktree-code() {
     return 1
   fi
   
+  # Extract Jira issue key from URL if provided
+  local branch_name="$1"
+  if [[ "$1" =~ ^https://issues\.redhat\.com/browse/([A-Z]+-[0-9]+) ]]; then
+    branch_name="${match[1]}"
+  fi
+  
   local current_repo=$(basename $(pwd))
-  local dir="../$current_repo-$1"
+  local dir="../$current_repo-$branch_name"
   
   # Check if branch exists
-  if git show-ref --verify --quiet refs/heads/"$1"; then
+  if git show-ref --verify --quiet refs/heads/"$branch_name"; then
     # Branch exists, add worktree
-    git worktree add "$dir" "$1" && code "$dir"
+    git worktree add "$dir" "$branch_name" && code "$dir"
   else
     # Branch doesn't exist, create it with the worktree
     # Determine the upstream branch to use
@@ -71,8 +77,8 @@ znap function git-worktree-code() {
       return 1
     fi
     
-    echo "Branch '$1' doesn't exist, creating it from $upstream_branch..."
-    git worktree add -b "$1" "$dir" "$upstream_branch" && code "$dir"
+    echo "Branch '$branch_name' doesn't exist, creating it from $upstream_branch..."
+    git worktree add -b "$branch_name" "$dir" "$upstream_branch" && code "$dir"
   fi
 }
 alias gwc='git-worktree-code'
