@@ -260,3 +260,669 @@ ccoctl gcp create-all \
     unset OPENSHIFT_INSTALL_RELEASE_IMAGE_OVERRIDE
     [[ -n "$PROCEED_WITH_EXISTING_CLUSTERS" ]] && unset PROCEED_WITH_EXISTING_CLUSTERS
 }
+
+# Function to create Velero identity for current GCP OpenShift cluster
+# run this after creation above is successful to get vars for velero install for oadp with `make deploy-olm-stsflow-gcp`
+create-velero-identity-for-gcp-cluster() {
+    # Get cluster API URL
+    local API_URL=$(oc whoami --show-server)
+    
+    # Extract cluster name from API URL
+    # Format: https://api.cluster-name.basedomain:6443
+    local CLUSTER_NAME=$(echo "$API_URL" | sed 's|https://api\.||' | sed 's|\..*||')
+    
+    if [[ -z "$CLUSTER_NAME" ]]; then
+        echo "ERROR: Could not determine cluster name from API URL: $API_URL"
+        return 1
+    fi
+    
+    echo "Creating Velero service account for cluster: $CLUSTER_NAME"
+    
+    # Check if GCP_PROJECT_ID is set
+    if [[ -z "$GCP_PROJECT_ID" ]]; then
+        echo "ERROR: GCP_PROJECT_ID environment variable is not set"
+        return 1
+    fi
+    
+    local SERVICE_ACCOUNT_NAME="velero-${CLUSTER_NAME}"
+    local SERVICE_ACCOUNT_EMAIL="${SERVICE_ACCOUNT_NAME}@${GCP_PROJECT_ID}.iam.gserviceaccount.com"
+    
+    echo "Using project: $GCP_PROJECT_ID"
+    
+    # Check if service account already exists
+    if gcloud iam service-accounts describe "$SERVICE_ACCOUNT_EMAIL" --project="$GCP_PROJECT_ID" &>/dev/null; then
+        echo "Service account $SERVICE_ACCOUNT_EMAIL already exists"
+    else
+        echo "Creating service account..."
+        gcloud iam service-accounts create "$SERVICE_ACCOUNT_NAME" \
+            --display-name="Velero service account for $CLUSTER_NAME" \
+            --project="$GCP_PROJECT_ID"
+        
+        # Wait for service account to propagate
+        echo "Waiting for service account to propagate..."
+        sleep 10
+    fi
+    
+    # Check and assign roles if not already assigned
+    echo "Checking role assignments for service account..."
+    
+    # Define required roles
+    local REQUIRED_ROLES=(
+        "roles/compute.storageAdmin"
+        "roles/storage.admin"
+        "roles/compute.admin"
+    )
+    
+    for role in "${REQUIRED_ROLES[@]}"; do
+        # Check if role is already assigned
+        if gcloud projects get-iam-policy "$GCP_PROJECT_ID" \
+            --flatten="bindings[].members" \
+            --filter="bindings.role:$role AND bindings.members:serviceAccount:$SERVICE_ACCOUNT_EMAIL" \
+            --format="value(bindings.members)" | grep -q "$SERVICE_ACCOUNT_EMAIL"; then
+            echo "Role $role already assigned"
+        else
+            echo "Assigning role $role..."
+            gcloud projects add-iam-policy-binding "$GCP_PROJECT_ID" \
+                --member="serviceAccount:$SERVICE_ACCOUNT_EMAIL" \
+                --role="$role" \
+                --condition=None
+        fi
+    done
+    
+    # Get OIDC issuer URL from the cluster
+    echo "Getting cluster OIDC issuer URL..."
+    local SERVICE_ACCOUNT_ISSUER=$(oc get authentication.config.openshift.io cluster -o json | jq -r .spec.serviceAccountIssuer)
+    
+    if [[ -z "$SERVICE_ACCOUNT_ISSUER" || "$SERVICE_ACCOUNT_ISSUER" == "null" ]]; then
+        echo "ERROR: Could not get OIDC issuer URL from cluster"
+        return 1
+    fi
+    
+    # Extract issuer URL without protocol
+    local ISSUER_HOST=$(echo "$SERVICE_ACCOUNT_ISSUER" | sed 's|https://||')
+    
+    # Get or use existing workload identity pool and provider
+    local POOL_ID="${GCP_POOL_ID:-${CLUSTER_NAME}}"
+    local PROVIDER_ID="${GCP_PROVIDER_ID:-${CLUSTER_NAME}}"
+    
+    echo "Using workload identity pool: $POOL_ID"
+    echo "Using workload identity provider: $PROVIDER_ID"
+    
+    # Get project number for workload identity binding
+    local GCP_PROJECT_NUM=$(gcloud projects describe "$GCP_PROJECT_ID" --format="value(projectNumber)")
+    
+    # Check if workload identity pool exists
+    if ! gcloud iam workload-identity-pools describe "$POOL_ID" \
+        --location="global" \
+        --project="$GCP_PROJECT_ID" &>/dev/null; then
+        echo "WARNING: Workload identity pool '$POOL_ID' not found in project '$GCP_PROJECT_ID'"
+        echo "This is expected if the cluster was not created with workload identity federation"
+        echo "Skipping workload identity binding..."
+    else
+        # Add policy binding for workload identity
+        echo "Adding workload identity user binding..."
+        gcloud iam service-accounts add-iam-policy-binding "$SERVICE_ACCOUNT_EMAIL" \
+            --project="$GCP_PROJECT_ID" \
+            --role="roles/iam.workloadIdentityUser" \
+            --member="principalSet://iam.googleapis.com/projects/${GCP_PROJECT_NUM}/locations/global/workloadIdentityPools/${POOL_ID}/attribute.namespace_name/openshift-adp#velero"
+        
+        # Also add binding for the specific subject format
+        gcloud iam service-accounts add-iam-policy-binding "$SERVICE_ACCOUNT_EMAIL" \
+            --project="$GCP_PROJECT_ID" \
+            --role="roles/iam.workloadIdentityUser" \
+            --member="principal://iam.googleapis.com/projects/${GCP_PROJECT_NUM}/locations/global/workloadIdentityPools/${POOL_ID}/subject/system:serviceaccount:openshift-adp:velero" \
+            2>/dev/null || true
+    fi
+    
+    echo ""
+    echo "Velero identity setup complete!"
+    echo ""
+    echo "Identity Configuration Summary:"
+    echo "  Service Account Name: $SERVICE_ACCOUNT_NAME"
+    echo "  Service Account Email: $SERVICE_ACCOUNT_EMAIL"
+    echo "  Project ID: $GCP_PROJECT_ID"
+    echo "  Project Number: $GCP_PROJECT_NUM"
+    echo "  Workload Identity Pool: $POOL_ID"
+    echo "  Workload Identity Provider: $PROVIDER_ID"
+    echo ""
+    echo "Service account has been configured with:"
+    echo "  ✓ Compute Storage Admin role (for disk snapshots)"
+    echo "  ✓ Storage Admin role (for object storage)"
+    echo "  ✓ Compute Admin role (for VM operations)"
+    if gcloud iam workload-identity-pools describe "$POOL_ID" \
+        --location="global" \
+        --project="$GCP_PROJECT_ID" &>/dev/null; then
+        echo "  ✓ Workload Identity User binding for Velero"
+    else
+        echo "  ⚠️  Workload Identity binding skipped (pool not found)"
+    fi
+    
+    echo ""
+    echo "Export these variables for the OADP Makefile:"
+    echo "export GCP_PROJECT_ID=$GCP_PROJECT_ID"
+    echo "export GCP_PROJECT_NUM=$GCP_PROJECT_NUM"
+    echo "export GCP_POOL_ID=$POOL_ID"
+    echo "export GCP_PROVIDER_ID=$PROVIDER_ID"
+    echo "export GCP_SA_EMAIL=$SERVICE_ACCOUNT_EMAIL"
+    echo "export GCP_SERVICE_ACCOUNT_EMAIL=$SERVICE_ACCOUNT_EMAIL"
+    
+    # Export all required variables
+    export GCP_PROJECT_NUM=$GCP_PROJECT_NUM
+    export GCP_POOL_ID=$POOL_ID
+    export GCP_PROVIDER_ID=$PROVIDER_ID
+    export GCP_SA_EMAIL=$SERVICE_ACCOUNT_EMAIL
+    export GCP_SERVICE_ACCOUNT_EMAIL=$SERVICE_ACCOUNT_EMAIL
+    
+    echo ""
+    echo "Or run the OADP deployment directly with:"
+    echo "make deploy-olm-stsflow-gcp GCP_PROJECT_ID=$GCP_PROJECT_ID GCP_PROJECT_NUM=$GCP_PROJECT_NUM GCP_POOL_ID=$POOL_ID GCP_PROVIDER_ID=$PROVIDER_ID GCP_SA_EMAIL=$SERVICE_ACCOUNT_EMAIL"
+}
+
+# Function to create GCS bucket for Velero backups
+create-velero-bucket-for-gcp-cluster() {
+    # Get cluster API URL
+    local API_URL=$(oc whoami --show-server)
+    
+    # Extract cluster name from API URL
+    local CLUSTER_NAME=$(echo "$API_URL" | sed 's|https://api\.||' | sed 's|\..*||')
+    
+    if [[ -z "$CLUSTER_NAME" ]]; then
+        echo "ERROR: Could not determine cluster name from API URL: $API_URL"
+        return 1
+    fi
+    
+    echo "Creating Velero storage bucket for cluster: $CLUSTER_NAME"
+    
+    # Check if GCP_PROJECT_ID is set
+    if [[ -z "$GCP_PROJECT_ID" ]]; then
+        echo "ERROR: GCP_PROJECT_ID environment variable is not set"
+        return 1
+    fi
+    
+    echo "Using project: $GCP_PROJECT_ID"
+    
+    # Bucket name must be globally unique and follow GCS naming rules
+    local BUCKET_NAME="velero-${GCP_PROJECT_ID}-${CLUSTER_NAME}"
+    # Ensure bucket name is valid (lowercase, no underscores, max 63 chars)
+    BUCKET_NAME=$(echo "$BUCKET_NAME" | tr '[:upper:]' '[:lower:]' | tr '_' '-' | cut -c1-63)
+    
+    # Get region from environment or use default
+    local REGION="${GCP_REGION:-us-central1}"
+    
+    # Check if bucket exists
+    if gsutil ls -b "gs://${BUCKET_NAME}" &>/dev/null; then
+        echo "Bucket gs://${BUCKET_NAME} already exists"
+    else
+        echo "Creating bucket: gs://${BUCKET_NAME} in region ${REGION}"
+        gsutil mb -p "$GCP_PROJECT_ID" -c STANDARD -l "$REGION" "gs://${BUCKET_NAME}"
+        
+        # Enable versioning for better backup integrity
+        echo "Enabling versioning on bucket..."
+        gsutil versioning set on "gs://${BUCKET_NAME}"
+        
+        # Set lifecycle policy to delete old backups after 30 days (optional)
+        echo "Setting lifecycle policy..."
+        cat > /tmp/lifecycle.json << EOF
+{
+  "lifecycle": {
+    "rule": [
+      {
+        "action": {"type": "Delete"},
+        "condition": {
+          "age": 30,
+          "matchesPrefix": ["backups/"]
+        }
+      }
+    ]
+  }
+}
+EOF
+        gsutil lifecycle set /tmp/lifecycle.json "gs://${BUCKET_NAME}"
+        rm -f /tmp/lifecycle.json
+    fi
+    
+    # Grant access to the service account
+    local SERVICE_ACCOUNT_NAME="velero-${CLUSTER_NAME}"
+    local SERVICE_ACCOUNT_EMAIL="${SERVICE_ACCOUNT_NAME}@${GCP_PROJECT_ID}.iam.gserviceaccount.com"
+    
+    # Check if service account exists
+    if gcloud iam service-accounts describe "$SERVICE_ACCOUNT_EMAIL" --project="$GCP_PROJECT_ID" &>/dev/null; then
+        echo "Granting bucket access to service account: $SERVICE_ACCOUNT_EMAIL"
+        
+        # Grant objectAdmin role on the bucket
+        gsutil iam ch "serviceAccount:${SERVICE_ACCOUNT_EMAIL}:objectAdmin" "gs://${BUCKET_NAME}"
+        
+        # Grant legacy bucket writer role
+        gsutil iam ch "serviceAccount:${SERVICE_ACCOUNT_EMAIL}:legacyBucketWriter" "gs://${BUCKET_NAME}"
+    else
+        echo "Service account not found. Run 'create-velero-identity-for-gcp-cluster' to create it."
+    fi
+    
+    echo ""
+    echo "Velero storage bucket setup complete!"
+    echo ""
+    echo "Storage configuration:"
+    echo "  Bucket: gs://${BUCKET_NAME}"
+    echo "  Region: ${REGION}"
+    echo "  Project: ${GCP_PROJECT_ID}"
+    echo ""
+    if gcloud iam service-accounts describe "$SERVICE_ACCOUNT_EMAIL" --project="$GCP_PROJECT_ID" &>/dev/null; then
+        echo "Access granted to:"
+        echo "  ✓ Service Account: $SERVICE_ACCOUNT_EMAIL"
+        echo "  ✓ Object Admin role on bucket"
+        echo "  ✓ Legacy Bucket Writer role"
+    fi
+    echo ""
+    echo "To configure Velero with this storage:"
+    echo "1. Ensure you have run 'create-velero-identity-for-gcp-cluster' first"
+    echo "2. Use the following in your BackupStorageLocation:"
+    echo "   bucket: ${BUCKET_NAME}"
+    echo "   prefix: velero"
+    
+    # Export for later use
+    export VELERO_BUCKET_NAME="${BUCKET_NAME}"
+}
+
+# Function to create BackupStorageLocation YAML for Velero with GCP Workload Identity
+create-velero-bsl-for-gcp-cluster() {
+    # Get cluster API URL
+    local API_URL=$(oc whoami --show-server)
+    
+    # Extract cluster name from API URL
+    local CLUSTER_NAME=$(echo "$API_URL" | sed 's|https://api\.||' | sed 's|\..*||')
+    
+    if [[ -z "$CLUSTER_NAME" ]]; then
+        echo "ERROR: Could not determine cluster name from API URL: $API_URL"
+        return 1
+    fi
+    
+    echo "Creating Velero BackupStorageLocation for cluster: $CLUSTER_NAME"
+    
+    # Check if GCP_PROJECT_ID is set
+    if [[ -z "$GCP_PROJECT_ID" ]]; then
+        echo "ERROR: GCP_PROJECT_ID environment variable is not set"
+        return 1
+    fi
+    
+    # Bucket name
+    local BUCKET_NAME="velero-${GCP_PROJECT_ID}-${CLUSTER_NAME}"
+    BUCKET_NAME=$(echo "$BUCKET_NAME" | tr '[:upper:]' '[:lower:]' | tr '_' '-' | cut -c1-63)
+    
+    # Check if bucket exists
+    if ! gsutil ls -b "gs://${BUCKET_NAME}" &>/dev/null; then
+        echo "ERROR: Bucket gs://${BUCKET_NAME} not found"
+        echo "Please run 'create-velero-bucket-for-gcp-cluster' first"
+        return 1
+    fi
+    
+    # Check if velero service account exists
+    local SERVICE_ACCOUNT_NAME="velero-${CLUSTER_NAME}"
+    local SERVICE_ACCOUNT_EMAIL="${SERVICE_ACCOUNT_NAME}@${GCP_PROJECT_ID}.iam.gserviceaccount.com"
+    
+    if ! gcloud iam service-accounts describe "$SERVICE_ACCOUNT_EMAIL" --project="$GCP_PROJECT_ID" &>/dev/null; then
+        echo "ERROR: Velero service account not found"
+        echo "Please run 'create-velero-identity-for-gcp-cluster' first"
+        return 1
+    fi
+    
+    # Create BSL YAML file
+    local BSL_FILE="velero-bsl-${CLUSTER_NAME}.yaml"
+    
+    echo "Creating BackupStorageLocation YAML: $BSL_FILE"
+    
+    cat > "$BSL_FILE" << EOF
+apiVersion: velero.io/v1
+kind: BackupStorageLocation
+metadata:
+  name: default
+  namespace: openshift-adp
+spec:
+  # Name of the object store plugin to use to connect to this location.
+  provider: velero.io/gcp
+  
+  objectStorage:
+    # The bucket in which to store backups.
+    bucket: ${BUCKET_NAME}
+    
+    # The prefix within the bucket under which to store backups.
+    prefix: velero
+EOF
+
+    echo ""
+    echo "BackupStorageLocation YAML created: $BSL_FILE"
+    echo ""
+    echo "Prerequisites checklist:"
+    echo "✓ Storage bucket: gs://${BUCKET_NAME}"
+    echo "✓ Velero service account: $SERVICE_ACCOUNT_EMAIL"
+    echo "✓ Project ID: $GCP_PROJECT_ID"
+    echo ""
+    echo "To apply this BackupStorageLocation:"
+    echo "  kubectl apply -f $BSL_FILE"
+    echo ""
+    echo "Make sure you have:"
+    echo "1. OADP (OpenShift API for Data Protection) installed"
+    echo "2. Service account 'velero' in 'openshift-adp' namespace with workload identity annotation"
+    echo "3. Workload identity binding configured for 'system:serviceaccount:openshift-adp:velero'"
+    echo ""
+    echo "Note: This BSL is configured for the 'openshift-adp' namespace used by OADP"
+}
+
+# Function to create DataProtectionApplication YAML for OADP with GCP Workload Identity
+create-velero-dpa-for-gcp-cluster() {
+    # Get cluster API URL
+    local API_URL=$(oc whoami --show-server)
+    
+    # Extract cluster name from API URL
+    local CLUSTER_NAME=$(echo "$API_URL" | sed 's|https://api\.||' | sed 's|\..*||')
+    
+    if [[ -z "$CLUSTER_NAME" ]]; then
+        echo "ERROR: Could not determine cluster name from API URL: $API_URL"
+        return 1
+    fi
+    
+    echo "Creating DataProtectionApplication for cluster: $CLUSTER_NAME"
+    
+    # Check if GCP_PROJECT_ID is set
+    if [[ -z "$GCP_PROJECT_ID" ]]; then
+        echo "ERROR: GCP_PROJECT_ID environment variable is not set"
+        return 1
+    fi
+    
+    # Bucket name
+    local BUCKET_NAME="velero-${GCP_PROJECT_ID}-${CLUSTER_NAME}"
+    BUCKET_NAME=$(echo "$BUCKET_NAME" | tr '[:upper:]' '[:lower:]' | tr '_' '-' | cut -c1-63)
+    
+    # Check if bucket exists
+    if ! gsutil ls -b "gs://${BUCKET_NAME}" &>/dev/null; then
+        echo "ERROR: Bucket gs://${BUCKET_NAME} not found"
+        echo "Please run 'create-velero-bucket-for-gcp-cluster' first"
+        return 1
+    fi
+    
+    # Check if velero service account exists
+    local SERVICE_ACCOUNT_NAME="velero-${CLUSTER_NAME}"
+    local SERVICE_ACCOUNT_EMAIL="${SERVICE_ACCOUNT_NAME}@${GCP_PROJECT_ID}.iam.gserviceaccount.com"
+    
+    if ! gcloud iam service-accounts describe "$SERVICE_ACCOUNT_EMAIL" --project="$GCP_PROJECT_ID" &>/dev/null; then
+        echo "ERROR: Velero service account not found"
+        echo "Please run 'create-velero-identity-for-gcp-cluster' first"
+        return 1
+    fi
+    
+    # Create DPA YAML file
+    local DPA_FILE="velero-dpa-${CLUSTER_NAME}.yaml"
+    
+    echo "Creating DataProtectionApplication YAML: $DPA_FILE"
+    
+    cat > "$DPA_FILE" << EOF
+apiVersion: oadp.openshift.io/v1alpha1
+kind: DataProtectionApplication
+metadata:
+  name: dpa
+  namespace: openshift-adp
+spec:
+  configuration:
+    velero:
+      # Use OpenShift plugin for OpenShift-specific features
+      defaultPlugins:
+        - openshift
+        - gcp
+        - csi
+      # Resource requests/limits for Velero pod
+      resourceAllocations:
+        limits:
+          cpu: 1000m
+          memory: 512Mi
+        requests:
+          cpu: 500m
+          memory: 256Mi
+    # Node agent configuration (formerly Restic)
+    nodeAgent:
+      enable: true
+      uploaderType: kopia
+      # Configure the DaemonSet node selector
+      nodeSelector:
+        node-role.kubernetes.io/worker: ""
+  # TODO: fix - backupImages should be enabled once image backup is properly configured
+  backupImages: false
+  backupLocations:
+    - name: default
+      velero:
+        # GCP provider configuration
+        provider: velero.io/gcp
+        default: true
+        # Credential secret reference
+        credential:
+          name: cloud-credentials-gcp
+          key: service_account.json
+        # Storage configuration
+        objectStorage:
+          bucket: ${BUCKET_NAME}
+          prefix: velero
+  # Volume snapshot locations for GCP snapshots
+  snapshotLocations:
+    - name: default
+      velero:
+        provider: gcp
+        # Credential secret reference
+        credential:
+          name: cloud-credentials-gcp
+          key: service_account.json
+        config:
+          snapshotLocation: ${GCP_REGION:-us-central1}
+EOF
+
+    echo ""
+    echo "DataProtectionApplication YAML created: $DPA_FILE"
+    echo ""
+    echo "Prerequisites checklist:"
+    echo "✓ Storage bucket: gs://${BUCKET_NAME}"
+    echo "✓ Velero service account: $SERVICE_ACCOUNT_EMAIL"
+    echo "✓ Project ID: $GCP_PROJECT_ID"
+    echo ""
+    echo "IMPORTANT: Before applying the DPA, ensure the Velero service account is properly annotated:"
+    echo "  kubectl annotate serviceaccount velero -n openshift-adp iam.gke.io/gcp-service-account=$SERVICE_ACCOUNT_EMAIL --overwrite"
+    echo ""
+    echo "To apply this DataProtectionApplication:"
+    echo "  kubectl apply -f $DPA_FILE"
+    echo ""
+    echo "Make sure you have:"
+    echo "1. OADP operator installed in 'openshift-adp' namespace"
+    echo "2. Completed the STS configuration flow (the operator will create the cloud-credentials-gcp secret)"
+    echo "3. The velero service account annotated with workload identity"
+    echo ""
+    echo "After applying the DPA, check the status with:"
+    echo "  kubectl get dpa dpa -n openshift-adp -o yaml"
+    echo ""
+    echo "Verify the deployment:"
+    echo "  kubectl get secret cloud-credentials-gcp -n openshift-adp"
+    echo "  kubectl get pods -n openshift-adp"
+    echo "  velero version"
+}
+
+# Function to setup complete Velero/OADP for current GCP OpenShift cluster
+setup-velero-oadp-for-gcp-cluster() {
+    echo "Starting complete Velero/OADP setup for GCP OpenShift cluster..."
+    echo "================================================================"
+    
+    # Get cluster API URL
+    local API_URL=$(oc whoami --show-server 2>/dev/null)
+    
+    if [[ -z "$API_URL" ]]; then
+        echo "ERROR: Not connected to an OpenShift cluster. Please login first."
+        return 1
+    fi
+    
+    # Extract cluster name from API URL
+    local CLUSTER_NAME=$(echo "$API_URL" | sed 's|https://api\.||' | sed 's|\..*||')
+    
+    if [[ -z "$CLUSTER_NAME" ]]; then
+        echo "ERROR: Could not determine cluster name from API URL: $API_URL"
+        return 1
+    fi
+    
+    echo "Cluster: $CLUSTER_NAME"
+    echo ""
+    
+    # Step 1: Create Velero identity
+    echo "Step 1: Creating Velero service account..."
+    echo "-----------------------------------"
+    if ! create-velero-identity-for-gcp-cluster; then
+        echo "ERROR: Failed to create Velero service account"
+        return 1
+    fi
+    echo ""
+    
+    # Step 2: Create storage bucket
+    echo "Step 2: Creating Velero storage bucket..."
+    echo "-------------------------------------------"
+    if ! create-velero-bucket-for-gcp-cluster; then
+        echo "ERROR: Failed to create Velero storage bucket"
+        return 1
+    fi
+    echo ""
+    
+    # Step 3: Deploy OADP operator with STS flow
+    echo "Step 3: Deploying OADP operator with STS flow..."
+    echo "------------------------------------------------"
+    
+    # Check if we're in an OADP repo directory
+    if [[ -f "Makefile" ]] && grep -q "deploy-olm-stsflow-gcp" Makefile 2>/dev/null; then
+        echo "Found OADP Makefile in current directory"
+    else
+        echo "WARNING: Not in OADP operator directory. Please ensure you're in the correct directory."
+        echo "You can clone it with: git clone https://github.com/openshift/oadp-operator.git"
+        echo ""
+        echo "Would you like to continue anyway? (y/N)"
+        read -r response
+        if [[ ! "$response" =~ ^[Yy]$ ]]; then
+            echo "Aborting setup"
+            return 1
+        fi
+    fi
+    
+    # The required variables should already be exported by create-velero-identity-for-gcp-cluster
+    if [[ -z "$GCP_PROJECT_ID" ]] || [[ -z "$GCP_PROJECT_NUM" ]] || [[ -z "$GCP_POOL_ID" ]] || [[ -z "$GCP_PROVIDER_ID" ]] || [[ -z "$GCP_SA_EMAIL" ]]; then
+        echo "ERROR: Required GCP environment variables not set. This should have been done by create-velero-identity-for-gcp-cluster"
+        echo "Missing one or more of: GCP_PROJECT_ID, GCP_PROJECT_NUM, GCP_POOL_ID, GCP_PROVIDER_ID, GCP_SA_EMAIL"
+        return 1
+    fi
+    
+    echo "Running: make deploy-olm-stsflow-gcp"
+    if ! make deploy-olm-stsflow-gcp; then
+        echo "ERROR: Failed to deploy OADP operator"
+        echo "Please check the output above for errors"
+        return 1
+    fi
+    echo ""
+    
+    # Wait for operator to be ready
+    echo "Waiting for OADP operator to be ready..."
+    local retries=30
+    while [[ $retries -gt 0 ]]; do
+        if oc get pods -n openshift-adp 2>/dev/null | grep -q "oadp-operator.*Running"; then
+            echo "OADP operator is running"
+            break
+        fi
+        echo -n "."
+        sleep 5
+        ((retries--))
+    done
+    
+    if [[ $retries -eq 0 ]]; then
+        echo ""
+        echo "WARNING: OADP operator may not be fully ready yet"
+    fi
+    echo ""
+    
+    # Step 4: Create and apply DataProtectionApplication
+    echo "Step 4: Creating and applying DataProtectionApplication..."
+    echo "---------------------------------------------------------"
+    if ! create-velero-dpa-for-gcp-cluster; then
+        echo "ERROR: Failed to create DataProtectionApplication YAML"
+        return 1
+    fi
+    
+    # Get the DPA file name
+    local DPA_FILE="velero-dpa-${CLUSTER_NAME}.yaml"
+    
+    if [[ ! -f "$DPA_FILE" ]]; then
+        echo "ERROR: DataProtectionApplication file not found: $DPA_FILE"
+        return 1
+    fi
+    
+    echo "Applying DataProtectionApplication..."
+    if ! oc apply -f "$DPA_FILE"; then
+        echo "ERROR: Failed to apply DataProtectionApplication"
+        return 1
+    fi
+    echo ""
+    
+    # Step 5: Wait for Velero to be ready
+    echo "Step 5: Waiting for Velero deployment to be ready..."
+    echo "---------------------------------------------------"
+    local velero_ready=false
+    retries=60  # 5 minutes timeout
+    
+    while [[ $retries -gt 0 ]]; do
+        if oc get pods -n openshift-adp -l app.kubernetes.io/name=velero 2>/dev/null | grep -q "velero.*Running"; then
+            velero_ready=true
+            break
+        fi
+        echo -n "."
+        sleep 5
+        ((retries--))
+    done
+    
+    echo ""
+    
+    if [[ "$velero_ready" == "true" ]]; then
+        echo "✓ Velero is running"
+    else
+        echo "⚠️  Velero may not be fully ready yet"
+    fi
+    
+    # Step 6: Validate setup
+    echo ""
+    echo "Step 6: Validating Velero setup..."
+    echo "----------------------------------"
+    
+    # Check Velero version
+    if command -v velero &>/dev/null; then
+        echo "Velero CLI version:"
+        velero version --client-only
+    else
+        echo "Velero CLI not found. Install it from: https://velero.io/docs/main/basic-install/#install-the-cli"
+    fi
+    
+    # Check DPA status
+    echo ""
+    echo "DataProtectionApplication status:"
+    oc get dpa dpa -n openshift-adp -o jsonpath='{.status.conditions[?(@.type=="Reconciled")]}' | jq '.' 2>/dev/null || echo "Status not yet available"
+    
+    # Check pods
+    echo ""
+    echo "OADP/Velero pods:"
+    oc get pods -n openshift-adp
+    
+    # Final summary
+    echo ""
+    echo "================================================================"
+    echo "Velero/OADP Setup Complete!"
+    echo "================================================================"
+    echo ""
+    echo "Next steps:"
+    echo "1. Verify the setup with: oc get all -n openshift-adp"
+    echo "2. Check backup storage location: oc get backupstoragelocation -n openshift-adp"
+    echo "3. Create your first backup: velero backup create test-backup --include-namespaces=<namespace>"
+    echo ""
+    echo "DataProtectionApplication file saved as: $DPA_FILE"
+    echo ""
+    echo "To troubleshoot issues:"
+    echo "- Check DPA status: oc describe dpa dpa -n openshift-adp"
+    echo "- Check Velero logs: oc logs -n openshift-adp -l app.kubernetes.io/name=velero"
+}
+
+# Alias for convenience
+alias setup-velero-gcp='setup-velero-oadp-for-gcp-cluster'
+alias setup-cluster-with-oadp-gcp='create-ocp-gcp-wif && oc login -u kubeadmin -p $(cat $OCP_CREATE_DIR/auth/kubeadmin-password) $(oc whoami --show-server) && create-velero-identity-for-gcp-cluster && create-velero-bucket-for-gcp-cluster && make deploy-olm-stsflow-gcp && create-velero-dpa-for-gcp-cluster && oc apply -f velero-dpa-*.yaml'
