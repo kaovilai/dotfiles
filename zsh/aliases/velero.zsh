@@ -32,3 +32,69 @@ logs-oadp() {
   oc wait --for=condition=available deployment/openshift-adp-controller-manager -n "$ns" --timeout=300s && \
   oc logs deploy/openshift-adp-controller-manager -n "$ns" -f
 }
+
+# Set PR_REVIEW_USERS to current Velero maintainers (excluding emeritus)
+set-velero-pr-review-users() {
+  # Fetch current maintainers from GitHub
+  local maintainers_url="https://raw.githubusercontent.com/vmware-tanzu/velero/main/MAINTAINERS.md"
+  local maintainers=$(curl -s "$maintainers_url" | grep -E '@[a-zA-Z0-9_-]+' | grep -v -i 'emeritus' | sed -E 's/.*@([a-zA-Z0-9_-]+).*/\1/' | sort -u | tr '\n' ' ')
+  
+  if [[ -z "$maintainers" ]]; then
+    echo "Error: Could not fetch Velero maintainers"
+    return 1
+  fi
+  
+  export PR_REVIEW_USERS="$maintainers"
+  echo "PR_REVIEW_USERS set to: $PR_REVIEW_USERS"
+  echo "To persist, add the following to ~/secrets.zsh:"
+  echo "export PR_REVIEW_USERS=\"$PR_REVIEW_USERS\""
+}
+
+# Alias for convenience
+alias velero-set-reviewers='set-velero-pr-review-users'
+
+# Set PR_REVIEW_USERS to current OADP operator owners
+set-oadp-pr-review-users() {
+  # Fetch current owners from GitHub OWNERS file
+  local owners_url="https://raw.githubusercontent.com/openshift/oadp-operator/master/OWNERS"
+  local owners=$(curl -s "$owners_url" | grep -E '^\s*-\s+[a-zA-Z0-9_-]+\s*$' | sed -E 's/^\s*-\s+([a-zA-Z0-9_-]+)\s*$/\1/' | sort -u | tr '\n' ' ')
+  
+  if [[ -z "$owners" ]]; then
+    echo "Error: Could not fetch OADP owners"
+    return 1
+  fi
+  
+  export PR_REVIEW_USERS="$owners"
+  echo "PR_REVIEW_USERS set to: $PR_REVIEW_USERS"
+  echo "To persist, add the following to ~/secrets.zsh:"
+  echo "export PR_REVIEW_USERS=\"$PR_REVIEW_USERS\""
+}
+
+# Alias for convenience
+alias oadp-set-reviewers='set-oadp-pr-review-users'
+
+# Review PRs from a specific author
+pr-review-user() {
+  local user="${1:-sseago}"
+  local repo="${2:-vmware-tanzu/velero}"
+  gh pr list --repo "$repo" --author "$user" --state open --json url --jq '.[].url' | xargs -I {} zsh -ic 'claude-review {}'
+}
+
+# Review PRs from multiple users defined in environment variable
+pr-review-all-users() {
+  local repo="${1:-vmware-tanzu/velero}"
+  
+  # Check if PR_REVIEW_USERS is set
+  if [[ -z "$PR_REVIEW_USERS" ]]; then
+    echo "Error: PR_REVIEW_USERS environment variable not set"
+    echo "Add 'export PR_REVIEW_USERS=\"user1 user2 user3\"' to ~/secrets.zsh"
+    echo "Or use velero-set-reviewers or oadp-set-reviewers to set automatically"
+    return 1
+  fi
+  
+  # Loop through each user
+  for user in ${=PR_REVIEW_USERS}; do
+    echo "Reviewing PRs from $user in $repo..."
+    pr-review-user "$user" "$repo"
+  done
+}
