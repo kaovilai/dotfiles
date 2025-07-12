@@ -34,6 +34,9 @@ znap function use-rosa-sts() {
     # Configure kubectl access
     echo "Configuring kubectl access for ROSA cluster: $CLUSTER_NAME"
     
+    # Create directory if it doesn't exist
+    mkdir -p "$ROSA_DIR"
+    
     # Get cluster API URL
     local api_url=$(rosa describe cluster --cluster "$CLUSTER_NAME" -o json | jq -r '.api.url // empty')
     
@@ -42,21 +45,40 @@ znap function use-rosa-sts() {
         return 1
     fi
     
-    # Check if we have cluster-admin credentials
+    # Check if we have valid cluster-admin credentials
+    local needs_new_admin=false
+    
     if [[ -f "$ROSA_DIR/cluster-admin.txt" ]]; then
-        echo "Found cluster-admin credentials"
-        local admin_password=$(grep "password:" "$ROSA_DIR/cluster-admin.txt" | awk '{print $2}')
-        local admin_user="cluster-admin"
+        echo "Found cluster-admin credentials file, checking validity..."
         
-        if [[ -n "$admin_password" ]]; then
-            echo "Logging in as cluster-admin..."
-            oc login "$api_url" --username="$admin_user" --password="$admin_password" --insecure-skip-tls-verify=true
+        # Check if the file contains an error or actual credentials
+        if grep -q "ERR:" "$ROSA_DIR/cluster-admin.txt" || ! grep -q "password:" "$ROSA_DIR/cluster-admin.txt"; then
+            echo "Existing cluster-admin.txt contains no valid credentials"
+            needs_new_admin=true
         else
-            echo "WARNING: Could not extract admin password from $ROSA_DIR/cluster-admin.txt"
-            echo "You may need to create a new admin user with: rosa create admin --cluster $CLUSTER_NAME"
+            local admin_password=$(grep "password:" "$ROSA_DIR/cluster-admin.txt" | awk '{print $2}')
+            local admin_user="cluster-admin"
+            
+            if [[ -n "$admin_password" ]]; then
+                echo "Logging in as cluster-admin..."
+                if oc login "$api_url" --username="$admin_user" --password="$admin_password" --insecure-skip-tls-verify=true; then
+                    echo "Successfully logged in"
+                else
+                    echo "Login failed, credentials may be expired"
+                    needs_new_admin=true
+                fi
+            else
+                echo "Could not extract admin password"
+                needs_new_admin=true
+            fi
         fi
     else
-        echo "No cluster-admin credentials found at $ROSA_DIR/cluster-admin.txt"
+        echo "No cluster-admin credentials found"
+        needs_new_admin=true
+    fi
+    
+    # Create new admin if needed
+    if [[ "$needs_new_admin" == "true" ]]; then
         echo "Creating new cluster-admin user..."
         rosa create admin --cluster "$CLUSTER_NAME" | tee "$ROSA_DIR/cluster-admin.txt"
         
@@ -65,8 +87,11 @@ znap function use-rosa-sts() {
         local admin_user="cluster-admin"
         
         if [[ -n "$admin_password" ]]; then
-            echo "Logging in as cluster-admin..."
+            echo "Logging in with new cluster-admin credentials..."
             oc login "$api_url" --username="$admin_user" --password="$admin_password" --insecure-skip-tls-verify=true
+        else
+            echo "ERROR: Failed to create cluster-admin user or extract credentials"
+            return 1
         fi
     fi
     
