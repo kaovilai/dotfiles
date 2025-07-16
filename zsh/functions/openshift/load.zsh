@@ -16,6 +16,7 @@ source ~/git/dotfiles/zsh/functions/openshift/aws/use-ocp-aws.zsh
 source ~/git/dotfiles/zsh/functions/openshift/rosa/create-rosa-sts.zsh
 source ~/git/dotfiles/zsh/functions/openshift/rosa/delete-rosa-sts.zsh
 source ~/git/dotfiles/zsh/functions/openshift/rosa/use-rosa-sts.zsh
+source ~/git/dotfiles/zsh/functions/openshift/rosa/velero-rosa-sts.zsh
 source ~/git/dotfiles/zsh/functions/openshift/azure/retry-ccoctl-azure.zsh
 source ~/git/dotfiles/zsh/functions/openshift/azure/create-ocp-azure-sts.zsh
 source ~/git/dotfiles/zsh/functions/openshift/azure/delete-ocp-azure-sts.zsh
