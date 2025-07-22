@@ -57,8 +57,10 @@ alias activepieces-restart='
 alias makelintv2oadp='git checkout linterv2 Makefile .golangci.yaml && make lint-fix && git restore --staged Makefile .golangci.yaml && git restore Makefile .golangci.yaml'
 alias term='open -Fna Terminal .'
 alias termc='osascript -e "tell app \"Terminal\" to do script \"cd $(pwd) && claude\""'
-alias claude-review='f() { osascript -e "tell app \"Terminal\" to do script \"cd $HOME/experiments/ && claude \\\"/review $1\\\"\""; }; f'
+alias claude-review='f() { osascript -e "tell app \"Terminal\" to do script \"cd $HOME/experiments/ && claude \\\"/review $1\\\"\""}; f'
 alias cr='claude-review'
+alias gemini-review='f() { osascript -e "tell app \"Terminal\" to do script \"cd $HOME/experiments/ && gemini -p \\\"/review $1\\\"\""}; f'
+alias gr='gemini-review'
 znap function vid2gif(){
     local input="$1"
     local output="$HOME/Downloads/$(basename "${input%.*}").gif"
