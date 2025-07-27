@@ -23,6 +23,7 @@ source ~/git/dotfiles/zsh/colors.zsh
 
 # Essential exports and aliases for immediate shell usage
 alias edit-dotfiles='code ~/git/dotfiles/'
+alias edit-agents='code ~/.claude/agents/'
 source ~/git/dotfiles/zsh/alias.zsh
 # gpg tty
 export GPG_TTY=$(tty)
