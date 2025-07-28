@@ -13,6 +13,32 @@ This is a dotfiles repository containing ZSH shell configuration files and utili
 - `push-dotfiles-from-zshrc` - Push changes to the dotfiles repository  
 - `update-zshrc-from-dotfiles` - Update local .zshrc from the dotfiles repo
 
+### Updating .zshrc
+When making changes to the ZSH configuration:
+
+1. **Edit in dotfiles repo**:
+   ```bash
+   cd ~/git/dotfiles
+   # Make your changes to files in zsh/
+   ```
+
+2. **Test changes locally**:
+   ```bash
+   # Test specific file
+   source ~/git/dotfiles/zsh/[modified-file].zsh
+   
+   # Update local .zshrc with changes
+   update-zshrc-from-dotfiles
+   ```
+
+3. **Commit and push**:
+   ```bash
+   cd ~/git/dotfiles
+   git add -A
+   git commit -m "feat: description of changes"
+   git push
+   ```
+
 ### Installation
 ```bash
 # Install dependencies from Brewfile
@@ -23,11 +49,54 @@ source ~/git/dotfiles/zsh/functions/migrate-laptop.zsh
 migrate-to-new-laptop
 ```
 
-### Testing
+### Testing & Validation
+
+#### Testing ZSH Changes
 No formal test suite exists. Changes should be manually tested by:
-1. Sourcing the modified file: `source ~/git/dotfiles/zsh/[modified-file].zsh`
-2. Testing the modified aliases/functions
-3. Restarting shell to ensure no startup errors
+
+1. **Syntax Checking**:
+   ```bash
+   # Check syntax of a specific file
+   zsh -n ~/git/dotfiles/zsh/[modified-file].zsh
+   
+   # Check entire .zshrc
+   zsh -n ~/.zshrc
+   ```
+
+2. **Source and Test**:
+   ```bash
+   # Source the modified file
+   source ~/git/dotfiles/zsh/[modified-file].zsh
+   
+   # Test the modified aliases/functions
+   # For functions, check if they're loaded:
+   which function_name
+   type function_name
+   ```
+
+3. **Full Shell Test**:
+   ```bash
+   # Start a new shell session to test startup
+   zsh -l
+   
+   # Or reload the entire configuration
+   exec zsh
+   ```
+
+4. **Debug Mode**:
+   ```bash
+   # Start shell with verbose output for debugging
+   zsh -xv
+   
+   # Or trace specific function execution
+   zsh -c 'set -x; function_name'
+   ```
+
+#### Common Issues to Check
+- **Function conflicts**: Use `which` or `type` to check if a function/alias already exists
+- **Syntax errors**: Run `zsh -n` on files before committing
+- **Performance**: Use `time zsh -i -c exit` to measure shell startup time
+- **Dependencies**: Ensure required commands exist with `command -v cmd_name`
 
 ## Architecture
 
