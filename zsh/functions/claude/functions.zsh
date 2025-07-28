@@ -20,14 +20,14 @@ znap function merge-claude-settings() {
         echo '{"permissions": {"allow": [], "deny": []}}' > "$global_settings"
     fi
     
-    # Read existing permissions from both files
-    local local_allow=$(jq -r '.permissions.allow[]' "$local_settings" 2>/dev/null)
-    local global_allow=$(jq -r '.permissions.allow[]' "$global_settings" 2>/dev/null)
+    # Read existing permissions from both files as JSON array elements
+    local local_allow=$(jq -c '.permissions.allow[]' "$local_settings" 2>/dev/null)
+    local global_allow=$(jq -c '.permissions.allow[]' "$global_settings" 2>/dev/null)
     
     # Find new permissions not in global settings
     local new_permissions=()
     while IFS= read -r perm; do
-        if [[ -n "$perm" ]] && ! echo "$global_allow" | grep -Fxq "$perm"; then
+        if [[ -n "$perm" ]] && ! echo "$global_allow" | grep -Fxq -- "$perm"; then
             new_permissions+=("$perm")
         fi
     done <<< "$local_allow"
@@ -41,36 +41,44 @@ znap function merge-claude-settings() {
     echo "Found ${#new_permissions[@]} new permission(s) to merge:"
     echo
     
-    # Ask about each new permission
-    local permissions_to_add=()
+    # Create backup of global settings before any changes
+    local backup_file="${global_settings}.backup.$(date +%Y%m%d_%H%M%S)"
+    cp "$global_settings" "$backup_file"
+    
+    # Ask about each new permission and add immediately
+    local permissions_added=0
     for perm in "${new_permissions[@]}"; do
-        echo -n "Add permission '$perm'? (y/n): "
+        # Decode the JSON string for display
+        local decoded_perm=$(echo "$perm" | jq -r '.')
+        echo -n "Add permission '$decoded_perm'? (y/n): "
         read -r response
         if [[ "$response" =~ ^[Yy]$ ]]; then
-            permissions_to_add+=("$perm")
+            # Add this permission immediately
+            local temp_file=$(mktemp)
+            jq --argjson new_perm "$perm" '
+                .permissions.allow += [$new_perm]
+                | .permissions.allow |= unique
+            ' "$global_settings" > "$temp_file"
+            
+            if [[ $? -eq 0 ]]; then
+                mv "$temp_file" "$global_settings"
+                ((permissions_added++))
+                echo "  ✓ Added"
+            else
+                echo "  ✗ Failed to add permission"
+                rm -f "$temp_file"
+            fi
         fi
     done
     
     # If user didn't approve any permissions
-    if [[ ${#permissions_to_add[@]} -eq 0 ]]; then
+    if [[ $permissions_added -eq 0 ]]; then
         echo "No permissions were added."
+        rm -f "$backup_file"  # Remove unused backup
         return 0
     fi
     
-    # Create backup of global settings
-    cp "$global_settings" "${global_settings}.backup.$(date +%Y%m%d_%H%M%S)"
-    
-    # Add approved permissions to global settings
-    local temp_file=$(mktemp)
-    jq --arg perms "$(printf '%s\n' "${permissions_to_add[@]}")" '
-        .permissions.allow += ($perms | split("\n") | map(select(. != "")))
-        | .permissions.allow |= unique
-    ' "$global_settings" > "$temp_file"
-    
-    # Move temp file to global settings
-    mv "$temp_file" "$global_settings"
-    
     echo
-    echo "Successfully added ${#permissions_to_add[@]} permission(s) to $global_settings"
-    echo "A backup was created at ${global_settings}.backup.$(date +%Y%m%d_%H%M%S)"
+    echo "Successfully added $permissions_added permission(s) to $global_settings"
+    echo "A backup was created at $backup_file"
 }
