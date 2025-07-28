@@ -409,6 +409,11 @@ if [[ "$TERM_PROGRAM" != "vscode" ]]; then
         local sd_path="$1"
         local local_path="$2"
         
+        # Check if arguments are provided
+        if [ -z "$sd_path" ]; then
+            return 0  # Silently exit if no arguments provided
+        fi
+        
         # Check if SD volume is mounted
         if [ ! -d "/Volumes/SD" ]; then
             echo "Error: SD volume is not mounted at /Volumes/SD"
@@ -460,3 +465,15 @@ if [[ "$TERM_PROGRAM" != "vscode" ]]; then
         echo "Symlink created: $local_path -> $sd_path"
     }
 fi
+
+# Update local .zshrc from the dotfiles repository
+znap function update-zshrc-from-dotfiles() {
+    if [ ! -d "$HOME/git/dotfiles" ]; then
+        echo "Error: Dotfiles repository not found at $HOME/git/dotfiles"
+        return 1
+    fi
+    
+    echo "Updating .zshrc from dotfiles repository..."
+    cp "$HOME/git/dotfiles/.zshrc" "$HOME/.zshrc"
+    echo "Updated. Reload your shell or run 'source ~/.zshrc' to apply changes."
+}
