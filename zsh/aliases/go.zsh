@@ -1,6 +1,7 @@
 alias gofmtgitdiff='git diff --name-only  | xargs -L 1 go fmt'
 alias gofmtgitdiffmain='git diff upstream/main --name-only | grep .go$  | xargs -L 1 go fmt'
 alias gofmtgitdiffmaster='git diff upstream/master --name-only | grep .go$  | xargs -L 1 go fmt'
+alias gofmtgitdiffoadp='git diff upstream/oadp-dev --name-only | grep .go$  | xargs -L 1 go fmt'
 alias grf='golangci-lint run --fix'
 alias grfw='golangci-lint-with-retry() {
   local max_attempts=30
