@@ -5,28 +5,33 @@ alias gcan='git commit --amend --no-edit'
 alias gca='git commit --amend'
 alias gcas='git commit --amend --no-edit --signoff'
 alias gcasf='git commit --amend --no-edit --signoff && git push --force'
-alias gcu='(git checkout upstream/main || git checkout upstream/master)'
-alias gcu_nb='(git checkout upstream/main || git checkout upstream/master) && git checkout -b'
+alias gcu='(git checkout upstream/main || git checkout upstream/master || git checkout upstream/oadp-dev)'
+alias gcu_nb='(git checkout upstream/main || git checkout upstream/master || git checkout upstream/oadp-dev) && git checkout -b'
 alias gcu_master='git checkout upstream/master'
 alias gcu_master_nb='git checkout upstream/master && git checkout -b'
 alias gcu_main='git checkout upstream/main'
 alias gcu_main_nb='git checkout upstream/main && git checkout -b'
+alias gcu_oadp='git checkout upstream/oadp-dev'
+alias gcu_oadp_nb='git checkout upstream/oadp-dev && git checkout -b'
 alias grumaster='git rebase upstream/master'
 alias grumain='git rebase upstream/main'
+alias gruoadp='git rebase upstream/oadp-dev'
 alias gfa='git fetch --all'
 alias gfu='git fetch upstream'
 alias gfum='git fetch upstream main'
 alias gfumas='git fetch upstream master'
+alias gfuoadp='git fetch upstream oadp-dev'
 alias gfo='git fetch origin'
 alias gfop='git fetch openshift'
 alias gfopm='git fetch openshift master'
 alias gfopk='git fetch openshift konveyor-dev'
 alias gfomain='git fetch origin main:main'
 alias gfomaster='git fetch origin master:master'
+alias gfooadp='git fetch origin oadp-dev:oadp-dev'
 alias gpf='git push  --force'
 alias gpl='git pull'
 alias gpo='git push'
-alias grhu='git reset --hard upstream/main || git reset --hard upstream/master'
+alias grhu='git reset --hard upstream/main || git reset --hard upstream/master || git reset --hard upstream/oadp-dev'
 alias current-branch='git branch --show-current'
 alias recent-branches='git branch --sort=committerdate | tail -n 10'
 alias rev-sha-short='git rev-parse --short HEAD'
@@ -41,6 +46,20 @@ alias ocosp='oco && gcas && gpf'
 alias oco-signoff='oco && gcas'
 alias oco-signoff-push-force='oco && gcas && gpf'
 alias oco-confirm-signoff-push-force='(oco -y || (open -a Ollama && oco -y)) && gcas && gpf'
+
+# Branch rename function for master to oadp-dev
+znap function git-rename-master-to-oadp-dev() {
+  echo "Renaming master branch to oadp-dev..."
+  git branch -m master oadp-dev
+  echo "Fetching origin..."
+  git fetch origin
+  echo "Setting upstream branch..."
+  git branch -u origin/oadp-dev oadp-dev
+  echo "Setting remote HEAD..."
+  git remote set-head origin -a
+  echo "Done! Your master branch has been renamed to oadp-dev"
+}
+alias grm2oadp='git-rename-master-to-oadp-dev'
 
 # Worktree functions
 alias gwl='git worktree list'
@@ -74,8 +93,10 @@ znap function git-worktree-code() {
       upstream_branch="upstream/main"
     elif git show-ref --verify --quiet refs/remotes/upstream/master; then
       upstream_branch="upstream/master"
+    elif git show-ref --verify --quiet refs/remotes/upstream/oadp-dev; then
+      upstream_branch="upstream/oadp-dev"
     else
-      echo "Error: No upstream/main or upstream/master branch found"
+      echo "Error: No upstream/main, upstream/master, or upstream/oadp-dev branch found"
       return 1
     fi
     

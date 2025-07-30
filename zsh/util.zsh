@@ -55,7 +55,7 @@ znap function go-mod-upgrade(){
 # Examples: GOTOOLCHAIN=go1.23.6 go-mod-upgrade-dirs "velero*" golang.org/x/crypto@v0.35.0 "gsed -i \"s/golang:1.22-bookworm/golang:1.23-bookworm/g\" Dockerfile && git add Dockerfile" CVE-2025-22869
 znap function go-mod-upgrade-dirs(){
     find . -type d -maxdepth 1 -name "$1" -exec sh -c "cd {} && pwd && \
-        git fetch upstream && (git checkout upstream/main || git checkout upstream/master) && \
+        git fetch upstream && (git checkout upstream/main || git checkout upstream/master || git checkout upstream/oadp-dev) && \
         (git checkout -b $2 || git checkout $2) && \
         go get $2 && go mod tidy && git add go.mod go.sum && \
         sh -c \"$3\" && \
@@ -72,7 +72,7 @@ znap function go-mod-upgrade-dirs(){
 #   find . -type f -name \"Dockerfile*\" -name \"Tiltfile\" -exec sed s/golang:1.22.10/golang:1.23.6/g {} \; \
 #   find . -type f -name \"Dockerfile*\" -name \"Tiltfile\" -exec git add {} \;"
 znap function exec-dirs(){
-    find . -type d -maxdepth 1 -name "$1" -exec sh -c "cd {} && pwd && git fetch upstream && (git checkout upstream/main || git checkout upstream/master) && (git checkout -b $2 || git checkout $2) && sh -c \"$3\"" \;
+    find . -type d -maxdepth 1 -name "$1" -exec sh -c "cd {} && pwd && git fetch upstream && (git checkout upstream/main || git checkout upstream/master || git checkout upstream/oadp-dev) && (git checkout -b $2 || git checkout $2) && sh -c \"$3\"" \;
 }
 
 # Improved version of exec-dirs-ds and exec-dirs-ds-echo with better error handling,
