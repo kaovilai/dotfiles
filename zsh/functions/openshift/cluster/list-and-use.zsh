@@ -25,9 +25,9 @@ znap function list-ocp-clusters() {
     echo "=== OpenShift Clusters ==="
     echo ""
     
-    # Check AWS and GCP cluster directories
+    # Check AWS, GCP, Azure, and ROSA cluster directories
     if [ -d "$OCP_MANIFESTS_DIR" ]; then
-        echo "AWS/GCP Clusters:"
+        echo "Cloud Provider Clusters:"
         local count=0
         
         # Find all directories with auth/kubeconfig files
@@ -35,18 +35,47 @@ znap function list-ocp-clusters() {
             if [[ -f "$dir/kubeconfig" ]]; then
                 local cluster_dir=$(dirname "$dir")
                 local cluster_name=$(basename "$cluster_dir")
+                
+                # Determine cluster type
+                local cluster_type=""
+                if [[ "$cluster_name" == *"-aws-"* ]]; then
+                    cluster_type="AWS"
+                elif [[ "$cluster_name" == *"-gcp-"* ]]; then
+                    cluster_type="GCP"
+                elif [[ "$cluster_name" == *"-azure-"* ]]; then
+                    cluster_type="Azure"
+                elif [[ "$cluster_name" == *"-rosa-"* ]]; then
+                    cluster_type="ROSA"
+                else
+                    cluster_type="Unknown"
+                fi
+                
                 count=$((count+1))
                 
                 if [ "$show_full" = true ]; then
-                    echo "$count. $cluster_name: $dir/kubeconfig"
+                    echo "$count. $cluster_name ($cluster_type): $dir/kubeconfig"
                 else
-                    echo "$count. $cluster_name"
+                    echo "$count. $cluster_name ($cluster_type)"
+                fi
+            fi
+        done
+        
+        # Check for ROSA clusters that might not have kubeconfig files yet
+        for dir in $(find $OCP_MANIFESTS_DIR -type d -name "*-rosa-sts-*" 2>/dev/null | sort); do
+            if [[ ! -f "$dir/auth/kubeconfig" && -f "$dir/cluster-admin.txt" ]]; then
+                local cluster_name=$(basename "$dir")
+                count=$((count+1))
+                
+                if [ "$show_full" = true ]; then
+                    echo "$count. $cluster_name (ROSA): $dir/cluster-admin.txt [No kubeconfig - use use-rosa-sts to connect]"
+                else
+                    echo "$count. $cluster_name (ROSA) [No kubeconfig - use use-rosa-sts to connect]"
                 fi
             fi
         done
         
         if [ $count -eq 0 ]; then
-            echo "   No AWS/GCP clusters found"
+            echo "   No cloud provider clusters found"
         fi
         echo ""
     fi
@@ -113,17 +142,45 @@ znap function use-ocp-cluster() {
     local kubeconfig_files=()
     local cluster_names=()
     
-    # Find all AWS/GCP clusters
+    # Find all cloud provider clusters
     if [ -d "$OCP_MANIFESTS_DIR" ]; then
         for dir in $(find $OCP_MANIFESTS_DIR -type d -name "auth" 2>/dev/null | sort); do
             if [[ -f "$dir/kubeconfig" ]]; then
                 local cluster_dir=$(dirname "$dir")
                 local cluster_name=$(basename "$cluster_dir")
                 
+                # Determine cluster type
+                local cluster_type=""
+                if [[ "$cluster_name" == *"-aws-"* ]]; then
+                    cluster_type="AWS"
+                elif [[ "$cluster_name" == *"-gcp-"* ]]; then
+                    cluster_type="GCP"
+                elif [[ "$cluster_name" == *"-azure-"* ]]; then
+                    cluster_type="Azure"
+                elif [[ "$cluster_name" == *"-rosa-"* ]]; then
+                    cluster_type="ROSA"
+                else
+                    cluster_type="Unknown"
+                fi
+                
                 # Apply pattern filter if provided
                 if [[ -z $search_pattern || $cluster_name == *$search_pattern* ]]; then
                     kubeconfig_files+=("$dir/kubeconfig")
-                    cluster_names+=("$cluster_name (AWS/GCP)")
+                    cluster_names+=("$cluster_name ($cluster_type)")
+                fi
+            fi
+        done
+        
+        # Check for ROSA clusters that might not have kubeconfig files yet
+        for dir in $(find $OCP_MANIFESTS_DIR -type d -name "*-rosa-sts-*" 2>/dev/null | sort); do
+            if [[ ! -f "$dir/auth/kubeconfig" && -f "$dir/cluster-admin.txt" ]]; then
+                local cluster_name=$(basename "$dir")
+                
+                # Apply pattern filter if provided
+                if [[ -z $search_pattern || $cluster_name == *$search_pattern* ]]; then
+                    # For ROSA clusters without kubeconfig, we'll add a special marker
+                    kubeconfig_files+=("ROSA:$dir")
+                    cluster_names+=("$cluster_name (ROSA - requires use-rosa-sts)")
                 fi
             fi
         done
@@ -186,8 +243,29 @@ znap function use-ocp-cluster() {
         return 1
     fi
     
+    # Handle special ROSA clusters
+    local selected_path="${kubeconfig_files[$choice-1]}"
+    if [[ "$selected_path" == ROSA:* ]]; then
+        echo ""
+        echo "This is a ROSA cluster without a kubeconfig file."
+        echo "You need to use the use-rosa-sts function to connect."
+        echo ""
+        local rosa_dir="${selected_path#ROSA:}"
+        local rosa_cluster_name=$(basename "$rosa_dir")
+        
+        # Extract architecture from directory name
+        if [[ "$rosa_cluster_name" == *"-arm64" ]]; then
+            echo "To connect, run: use-rosa-sts-arm64"
+        elif [[ "$rosa_cluster_name" == *"-amd64" ]]; then
+            echo "To connect, run: use-rosa-sts-amd64"
+        else
+            echo "To connect, run: use-rosa-sts"
+        fi
+        return 0
+    fi
+    
     # Set KUBECONFIG
-    export KUBECONFIG="${kubeconfig_files[$choice-1]}"
+    export KUBECONFIG="$selected_path"
     echo "Using cluster: ${cluster_names[$choice-1]}"
     echo "KUBECONFIG set to: $KUBECONFIG"
     
