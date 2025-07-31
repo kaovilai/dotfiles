@@ -133,5 +133,27 @@ No formal test suite exists. Changes should be manually tested by:
 2. For complex functions: Create new file in `zsh/functions/`
 3. For OpenShift functions: Follow the structure in `zsh/functions/openshift/`
 
+### OpenShift Cluster Management
+
+#### Listing and Using Clusters
+- `list-ocp-clusters` - List all OpenShift clusters (AWS, GCP, Azure, ROSA)
+- `use-ocp-cluster [PATTERN]` - Set KUBECONFIG to a selected cluster
+- `check-for-existing-clusters [PROVIDER] [PATTERN]` - Check for existing clusters before creating new ones
+
+#### Supported Cloud Providers
+- **AWS**: Traditional OpenShift on AWS (`*-aws-*` naming pattern)
+- **GCP**: Google Cloud Platform with Workload Identity (`*-gcp-wif*` naming pattern)
+- **Azure**: Azure with STS/Workload Identity (`*-azure-sts*` naming pattern)
+- **ROSA**: Red Hat OpenShift Service on AWS (`*-rosa-sts-*` naming pattern)
+
+#### Directory Structure
+Clusters are stored in `$OCP_MANIFESTS_DIR` with naming patterns:
+- AWS: `$TODAY-aws-$ARCH` (e.g., `20250131-aws-arm64`)
+- GCP: `$TODAY-gcp-wif` (e.g., `20250131-gcp-wif`)
+- Azure: `$TODAY-azure-sts` (e.g., `20250131-azure-sts`)
+- ROSA: `$TODAY-rosa-sts-$ARCH` (e.g., `20250131-rosa-sts-amd64`)
+
+Note: ROSA clusters may not have traditional kubeconfig files. Use `use-rosa-sts` functions to connect.
+
 ### Dependencies
 When adding features that require new tools, update the `Brewfile` with the necessary formulae or casks.
