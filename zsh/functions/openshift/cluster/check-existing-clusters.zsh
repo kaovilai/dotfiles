@@ -6,14 +6,15 @@ znap function check-for-existing-clusters() {
         echo "Check for existing OpenShift clusters and prompt for action"
         echo ""
         echo "Parameters:"
-        echo "  CLOUD_PROVIDER  Optional: Filter by provider (aws, gcp, all)"
+        echo "  CLOUD_PROVIDER  Optional: Filter by provider (aws, gcp, azure, rosa, all)"
         echo "  PATTERN         Optional: Pattern to match in cluster names"
         echo ""
         echo "Pattern examples:"
         echo "  20250417        Match clusters created on April 17, 2025"
-        echo "  arm64           Match AWS ARM64 architecture clusters"
-        echo "  amd64           Match AWS AMD64 architecture clusters"
+        echo "  arm64           Match AWS/ROSA ARM64 architecture clusters"
+        echo "  amd64           Match AWS/ROSA AMD64 architecture clusters"
         echo "  wif             Match GCP WIF clusters"
+        echo "  sts             Match Azure/ROSA STS clusters"
         echo "  -1              Match clusters with suffix -1 (created alongside others)"
         echo ""
         echo "Returns:"
@@ -65,6 +66,12 @@ znap function check-for-existing-clusters() {
                 if [[ "$provider" == "gcp" && ! "$cluster_name" =~ "gcp" ]]; then
                     continue
                 fi
+                if [[ "$provider" == "azure" && ! "$cluster_name" =~ "azure" ]]; then
+                    continue
+                fi
+                if [[ "$provider" == "rosa" && ! "$cluster_name" =~ "rosa" ]]; then
+                    continue
+                fi
                 
                 # Apply pattern filter if provided
                 if [[ -z $pattern || $cluster_name == *$pattern* ]]; then
@@ -80,6 +87,23 @@ znap function check-for-existing-clusters() {
                 fi
             fi
         done
+        
+        # Check for ROSA clusters without kubeconfig files
+        if [[ "$provider" == "all" || "$provider" == "rosa" ]]; then
+            for dir in $(find $OCP_MANIFESTS_DIR -type d -name "*-rosa-sts-*" 2>/dev/null | sort); do
+                if [[ ! -f "$dir/auth/kubeconfig" && -f "$dir/cluster-admin.txt" ]]; then
+                    local cluster_name=$(basename "$dir")
+                    
+                    # Apply pattern filter if provided
+                    if [[ -z $pattern || $cluster_name == *$pattern* ]]; then
+                        debug "Adding ROSA cluster: $cluster_name at $dir"
+                        cluster_dirs+=("$dir")
+                        cluster_names+=("$cluster_name (ROSA)")
+                        found=true
+                    fi
+                fi
+            done
+        fi
         
         # Also check for legacy clusters with empty TODAY variable
         # Check for -gcp-wif directory (empty TODAY with GCP WIF)
@@ -126,6 +150,23 @@ znap function check-for-existing-clusters() {
                     found=true
                 else
                     echo "WARNING: Found legacy AWS AMD64 cluster with empty directory, skipping"
+                fi
+            fi
+        fi
+        
+        # Check for -azure-sts directory (empty TODAY with Azure STS)
+        if [[ "$provider" == "all" || "$provider" == "azure" ]]; then
+            local legacy_azure_dir="$OCP_MANIFESTS_DIR/-azure-sts"
+            if [[ -d "$legacy_azure_dir" ]]; then
+                echo "Found legacy Azure STS cluster with empty TODAY variable: $legacy_azure_dir"
+                # Validate that directory is non-empty
+                if [[ -n "$legacy_azure_dir" ]]; then
+                    debug "Adding legacy Azure STS cluster: -azure-sts (legacy) at $legacy_azure_dir"
+                    cluster_dirs+=("$legacy_azure_dir")
+                    cluster_names+=("-azure-sts (legacy)")
+                    found=true
+                else
+                    echo "WARNING: Found legacy Azure STS cluster with empty directory, skipping"
                 fi
             fi
         fi
@@ -275,6 +316,13 @@ znap function check-for-existing-clusters() {
                     else
                         echo "WARNING: Directory $dir does not exist, skipping deletion"
                     fi
+                elif [[ "$dir" == "$OCP_MANIFESTS_DIR/-azure-sts" ]]; then
+                    echo "Destroying legacy Azure STS cluster: $dir_name"
+                    if [ -d "$dir" ]; then
+                        delete-ocp-azure-sts "cleanup-legacy"
+                    else
+                        echo "WARNING: Directory $dir does not exist, skipping deletion"
+                    fi
                 elif [[ "$dir" == *"-aws-"* ]]; then
                     echo "Destroying AWS cluster: $dir_name"
                     # Ensure the directory exists before attempting to delete
@@ -290,6 +338,29 @@ znap function check-for-existing-clusters() {
                         delete-ocp-gcp-wif-dir "$dir"
                     else
                         echo "WARNING: Directory $dir does not exist, skipping deletion"
+                    fi
+                elif [[ "$dir" == *"-azure-sts"* ]]; then
+                    echo "Destroying Azure STS cluster: $dir_name"
+                    # Ensure the directory exists before attempting to delete
+                    if [ -d "$dir" ]; then
+                        delete-ocp-azure-sts-dir "$dir"
+                    else
+                        echo "WARNING: Directory $dir does not exist, skipping deletion"
+                    fi
+                elif [[ "$dir" == *"-rosa-sts-"* ]]; then
+                    echo "Destroying ROSA STS cluster: $dir_name"
+                    # Extract architecture from directory name
+                    local arch_suffix=""
+                    if [[ "$dir_name" == *"-arm64" ]]; then
+                        arch_suffix="arm64"
+                    elif [[ "$dir_name" == *"-amd64" ]]; then
+                        arch_suffix="amd64"
+                    fi
+                    
+                    if [[ -n "$arch_suffix" ]]; then
+                        delete-rosa-sts "$arch_suffix"
+                    else
+                        echo "WARNING: Could not determine architecture for ROSA cluster, skipping deletion"
                     fi
                 else
                     echo "Unknown cluster type, using generic destroy: $dir_name"
