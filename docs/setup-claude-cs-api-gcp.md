@@ -88,10 +88,17 @@ export PROVIDER_ID="${CLUSTER_NAME}"
 4. Configure workload identity binding:
 
 ```bash
+# Bind for Velero service account
 gcloud iam service-accounts add-iam-policy-binding ${SERVICE_ACCOUNT_EMAIL} \
     --project=${GCP_PROJECT_ID} \
     --role="roles/iam.workloadIdentityUser" \
     --member="principal://iam.googleapis.com/projects/${GCP_PROJECT_NUM}/locations/global/workloadIdentityPools/${POOL_ID}/subject/system:serviceaccount:openshift-adp:velero"
+
+# Bind for OADP operator controller manager service account
+gcloud iam service-accounts add-iam-policy-binding ${SERVICE_ACCOUNT_EMAIL} \
+    --project=${GCP_PROJECT_ID} \
+    --role="roles/iam.workloadIdentityUser" \
+    --member="principal://iam.googleapis.com/projects/${GCP_PROJECT_NUM}/locations/global/workloadIdentityPools/${POOL_ID}/subject/system:serviceaccount:openshift-adp:openshift-adp-controller-manager"
 ```
 
 ### Step 3: Deploy OADP Operator with Custom Image

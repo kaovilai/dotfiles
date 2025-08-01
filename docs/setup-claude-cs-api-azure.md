@@ -34,6 +34,10 @@ create-velero-identity-for-azure-cluster
 create-velero-container-for-azure-cluster
 ```
 
+**Note**: The `create-velero-identity-for-azure-cluster` function automatically creates federated identity credentials for both:
+- Velero service account (`system:serviceaccount:openshift-adp:velero`)
+- OADP controller manager service account (`system:serviceaccount:openshift-adp:openshift-adp-controller-manager`)
+
 ### Step 3: Build and Deploy OADP Operator from PR Branch
 
 ```bash
@@ -140,8 +144,19 @@ oc get all -n test-backup
 # Check Velero pod environment variables
 oc get pods -n openshift-adp -l app.kubernetes.io/name=velero -o jsonpath='{.items[0].spec.containers[0].env[?(@.name=="AZURE_CLIENT_ID")]}' | jq .
 
-# Check service account annotations (if enabled)
-oc get sa velero -n openshift-adp -o jsonpath='{.metadata.annotations}'
+# Check AZURE_FEDERATED_TOKEN_FILE environment variable
+oc get pods -n openshift-adp -l app.kubernetes.io/name=velero -o jsonpath='{.items[0].spec.containers[0].env[?(@.name=="AZURE_FEDERATED_TOKEN_FILE")]}' | jq .
+
+# Check service account annotations for both Velero and OADP controller
+oc get sa velero -n openshift-adp -o jsonpath='{.metadata.annotations}' | jq .
+oc get sa openshift-adp-controller-manager -n openshift-adp -o jsonpath='{.metadata.annotations}' | jq .
+
+# Verify federated identity credentials exist for both service accounts
+CLUSTER_NAME=$(oc whoami --show-server | sed 's|https://api\.||' | sed 's|\..*||')
+az identity federated-credential list \
+  --identity-name "velero-${CLUSTER_NAME}" \
+  --resource-group "${CLUSTER_NAME}-rg" \
+  --query "[].{name:name,subject:subject}" -o table
 ```
 
 #### Test 2: Test Secret Update Flow
@@ -215,10 +230,21 @@ validate-velero-role-assignments-for-azure-cluster
    # Check Velero logs for Azure authentication errors
    oc logs -n openshift-adp -l app.kubernetes.io/name=velero | grep -i "azure\|auth"
    
-   # Verify managed identity federated credentials
+   # Check OADP operator controller logs for authentication issues
+   oc logs -n openshift-adp deployment/oadp-operator-controller-manager | grep -i "azure\|auth"
+   
+   # Verify managed identity federated credentials for both service accounts
+   CLUSTER_NAME=$(oc whoami --show-server | sed 's|https://api\.||' | sed 's|\..*||')
    az identity federated-credential list \
-     --identity-name "velero-$(oc whoami --show-server | sed 's|https://api\.||' | sed 's|\..*||')" \
-     --resource-group "$(oc whoami --show-server | sed 's|https://api\.||' | sed 's|\..*||')-rg"
+     --identity-name "velero-${CLUSTER_NAME}" \
+     --resource-group "${CLUSTER_NAME}-rg" \
+     --query "[].{name:name,subject:subject}" -o table
+   
+   # Verify both service accounts have correct annotations
+   echo "Velero service account annotations:"
+   oc get sa velero -n openshift-adp -o jsonpath='{.metadata.annotations}' | jq .
+   echo "OADP controller service account annotations:"
+   oc get sa openshift-adp-controller-manager -n openshift-adp -o jsonpath='{.metadata.annotations}' | jq .
    ```
 
 3. **CloudStorage Resource Issues**
