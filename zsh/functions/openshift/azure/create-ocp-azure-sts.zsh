@@ -625,6 +625,25 @@ create-velero-identity-for-azure-cluster() {
         echo "Federated credential $FED_CRED_NAME already exists for managed identity"
     fi
     
+    # Create federated credential for OADP controller manager
+    local CONTROLLER_FED_CRED_NAME="oadp-controller-federated-credential"
+    if ! az identity federated-credential show \
+        --name "$CONTROLLER_FED_CRED_NAME" \
+        --identity-name "$IDENTITY_NAME" \
+        --resource-group "$CLUSTER_RESOURCE_GROUP" &>/dev/null; then
+        
+        echo "Creating federated identity credential for OADP controller manager..."
+        az identity federated-credential create \
+            --name "$CONTROLLER_FED_CRED_NAME" \
+            --identity-name "$IDENTITY_NAME" \
+            --resource-group "$CLUSTER_RESOURCE_GROUP" \
+            --issuer "$SERVICE_ACCOUNT_ISSUER" \
+            --subject "system:serviceaccount:openshift-adp:openshift-adp-controller-manager" \
+            --audiences "openshift"
+    else
+        echo "Federated credential $CONTROLLER_FED_CRED_NAME already exists for OADP controller manager"
+    fi
+    
     
     echo ""
     echo "Velero identity setup complete!"
