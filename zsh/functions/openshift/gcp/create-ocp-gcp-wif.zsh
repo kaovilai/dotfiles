@@ -372,6 +372,20 @@ create-velero-identity-for-gcp-cluster() {
             --role="roles/iam.workloadIdentityUser" \
             --member="principal://iam.googleapis.com/projects/${GCP_PROJECT_NUM}/locations/global/workloadIdentityPools/${POOL_ID}/subject/system:serviceaccount:openshift-adp:velero" \
             2>/dev/null || true
+        
+        # Add binding for OADP controller manager using principalSet format
+        echo "Adding workload identity user binding for OADP controller manager..."
+        gcloud iam service-accounts add-iam-policy-binding "$SERVICE_ACCOUNT_EMAIL" \
+            --project="$GCP_PROJECT_ID" \
+            --role="roles/iam.workloadIdentityUser" \
+            --member="principalSet://iam.googleapis.com/projects/${GCP_PROJECT_NUM}/locations/global/workloadIdentityPools/${POOL_ID}/attribute.namespace_name/openshift-adp#openshift-adp-controller-manager"
+        
+        # Also add binding for the specific subject format for controller manager
+        gcloud iam service-accounts add-iam-policy-binding "$SERVICE_ACCOUNT_EMAIL" \
+            --project="$GCP_PROJECT_ID" \
+            --role="roles/iam.workloadIdentityUser" \
+            --member="principal://iam.googleapis.com/projects/${GCP_PROJECT_NUM}/locations/global/workloadIdentityPools/${POOL_ID}/subject/system:serviceaccount:openshift-adp:openshift-adp-controller-manager" \
+            2>/dev/null || true
     fi
     
     echo ""
