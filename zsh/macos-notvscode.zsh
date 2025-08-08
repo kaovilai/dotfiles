@@ -47,7 +47,7 @@ if [[ "$TERM_PROGRAM" != "vscode" ]]; then
   eval $AT_HOME && (eval $DISPLAYLINK_CONNECTED || eval $RESTART_DISPLAYLINK) &!
   
   # Handle proxy setup based on network
-  if [[ "$WIFI_NAME" = "S23" ]]; then
+  if [[ "$WIFI_NAME" = "PASSAWIT's Z Fold7" ]]; then
         (curl --silent --socks5 $SOCKS_ROUTER_IP:$SOCKS_ROUTER_PROXY_PORT http://www.google.com && setSOCKSproxy) &!
     else
         unsetSOCKSproxy &!
