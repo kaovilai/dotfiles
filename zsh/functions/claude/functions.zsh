@@ -20,9 +20,9 @@ znap function merge-claude-settings() {
         echo '{"permissions": {"allow": [], "deny": []}}' > "$global_settings"
     fi
     
-    # Read existing permissions from both files as JSON array elements
-    local local_allow=$(jq -c '.permissions.allow[]' "$local_settings" 2>/dev/null)
-    local global_allow=$(jq -c '.permissions.allow[]' "$global_settings" 2>/dev/null)
+    # Read existing permissions from both files as raw strings (not JSON-encoded)
+    local local_allow=$(jq -r '.permissions.allow[]' "$local_settings" 2>/dev/null)
+    local global_allow=$(jq -r '.permissions.allow[]' "$global_settings" 2>/dev/null)
     
     # Find new permissions not in global settings
     local new_permissions=()
@@ -48,14 +48,13 @@ znap function merge-claude-settings() {
     # Ask about each new permission and add immediately
     local permissions_added=0
     for perm in "${new_permissions[@]}"; do
-        # Decode the JSON string for display
-        local decoded_perm=$(echo "$perm" | jq -r '.')
-        echo -n "Add permission '$decoded_perm'? (y/n): "
+        # Permission is already a raw string, no need to decode
+        echo -n "Add permission '$perm'? (y/n): "
         read -r response
         if [[ "$response" =~ ^[Yy]$ ]]; then
-            # Add this permission immediately
+            # Add this permission immediately (use --arg for proper string escaping)
             local temp_file=$(mktemp)
-            jq --argjson new_perm "$perm" '
+            jq --arg new_perm "$perm" '
                 .permissions.allow += [$new_perm]
                 | .permissions.allow |= unique
             ' "$global_settings" > "$temp_file"
