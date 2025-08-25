@@ -42,17 +42,22 @@ znap get_latest_multi_release_image() {
     fi
 }
 
-# Get the latest EC version dynamically
-export OCP_LATEST_EC_VERSION=$(get_latest_ec_version)
+# Functions to get latest EC version and release images dynamically at runtime
+znap function get_ocp_latest_ec_version() {
+    get_latest_ec_version
+}
 
-# Define release payload for OpenShift installations
-# Using architecture-specific images from the API
-# For AMD64 architecture
-export OCP_FUNCTIONS_RELEASE_IMAGE_AMD64=$(get_latest_amd64_release_image)
-# For ARM64 architecture
-export OCP_FUNCTIONS_RELEASE_IMAGE_ARM64=$(get_latest_arm64_release_image)
-# For multi-arch
-export OCP_FUNCTIONS_RELEASE_IMAGE_MULTI=$(get_latest_multi_release_image)
+znap function get_ocp_functions_release_image_amd64() {
+    get_latest_amd64_release_image
+}
+
+znap function get_ocp_functions_release_image_arm64() {
+    get_latest_arm64_release_image
+}
+
+znap function get_ocp_functions_release_image_multi() {
+    get_latest_multi_release_image
+}
 
 # 4-stable release stream functions
 # Function to get the latest stable AMD64 release image from OpenShift CI API
@@ -99,17 +104,22 @@ znap get_latest_stable_version() {
     fi
 }
 
-# Get the latest stable version dynamically
-export OCP_LATEST_STABLE_VERSION=$(get_latest_stable_version)
+# Functions to get latest stable version and release images dynamically at runtime
+znap function get_ocp_latest_stable_version() {
+    get_latest_stable_version
+}
 
-# Define stable release payload for OpenShift installations
-# Using architecture-specific images from the API
-# For AMD64 architecture
-export OCP_FUNCTIONS_RELEASE_IMAGE_STABLE_AMD64=$(get_latest_stable_amd64_release_image)
-# For ARM64 architecture
-export OCP_FUNCTIONS_RELEASE_IMAGE_STABLE_ARM64=$(get_latest_stable_arm64_release_image)
-# For multi-arch
-export OCP_FUNCTIONS_RELEASE_IMAGE_STABLE_MULTI=$(get_latest_stable_multi_release_image)
+znap function get_ocp_functions_release_image_stable_amd64() {
+    get_latest_stable_amd64_release_image
+}
+
+znap function get_ocp_functions_release_image_stable_arm64() {
+    get_latest_stable_arm64_release_image
+}
+
+znap function get_ocp_functions_release_image_stable_multi() {
+    get_latest_stable_multi_release_image
+}
 
 
 # Directory containing the manifests for many clusters
