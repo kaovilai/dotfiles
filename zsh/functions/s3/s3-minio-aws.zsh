@@ -3,7 +3,8 @@
 znap function create-minio-aws() {
     local name=""
     local region="${AWS_REGION:-us-east-1}"
-    local instance_type="t3.medium"
+    local instance_type=""
+    local architecture="arm64"
     local key_name=""
     local vpc_id=""
     local subnet_id=""
@@ -23,6 +24,10 @@ znap function create-minio-aws() {
                 ;;
             --instance-type)
                 instance_type="$2"
+                shift 2
+                ;;
+            --arch|--architecture)
+                architecture="$2"
                 shift 2
                 ;;
             --key-name)
@@ -51,7 +56,8 @@ znap function create-minio-aws() {
                 echo "Options:"
                 echo "  --name NAME              Name for the MinIO deployment (required)"
                 echo "  --region REGION          AWS region (default: us-east-1)"
-                echo "  --instance-type TYPE     EC2 instance type (default: t3.medium)"
+                echo "  --instance-type TYPE     EC2 instance type (default: architecture-specific)"
+                echo "  --arch ARCH              Architecture: arm64 (default) or amd64"
                 echo "  --key-name NAME          EC2 key pair name for SSH access"
                 echo "  --vpc-id ID              VPC ID to deploy in (auto-detected if not provided)"
                 echo "  --subnet-id ID           Subnet ID to deploy in (auto-detected if not provided)"
@@ -73,6 +79,23 @@ znap function create-minio-aws() {
         echo -e "${RED}ERROR${NC}: MinIO deployment name is required"
         echo "Usage: create-minio-aws --name <deployment-name> [OPTIONS]"
         return 1
+    fi
+    
+    # Set default instance type based on architecture
+    if [[ -z "$instance_type" ]]; then
+        case "$architecture" in
+            "arm64"|"aarch64")
+                instance_type="t4g.medium"
+                ;;
+            "amd64"|"x86_64")
+                instance_type="t3.medium"
+                ;;
+            *)
+                echo -e "${RED}ERROR${NC}: Unknown architecture: $architecture"
+                echo "Supported architectures: arm64, amd64"
+                return 1
+                ;;
+        esac
     fi
     
     # Check if deployment already exists
@@ -176,12 +199,22 @@ znap function create-minio-aws() {
         echo -e "${YELLOW}WARN${NC}: Could not detect your IP, SSH open to all (0.0.0.0/0)"
     fi
     
-    # Get the latest Amazon Linux 2 AMI
-    echo -e "${BLUE}INFO${NC}: Finding latest Amazon Linux 2 AMI..."
+    # Get the latest Amazon Linux 2 AMI for the specified architecture
+    local ami_arch
+    case "$architecture" in
+        "arm64"|"aarch64")
+            ami_arch="arm64"
+            ;;
+        "amd64"|"x86_64")
+            ami_arch="x86_64"
+            ;;
+    esac
+    
+    echo -e "${BLUE}INFO${NC}: Finding latest Amazon Linux 2 AMI for $ami_arch..."
     local ami_id=$(aws ec2 describe-images \
         --region "$region" \
         --owners amazon \
-        --filters "Name=name,Values=amzn2-ami-hvm-*-x86_64-gp2" \
+        --filters "Name=name,Values=amzn2-ami-hvm-*-${ami_arch}-gp2" \
         --query "sort_by(Images, &CreationDate)[-1].ImageId" \
         --output text 2>/dev/null)
     
@@ -210,7 +243,8 @@ systemctl enable docker
 usermod -a -G docker ec2-user
 
 # Install MinIO
-wget https://dl.min.io/server/minio/release/linux-amd64/minio
+MINIO_ARCH=\$(uname -m | sed 's/aarch64/arm64/' | sed 's/x86_64/amd64/')
+wget https://dl.min.io/server/minio/release/linux-\$MINIO_ARCH/minio
 chmod +x minio
 mv minio /usr/local/bin/
 
@@ -317,25 +351,69 @@ EOL
 # Wait for MinIO to be ready and create initial bucket
 cat > /home/ec2-user/setup_bucket.sh << EOL
 #!/bin/bash
-# Wait for MinIO to start
-sleep 30
+set -e
+
+# Function to log messages
+log() {
+    echo "\$(date '+%Y-%m-%d %H:%M:%S') - \$1" | tee -a /var/log/setup_bucket.log
+}
+
+log "Starting MinIO bucket setup"
 
 # Install MinIO client
-wget https://dl.min.io/client/mc/release/linux-amd64/mc
+log "Installing MinIO client..."
+MC_ARCH=\\$(uname -m | sed 's/aarch64/arm64/' | sed 's/x86_64/amd64/')
+wget -q https://dl.min.io/client/mc/release/linux-\\$MC_ARCH/mc
 chmod +x mc
 sudo mv mc /usr/local/bin/
 
-# Configure mc and create bucket (using HTTPS with --insecure for self-signed cert)
+# Get instance metadata
+PUBLIC_DNS=\$(curl -s http://169.254.169.254/latest/meta-data/public-hostname)
+log "Using public DNS: \$PUBLIC_DNS"
+
+# Wait for MinIO to be ready with retry logic
 export MINIO_ROOT_USER=minioadmin
 export MINIO_ROOT_PASSWORD=REPLACE_PASSWORD
-PUBLIC_DNS=\$(curl -s http://169.254.169.254/latest/meta-data/public-hostname)
-/usr/local/bin/mc config host add local https://\$PUBLIC_DNS:9000 \$MINIO_ROOT_USER \$MINIO_ROOT_PASSWORD --insecure
-/usr/local/bin/mc mb local/REPLACE_BUCKET_NAME --insecure
+MINIO_URL="https://\$PUBLIC_DNS:9000"
+
+log "Waiting for MinIO to start at \$MINIO_URL"
+for i in {1..30}; do
+    if curl -k -s --connect-timeout 5 --max-time 10 "\$MINIO_URL/minio/health/ready" >/dev/null 2>&1; then
+        log "MinIO is ready after \$((i*10)) seconds"
+        break
+    fi
+    if [ \$i -eq 30 ]; then
+        log "ERROR: MinIO failed to start after 300 seconds"
+        exit 1
+    fi
+    log "MinIO not ready yet, waiting... (attempt \$i/30)"
+    sleep 10
+done
+
+# Configure mc and create bucket
+log "Configuring MinIO client..."
+/usr/local/bin/mc config host add local \$MINIO_URL \$MINIO_ROOT_USER \$MINIO_ROOT_PASSWORD --insecure
+
+# Create bucket if it doesn't exist
+BUCKET_NAME="REPLACE_BUCKET_NAME"
+if /usr/local/bin/mc ls local/\$BUCKET_NAME --insecure >/dev/null 2>&1; then
+    log "Bucket '\$BUCKET_NAME' already exists"
+else
+    log "Creating bucket '\$BUCKET_NAME'..."
+    if /usr/local/bin/mc mb local/\$BUCKET_NAME --insecure; then
+        log "Successfully created bucket '\$BUCKET_NAME'"
+    else
+        log "ERROR: Failed to create bucket '\$BUCKET_NAME'"
+        exit 1
+    fi
+fi
+
+log "MinIO bucket setup completed successfully"
 EOL
 
 # Replace placeholders
 sed -i "s/REPLACE_PASSWORD/$MINIO_ROOT_PASSWORD/g" /home/ec2-user/setup_bucket.sh
-sed -i "s/REPLACE_BUCKET_NAME/$BUCKET_NAME/" /home/ec2-user/setup_bucket.sh
+sed -i "s/REPLACE_BUCKET_NAME/$bucket_name/" /home/ec2-user/setup_bucket.sh
 chown ec2-user:ec2-user /home/ec2-user/setup_bucket.sh
 chmod +x /home/ec2-user/setup_bucket.sh
 
@@ -522,6 +600,10 @@ EOF
     echo -e "  Certificate: $cert_file"
     echo -e "  Initial Bucket: $bucket_name"
     echo -e ""
+    echo -e "${BLUE}AWS CLI Configuration:${NC}"
+    echo -e "  export AWS_ACCESS_KEY_ID=\"$minio_root_user\""
+    echo -e "  export AWS_SECRET_ACCESS_KEY=\"$minio_root_password\""
+    echo -e ""
     echo -e "${YELLOW}NOTE${NC}: MinIO is configured with HTTPS using self-signed certificates."
     echo -e "${YELLOW}NOTE${NC}: It may take 3-5 minutes for MinIO to be fully ready with HTTPS."
     echo -e "${YELLOW}NOTE${NC}: The certificate is self-signed and needs to be trusted for SSL verification."
@@ -539,6 +621,31 @@ EOF
         echo -e "  3. Get connection info: get-minio-connection-info --name $name"
     else
         echo -e "  4. Get connection info: get-minio-connection-info --name $name"
+    fi
+    
+    # Verify bucket creation if certificate was downloaded successfully
+    if [[ "$cert_downloaded" == true ]]; then
+        echo -e ""
+        echo -e "${BLUE}INFO${NC}: Verifying bucket creation..."
+        
+        # Set credentials for AWS CLI
+        export AWS_ACCESS_KEY_ID="$minio_root_user"
+        export AWS_SECRET_ACCESS_KEY="$minio_root_password"
+        
+        # Wait a bit more for bucket creation script to complete
+        sleep 30
+        
+        # Try to verify/create bucket
+        if ensure_default_bucket "$name" "$bucket_name"; then
+            echo -e "${GREEN}SUCCESS${NC}: Default bucket '$bucket_name' is ready!"
+        else
+            echo -e "${YELLOW}WARN${NC}: Default bucket verification failed, but you can create it manually later"
+            echo -e "${YELLOW}HINT${NC}: Run 'ensure_default_bucket $name' once MinIO is fully started"
+        fi
+        
+        # Clean up credentials from environment
+        unset AWS_ACCESS_KEY_ID
+        unset AWS_SECRET_ACCESS_KEY
     fi
     
     return 0
