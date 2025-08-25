@@ -401,3 +401,43 @@ znap function download-minio-certificate() {
     echo -e "${YELLOW}HINT${NC}: You can test the connection with: curl -k $endpoint/minio/health/ready"
     return 1
 }
+
+# Function to ensure default bucket exists
+znap function ensure_default_bucket() {
+    local deployment_name="$1"
+    local bucket_name="${2:-default-bucket}"
+    
+    if [[ -z "$deployment_name" ]]; then
+        echo -e "${RED}ERROR${NC}: Deployment name is required"
+        echo "Usage: ensure_default_bucket <deployment-name> [bucket-name]"
+        return 1
+    fi
+    
+    local deployment_file="$MINIO_DEPLOYMENTS_DIR/${deployment_name}.json"
+    if [[ ! -f "$deployment_file" ]]; then
+        echo -e "${RED}ERROR${NC}: Deployment '$deployment_name' not found"
+        return 1
+    fi
+    
+    # Get deployment details
+    local endpoint=$(jq -r '.endpoint' "$deployment_file")
+    local ca_bundle_file="$MINIO_DEPLOYMENTS_DIR/${deployment_name}/minio-cert.pem"
+    
+    echo -e "${BLUE}INFO${NC}: Checking if bucket '$bucket_name' exists in deployment '$deployment_name'"
+    
+    # Check if bucket exists
+    if aws s3 ls --endpoint-url "$endpoint" --ca-bundle "$ca_bundle_file" 2>/dev/null | grep -q "$bucket_name"; then
+        echo -e "${GREEN}SUCCESS${NC}: Bucket '$bucket_name' already exists"
+        return 0
+    fi
+    
+    echo -e "${YELLOW}INFO${NC}: Creating bucket '$bucket_name'..."
+    if aws s3api create-bucket --bucket "$bucket_name" --endpoint-url "$endpoint" --ca-bundle "$ca_bundle_file" >/dev/null 2>&1; then
+        echo -e "${GREEN}SUCCESS${NC}: Created bucket '$bucket_name'"
+        return 0
+    else
+        echo -e "${RED}ERROR${NC}: Failed to create bucket '$bucket_name'"
+        echo -e "${YELLOW}HINT${NC}: Make sure AWS credentials are set (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY)"
+        return 1
+    fi
+}
