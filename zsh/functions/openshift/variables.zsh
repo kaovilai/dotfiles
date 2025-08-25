@@ -1,5 +1,5 @@
 # Function to get the latest AMD64 release image from OpenShift CI API
-get_latest_amd64_release_image() {
+znap get_latest_amd64_release_image() {
     local pullSpec=$(curl -s https://amd64.ocp.releases.ci.openshift.org/api/v1/releasestream/4-dev-preview/latest | jq -r '.pullSpec' 2>/dev/null)
     if [ -z "$pullSpec" ]; then
         echo "ERROR: Failed to fetch latest AMD64 release image from OpenShift CI API" >&2
@@ -10,7 +10,7 @@ get_latest_amd64_release_image() {
 }
 
 # Function to get the latest ARM64 release image from OpenShift CI API
-get_latest_arm64_release_image() {
+znap get_latest_arm64_release_image() {
     local pullSpec=$(curl -s https://arm64.ocp.releases.ci.openshift.org/api/v1/releasestream/4-dev-preview-arm64/latest | jq -r '.pullSpec' 2>/dev/null)
     if [ -z "$pullSpec" ]; then
         echo "ERROR: Failed to fetch latest ARM64 release image from OpenShift CI API" >&2
@@ -21,7 +21,7 @@ get_latest_arm64_release_image() {
 }
 
 # Get the latest EC version from AMD64 release for compatibility
-get_latest_ec_version() {
+znap get_latest_ec_version() {
     local version=$(curl -s https://amd64.ocp.releases.ci.openshift.org/api/v1/releasestream/4-dev-preview/latest | jq -r '.name' 2>/dev/null)
     if [ -z "$version" ]; then
         echo "ERROR: Failed to fetch latest EC version from OpenShift CI API" >&2
@@ -32,7 +32,7 @@ get_latest_ec_version() {
 }
 
 # Function to get the latest multi-arch release image from OpenShift CI API
-get_latest_multi_release_image() {
+znap get_latest_multi_release_image() {
     local pullSpec=$(curl -s https://multi.ocp.releases.ci.openshift.org/api/v1/releasestream/4-dev-preview-multi/latest | jq -r '.pullSpec' 2>/dev/null)
     if [ -z "$pullSpec" ]; then
         echo "ERROR: Failed to fetch latest multi-arch release image from OpenShift CI API" >&2
@@ -56,7 +56,7 @@ export OCP_FUNCTIONS_RELEASE_IMAGE_MULTI=$(get_latest_multi_release_image)
 
 # 4-stable release stream functions
 # Function to get the latest stable AMD64 release image from OpenShift CI API
-get_latest_stable_amd64_release_image() {
+znap get_latest_stable_amd64_release_image() {
     local pullSpec=$(curl -s https://amd64.ocp.releases.ci.openshift.org/api/v1/releasestream/4-stable/latest | jq -r '.pullSpec' 2>/dev/null)
     if [ -z "$pullSpec" ]; then
         echo "ERROR: Failed to fetch latest stable AMD64 release image from OpenShift CI API" >&2
@@ -67,7 +67,7 @@ get_latest_stable_amd64_release_image() {
 }
 
 # Function to get the latest stable ARM64 release image from OpenShift CI API
-get_latest_stable_arm64_release_image() {
+znap get_latest_stable_arm64_release_image() {
     local pullSpec=$(curl -s https://arm64.ocp.releases.ci.openshift.org/api/v1/releasestream/4-stable-arm64/latest | jq -r '.pullSpec' 2>/dev/null)
     if [ -z "$pullSpec" ]; then
         echo "ERROR: Failed to fetch latest stable ARM64 release image from OpenShift CI API" >&2
@@ -78,7 +78,7 @@ get_latest_stable_arm64_release_image() {
 }
 
 # Function to get the latest stable multi-arch release image from OpenShift CI API
-get_latest_stable_multi_release_image() {
+znap get_latest_stable_multi_release_image() {
     local pullSpec=$(curl -s https://multi.ocp.releases.ci.openshift.org/api/v1/releasestream/4-stable-multi/latest | jq -r '.pullSpec' 2>/dev/null)
     if [ -z "$pullSpec" ]; then
         echo "ERROR: Failed to fetch latest stable multi-arch release image from OpenShift CI API" >&2
@@ -89,7 +89,7 @@ get_latest_stable_multi_release_image() {
 }
 
 # Get the latest stable version from AMD64 release
-get_latest_stable_version() {
+znap get_latest_stable_version() {
     local version=$(curl -s https://amd64.ocp.releases.ci.openshift.org/api/v1/releasestream/4-stable/latest | jq -r '.name' 2>/dev/null)
     if [ -z "$version" ]; then
         echo "ERROR: Failed to fetch latest stable version from OpenShift CI API" >&2
