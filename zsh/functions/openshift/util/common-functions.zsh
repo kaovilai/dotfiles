@@ -4,17 +4,17 @@
 prompt_release_stream() {
     echo "" >&2
     echo "Select OpenShift release stream:" >&2
-    echo "1) 4-dev-preview (Early Candidate) - Version: $OCP_LATEST_EC_VERSION" >&2
-    echo "2) 4-stable (Release Candidate)   - Version: $OCP_LATEST_STABLE_VERSION" >&2
+    echo "1) 4-dev-preview (Early Candidate) - Version: $(get_ocp_latest_ec_version)" >&2
+    echo "2) 4-stable (Release Candidate)   - Version: $(get_ocp_latest_stable_version)" >&2
     echo "" >&2
     echo -n "Enter your choice (1 or 2): " >&2
     read stream_choice
     
     if [[ "$stream_choice" == "2" ]]; then
-        echo "INFO: Using 4-stable release stream (version: $OCP_LATEST_STABLE_VERSION)" >&2
+        echo "INFO: Using 4-stable release stream (version: $(get_ocp_latest_stable_version))" >&2
         echo "stable"
     else
-        echo "INFO: Using 4-dev-preview release stream (version: $OCP_LATEST_EC_VERSION)" >&2
+        echo "INFO: Using 4-dev-preview release stream (version: $(get_ocp_latest_ec_version))" >&2
         echo "dev-preview"
     fi
 }
@@ -27,13 +27,13 @@ get_release_image() {
     if [[ "$stream" == "stable" ]]; then
         case "$architecture" in
             "amd64"|"x86_64")
-                echo "$OCP_FUNCTIONS_RELEASE_IMAGE_STABLE_AMD64"
+                get_ocp_functions_release_image_stable_amd64
                 ;;
             "arm64"|"aarch64")
-                echo "$OCP_FUNCTIONS_RELEASE_IMAGE_STABLE_ARM64"
+                get_ocp_functions_release_image_stable_arm64
                 ;;
             "multi")
-                echo "$OCP_FUNCTIONS_RELEASE_IMAGE_STABLE_MULTI"
+                get_ocp_functions_release_image_stable_multi
                 ;;
             *)
                 echo "ERROR: Unknown architecture: $architecture" >&2
@@ -43,13 +43,13 @@ get_release_image() {
     else
         case "$architecture" in
             "amd64"|"x86_64")
-                echo "$OCP_FUNCTIONS_RELEASE_IMAGE_AMD64"
+                get_ocp_functions_release_image_amd64
                 ;;
             "arm64"|"aarch64")
-                echo "$OCP_FUNCTIONS_RELEASE_IMAGE_ARM64"
+                get_ocp_functions_release_image_arm64
                 ;;
             "multi")
-                echo "$OCP_FUNCTIONS_RELEASE_IMAGE_MULTI"
+                get_ocp_functions_release_image_multi
                 ;;
             *)
                 echo "ERROR: Unknown architecture: $architecture" >&2
@@ -87,8 +87,8 @@ validate_env_vars() {
 
 # Function to get openshift-install binary
 get_openshift_install() {
-    local ec_version=${OCP_LATEST_EC_VERSION:-$(get_latest_ec_version)}
-    local stable_version=${OCP_LATEST_STABLE_VERSION:-$(get_latest_stable_version)}
+    local ec_version=$(get_ocp_latest_ec_version)
+    local stable_version=$(get_ocp_latest_stable_version)
     
     # Check if user has set a specific version
     if [[ -n "$OPENSHIFT_INSTALL" ]]; then
