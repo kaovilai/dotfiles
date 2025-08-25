@@ -10,7 +10,7 @@ znap function delete-ocp-aws() {
     fi
     
     # Use specified openshift-install or default to latest EC version
-    local EC_VERSION=${OCP_LATEST_EC_VERSION:-$(get_latest_ec_version)}
+    local EC_VERSION=$(get_ocp_latest_ec_version)
     local OPENSHIFT_INSTALL=${OPENSHIFT_INSTALL:-openshift-install-${EC_VERSION}}
     local ARCH_SUFFIX=$2
     

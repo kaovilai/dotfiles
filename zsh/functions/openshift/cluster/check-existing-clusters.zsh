@@ -364,7 +364,7 @@ znap function check-for-existing-clusters() {
                     fi
                 else
                     echo "Unknown cluster type, using generic destroy: $dir_name"
-                    local EC_VERSION=${OCP_LATEST_EC_VERSION:-$(get_latest_ec_version)}
+                    local EC_VERSION=$(get_ocp_latest_ec_version)
                     local OPENSHIFT_INSTALL=${OPENSHIFT_INSTALL:-openshift-install-${EC_VERSION}}
                     $OPENSHIFT_INSTALL destroy cluster --dir "$dir" || echo "Failed to destroy cluster: $dir_name"
                 fi
