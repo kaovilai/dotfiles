@@ -173,16 +173,6 @@ az identity federated-credential create \
 oc create namespace openshift-adp
 ----
 
-. Annotate the service accounts to use Microsoft Entra Workload ID:
-+
-[source,bash]
-----
-oc annotate serviceaccount velero -n openshift-adp \
-    azure.workload.identity/client-id="$IDENTITY_CLIENT_ID" --overwrite
-
-oc annotate serviceaccount openshift-adp-controller-manager -n openshift-adp \
-    azure.workload.identity/client-id="$IDENTITY_CLIENT_ID" --overwrite
-----
 
 [id="oadp-azure-cloud-storage-api_{context}"]
 == Alternative: Using Cloud Storage API for Automated Container Management

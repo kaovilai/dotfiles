@@ -147,14 +147,7 @@ EOF
 
 ### Step 4: Configure OADP for Cloud Secret API
 
-1. Annotate the Velero service account:
-
-```bash
-oc annotate serviceaccount velero -n openshift-adp \
-    iam.gke.io/gcp-service-account=${SERVICE_ACCOUNT_EMAIL} --overwrite
-```
-
-2. Create DataProtectionApplication without explicit credentials:
+1. Create DataProtectionApplication without explicit credentials:
 
 ```yaml
 cat <<EOF | oc apply -f -
@@ -200,7 +193,7 @@ EOF
 oc get pods -n openshift-adp -l app.kubernetes.io/name=oadp-api-service
 ```
 
-2. Test credential retrieval via API:
+1. Test credential retrieval via API:
 
 ```bash
 # Get the API service route
@@ -227,7 +220,7 @@ Expected response should contain:
 }
 ```
 
-3. Verify Velero is using the Cloud Secret API:
+1. Verify Velero is using the Cloud Secret API:
 
 ```bash
 # Check Velero logs for Cloud Secret API usage
@@ -246,7 +239,7 @@ oc get secret cloud-credentials-gcp -n openshift-adp
 velero backup create cloud-api-test --include-namespaces=default
 ```
 
-2. Monitor the backup:
+1. Monitor the backup:
 
 ```bash
 velero backup describe cloud-api-test
@@ -268,9 +261,6 @@ oc logs -n openshift-adp deployment/oadp-operator | grep -i credential
 ### Verify Workload Identity Configuration
 
 ```bash
-# Check service account annotation
-oc get sa velero -n openshift-adp -o yaml | grep -A5 annotations
-
 # Verify workload identity binding
 gcloud iam service-accounts get-iam-policy ${SERVICE_ACCOUNT_EMAIL} \
     --flatten="bindings[].members" \
