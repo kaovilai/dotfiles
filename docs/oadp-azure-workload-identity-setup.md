@@ -224,23 +224,7 @@ EOF
 oc wait --for=condition=Ready pod -l name=oadp-operator -n openshift-adp --timeout=300s
 ```
 
-## Step 8: Annotate Service Account
-
-```bash
-# Wait for velero service account to be created by the operator
-until oc get sa velero -n openshift-adp &>/dev/null; do
-  echo "Waiting for velero service account..."
-  sleep 5
-done
-
-# Annotate with Azure AD app client ID
-oc annotate serviceaccount velero \
-    -n openshift-adp \
-    azure.workload.identity/client-id="$APP_ID" \
-    --overwrite
-```
-
-## Step 9: Create DataProtectionApplication
+## Step 8: Create DataProtectionApplication
 
 ```bash
 cat << EOF | oc apply -f -
@@ -304,7 +288,7 @@ spec:
 EOF
 ```
 
-## Step 10: Verify Installation
+## Step 9: Verify Installation
 
 ```bash
 # Check DPA status
@@ -320,7 +304,7 @@ oc get deployment velero -n openshift-adp
 velero version
 ```
 
-## Step 11: Create a Test Backup
+## Step 10: Create a Test Backup
 
 ```bash
 # Create a test namespace
@@ -343,12 +327,6 @@ velero backup logs test-backup
 oc logs deployment/velero -n openshift-adp
 ```
 
-### Verify Service Account Annotation
-
-```bash
-oc get sa velero -n openshift-adp -o yaml | grep azure.workload.identity
-```
-
 ### Check Azure Permissions
 
 ```bash
@@ -361,7 +339,7 @@ az ad app federated-credential list --id "$APP_OBJECT_ID"
 
 ### Common Issues
 
-1. **Authentication Failures**: Ensure the service account is annotated with the correct Azure AD app ID
+1. **Authentication Failures**: Ensure federated credentials are configured correctly with the OIDC issuer
 2. **Storage Access Denied**: Verify the app has Storage Blob Data Contributor role on the storage account
 3. **Snapshot Failures**: Check that Disk Snapshot Contributor role is assigned
 4. **Federated Credential Issues**: Ensure the OIDC issuer URL matches exactly and the subject is correct

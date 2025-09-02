@@ -290,11 +290,6 @@ If you encounter authentication errors:
    ```bash
    oc get sa velero -n openshift-adp -o yaml
    ```
-   
-   The service account should have the annotation:
-   ```yaml
-   eks.amazonaws.com/role-arn: ${ROLE_ARN}
-   ```
 
 2. Check Velero pod logs:
    ```bash
