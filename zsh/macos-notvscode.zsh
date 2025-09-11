@@ -28,7 +28,12 @@ znap function unsetTFproxy(){
 }
 
 znap function setSOCKSproxy(){
-    export SOCKS_ROUTER_IP=$(networksetup -getinfo Wi-Fi | grep -e "^Router" | cut -d " " -f 2)
+    # Allow IP override via parameter, otherwise get from router
+    if [[ -n "$1" ]]; then
+        export SOCKS_ROUTER_IP="$1"
+    else
+        export SOCKS_ROUTER_IP=$(networksetup -getinfo Wi-Fi | grep -e "^Router" | cut -d " " -f 2)
+    fi
     export SOCKS_ROUTER_PROXY_PORT=1888
     networksetup -setsocksfirewallproxy Wi-Fi $SOCKS_ROUTER_IP $SOCKS_ROUTER_PROXY_PORT off
     networksetup -setsocksfirewallproxystate Wi-Fi on
