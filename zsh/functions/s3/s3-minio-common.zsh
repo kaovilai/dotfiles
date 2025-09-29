@@ -312,7 +312,7 @@ znap function remove_minio_config() {
 znap function download-minio-certificate() {
     local name=""
     local force=false
-    
+
     # Parse arguments
     while [[ $# -gt 0 ]]; do
         case $1 in
@@ -333,6 +333,7 @@ znap function download-minio-certificate() {
                 echo "  --help           Show this help message"
                 echo ""
                 echo "Downloads the self-signed certificate from a MinIO deployment."
+                echo "Works with both Docker-based and systemd-based deployments."
                 return 0
                 ;;
             *)
@@ -343,90 +344,33 @@ znap function download-minio-certificate() {
                 ;;
         esac
     done
-    
+
     if [[ -z "$name" ]]; then
         echo -e "${RED}ERROR${NC}: MinIO deployment name is required"
-        echo "Usage: download-minio-certificate --name <deployment-name>"
+        echo "Usage: download-minio-certificate --name <deployment-name> [--force]"
         return 1
     fi
-    
+
     if ! config=$(load_minio_config "$name"); then
         return 1
     fi
-    
+
     local provider=$(echo "$config" | jq -r '.provider')
     local public_dns=$(echo "$config" | jq -r '.public_dns')
     local endpoint=$(echo "$config" | jq -r '.endpoint')
-    local cert_file=$(echo "$config" | jq -r '.cert_file // ""')
-    
+    local cert_dir="$MINIO_DEPLOYMENTS_DIR/$name"
+    local cert_file="$cert_dir/minio-cert.pem"
+
     if [[ "$provider" != "aws" ]]; then
         echo -e "${RED}ERROR${NC}: Certificate download is only supported for AWS deployments"
         return 1
     fi
-    
-    if [[ -f "$cert_file" && "$force" == false ]]; then
-        echo -e "${YELLOW}WARN${NC}: Certificate file already exists: $cert_file"
-        echo "Use --force to overwrite"
-        return 1
-    fi
-    
-    echo -e "${BLUE}INFO${NC}: Downloading certificate from MinIO deployment '$name'"
-    echo -e "  Endpoint: $endpoint"
-    
-    # Try to extract certificate from HTTPS connection
-    echo -e "${BLUE}INFO${NC}: Extracting certificate from HTTPS connection..."
-    
-    local temp_cert=$(mktemp)
-    if echo | timeout 10 openssl s_client -servername "$public_dns" -connect "${public_dns}:9000" 2>/dev/null | openssl x509 -outform PEM > "$temp_cert" 2>/dev/null; then
-        if [[ -s "$temp_cert" ]]; then
-            # Ensure directory exists
-            mkdir -p "$(dirname "$cert_file")"
-            mv "$temp_cert" "$cert_file"
-            echo -e "${GREEN}SUCCESS${NC}: Certificate downloaded and saved to: $cert_file"
-            
-            # Verify the certificate
-            echo -e "${BLUE}INFO${NC}: Certificate details:"
-            openssl x509 -in "$cert_file" -text -noout | grep -A 1 "Subject:"
-            openssl x509 -in "$cert_file" -text -noout | grep -A 5 "Subject Alternative Name:"
-            
-            return 0
-        fi
-    fi
-    
-    # Clean up temp file
-    rm -f "$temp_cert"
-    
-    echo -e "${RED}ERROR${NC}: Failed to download certificate"
-    echo -e "${YELLOW}HINT${NC}: Make sure MinIO is running with HTTPS enabled"
-    echo -e "${YELLOW}HINT${NC}: You can test the connection with: curl -k $endpoint/minio/health/ready"
-    return 1
-}
 
-# Function to manually download MinIO certificate
-znap function download-minio-certificate() {
-    local name="$1"
-    local force="${2:-false}"
-
-    if [[ -z "$name" ]]; then
-        echo -e "${RED}ERROR${NC}: Deployment name is required"
-        echo "Usage: download-minio-certificate <deployment-name> [--force]"
-        return 1
-    fi
-
-    local config=$(load_minio_config "$name")
-    if [[ $? -ne 0 ]]; then
-        return 1
-    fi
-
-    local endpoint=$(echo "$config" | jq -r '.endpoint')
-    local public_dns=$(echo "$config" | jq -r '.public_dns')
-    local cert_dir="$MINIO_DEPLOYMENTS_DIR/$name"
-    local cert_file="$cert_dir/minio-cert.pem"
-
+    # Ensure directory exists
     mkdir -p "$cert_dir"
 
     # Check if certificate already exists
-    if [[ -f "$cert_file" && -s "$cert_file" && "$force" != "--force" ]]; then
+    if [[ -f "$cert_file" && -s "$cert_file" && "$force" == false ]]; then
         echo -e "${BLUE}INFO${NC}: Certificate already exists at $cert_file"
         echo -e "${YELLOW}NOTE${NC}: Use '--force' to re-download"
 
@@ -439,13 +383,14 @@ znap function download-minio-certificate() {
         fi
     fi
 
-    echo -e "${BLUE}INFO${NC}: Downloading certificate for MinIO deployment '$name'"
+    echo -e "${BLUE}INFO${NC}: Downloading certificate from MinIO deployment '$name'"
     echo -e "${BLUE}INFO${NC}: Endpoint: $endpoint"
 
     # First check if HTTPS is responding
     if ! curl -k -s --connect-timeout 10 --max-time 15 "https://${public_dns}:9000/minio/health/ready" &>/dev/null; then
         echo -e "${RED}ERROR${NC}: MinIO HTTPS endpoint is not responding"
         echo -e "${YELLOW}HINT${NC}: Make sure the MinIO deployment is running"
+        echo -e "${YELLOW}HINT${NC}: For Docker deployments, MinIO may take 2-3 minutes to start"
         echo -e "${YELLOW}HINT${NC}: You can check with: curl -k $endpoint/minio/health/ready"
         return 1
     fi
@@ -454,39 +399,117 @@ znap function download-minio-certificate() {
 
     # Extract certificate from the HTTPS connection
     local temp_cert="/tmp/minio-cert-$$.pem"
-    timeout 10 bash -c "echo | openssl s_client -servername '$public_dns' -connect '${public_dns}:9000' 2>/dev/null | openssl x509 -outform PEM" > "$temp_cert"
+    if timeout 10 bash -c "echo | openssl s_client -servername '$public_dns' -connect '${public_dns}:9000' 2>/dev/null | openssl x509 -outform PEM" > "$temp_cert"; then
+        if [[ -s "$temp_cert" ]]; then
+            # Verify the certificate is valid
+            if openssl x509 -in "$temp_cert" -text -noout &>/dev/null; then
+                mv "$temp_cert" "$cert_file"
 
-    if [[ $? -eq 0 && -s "$temp_cert" ]]; then
-        # Verify the certificate is valid
-        if openssl x509 -in "$temp_cert" -text -noout &>/dev/null; then
-            mv "$temp_cert" "$cert_file"
-            echo -e "${GREEN}SUCCESS${NC}: Certificate downloaded successfully"
-            echo -e "${BLUE}INFO${NC}: Certificate saved to: $cert_file"
+                # Update the config file with the certificate path
+                local updated_config=$(echo "$config" | jq --arg cert_file "$cert_file" '.cert_file = $cert_file')
+                save_minio_config "$name" "$updated_config"
 
-            # Show certificate details
-            echo -e "${BLUE}INFO${NC}: Certificate details:"
-            openssl x509 -in "$cert_file" -noout -subject -dates | sed 's/^/  /'
+                echo -e "${GREEN}SUCCESS${NC}: Certificate downloaded successfully"
+                echo -e "${BLUE}INFO${NC}: Certificate saved to: $cert_file"
 
-            echo -e ""
-            echo -e "${BLUE}Next steps:${NC}"
-            echo -e "  1. Trust the certificate: trust_certificate_in_system $cert_file"
-            echo -e "  2. Test connection: test-minio-connection $name"
-            echo -e "  3. Use MinIO: get-minio-connection-info --name $name"
+                # Show certificate details
+                echo -e "${BLUE}INFO${NC}: Certificate details:"
+                openssl x509 -in "$cert_file" -noout -subject -dates | sed 's/^/  /'
 
-            return 0
-        else
-            echo -e "${RED}ERROR${NC}: Downloaded file is not a valid certificate"
-            rm -f "$temp_cert"
-            return 1
+                echo -e ""
+                echo -e "${BLUE}Next steps:${NC}"
+                echo -e "  1. Trust the certificate: trust_certificate_in_system $cert_file"
+                echo -e "  2. Test connection: test_minio_connection $name"
+                echo -e "  3. Use MinIO: get-minio-connection-info --name $name"
+
+                return 0
+            else
+                echo -e "${RED}ERROR${NC}: Downloaded file is not a valid certificate"
+                rm -f "$temp_cert"
+                return 1
+            fi
         fi
+    fi
+
+    # Clean up temp file if it exists
+    rm -f "$temp_cert"
+
+    echo -e "${RED}ERROR${NC}: Failed to extract certificate from HTTPS connection"
+    echo -e "${YELLOW}HINT${NC}: Make sure MinIO is running with HTTPS enabled"
+    echo -e "${YELLOW}HINT${NC}: You can test the connection with: curl -k $endpoint/minio/health/ready"
+    return 1
+}
+
+
+# Function to ensure default bucket exists
+# Function to check MinIO Docker container status (requires SSH access)
+znap function check-minio-docker-status() {
+    local name="$1"
+    local key_name="$2"
+
+    if [[ -z "$name" ]]; then
+        echo -e "${RED}ERROR${NC}: MinIO deployment name is required"
+        echo "Usage: check-minio-docker-status <deployment-name> [key-name]"
+        return 1
+    fi
+
+    if ! config=$(load_minio_config "$name"); then
+        return 1
+    fi
+
+    local provider=$(echo "$config" | jq -r '.provider')
+    local public_dns=$(echo "$config" | jq -r '.public_dns')
+    local endpoint=$(echo "$config" | jq -r '.endpoint')
+
+    if [[ "$provider" != "aws" ]]; then
+        echo -e "${RED}ERROR${NC}: Docker status check is only supported for AWS deployments"
+        return 1
+    fi
+
+    echo -e "${BLUE}INFO${NC}: Checking Docker status for MinIO deployment '$name'"
+
+    # First try HTTPS health check
+    echo -e "${BLUE}INFO${NC}: Checking HTTPS endpoint..."
+    if curl -k -s --connect-timeout 5 --max-time 10 "https://${public_dns}:9000/minio/health/ready" &>/dev/null; then
+        echo -e "${GREEN}SUCCESS${NC}: MinIO is responding on HTTPS"
+        echo -e "${BLUE}INFO${NC}: Endpoint: $endpoint"
+        echo -e "${BLUE}INFO${NC}: Console: https://${public_dns}:9001"
+        return 0
     else
-        echo -e "${RED}ERROR${NC}: Failed to extract certificate from HTTPS connection"
-        rm -f "$temp_cert"
+        echo -e "${YELLOW}WARN${NC}: MinIO is not responding on HTTPS"
+
+        if [[ -n "$key_name" ]]; then
+            echo -e "${BLUE}INFO${NC}: Attempting to check Docker status via SSH..."
+
+            # Try common key locations
+            local key_path=""
+            if [[ -f ~/.ssh/${key_name}.pem ]]; then
+                key_path="~/.ssh/${key_name}.pem"
+            elif [[ -f ~/.ssh/${key_name} ]]; then
+                key_path="~/.ssh/${key_name}"
+            elif [[ -f ${key_name} ]]; then
+                key_path="${key_name}"
+            else
+                echo -e "${RED}ERROR${NC}: SSH key not found"
+                return 1
+            fi
+
+            echo -e "${BLUE}INFO${NC}: Checking Docker container status..."
+            if ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 -i "$key_path" "ec2-user@${public_dns}" "docker ps --filter name=minio --format 'table {{.Status}}'" 2>/dev/null; then
+                echo -e "${BLUE}INFO${NC}: Checking Docker logs (last 20 lines)..."
+                ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 -i "$key_path" "ec2-user@${public_dns}" "docker logs minio --tail 20" 2>/dev/null
+            else
+                echo -e "${RED}ERROR${NC}: Could not connect via SSH"
+            fi
+        else
+            echo -e "${YELLOW}HINT${NC}: Provide SSH key name to check Docker container status"
+            echo -e "${YELLOW}HINT${NC}: Example: check-minio-docker-status $name your-key-name"
+        fi
+
         return 1
     fi
 }
 
-# Function to ensure default bucket exists
 znap function ensure_default_bucket() {
     local deployment_name="$1"
     local bucket_name="${2:-default-bucket}"
