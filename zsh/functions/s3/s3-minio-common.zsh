@@ -399,35 +399,38 @@ znap function download-minio-certificate() {
 
     # Extract certificate from the HTTPS connection
     local temp_cert="/tmp/minio-cert-$$.pem"
-    if timeout 10 bash -c "echo | openssl s_client -servername '$public_dns' -connect '${public_dns}:9000' 2>/dev/null | openssl x509 -outform PEM" > "$temp_cert"; then
-        if [[ -s "$temp_cert" ]]; then
-            # Verify the certificate is valid
-            if openssl x509 -in "$temp_cert" -text -noout &>/dev/null; then
-                mv "$temp_cert" "$cert_file"
 
-                # Update the config file with the certificate path
-                local updated_config=$(echo "$config" | jq --arg cert_file "$cert_file" '.cert_file = $cert_file')
-                save_minio_config "$name" "$updated_config"
+    # Use openssl with a connection timeout instead of external timeout command
+    echo | openssl s_client -servername "$public_dns" -connect "${public_dns}:9000" -showcerts 2>/dev/null | \
+        openssl x509 -outform PEM > "$temp_cert" 2>/dev/null
 
-                echo -e "${GREEN}SUCCESS${NC}: Certificate downloaded successfully"
-                echo -e "${BLUE}INFO${NC}: Certificate saved to: $cert_file"
+    if [[ -s "$temp_cert" ]]; then
+        # Verify the certificate is valid
+        if openssl x509 -in "$temp_cert" -text -noout &>/dev/null; then
+            mv "$temp_cert" "$cert_file"
 
-                # Show certificate details
-                echo -e "${BLUE}INFO${NC}: Certificate details:"
-                openssl x509 -in "$cert_file" -noout -subject -dates | sed 's/^/  /'
+            # Update the config file with the certificate path
+            local updated_config=$(echo "$config" | jq --arg cert_file "$cert_file" '.cert_file = $cert_file')
+            save_minio_config "$name" "$updated_config"
 
-                echo -e ""
-                echo -e "${BLUE}Next steps:${NC}"
-                echo -e "  1. Trust the certificate: trust_certificate_in_system $cert_file"
-                echo -e "  2. Test connection: test_minio_connection $name"
-                echo -e "  3. Use MinIO: get-minio-connection-info --name $name"
+            echo -e "${GREEN}SUCCESS${NC}: Certificate downloaded successfully"
+            echo -e "${BLUE}INFO${NC}: Certificate saved to: $cert_file"
 
-                return 0
-            else
-                echo -e "${RED}ERROR${NC}: Downloaded file is not a valid certificate"
-                rm -f "$temp_cert"
-                return 1
-            fi
+            # Show certificate details
+            echo -e "${BLUE}INFO${NC}: Certificate details:"
+            openssl x509 -in "$cert_file" -noout -subject -dates | sed 's/^/  /'
+
+            echo -e ""
+            echo -e "${BLUE}Next steps:${NC}"
+            echo -e "  1. Trust the certificate: trust_certificate_in_system $cert_file"
+            echo -e "  2. Test connection: test_minio_connection $name"
+            echo -e "  3. Use MinIO: get-minio-connection-info --name $name"
+
+            return 0
+        else
+            echo -e "${RED}ERROR${NC}: Downloaded file is not a valid certificate"
+            rm -f "$temp_cert"
+            return 1
         fi
     fi
 
