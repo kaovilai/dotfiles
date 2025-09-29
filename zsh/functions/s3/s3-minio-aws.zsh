@@ -496,8 +496,9 @@ EOF
             # If SCP failed or no key, extract certificate from HTTPS connection
             if [[ "$cert_downloaded" == false ]]; then
                 echo -e "${BLUE}INFO${NC}: Extracting certificate from HTTPS connection..."
-                # Use timeout to prevent hanging
-                timeout 10 bash -c "echo | openssl s_client -servername '$public_dns' -connect '${public_dns}:9000' 2>/dev/null | openssl x509 -outform PEM" > "$cert_file"
+                # Use openssl with built-in timeout instead of external timeout command
+                echo | openssl s_client -servername "$public_dns" -connect "${public_dns}:9000" -showcerts 2>/dev/null | \
+                    openssl x509 -outform PEM > "$cert_file" 2>/dev/null
                 if [[ $? -eq 0 && -s "$cert_file" ]]; then
                     # Verify the certificate is valid
                     if openssl x509 -in "$cert_file" -text -noout &>/dev/null; then
