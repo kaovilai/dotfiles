@@ -402,6 +402,90 @@ znap function download-minio-certificate() {
     return 1
 }
 
+# Function to manually download MinIO certificate
+znap function download-minio-certificate() {
+    local name="$1"
+    local force="${2:-false}"
+
+    if [[ -z "$name" ]]; then
+        echo -e "${RED}ERROR${NC}: Deployment name is required"
+        echo "Usage: download-minio-certificate <deployment-name> [--force]"
+        return 1
+    fi
+
+    local config=$(load_minio_config "$name")
+    if [[ $? -ne 0 ]]; then
+        return 1
+    fi
+
+    local endpoint=$(echo "$config" | jq -r '.endpoint')
+    local public_dns=$(echo "$config" | jq -r '.public_dns')
+    local cert_dir="$MINIO_DEPLOYMENTS_DIR/$name"
+    local cert_file="$cert_dir/minio-cert.pem"
+
+    mkdir -p "$cert_dir"
+
+    # Check if certificate already exists
+    if [[ -f "$cert_file" && -s "$cert_file" && "$force" != "--force" ]]; then
+        echo -e "${BLUE}INFO${NC}: Certificate already exists at $cert_file"
+        echo -e "${YELLOW}NOTE${NC}: Use '--force' to re-download"
+
+        # Verify the existing certificate
+        if openssl x509 -in "$cert_file" -text -noout &>/dev/null; then
+            echo -e "${GREEN}SUCCESS${NC}: Existing certificate is valid"
+            return 0
+        else
+            echo -e "${YELLOW}WARN${NC}: Existing certificate appears invalid, re-downloading..."
+        fi
+    fi
+
+    echo -e "${BLUE}INFO${NC}: Downloading certificate for MinIO deployment '$name'"
+    echo -e "${BLUE}INFO${NC}: Endpoint: $endpoint"
+
+    # First check if HTTPS is responding
+    if ! curl -k -s --connect-timeout 10 --max-time 15 "https://${public_dns}:9000/minio/health/ready" &>/dev/null; then
+        echo -e "${RED}ERROR${NC}: MinIO HTTPS endpoint is not responding"
+        echo -e "${YELLOW}HINT${NC}: Make sure the MinIO deployment is running"
+        echo -e "${YELLOW}HINT${NC}: You can check with: curl -k $endpoint/minio/health/ready"
+        return 1
+    fi
+
+    echo -e "${BLUE}INFO${NC}: Extracting certificate from HTTPS connection..."
+
+    # Extract certificate from the HTTPS connection
+    local temp_cert="/tmp/minio-cert-$$.pem"
+    timeout 10 bash -c "echo | openssl s_client -servername '$public_dns' -connect '${public_dns}:9000' 2>/dev/null | openssl x509 -outform PEM" > "$temp_cert"
+
+    if [[ $? -eq 0 && -s "$temp_cert" ]]; then
+        # Verify the certificate is valid
+        if openssl x509 -in "$temp_cert" -text -noout &>/dev/null; then
+            mv "$temp_cert" "$cert_file"
+            echo -e "${GREEN}SUCCESS${NC}: Certificate downloaded successfully"
+            echo -e "${BLUE}INFO${NC}: Certificate saved to: $cert_file"
+
+            # Show certificate details
+            echo -e "${BLUE}INFO${NC}: Certificate details:"
+            openssl x509 -in "$cert_file" -noout -subject -dates | sed 's/^/  /'
+
+            echo -e ""
+            echo -e "${BLUE}Next steps:${NC}"
+            echo -e "  1. Trust the certificate: trust_certificate_in_system $cert_file"
+            echo -e "  2. Test connection: test-minio-connection $name"
+            echo -e "  3. Use MinIO: get-minio-connection-info --name $name"
+
+            return 0
+        else
+            echo -e "${RED}ERROR${NC}: Downloaded file is not a valid certificate"
+            rm -f "$temp_cert"
+            return 1
+        fi
+    else
+        echo -e "${RED}ERROR${NC}: Failed to extract certificate from HTTPS connection"
+        rm -f "$temp_cert"
+        return 1
+    fi
+}
+
 # Function to ensure default bucket exists
 znap function ensure_default_bucket() {
     local deployment_name="$1"
