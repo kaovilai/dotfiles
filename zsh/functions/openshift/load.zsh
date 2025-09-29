@@ -36,7 +36,7 @@ source ~/git/dotfiles/zsh/functions/openshift/util/misc-functions.zsh
 alias kubectl=oc
 alias oc-registry-login='oc registry login'
 alias oc-registry-route='oc get route -n openshift-image-registry default-route -o jsonpath={.spec.host}'
-alias ocwebconsole='edge $(oc whoami --show-console)'
+alias ocwebconsole='comet $(oc whoami --show-console)'
 alias oc-run='oc run --rm -it --image'
 # ROSA functions are now available as create-rosa-sts-arm64 and create-rosa-sts-amd64
 
