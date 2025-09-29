@@ -231,35 +231,41 @@ znap function create-minio-aws() {
     local minio_root_user="minioadmin"
     local minio_root_password=$(openssl rand -base64 32 | tr -d "=+/" | cut -c1-25)
     
-    # Create user data script for MinIO installation
+    # Create user data script for MinIO installation using Docker
     local user_data=$(cat << 'EOF'
 #!/bin/bash
+set -e
+
+# Log function
+log() {
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" | tee -a /var/log/minio-setup.log
+}
+
+log "Starting MinIO setup..."
+
+# Update and install Docker
+log "Installing Docker..."
 yum update -y
-yum install -y docker openssl
+amazon-linux-extras install docker -y
 
 # Start Docker
 systemctl start docker
 systemctl enable docker
 usermod -a -G docker ec2-user
 
-# Install MinIO
-MINIO_ARCH=\$(uname -m | sed 's/aarch64/arm64/' | sed 's/x86_64/amd64/')
-wget https://dl.min.io/server/minio/release/linux-\$MINIO_ARCH/minio
-chmod +x minio
-mv minio /usr/local/bin/
-
-# Create MinIO user and directories
-useradd -r minio-user -s /sbin/nologin
+# Create directories for MinIO data and certificates
+log "Creating directories..."
 mkdir -p /minio/data
-mkdir -p /etc/minio/certs
-mkdir -p /var/log/minio
-chown minio-user:minio-user /minio/data /etc/minio /var/log/minio
+mkdir -p /minio/certs
 
-# Generate self-signed certificate on the instance
+# Get instance metadata
 PUBLIC_DNS=$(curl -s http://169.254.169.254/latest/meta-data/public-hostname)
 PUBLIC_IP=$(curl -s http://169.254.169.254/latest/meta-data/public-ipv4)
+log "Public DNS: $PUBLIC_DNS"
+log "Public IP: $PUBLIC_IP"
 
-# Create OpenSSL config for certificate generation
+# Generate self-signed certificate
+log "Generating self-signed certificate..."
 cat > /tmp/minio-cert.conf << EOL
 [req]
 default_bits = 2048
@@ -277,159 +283,104 @@ subjectAltName = @alt_names
 [alt_names]
 DNS.1 = $PUBLIC_DNS
 DNS.2 = localhost
+DNS.3 = minio
 IP.1 = $PUBLIC_IP
 IP.2 = 127.0.0.1
 EOL
 
 # Generate certificate and key
 openssl req -new -x509 -days 365 -nodes \
-    -keyout /etc/minio/certs/private.key \
-    -out /etc/minio/certs/public.crt \
+    -keyout /minio/certs/private.key \
+    -out /minio/certs/public.crt \
     -config /tmp/minio-cert.conf \
     -extensions v3_req
 
-# Set proper permissions for certificates
-chown minio-user:minio-user /etc/minio/certs/private.key /etc/minio/certs/public.crt
-chmod 600 /etc/minio/certs/private.key
-chmod 644 /etc/minio/certs/public.crt
+# Set proper permissions
+chmod 644 /minio/certs/public.crt
+chmod 600 /minio/certs/private.key
 
-# Copy certificate for local download later
-cp /etc/minio/certs/public.crt /home/ec2-user/minio-cert.pem
+# Copy certificate for download
+cp /minio/certs/public.crt /home/ec2-user/minio-cert.pem
 chown ec2-user:ec2-user /home/ec2-user/minio-cert.pem
 
-# Clean up temp config
+# Clean up
 rm /tmp/minio-cert.conf
 
-# Create MinIO configuration
-cat > /etc/default/minio << EOL
-MINIO_ROOT_USER=minioadmin
-MINIO_ROOT_PASSWORD=REPLACE_PASSWORD
-MINIO_VOLUMES=/minio/data
-MINIO_OPTS="--certs-dir /etc/minio/certs --console-address :9001"
-EOL
+# Set MinIO credentials
+MINIO_ROOT_USER="minioadmin"
+MINIO_ROOT_PASSWORD="REPLACE_PASSWORD"
 
-# Replace password in config
-sed -i "s/REPLACE_PASSWORD/$MINIO_ROOT_PASSWORD/" /etc/default/minio
+# Pull and run MinIO container
+log "Starting MinIO container..."
+docker pull minio/minio:latest
 
-# Create systemd service
-cat > /etc/systemd/system/minio.service << EOL
-[Unit]
-Description=MinIO
-Documentation=https://docs.min.io
-Wants=network-online.target
-After=network-online.target
-AssertFileIsExecutable=/usr/local/bin/minio
+# Run MinIO with HTTPS enabled
+docker run -d \
+    --name minio \
+    --restart unless-stopped \
+    -p 9000:9000 \
+    -p 9001:9001 \
+    -v /minio/data:/data \
+    -v /minio/certs:/root/.minio/certs \
+    -e "MINIO_ROOT_USER=$MINIO_ROOT_USER" \
+    -e "MINIO_ROOT_PASSWORD=$MINIO_ROOT_PASSWORD" \
+    minio/minio server /data --console-address ":9001"
 
-[Service]
-WorkingDirectory=/usr/local
-
-User=minio-user
-Group=minio-user
-ProtectProc=invisible
-
-EnvironmentFile=-/etc/default/minio
-ExecStartPre=/bin/bash -c "if [ -z \"\${MINIO_VOLUMES}\" ]; then echo \"Variable MINIO_VOLUMES not set in /etc/default/minio\"; exit 1; fi"
-ExecStart=/usr/local/bin/minio server \$MINIO_OPTS \$MINIO_VOLUMES
-
-# Let systemd restart this service always
-Restart=always
-
-# Specifies the maximum file descriptor number that can be opened by this process
-LimitNOFILE=1048576
-
-# Specifies the maximum number of threads this process can create
-TasksMax=infinity
-
-# Disable timeout logic and wait until process is stopped
-TimeoutStopSec=infinity
-SendSIGKILL=no
-
-[Install]
-WantedBy=multi-user.target
-EOL
-
-# Wait for MinIO to be ready and create initial bucket
-cat > /home/ec2-user/setup_bucket.sh << EOL
-#!/bin/bash
-set -e
-
-# Function to log messages
-log() {
-    echo "\$(date '+%Y-%m-%d %H:%M:%S') - \$1" | tee -a /var/log/setup_bucket.log
-}
-
-log "Starting MinIO bucket setup"
+# Wait for MinIO to be ready
+log "Waiting for MinIO to start..."
+for i in {1..30}; do
+    if curl -k -s --connect-timeout 5 "https://localhost:9000/minio/health/ready" >/dev/null 2>&1; then
+        log "MinIO is ready after $((i*5)) seconds"
+        break
+    fi
+    if [ $i -eq 30 ]; then
+        log "ERROR: MinIO failed to start after 150 seconds"
+        docker logs minio >> /var/log/minio-setup.log 2>&1
+        exit 1
+    fi
+    log "MinIO not ready yet, waiting... (attempt $i/30)"
+    sleep 5
+done
 
 # Install MinIO client
 log "Installing MinIO client..."
-MC_ARCH=\\$(uname -m | sed 's/aarch64/arm64/' | sed 's/x86_64/amd64/')
-wget -q https://dl.min.io/client/mc/release/linux-\\$MC_ARCH/mc
+MC_ARCH=$(uname -m | sed 's/aarch64/arm64/' | sed 's/x86_64/amd64/')
+wget -q https://dl.min.io/client/mc/release/linux-$MC_ARCH/mc
 chmod +x mc
-sudo mv mc /usr/local/bin/
+mv mc /usr/local/bin/
 
-# Get instance metadata
-PUBLIC_DNS=\$(curl -s http://169.254.169.254/latest/meta-data/public-hostname)
-log "Using public DNS: \$PUBLIC_DNS"
+# Configure mc and create default bucket
+log "Configuring MinIO client..."
+export MC_HOST_local="https://$MINIO_ROOT_USER:$MINIO_ROOT_PASSWORD@localhost:9000"
 
-# Wait for MinIO to be ready with retry logic
-export MINIO_ROOT_USER=minioadmin
-export MINIO_ROOT_PASSWORD=REPLACE_PASSWORD
-MINIO_URL="https://\$PUBLIC_DNS:9000"
-
-log "Waiting for MinIO to start at \$MINIO_URL"
-for i in {1..30}; do
-    if curl -k -s --connect-timeout 5 --max-time 10 "\$MINIO_URL/minio/health/ready" >/dev/null 2>&1; then
-        log "MinIO is ready after \$((i*10)) seconds"
+# Create default bucket
+BUCKET_NAME="REPLACE_BUCKET_NAME"
+log "Creating bucket '$BUCKET_NAME'..."
+for i in {1..5}; do
+    if /usr/local/bin/mc --insecure mb local/$BUCKET_NAME 2>/dev/null; then
+        log "Successfully created bucket '$BUCKET_NAME'"
+        break
+    elif /usr/local/bin/mc --insecure ls local/$BUCKET_NAME 2>/dev/null; then
+        log "Bucket '$BUCKET_NAME' already exists"
         break
     fi
-    if [ \$i -eq 30 ]; then
-        log "ERROR: MinIO failed to start after 300 seconds"
-        exit 1
+    if [ $i -eq 5 ]; then
+        log "WARNING: Could not create bucket '$BUCKET_NAME' after 5 attempts"
+    else
+        log "Retrying bucket creation... (attempt $i/5)"
+        sleep 5
     fi
-    log "MinIO not ready yet, waiting... (attempt \$i/30)"
-    sleep 10
 done
 
-# Configure mc and create bucket
-log "Configuring MinIO client..."
-/usr/local/bin/mc config host add local \$MINIO_URL \$MINIO_ROOT_USER \$MINIO_ROOT_PASSWORD --insecure
-
-# Create bucket if it doesn't exist
-BUCKET_NAME="REPLACE_BUCKET_NAME"
-if /usr/local/bin/mc ls local/\$BUCKET_NAME --insecure >/dev/null 2>&1; then
-    log "Bucket '\$BUCKET_NAME' already exists"
-else
-    log "Creating bucket '\$BUCKET_NAME'..."
-    if /usr/local/bin/mc mb local/\$BUCKET_NAME --insecure; then
-        log "Successfully created bucket '\$BUCKET_NAME'"
-    else
-        log "ERROR: Failed to create bucket '\$BUCKET_NAME'"
-        exit 1
-    fi
-fi
-
-log "MinIO bucket setup completed successfully"
-EOL
-
-# Replace placeholders
-sed -i "s/REPLACE_PASSWORD/$MINIO_ROOT_PASSWORD/g" /home/ec2-user/setup_bucket.sh
-sed -i "s/REPLACE_BUCKET_NAME/$bucket_name/" /home/ec2-user/setup_bucket.sh
-chown ec2-user:ec2-user /home/ec2-user/setup_bucket.sh
-chmod +x /home/ec2-user/setup_bucket.sh
-
-# Start MinIO service
-systemctl daemon-reload
-systemctl enable minio
-systemctl start minio
-
-# Setup bucket in background
-nohup /home/ec2-user/setup_bucket.sh > /var/log/setup_bucket.log 2>&1 &
+log "MinIO setup completed successfully!"
+log "Endpoint: https://$PUBLIC_DNS:9000"
+log "Console: https://$PUBLIC_DNS:9001"
 EOF
 )
     
     # Replace variables in user data
-    user_data=${user_data//\$MINIO_ROOT_PASSWORD/$minio_root_password}
-    user_data=${user_data//\$BUCKET_NAME/$bucket_name}
+    user_data=${user_data//REPLACE_PASSWORD/$minio_root_password}
+    user_data=${user_data//REPLACE_BUCKET_NAME/$bucket_name}
     
     # Encode user data for EC2
     local encoded_user_data=$(echo "$user_data" | base64 -w 0)
@@ -495,55 +446,85 @@ EOF
     
     # Download certificate from EC2 instance
     echo -e "${BLUE}INFO${NC}: Waiting for MinIO setup to complete..."
-    sleep 60  # Give time for user-data to complete and generate certificates
-    
+    echo -e "${YELLOW}NOTE${NC}: Initial setup takes 2-3 minutes for certificate generation and service startup"
+    sleep 120  # Give more time for user-data to complete and generate certificates
+
     local cert_dir="$MINIO_DEPLOYMENTS_DIR/$name"
     local cert_file="$cert_dir/minio-cert.pem"
     mkdir -p "$cert_dir"
-    
+
     # Download certificate from the EC2 instance
-    echo -e "${BLUE}INFO${NC}: Downloading certificate from EC2 instance..."
-    local max_attempts=10
+    echo -e "${BLUE}INFO${NC}: Attempting to download certificate from EC2 instance..."
+    local max_attempts=15  # Increased from 10 to 15
     local attempt=1
     local cert_downloaded=false
-    
+
     while [[ $attempt -le $max_attempts && "$cert_downloaded" == false ]]; do
         echo -e "${BLUE}INFO${NC}: Attempt $attempt/$max_attempts to download certificate..."
-        
-        # Try to check if MinIO is ready via HTTPS first, then fallback to HTTP
-        if curl -k -s --connect-timeout 10 --max-time 30 "https://${public_dns}:9000/minio/health/ready" &>/dev/null || \
-           curl -s --connect-timeout 10 --max-time 30 "http://${public_dns}:9000/minio/health/ready" &>/dev/null; then
-            # Try to get the certificate file via SCP if key is available, otherwise via curl
+
+        # First check if HTTPS is responding (indicates certificates are ready)
+        if curl -k -s --connect-timeout 10 --max-time 15 "https://${public_dns}:9000/minio/health/ready" &>/dev/null; then
+            echo -e "${BLUE}INFO${NC}: HTTPS is responding, attempting to download certificate..."
+
+            # Try to get the certificate file via SCP if key is available
             if [[ -n "$key_name" ]]; then
-                # Use SCP to download the certificate
-                scp -o StrictHostKeyChecking=no -o ConnectTimeout=10 -i ~/.ssh/${key_name}.pem ec2-user@${public_dns}:/home/ec2-user/minio-cert.pem "$cert_file" &>/dev/null
-                if [[ $? -eq 0 ]]; then
-                    cert_downloaded=true
-                    echo -e "${GREEN}SUCCESS${NC}: Certificate downloaded via SCP"
+                local key_path=""
+                # Check common key locations
+                if [[ -f ~/.ssh/${key_name}.pem ]]; then
+                    key_path="~/.ssh/${key_name}.pem"
+                elif [[ -f ~/.ssh/${key_name} ]]; then
+                    key_path="~/.ssh/${key_name}"
+                elif [[ -f ${key_name} ]]; then
+                    key_path="${key_name}"
                 fi
-            else
-                # Check if HTTPS is working and extract certificate
-                if curl -k -s --connect-timeout 5 "https://${public_dns}:9000/minio/health/ready" &>/dev/null; then
-                    # Extract certificate from the HTTPS connection
-                    echo -e "${BLUE}INFO${NC}: Extracting certificate from HTTPS connection..."
-                    echo | openssl s_client -servername "$public_dns" -connect "${public_dns}:9000" 2>/dev/null | openssl x509 -outform PEM > "$cert_file"
-                    if [[ -s "$cert_file" ]]; then
+
+                if [[ -n "$key_path" ]]; then
+                    # Use SCP to download the certificate
+                    echo -e "${BLUE}INFO${NC}: Using SSH key at $key_path to download certificate..."
+                    scp -o StrictHostKeyChecking=no -o ConnectTimeout=15 -i "$key_path" "ec2-user@${public_dns}:/home/ec2-user/minio-cert.pem" "$cert_file" 2>/dev/null
+                    if [[ $? -eq 0 && -s "$cert_file" ]]; then
                         cert_downloaded=true
-                        echo -e "${GREEN}SUCCESS${NC}: Certificate extracted from HTTPS connection"
+                        echo -e "${GREEN}SUCCESS${NC}: Certificate downloaded via SCP"
+                    else
+                        echo -e "${YELLOW}WARN${NC}: SCP failed, trying alternative method..."
                     fi
                 else
-                    # If HTTPS is not ready yet, wait a bit longer
-                    echo -e "${BLUE}INFO${NC}: HTTPS not ready yet, waiting..."
-                    sleep 30
+                    echo -e "${YELLOW}WARN${NC}: SSH key not found at expected locations"
                 fi
             fi
+
+            # If SCP failed or no key, extract certificate from HTTPS connection
+            if [[ "$cert_downloaded" == false ]]; then
+                echo -e "${BLUE}INFO${NC}: Extracting certificate from HTTPS connection..."
+                # Use timeout to prevent hanging
+                timeout 10 bash -c "echo | openssl s_client -servername '$public_dns' -connect '${public_dns}:9000' 2>/dev/null | openssl x509 -outform PEM" > "$cert_file"
+                if [[ $? -eq 0 && -s "$cert_file" ]]; then
+                    # Verify the certificate is valid
+                    if openssl x509 -in "$cert_file" -text -noout &>/dev/null; then
+                        cert_downloaded=true
+                        echo -e "${GREEN}SUCCESS${NC}: Certificate extracted from HTTPS connection"
+                    else
+                        echo -e "${YELLOW}WARN${NC}: Extracted file is not a valid certificate"
+                        rm -f "$cert_file"
+                    fi
+                fi
+            fi
+        else
+            # HTTPS not ready yet, check if HTTP is responding (service is starting)
+            if curl -s --connect-timeout 5 --max-time 10 "http://${public_dns}:9000/minio/health/ready" &>/dev/null; then
+                echo -e "${BLUE}INFO${NC}: MinIO is starting (HTTP responding), waiting for HTTPS..."
+            else
+                echo -e "${BLUE}INFO${NC}: MinIO service is still initializing..."
+            fi
         fi
-        
+
         if [[ "$cert_downloaded" == false ]]; then
-            echo -e "${YELLOW}WARN${NC}: Certificate download attempt $attempt failed, retrying in 30 seconds..."
-            sleep 30
+            if [[ $attempt -lt $max_attempts ]]; then
+                echo -e "${YELLOW}WARN${NC}: Certificate download attempt $attempt failed, retrying in 30 seconds..."
+                sleep 30
+            fi
         fi
-        
+
         attempt=$((attempt + 1))
     done
     
@@ -614,8 +595,8 @@ EOF
         echo -e "  2. Test connection: test_minio_connection $name"
     else
         echo -e "  1. Wait a few minutes for setup to complete"
-        echo -e "  2. Test connection (with --no-verify-ssl): aws s3 ls --endpoint-url $endpoint --no-verify-ssl"
-        echo -e "  3. Download certificate manually if needed"
+        echo -e "  2. Download certificate: download-minio-certificate $name"
+        echo -e "  3. Test connection: aws s3 ls --endpoint-url $endpoint --no-verify-ssl"
     fi
     if [[ "$cert_downloaded" == true ]]; then
         echo -e "  3. Get connection info: get-minio-connection-info --name $name"
