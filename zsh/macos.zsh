@@ -4,6 +4,7 @@
 alias ghd='open -a GitHub\ Desktop'
 alias finder='open -R'
 alias idlesleeppreventers='pmset -g assertions'
+alias comet='open -a Comet'
 alias edgedev='open -a Microsoft\ Edge\ Dev'
 alias edge='open -a Microsoft\ Edge'
 alias docker-desktop='open -a /Applications/Docker.app/Contents/MacOS/Docker\ Desktop.app'

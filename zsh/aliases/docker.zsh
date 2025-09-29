@@ -29,4 +29,4 @@ alias dockerplatforms-amdarmibm='echo linux/amd64,linux/arm64,linux/s390x,linux/
 # Helper functions for docker aliases
 alias ghcr_tag='echo ghcr.io/kaovilai/$(basename $PWD):$(current-branch)'
 alias ghcr_notag='echo ghcr.io/kaovilai/$(basename $PWD)'
-alias ghcr_tag-web='edge https://$(ghcr_tag)'
+alias ghcr_tag-web='comet https://$(ghcr_tag)'
