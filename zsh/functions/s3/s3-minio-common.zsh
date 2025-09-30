@@ -551,3 +551,151 @@ znap function ensure_default_bucket() {
         return 1
     fi
 }
+
+# Function to create Velero DataProtectionApplication for MinIO
+znap function create-velero-dpa-for-minio() {
+    local cluster_name="${1:-$(oc config current-context 2>/dev/null | cut -d'/' -f2 | cut -d':' -f1)}"
+    local bucket_name="${2:-velero}"
+    local namespace="${3:-openshift-adp}"
+    local apply="${4:-false}"  # Set to 'true' to apply directly to cluster
+
+    # Check for required environment variables
+    if [[ -z "$AWS_ACCESS_KEY_ID" ]] || [[ -z "$AWS_SECRET_ACCESS_KEY" ]] || [[ -z "$AWS_ENDPOINT_URL" ]]; then
+        echo -e "${RED}ERROR${NC}: Required MinIO environment variables not set"
+        echo "Please ensure the following are exported:"
+        echo "  - AWS_ACCESS_KEY_ID"
+        echo "  - AWS_SECRET_ACCESS_KEY"
+        echo "  - AWS_ENDPOINT_URL"
+        echo "  - AWS_CA_BUNDLE (optional, for custom certificates)"
+        return 1
+    fi
+
+    # Parse endpoint URL to extract host and port
+    local endpoint_url="${AWS_ENDPOINT_URL#https://}"
+    endpoint_url="${endpoint_url#http://}"
+    local minio_host="${endpoint_url%%:*}"
+    local minio_port="${endpoint_url##*:}"
+    [[ "$minio_port" == "$minio_host" ]] && minio_port="9000"
+
+    # Determine if we should skip TLS verification (for self-signed certs)
+    local skip_tls_verify="false"
+    if [[ -n "$AWS_CA_BUNDLE" ]] || [[ "$AWS_ENDPOINT_URL" =~ ^https ]]; then
+        skip_tls_verify="true"  # Skip verification for self-signed certs
+    fi
+
+    # Generate base64 encoded credentials
+    local credentials_content="[default]
+aws_access_key_id=$AWS_ACCESS_KEY_ID
+aws_secret_access_key=$AWS_SECRET_ACCESS_KEY"
+
+    # Create credentials secret YAML
+    cat <<EOF > /tmp/minio-credentials-secret.yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: cloud-credentials-minio
+  namespace: $namespace
+type: Opaque
+data:
+  cloud: $(echo -n "$credentials_content" | base64)
+EOF
+
+    # Create DataProtectionApplication YAML
+    cat <<EOF > /tmp/minio-dpa.yaml
+apiVersion: oadp.openshift.io/v1alpha1
+kind: DataProtectionApplication
+metadata:
+  name: ${cluster_name}-minio-dpa
+  namespace: $namespace
+spec:
+  configuration:
+    velero:
+      # Default plugins for OpenShift and AWS (MinIO is S3-compatible)
+      defaultPlugins:
+        - openshift
+        - aws
+        - csi
+      # Resource requests/limits for Velero pod
+      resourceAllocations:
+        limits:
+          cpu: 1000m
+          memory: 512Mi
+        requests:
+          cpu: 500m
+          memory: 256Mi
+    # Node agent configuration (formerly Restic)
+    nodeAgent:
+      enable: true
+      uploaderType: kopia
+      # Configure the DaemonSet node selector
+      nodeSelector:
+        node-role.kubernetes.io/worker: ""
+  # Enable backup of images stored in internal registry
+  backupImages: true
+  backupLocations:
+    - name: default
+      velero:
+        # AWS provider configuration (works with MinIO S3-compatible API)
+        provider: velero.io/aws
+        default: true
+        # Credential secret reference for MinIO
+        credential:
+          name: cloud-credentials-minio
+          key: cloud
+        # Storage configuration for MinIO
+        objectStorage:
+          bucket: $bucket_name
+          prefix: velero
+        config:
+          # MinIO endpoint configuration
+          s3Url: $AWS_ENDPOINT_URL
+          s3ForcePathStyle: "true"  # Required for MinIO
+          insecureSkipTLSVerify: "$skip_tls_verify"
+          region: minio  # MinIO doesn't use regions, but this field is required
+  # Volume snapshot locations (optional, may not work with MinIO)
+  snapshotLocations:
+    - name: default
+      velero:
+        provider: velero.io/aws
+        config:
+          region: minio
+EOF
+
+    echo -e "${BLUE}INFO${NC}: Generated Velero DPA configuration for MinIO:"
+    echo "  - DPA Name: ${cluster_name}-minio-dpa"
+    echo "  - Namespace: $namespace"
+    echo "  - MinIO Endpoint: $AWS_ENDPOINT_URL"
+    echo "  - Bucket: $bucket_name"
+    echo "  - Skip TLS Verify: $skip_tls_verify"
+    echo ""
+    echo "Files created:"
+    echo "  - /tmp/minio-credentials-secret.yaml"
+    echo "  - /tmp/minio-dpa.yaml"
+
+    if [[ "$apply" == "true" ]]; then
+        echo ""
+        echo -e "${YELLOW}INFO${NC}: Applying configuration to cluster..."
+
+        # Create namespace if it doesn't exist
+        oc create namespace $namespace --dry-run=client -o yaml | oc apply -f -
+
+        # Apply credentials secret
+        oc apply -f /tmp/minio-credentials-secret.yaml
+
+        # Apply DataProtectionApplication
+        oc apply -f /tmp/minio-dpa.yaml
+
+        echo ""
+        echo -e "${GREEN}SUCCESS${NC}: Configuration applied. Check status with:"
+        echo "  oc get dpa -n $namespace"
+        echo "  oc get backupstoragelocations -n $namespace"
+    else
+        echo ""
+        echo "To apply this configuration to your cluster, run:"
+        echo "  oc apply -f /tmp/minio-credentials-secret.yaml"
+        echo "  oc apply -f /tmp/minio-dpa.yaml"
+        echo ""
+        echo "Or re-run with 'apply' parameter:"
+        echo "  create-velero-dpa-for-minio '$cluster_name' '$bucket_name' '$namespace' true"
+    fi
+}
