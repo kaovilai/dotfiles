@@ -43,6 +43,19 @@ znap function unsetSOCKSproxy(){
     networksetup -setsocksfirewallproxystate Wi-Fi off
 }
 
+znap function getSOCKSproxy(){
+    local router_ip="${SOCKS_ROUTER_IP:-$(networksetup -getinfo Wi-Fi | grep -e "^Router" | cut -d " " -f 2)}"
+    local proxy_port="${SOCKS_ROUTER_PROXY_PORT:-1888}"
+
+    echo "SOCKS Proxy: ${router_ip}:${proxy_port}"
+    echo ""
+    echo "Usage in other applications:"
+    echo "  curl:        curl --socks5 ${router_ip}:${proxy_port} https://example.com"
+    echo "  SSH config:  ProxyCommand nc -X 5 -x ${router_ip}:${proxy_port} %h %p"
+    echo "  Environment: export ALL_PROXY=socks5://${router_ip}:${proxy_port}"
+    echo "  Git:         git config --global http.proxy socks5://${router_ip}:${proxy_port}"
+}
+
 # Wi-Fi and network-related setup - cache network name
 if [[ "$TERM_PROGRAM" != "vscode" ]]; then
   # Get WiFi name once and cache it
