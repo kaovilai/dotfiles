@@ -4,8 +4,9 @@
 # First load variables 
 source ~/git/dotfiles/zsh/functions/openshift/variables.zsh
 
-# Load cluster functions 
+# Load cluster functions
 source ~/git/dotfiles/zsh/functions/openshift/cluster/check-existing-clusters.zsh
+source ~/git/dotfiles/zsh/functions/openshift/cluster/cluster-logins.zsh
 source ~/git/dotfiles/zsh/functions/openshift/cluster/install-cluster.zsh
 source ~/git/dotfiles/zsh/functions/openshift/cluster/list-and-use.zsh
 
