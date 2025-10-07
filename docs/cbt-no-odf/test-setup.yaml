@@ -1,0 +1,149 @@
+# Test setup for CSI Changed Block Tracking with hostpath-csi-driver
+# This is a simplified test that doesn't require ODF/Ceph
+
+---
+# Namespace for testing
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: cbt-test
+
+---
+# VolumeSnapshotClass for hostpath driver
+apiVersion: snapshot.storage.k8s.io/v1
+kind: VolumeSnapshotClass
+metadata:
+  name: csi-hostpath-snapclass
+driver: hostpath.csi.k8s.io
+deletionPolicy: Delete
+
+---
+# PersistentVolumeClaim with Block mode (REQUIRED for CBT)
+# CBT only works with Block volumes, not Filesystem volumes
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: cbt-test-pvc
+  namespace: cbt-test
+spec:
+  accessModes:
+    - ReadWriteOnce
+  # IMPORTANT: volumeMode must be Block for CBT to work
+  volumeMode: Block
+  resources:
+    requests:
+      storage: 1Gi
+  storageClassName: csi-hostpath-sc
+
+---
+# Test pod that writes to the block device
+apiVersion: v1
+kind: Pod
+metadata:
+  name: cbt-test-pod
+  namespace: cbt-test
+spec:
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 1000
+    fsGroup: 1000
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+  - name: block-writer
+    image: registry.access.redhat.com/ubi9/ubi-minimal:latest
+    command: ["/bin/sh", "-c"]
+    args:
+    - |
+      echo "=== CBT Test Pod Started ==="
+      echo "Block device: /dev/xvda"
+
+      # Write initial 100MB of data at the beginning (blocks 0-99)
+      echo "Writing 100MB of random data at offset 0..."
+      dd if=/dev/urandom of=/dev/xvda bs=1M count=100 seek=0 || echo "Initial write completed"
+
+      echo "Initial data written at $(date)"
+      echo "Ready for first snapshot (cbt-snap1)"
+      echo ""
+      echo "After first snapshot is created, write more data with:"
+      echo "  kubectl exec -n cbt-test cbt-test-pod -- dd if=/dev/urandom of=/dev/xvda bs=1M count=50 seek=200"
+
+      # Keep pod running
+      sleep infinity
+    # Mount block device (not filesystem)
+    volumeDevices:
+    - name: block-storage
+      devicePath: /dev/xvda
+    securityContext:
+      allowPrivilegeEscalation: false
+      capabilities:
+        drop:
+        - ALL
+  volumes:
+  - name: block-storage
+    persistentVolumeClaim:
+      claimName: cbt-test-pvc
+
+---
+# First snapshot (after initial 100MB write)
+apiVersion: snapshot.storage.k8s.io/v1
+kind: VolumeSnapshot
+metadata:
+  name: cbt-snap1
+  namespace: cbt-test
+spec:
+  volumeSnapshotClassName: csi-hostpath-snapclass
+  source:
+    persistentVolumeClaimName: cbt-test-pvc
+
+---
+# Second snapshot (after additional data write)
+# Create this AFTER writing more data to the block device
+apiVersion: snapshot.storage.k8s.io/v1
+kind: VolumeSnapshot
+metadata:
+  name: cbt-snap2
+  namespace: cbt-test
+spec:
+  volumeSnapshotClassName: csi-hostpath-snapclass
+  source:
+    persistentVolumeClaimName: cbt-test-pvc
+
+---
+# Service Account for snapshot metadata access
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: cbt-test-sa
+  namespace: cbt-test
+
+---
+# Role for accessing snapshot metadata
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: snapshot-metadata-reader
+  namespace: cbt-test
+rules:
+- apiGroups: ["snapshot.storage.k8s.io"]
+  resources: ["volumesnapshots"]
+  verbs: ["get", "list"]
+- apiGroups: ["cbt.storage.k8s.io"]
+  resources: ["snapshotmetadataservices"]
+  verbs: ["get", "list"]
+
+---
+# RoleBinding for service account
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: snapshot-metadata-reader-binding
+  namespace: cbt-test
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: snapshot-metadata-reader
+subjects:
+- kind: ServiceAccount
+  name: cbt-test-sa
+  namespace: cbt-test
