@@ -7,13 +7,16 @@
 - `kubectl` or `oc` CLI
 - `git` and `make` for building tools
 
-## Quick Start (3 Steps)
+## Quick Start (4 Steps)
 
 ```bash
 # 1. Install CRD
 kubectl apply -f https://raw.githubusercontent.com/kubernetes-csi/external-snapshot-metadata/master/client/config/crd/cbt.storage.k8s.io_snapshotmetadataservices.yaml
 
-# 2. Deploy hostpath driver
+# 2. Create ClusterRoles (see detailed installation for full YAML)
+kubectl apply -f clusterroles.yaml  # Contains external-snapshot-metadata-client-runner and external-snapshot-metadata-runner
+
+# 3. Deploy hostpath driver
 git clone https://github.com/kubernetes-csi/csi-driver-host-path.git
 cd csi-driver-host-path
 SNAPSHOT_METADATA_TESTS=true \
@@ -21,7 +24,7 @@ HOSTPATHPLUGIN_REGISTRY=registry.k8s.io/sig-storage \
 HOSTPATHPLUGIN_TAG=v1.17.0 \
 ./deploy/kubernetes-latest/deploy.sh
 
-# 3. Run the test
+# 4. Run the test
 cd /path/to/docs/cbt-no-odf
 ./test-cbt.sh
 ```
@@ -41,7 +44,93 @@ Verify:
 kubectl get crd snapshotmetadataservices.cbt.storage.k8s.io
 ```
 
-### Step 2: Deploy hostpath-csi-driver
+### Step 2: Create Required ClusterRoles
+
+CBT requires two ClusterRoles for RBAC:
+
+```bash
+kubectl apply -f - <<EOF
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: external-snapshot-metadata-client-runner
+rules:
+- apiGroups:
+  - snapshot.storage.k8s.io
+  resources:
+  - volumesnapshots
+  - volumesnapshotcontents
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - cbt.storage.k8s.io
+  resources:
+  - snapshotmetadataservices
+  verbs:
+  - get
+  - list
+- apiGroups:
+  - ""
+  resources:
+  - serviceaccounts/token
+  verbs:
+  - create
+  - get
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: external-snapshot-metadata-runner
+rules:
+- apiGroups:
+  - cbt.storage.k8s.io
+  resources:
+  - snapshotmetadataservices
+  verbs:
+  - get
+  - list
+  - watch
+  - create
+  - update
+  - patch
+  - delete
+- apiGroups:
+  - authentication.k8s.io
+  resources:
+  - tokenreviews
+  verbs:
+  - create
+  - get
+- apiGroups:
+  - authorization.k8s.io
+  resources:
+  - subjectaccessreviews
+  verbs:
+  - create
+  - get
+- apiGroups:
+  - snapshot.storage.k8s.io
+  resources:
+  - volumesnapshots
+  - volumesnapshotcontents
+  verbs:
+  - get
+  - list
+EOF
+```
+
+**What these ClusterRoles do:**
+- `external-snapshot-metadata-client-runner`: Used by client tools (e.g., snapshot-metadata-lister) to query CBT metadata
+- `external-snapshot-metadata-runner`: Used by the external-snapshot-metadata sidecar in the CSI driver
+
+Verify:
+```bash
+kubectl get clusterrole external-snapshot-metadata-client-runner external-snapshot-metadata-runner
+```
+
+### Step 3: Deploy hostpath-csi-driver
 
 Clone the repository:
 ```bash
@@ -62,8 +151,10 @@ HOSTPATHPLUGIN_TAG=v1.17.0 \
 **What this does:**
 - Deploys the hostpath CSI driver
 - Adds the `external-snapshot-metadata` sidecar to the controller
-- Creates RBAC for snapshot metadata access
+- Creates ServiceAccount and ClusterRoleBindings
 - Registers a SnapshotMetadataService
+
+**Note**: This deployment creates ClusterRoleBindings that reference the ClusterRoles created in Step 2.
 
 **Alternative: Use specific namespace**
 ```bash
@@ -73,7 +164,7 @@ SNAPSHOT_METADATA_TESTS=true \
 ./deploy/kubernetes-latest/deploy.sh
 ```
 
-### Step 3: Verify Installation
+### Step 4: Verify Installation
 
 Check CSI driver:
 ```bash
@@ -107,7 +198,7 @@ NAME                    AGE
 hostpath-service        2m
 ```
 
-### Step 4: Verify Feature Gates (OpenShift only)
+### Step 5: Verify Feature Gates (OpenShift only)
 
 If using OpenShift, verify the CBT feature gate is enabled:
 
@@ -228,11 +319,14 @@ kubectl logs -l app=csi-hostpathplugin -c hostpath
 
 **Solution**: Ensure you have proper RBAC:
 ```bash
+# Check required ClusterRoles exist (from Step 2)
+kubectl get clusterrole external-snapshot-metadata-client-runner external-snapshot-metadata-runner
+
 # Check service account exists
 kubectl get sa cbt-test-sa -n cbt-test
 
-# Check role binding
-kubectl get rolebinding snapshot-metadata-reader-binding -n cbt-test
+# Check ClusterRoleBinding for client tools
+kubectl get clusterrolebinding | grep external-snapshot-metadata-client-runner
 
 # Use the service account token
 kubectl create token cbt-test-sa -n cbt-test

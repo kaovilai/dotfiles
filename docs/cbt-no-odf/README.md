@@ -89,7 +89,15 @@ CBT API tells you: "Only 50MB changed in these blocks: [x, y, z]"
 kubectl apply -f https://raw.githubusercontent.com/kubernetes-csi/external-snapshot-metadata/master/client/config/crd/cbt.storage.k8s.io_snapshotmetadataservices.yaml
 ```
 
-### 2. Deploy hostpath-csi-driver with CBT Support
+### 2. Create Required ClusterRoles
+
+See [INSTALL.md](INSTALL.md#step-2-create-required-clusterroles) for the complete ClusterRole definitions.
+
+These ClusterRoles are required:
+- `external-snapshot-metadata-client-runner` - For client tools
+- `external-snapshot-metadata-runner` - For the CSI driver sidecar
+
+### 3. Deploy hostpath-csi-driver with CBT Support
 
 ```bash
 # Clone the repository
@@ -99,11 +107,11 @@ cd csi-driver-host-path
 # Deploy with snapshot metadata enabled
 SNAPSHOT_METADATA_TESTS=true \
 HOSTPATHPLUGIN_REGISTRY=registry.k8s.io/sig-storage \
-HOSTPATHPLUGIN_TAG=v1.16.1 \
+HOSTPATHPLUGIN_TAG=v1.17.0 \
 ./deploy/kubernetes-latest/deploy.sh
 ```
 
-### 3. Verify Installation
+### 4. Verify Installation
 
 ```bash
 # Check CRD
@@ -239,7 +247,7 @@ spec:
 | Kubernetes API | ✅ Alpha in 1.33+ |
 | Feature Gates | `ExternalSnapshotMetadata=true` |
 | CRDs | Available |
-| hostpath-csi-driver | ✅ v1.17.0+ (v1.16.1 broken) |
+| hostpath-csi-driver | ✅ v1.17.0+ required |
 | Production Drivers | ⏳ Varies by vendor |
 
 ## Testing with snapshot-metadata-lister
