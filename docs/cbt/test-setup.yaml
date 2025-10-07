@@ -1,0 +1,95 @@
+# Complete test setup for CSI Changed Block Tracking
+
+---
+# Namespace for testing
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: cbt-test
+
+---
+# Test PVC using RBD storage
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: cbt-test-pvc
+  namespace: cbt-test
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+  storageClassName: ocs-storagecluster-ceph-rbd
+
+---
+# Test pod to write data
+apiVersion: v1
+kind: Pod
+metadata:
+  name: cbt-test-pod
+  namespace: cbt-test
+spec:
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 1000
+    fsGroup: 1000
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+  - name: writer
+    image: registry.access.redhat.com/ubi9/ubi-minimal:latest
+    command: ["/bin/sh", "-c"]
+    args:
+    - |
+      echo "Writing initial data..."
+      dd if=/dev/urandom of=/data/file1.dat bs=1M count=100 2>/dev/null || echo "Write completed"
+      echo "Initial data written at $(date)"
+      sleep infinity
+    volumeMounts:
+    - name: data
+      mountPath: /data
+    securityContext:
+      allowPrivilegeEscalation: false
+      capabilities:
+        drop:
+        - ALL
+  volumes:
+  - name: data
+    persistentVolumeClaim:
+      claimName: cbt-test-pvc
+
+---
+# First snapshot (after initial data write)
+apiVersion: snapshot.storage.k8s.io/v1
+kind: VolumeSnapshot
+metadata:
+  name: cbt-test-snap1
+  namespace: cbt-test
+spec:
+  volumeSnapshotClassName: ocs-storagecluster-rbdplugin-snapclass
+  source:
+    persistentVolumeClaimName: cbt-test-pvc
+
+---
+# Second snapshot (after additional data write)
+apiVersion: snapshot.storage.k8s.io/v1
+kind: VolumeSnapshot
+metadata:
+  name: cbt-test-snap2
+  namespace: cbt-test
+spec:
+  volumeSnapshotClassName: ocs-storagecluster-rbdplugin-snapclass
+  source:
+    persistentVolumeClaimName: cbt-test-pvc
+
+---
+# Test SnapshotMetadataService (non-functional without sidecar)
+apiVersion: cbt.storage.k8s.io/v1alpha1
+kind: SnapshotMetadataService
+metadata:
+  name: test-rbd-snapshot-metadata
+spec:
+  address: "openshift-storage.rbd.csi.ceph.com-snapshot-metadata:50051"
+  audience: "csi-rbd-snapshot-metadata"
+  caCert: "LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0t"  # Placeholder cert
