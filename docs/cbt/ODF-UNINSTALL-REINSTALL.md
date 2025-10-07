@@ -193,8 +193,7 @@ make deploy-with-olm
 
 **Solution**:
 1. Cross-compiled Go binary: `GOOS=linux GOARCH=amd64 make go-build`
-2. Created simplified `Dockerfile.amd64` to use pre-compiled binary
-3. Rebuilt all images with `--platform linux/amd64`
+2. Rebuilt all images with `--platform linux/amd64` using podman (avoids QEMU issues)
 
 #### Images Built and Pushed to ghcr.io/kaovilai
 
@@ -357,8 +356,8 @@ Build cephcsi-operator from `release-4.20` branch HEAD (commit cb3983dd, include
 
 ```bash
 # Install required tools
-brew install docker  # Or podman
-docker buildx create --use  # Enable multi-platform builds
+brew install podman  # Recommended - avoids QEMU cross-compilation issues
+# Or: brew install docker
 ```
 
 #### Build Operator Image
@@ -380,13 +379,16 @@ export IMAGE_TAG=release-4.20-cb3983dd
 export IMG=${IMAGE_REGISTRY}/${REGISTRY_NAMESPACE}/ceph-csi-operator:${IMAGE_TAG}
 
 # Build for AMD64 (OpenShift cluster architecture)
-docker buildx build \
+# Using podman (recommended - avoids QEMU emulation issues on Mac)
+podman build \
   --platform linux/amd64 \
-  --push \
   -t ${IMG} .
 
+# Push the image
+podman push ${IMG}
+
 # Verify the image was pushed
-docker manifest inspect ${IMG}
+podman manifest inspect ${IMG}
 ```
 
 #### Build Bundle Image (Optional)
@@ -491,7 +493,91 @@ oc get snapshotmetadataservice -A
 
 > ⚠️ **Alpha Feature**: CBT is currently in alpha and should only be used for testing
 
-**Manual Setup Steps** (once custom image is deployed):
+---
+
+## Part 7: CBT Deployment Execution (October 6, 2025 - Continued Session)
+
+### Completed Steps
+
+#### 1. Clone and Build Custom Operator ✅
+
+```bash
+# Cloned Red Hat fork
+cd ~/git
+git clone --branch release-4.20 https://github.com/red-hat-storage/ceph-csi-operator.git
+cd ceph-csi-operator
+
+# Verified CBT commit present
+git log --oneline --grep="snapshot.*metadata" | head -5
+# Output: 840b82eb Merge pull request #274 from iPraveenParihar/dev-preview/rbd-snapshot-metadata
+
+# Built for AMD64 using podman (avoids QEMU issues on Mac)
+podman build --platform linux/amd64 -t ghcr.io/kaovilai/ceph-csi-operator:release-4.20-cb3983dd .
+# Build completed successfully after ~2 minutes
+
+# Pushed to registry
+podman push ghcr.io/kaovilai/ceph-csi-operator:release-4.20-cb3983dd
+# Image made public via GitHub web interface
+```
+
+#### 2. Deploy Custom Operator ✅
+
+```bash
+# Patched CSV to use custom image
+CSV_NAME=$(oc get csv -n openshift-storage -o name | grep cephcsi-operator)
+oc patch ${CSV_NAME} -n openshift-storage --type='json' \
+  -p='[{"op": "replace", "path": "/spec/install/spec/deployments/0/spec/template/spec/containers/0/image", "value": "ghcr.io/kaovilai/ceph-csi-operator:release-4.20-cb3983dd"}]'
+# Output: clusterserviceversion.operators.coreos.com/cephcsi-operator.v4.20.0 patched
+
+# Verified deployment
+oc get pod -n openshift-storage ceph-csi-controller-manager-6f885c99b9-tg6kg \
+  -o jsonpath='{.spec.containers[0].image}'
+# Output: ghcr.io/kaovilai/ceph-csi-operator:release-4.20-cb3983dd
+```
+
+#### 3. Install SnapshotMetadataService CRD ✅
+
+```bash
+# Applied CRD from upstream
+oc apply -f https://raw.githubusercontent.com/kubernetes-csi/external-snapshot-metadata/main/client/config/crd/cbt.storage.k8s.io_snapshotmetadataservices.yaml
+# Output: customresourcedefinition.apiextensions.k8s.io/snapshotmetadataservices.cbt.storage.k8s.io configured
+
+# Verified CRD exists
+oc get crd snapshotmetadataservices.cbt.storage.k8s.io
+# Output: NAME                                              CREATED AT
+#         snapshotmetadataservices.cbt.storage.k8s.io      2025-10-07T01:50:00Z
+```
+
+#### 4. Current State
+
+**Operator Status**:
+- Custom image deployed: `ghcr.io/kaovilai/ceph-csi-operator:release-4.20-cb3983dd`
+- Pod ready: `ceph-csi-controller-manager-6f885c99b9-tg6kg` (1/1 Running)
+- Operator recognizes SnapshotMetadataService CRD
+- Operator logs show permission errors (expected - RBAC not configured yet)
+
+**RBD Controller Status**:
+- Current containers: 8 (not yet 9)
+- Container list: csi-rbdplugin, csi-provisioner, csi-resizer, csi-attacher, csi-snapshotter, csi-addons, csi-omap-generator, log-rotator
+- Missing: `external-snapshot-metadata` (will appear after completing manual setup)
+
+**CRD Status**:
+- SnapshotMetadataService CRD installed: ✅
+- No SnapshotMetadataService instances yet: ✅ (expected)
+
+### Remaining Steps
+
+To enable CBT and get the 9th container:
+
+1. **Grant RBAC permissions** - Service account needs permissions to manage SnapshotMetadataService resources
+2. **Create Service** - Expose RBD driver endpoint for snapshot metadata
+3. **Generate TLS certificates** - Required for secure communication
+4. **Create SnapshotMetadataService CR** - Triggers deployment of external-snapshot-metadata sidecar
+5. **Verify 9 containers** - Confirm CBT is fully operational
+
+---
+
+**Manual Setup Steps** (remaining tasks):
 
 Based on [official documentation](https://github.com/red-hat-storage/ceph-csi-operator/blob/release-4.20/docs/features/rbd-snapshot-metadata.md):
 
@@ -645,6 +731,6 @@ oc get pod -n openshift-storage -l app=openshift-storage.rbd.csi.ceph.com-ctrlpl
 
 ---
 
-**Document Version**: 3.0
-**Status**: ODF 4.20 Deployed - CBT Available (Alpha), Manual Setup Required
-**Last Updated**: October 6, 2025 (continued session)
+**Document Version**: 4.0
+**Status**: ODF 4.20 Deployed - CBT Custom Operator Deployed ✅ - Manual Setup In Progress (3/8 steps complete)
+**Last Updated**: October 7, 2025 (continued session)
