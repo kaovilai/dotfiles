@@ -19,7 +19,9 @@ For production ODF testing with Ceph RBD, see the full documentation in `../cbt/
 - Kubernetes 1.33+ or OpenShift 4.20+
 - `kubectl` or `oc` CLI
 - Cluster with CBT feature gates enabled
-- hostpath-csi-driver with snapshot metadata support
+- **hostpath-csi-driver v1.17.0+**
+
+**Important**: Version 1.17.0 is required for working CBT metadata. See [TEST-RESULTS.md](TEST-RESULTS.md) for verified test results.
 
 ## What is Changed Block Tracking?
 
@@ -185,6 +187,15 @@ cbt-snap2   true         cbt-test-pvc    1Gi
 ### Changed Block Query
 The delta query should show approximately **50MB of changed blocks** at the offset where we wrote the second data chunk (around block 200MB).
 
+### Verified Test Results
+
+✅ **Tested successfully with v1.17.0** on OpenShift 4.20.0-rc.3 (October 7, 2025)
+
+For detailed test results including actual CBT metadata output, see:
+- **[TEST-RESULTS.md](TEST-RESULTS.md)** - Full test results with working metadata
+- Verified allocated block queries return correct data
+- Verified delta queries accurately identify changed blocks
+
 ### What You'll Learn
 - ✅ How to create block mode volumes
 - ✅ How snapshots work with CBT
@@ -228,7 +239,7 @@ spec:
 | Kubernetes API | ✅ Alpha in 1.33+ |
 | Feature Gates | `ExternalSnapshotMetadata=true` |
 | CRDs | Available |
-| hostpath-csi-driver | ✅ Supports CBT |
+| hostpath-csi-driver | ✅ v1.17.0+ (v1.16.1 broken) |
 | Production Drivers | ⏳ Varies by vendor |
 
 ## Testing with snapshot-metadata-lister
@@ -302,11 +313,11 @@ After understanding CBT basics with this test:
 
 ## Comparison to Full ODF Test
 
-See `../cbt/ODF-UNINSTALL-REINSTALL.md` for the complete journey of enabling CBT with ODF 4.20, including:
-- Building custom operator images
-- Deploying production storage
-- Handling snapshot flattening
-- Production considerations
+See `../cbt/` for production CBT testing with ODF 4.20, including:
+- Production-grade Ceph RBD storage
+- Distributed, replicated volumes
+- Enterprise storage considerations
+- Integration with backup tools
 
 ---
 
