@@ -18,7 +18,7 @@ git clone https://github.com/kubernetes-csi/csi-driver-host-path.git
 cd csi-driver-host-path
 SNAPSHOT_METADATA_TESTS=true \
 HOSTPATHPLUGIN_REGISTRY=registry.k8s.io/sig-storage \
-HOSTPATHPLUGIN_TAG=v1.16.1 \
+HOSTPATHPLUGIN_TAG=v1.17.0 \
 ./deploy/kubernetes-latest/deploy.sh
 
 # 3. Run the test
@@ -55,7 +55,7 @@ Deploy with snapshot metadata support **enabled**:
 # Important: SNAPSHOT_METADATA_TESTS=true enables CBT support
 SNAPSHOT_METADATA_TESTS=true \
 HOSTPATHPLUGIN_REGISTRY=registry.k8s.io/sig-storage \
-HOSTPATHPLUGIN_TAG=v1.16.1 \
+HOSTPATHPLUGIN_TAG=v1.17.0 \
 ./deploy/kubernetes-latest/deploy.sh
 ```
 
