@@ -1,0 +1,13 @@
+apiVersion: operators.coreos.com/v1alpha1
+kind: CatalogSource
+metadata:
+  name: odf-catalogsource
+  namespace: openshift-marketplace
+spec:
+  sourceType: grpc
+  image: ghcr.io/kaovilai/odf-operator-catalog:v4.20.0-test
+  displayName: ODF 4.20 Test Catalog
+  publisher: kaovilai
+  updateStrategy:
+    registryPoll:
+      interval: 10m
