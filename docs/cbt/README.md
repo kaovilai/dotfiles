@@ -120,14 +120,15 @@ To enable CBT on your cluster:
 
 ## Current Status
 
-**As of October 6, 2025**:
+**As of October 7, 2025**:
 
 - ✅ OpenShift 4.20.0-rc.3 deployed
 - ✅ ODF 4.20 deployed (11/11 CSVs Succeeded)
 - ✅ StorageCluster healthy
-- ❌ CBT not available in release images
-- ⚠️ Custom build required for CBT testing
-- 📖 Complete documentation ready
+- ✅ Custom cephcsi-operator built and deployed (`ghcr.io/kaovilai/ceph-csi-operator:release-4.20-cb3983dd`)
+- ✅ SnapshotMetadataService CRD installed
+- ⏳ CBT manual setup in progress (3/8 steps complete)
+- 📖 Complete documentation with deployment execution log
 
 ## References
 
