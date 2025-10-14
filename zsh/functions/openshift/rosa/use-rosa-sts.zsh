@@ -1,25 +1,96 @@
 znap function use-rosa-sts() {
     # Configure kubectl to use a ROSA STS cluster
     # Parameters:
-    #   $1 - Architecture suffix (arm64 or amd64, defaults to amd64)
-    
-    local ARCH_SUFFIX=${1:-amd64}
-    
-    # Safety check - ensure TODAY is not empty
-    if [[ -z "$TODAY" ]]; then
-        echo "WARNING: TODAY variable is empty, using current date"
-        TODAY=$(date +%Y%m%d)
+    #   $1 - Can be:
+    #        - Architecture suffix (arm64 or amd64)
+    #        - Date in YYYYMMDD format (e.g., 20250710)
+    #        - Full cluster name (e.g., rosa-20250710-amd64)
+    #        - Empty (defaults to today's date and amd64)
+    #   $2 - Architecture suffix if $1 is a date (defaults to amd64)
+
+    local input=${1:-}
+    local ARCH_SUFFIX="amd64"
+    local DATE_PREFIX=""
+    local CLUSTER_NAME=""
+
+    # Parse input parameters
+    if [[ -z "$input" ]]; then
+        # No input, use today's date
+        DATE_PREFIX=${TODAY:-$(date +%Y%m%d)}
+        CLUSTER_NAME="rosa-$DATE_PREFIX-$ARCH_SUFFIX"
+    elif [[ "$input" == "arm64" || "$input" == "amd64" ]]; then
+        # Input is architecture
+        ARCH_SUFFIX=$input
+        DATE_PREFIX=${TODAY:-$(date +%Y%m%d)}
+        CLUSTER_NAME="rosa-$DATE_PREFIX-$ARCH_SUFFIX"
+    elif [[ "$input" =~ ^[0-9]{8}$ ]]; then
+        # Input is date in YYYYMMDD format
+        DATE_PREFIX=$input
+        ARCH_SUFFIX=${2:-amd64}
+        CLUSTER_NAME="rosa-$DATE_PREFIX-$ARCH_SUFFIX"
+    elif [[ "$input" =~ ^rosa-.*$ ]]; then
+        # Input is full cluster name
+        CLUSTER_NAME=$input
+        # Extract date and arch from cluster name
+        if [[ "$CLUSTER_NAME" =~ ^rosa-([0-9]{8})-(.*)$ ]]; then
+            DATE_PREFIX=${match[1]}
+            ARCH_SUFFIX=${match[2]}
+        fi
+    else
+        echo "ERROR: Invalid input '$input'"
+        echo "Usage: use-rosa-sts [arch|date|cluster-name] [arch-if-date-provided]"
+        echo "  Examples:"
+        echo "    use-rosa-sts                    # Use today's date with amd64"
+        echo "    use-rosa-sts arm64              # Use today's date with arm64"
+        echo "    use-rosa-sts 20250710           # Use specific date with amd64"
+        echo "    use-rosa-sts 20250710 arm64    # Use specific date with arm64"
+        echo "    use-rosa-sts rosa-20250710-amd64  # Use specific cluster name"
+        return 1
     fi
-    
-    # Set cluster name
-    local CLUSTER_NAME="rosa-$TODAY-$ARCH_SUFFIX"
-    local ROSA_DIR="$OCP_MANIFESTS_DIR/$TODAY-rosa-sts-$ARCH_SUFFIX"
+
+    local ROSA_DIR="$OCP_MANIFESTS_DIR/$DATE_PREFIX-rosa-sts-$ARCH_SUFFIX"
     
     # Check if cluster exists
     if ! rosa describe cluster --cluster "$CLUSTER_NAME" &>/dev/null; then
-        echo "ERROR: ROSA cluster '$CLUSTER_NAME' not found"
-        echo "Available ROSA clusters:"
-        rosa list clusters --output table
+        echo "ERROR: ROSA cluster '$CLUSTER_NAME' not found in AWS"
+
+        # Check if local directory exists
+        if [[ -d "$ROSA_DIR" ]]; then
+            echo "Note: Local directory exists at $ROSA_DIR but cluster may have been deleted from AWS"
+            echo ""
+        fi
+
+        echo "Available ROSA clusters in AWS:"
+        local cluster_list=$(rosa list clusters --output json 2>/dev/null | jq -r '.[] | .name' 2>/dev/null)
+
+        if [[ -z "$cluster_list" ]]; then
+            echo "  No ROSA clusters found in AWS"
+
+            # Check for any local ROSA directories
+            echo ""
+            echo "Local ROSA cluster directories found:"
+            local found_local=false
+            # Use nullglob to handle the case when no matches are found
+            setopt local_options nullglob
+            for dir in $OCP_MANIFESTS_DIR/*-rosa-sts-*/; do
+                if [[ -d "$dir" ]]; then
+                    found_local=true
+                    local dir_name=$(basename "$dir")
+                    echo "  - $dir_name (may be stale)"
+                fi
+            done
+
+            if [[ "$found_local" == "false" ]]; then
+                echo "  No local ROSA directories found"
+            fi
+        else
+            echo "$cluster_list" | while read -r cluster; do
+                echo "  - $cluster"
+            done
+            echo ""
+            echo "Hint: Use 'use-rosa-sts <cluster-name>' to connect to a specific cluster"
+        fi
+
         return 1
     fi
     
