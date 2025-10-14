@@ -96,9 +96,11 @@ znap function get-minio-connection-info() {
     local secret_key=$(echo "$config" | jq -r '.secret_key')
     local cert_file=$(echo "$config" | jq -r '.cert_file // ""')
     local provider=$(echo "$config" | jq -r '.provider')
+    local bucket_name=$(echo "$config" | jq -r '.bucket_name // "N/A"')
     
     echo -e "${BLUE}Connection Information for MinIO deployment '${name}'${NC}:"
     echo -e "  Provider:    ${provider}"
+    echo -e "  Bucket:      ${bucket_name}"
     echo -e "  Endpoint:    ${endpoint}"
     echo -e "  Access Key:  ${access_key}"
     echo -e "  Secret Key:  ${secret_key}"
@@ -126,6 +128,15 @@ znap function get-minio-connection-info() {
     if [[ -n "$cert_file" && "$cert_file" != "null" ]]; then
         echo "# Or with custom certificate:"
         echo "aws s3 ls --endpoint-url $endpoint --ca-bundle $cert_file"
+    fi
+    if [[ "$bucket_name" != "N/A" ]]; then
+        echo ""
+        echo "# List objects in bucket '$bucket_name':"
+        echo "aws s3 ls s3://$bucket_name --endpoint-url $endpoint"
+        if [[ -n "$cert_file" && "$cert_file" != "null" ]]; then
+            echo "# Or with custom certificate:"
+            echo "aws s3 ls s3://$bucket_name --endpoint-url $endpoint --ca-bundle $cert_file"
+        fi
     fi
 }
 
