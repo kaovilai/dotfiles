@@ -2,10 +2,10 @@ znap function use-rosa-sts() {
     # Configure kubectl to use a ROSA STS cluster
     # Parameters:
     #   $1 - Can be:
-    #        - Architecture suffix (arm64 or amd64)
+    #        - Empty (lists clusters and uses most recent)
+    #        - Architecture suffix (arm64 or amd64) - creates name with today's date
     #        - Date in YYYYMMDD format (e.g., 20250710)
     #        - Full cluster name (e.g., rosa-20250710-amd64)
-    #        - Empty (defaults to today's date and amd64)
     #   $2 - Architecture suffix if $1 is a date (defaults to amd64)
 
     local input=${1:-}
@@ -15,9 +15,60 @@ znap function use-rosa-sts() {
 
     # Parse input parameters
     if [[ -z "$input" ]]; then
-        # No input, use today's date
-        DATE_PREFIX=${TODAY:-$(date +%Y%m%d)}
-        CLUSTER_NAME="rosa-$DATE_PREFIX-$ARCH_SUFFIX"
+        # No input, list clusters and use the most recent one
+        echo "Checking for available ROSA clusters..."
+
+        # Get list of ROSA clusters sorted by name (which includes date)
+        local clusters=$(rosa list clusters --output json 2>/dev/null | jq -r '.[] | .name' 2>/dev/null | sort -r)
+
+        if [[ -z "$clusters" ]]; then
+            echo "No ROSA clusters found in AWS"
+
+            # Check for any local ROSA directories
+            echo ""
+            echo "Local ROSA cluster directories found:"
+            local found_local=false
+            setopt local_options nullglob
+            for dir in $OCP_MANIFESTS_DIR/*-rosa-sts-*/; do
+                if [[ -d "$dir" ]]; then
+                    found_local=true
+                    local dir_name=$(basename "$dir")
+                    echo "  - $dir_name (may be stale)"
+                fi
+            done
+
+            if [[ "$found_local" == "false" ]]; then
+                echo "  No local ROSA directories found"
+            fi
+            return 1
+        fi
+
+        # Get the most recent cluster (first in reverse sorted list)
+        CLUSTER_NAME=$(echo "$clusters" | head -n 1)
+
+        # Count clusters
+        local cluster_count=$(echo "$clusters" | wc -l | tr -d ' ')
+
+        if [[ $cluster_count -gt 1 ]]; then
+            echo "Found $cluster_count ROSA clusters. Using most recent: $CLUSTER_NAME"
+            echo "Other available clusters:"
+            echo "$clusters" | tail -n +2 | while read -r cluster; do
+                echo "  - $cluster"
+            done
+            echo ""
+            echo "To use a different cluster, specify: use-rosa-sts <cluster-name>"
+        else
+            echo "Found ROSA cluster: $CLUSTER_NAME"
+        fi
+
+        # Extract date and arch from cluster name
+        if [[ "$CLUSTER_NAME" =~ ^rosa-([0-9]{8})-(.*)$ ]]; then
+            DATE_PREFIX=${match[1]}
+            ARCH_SUFFIX=${match[2]}
+        else
+            echo "WARNING: Could not parse cluster name format: $CLUSTER_NAME"
+            DATE_PREFIX=$(date +%Y%m%d)
+        fi
     elif [[ "$input" == "arm64" || "$input" == "amd64" ]]; then
         # Input is architecture
         ARCH_SUFFIX=$input
@@ -40,11 +91,11 @@ znap function use-rosa-sts() {
         echo "ERROR: Invalid input '$input'"
         echo "Usage: use-rosa-sts [arch|date|cluster-name] [arch-if-date-provided]"
         echo "  Examples:"
-        echo "    use-rosa-sts                    # Use today's date with amd64"
-        echo "    use-rosa-sts arm64              # Use today's date with arm64"
-        echo "    use-rosa-sts 20250710           # Use specific date with amd64"
-        echo "    use-rosa-sts 20250710 arm64    # Use specific date with arm64"
-        echo "    use-rosa-sts rosa-20250710-amd64  # Use specific cluster name"
+        echo "    use-rosa-sts                      # List clusters and use most recent"
+        echo "    use-rosa-sts arm64                # Use today's date with arm64"
+        echo "    use-rosa-sts 20250710             # Use specific date with amd64"
+        echo "    use-rosa-sts 20250710 arm64      # Use specific date with arm64"
+        echo "    use-rosa-sts rosa-20250710-amd64 # Use specific cluster name"
         return 1
     fi
 
