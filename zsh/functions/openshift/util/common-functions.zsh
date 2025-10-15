@@ -1,6 +1,24 @@
 # Common utility functions for OpenShift cluster creation
+#
+# This file contains shared utility functions used across all OpenShift cluster
+# creation scripts (AWS, Azure, GCP, ROSA).
+#
+# Functions provided:
+#   - prompt_release_stream: Interactive release stream selection (dev-preview/stable)
+#   - get_release_image: Get release image URL for specific stream and architecture
+#   - validate_env_vars: Validate required environment variables are set
+#   - get_openshift_install: Find or install openshift-install binary
+#   - handle_registry_login: Login to container registries (podman)
+#   - update_pull_secret_with_podman: Update pull-secret.txt with registry credentials
+#   - create_install_config_header: Generate standard install-config.yaml header
+#   - add_credentials_to_install_config: Add pull secret and SSH key to install-config
+#   - generate_unique_cluster_name: Generate unique cluster name to avoid conflicts
+#   - cleanup_on_failure: Clean up resources when cluster creation fails
 
 # Function to prompt for release stream selection
+# Usage: stream=$(prompt_release_stream)
+# Description: Interactively prompts user to select between dev-preview (EC) or stable release
+# Returns: "dev-preview" or "stable" to stdout
 prompt_release_stream() {
     echo "" >&2
     echo "Select OpenShift release stream:" >&2
@@ -20,6 +38,14 @@ prompt_release_stream() {
 }
 
 # Function to get release image based on stream and architecture
+# Usage: image=$(get_release_image "stable" "amd64")
+#        image=$(get_release_image "dev-preview" "arm64")
+#        image=$(get_release_image "stable" "multi")
+# Description: Gets the appropriate release image URL for the given stream and architecture
+# Parameters:
+#   $1 - stream: "stable" or "dev-preview"
+#   $2 - architecture: "amd64", "arm64", or "multi" (multi-arch)
+# Returns: Release image URL to stdout, exits with 1 on error
 get_release_image() {
     local stream=$1
     local architecture=$2
@@ -60,6 +86,15 @@ get_release_image() {
 }
 
 # Function to validate environment variables
+# Usage: validate_env_vars "aws" AWS_REGION AWS_PROFILE
+#        validate_env_vars "azure" AZURE_SUBSCRIPTION_ID AZURE_TENANT_ID
+# Description: Validates that all required environment variables are set
+# Parameters:
+#   $1 - provider: Cloud provider name (for error messages only)
+#   $@ - variable names to validate
+# Returns: 0 if all variables are set, 1 if any are missing
+# Example:
+#   validate_env_vars "azure" AZURE_SUBSCRIPTION_ID AZURE_TENANT_ID || return 1
 validate_env_vars() {
     local provider=$1
     shift
@@ -86,6 +121,18 @@ validate_env_vars() {
 }
 
 # Function to get openshift-install binary
+# Usage: OPENSHIFT_INSTALL=$(get_openshift_install)
+# Description: Finds an appropriate openshift-install binary or offers to install one
+#              Checks for versioned binaries (e.g., openshift-install-4.17.0) first,
+#              then falls back to generic 'openshift-install' command.
+#              If not found, offers to download and install the latest EC version.
+# Returns: Path to openshift-install binary to stdout
+# Environment:
+#   OPENSHIFT_INSTALL - If set, uses this path instead of searching
+# Example:
+#   local installer=$(get_openshift_install)
+#   [[ -z "$installer" ]] && return 1
+#   $installer version
 get_openshift_install() {
     local ec_version=$(get_ocp_latest_ec_version)
     local stable_version=$(get_ocp_latest_stable_version)
@@ -184,6 +231,14 @@ get_openshift_install() {
 }
 
 # Function to handle registry login
+# Usage: handle_registry_login "registry.ci.openshift.org"
+#        handle_registry_login "quay.io"
+# Description: Ensures user is logged into the specified container registry using podman
+#              For registry.ci.openshift.org, opens browser for OAuth login
+# Parameters:
+#   $1 - registry: Registry hostname to login to
+# Example:
+#   handle_registry_login "registry.ci.openshift.org"
 handle_registry_login() {
     local registry=$1
     
@@ -206,6 +261,17 @@ handle_registry_login() {
 }
 
 # Function to update pull secret with podman credentials
+# Usage: update_pull_secret_with_podman "registry.ci.openshift.org"
+# Description: Updates ~/pull-secret.txt with credentials from podman auth file
+#              for the specified registry. Skips quay.io as it's already included.
+# Parameters:
+#   $1 - registry: Registry hostname to add credentials for
+# Prerequisites:
+#   - Must be logged into the registry via podman
+#   - ~/pull-secret.txt must exist
+# Example:
+#   handle_registry_login "$registry"
+#   update_pull_secret_with_podman "$registry"
 update_pull_secret_with_podman() {
     local registry=$1
     
@@ -254,12 +320,21 @@ update_pull_secret_with_podman() {
 }
 
 # Function to create standard install-config.yaml header
+# Usage: create_install_config_header > install-config.yaml
+# Description: Outputs the standard OpenShift install-config.yaml header
+# Returns: YAML header to stdout
 create_install_config_header() {
     echo "additionalTrustBundlePolicy: Proxyonly
 apiVersion: v1"
 }
 
 # Function to add pull secret and SSH key to install-config
+# Usage: add_credentials_to_install_config >> install-config.yaml
+# Description: Outputs pull secret and SSH key sections for install-config.yaml
+# Prerequisites:
+#   - ~/pull-secret.txt must exist
+#   - ~/.ssh/id_rsa.pub must exist
+# Returns: YAML credentials section to stdout
 add_credentials_to_install_config() {
     echo "pullSecret: '$(cat ~/pull-secret.txt)'
 sshKey: |
@@ -267,6 +342,20 @@ sshKey: |
 }
 
 # Function to generate unique cluster name and directory
+# Usage: result=$(generate_unique_cluster_name "tkaovila-20250114-sts" "/path/to/dir")
+#        cluster_name=$(echo "$result" | grep "cluster_name:" | cut -d: -f2)
+#        cluster_dir=$(echo "$result" | grep "cluster_dir:" | cut -d: -f2)
+# Description: Generates unique cluster name by appending suffix if conflicts exist
+#              Only adds suffix when PROCEED_WITH_EXISTING_CLUSTERS=true
+# Parameters:
+#   $1 - base_name: Base cluster name
+#   $2 - base_dir: Base directory path
+# Returns: Two lines to stdout: "cluster_name:NAME" and "cluster_dir:DIR"
+# Environment:
+#   PROCEED_WITH_EXISTING_CLUSTERS - If "true", appends -1, -2, etc. to avoid conflicts
+# Example:
+#   local unique=$(generate_unique_cluster_name "$CLUSTER_NAME" "$OCP_CREATE_DIR")
+#   [[ -z "$unique" ]] && return 1
 generate_unique_cluster_name() {
     local base_name=$1
     local base_dir=$2
@@ -305,6 +394,19 @@ generate_unique_cluster_name() {
 }
 
 # Function to cleanup cluster resources on failure
+# Usage: cleanup_on_failure "$OCP_CREATE_DIR" "$CLUSTER_NAME" "azure"
+# Description: Attempts to gather bootstrap logs and provides cleanup guidance
+#              when cluster creation fails
+# Parameters:
+#   $1 - cluster_dir: Path to cluster installation directory
+#   $2 - cluster_name: Name of the cluster
+#   $3 - provider: Cloud provider ("aws", "gcp", "azure")
+# Returns: Always returns 1 (failure status)
+# Example:
+#   if ! $OPENSHIFT_INSTALL create cluster --dir $dir; then
+#       cleanup_on_failure "$dir" "$name" "aws"
+#       return 1
+#   fi
 cleanup_on_failure() {
     local cluster_dir=$1
     local cluster_name=$2

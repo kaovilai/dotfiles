@@ -1,4 +1,27 @@
+# OpenShift Cluster Listing and Selection Functions
+#
+# Functions for discovering and switching between installed OpenShift clusters
+#
+# Functions provided:
+#   - list-ocp-clusters: List all installed OpenShift clusters across all providers
+#   - use-ocp-cluster: Interactively select and set KUBECONFIG to a cluster
+#   - copyKUBECONFIG: Copy current KUBECONFIG to ~/.kube/config
+
 # List all installed OpenShift clusters
+# Usage: list-ocp-clusters [--full]
+#        list-ocp-clusters help
+# Description: Scans directories for OpenShift cluster installations and lists them
+#              by cloud provider (AWS, GCP, Azure, ROSA, Local, CRC)
+# Parameters:
+#   --full - Show full paths to auth directory and kubeconfig
+#   help   - Display detailed help message
+# Searches:
+#   - $OCP_MANIFESTS_DIR for cloud provider clusters
+#   - ~/clusters for local installations
+#   - ~/.crc/machines/crc for CodeReady Containers
+# Example:
+#   list-ocp-clusters
+#   list-ocp-clusters --full
 znap function list-ocp-clusters() {
     # Check if help is requested
     if [[ $1 == "help" ]]; then
@@ -122,6 +145,22 @@ znap function list-ocp-clusters() {
 }
 
 # Set KUBECONFIG to a cluster
+# Usage: use-ocp-cluster [PATTERN]
+#        use-ocp-cluster help
+# Description: Interactively select an OpenShift cluster and set KUBECONFIG
+#              If only one cluster found, uses it directly without prompting
+#              For ROSA clusters without kubeconfig, shows instructions for use-rosa-sts
+# Parameters:
+#   PATTERN - Optional search pattern to filter clusters (substring match)
+#   help    - Display detailed help message
+# Environment:
+#   KUBECONFIG - Will be exported with the selected cluster's kubeconfig path
+# Example:
+#   use-ocp-cluster                    # Show all clusters
+#   use-ocp-cluster azure              # Show only Azure clusters
+#   use-ocp-cluster 20250114           # Show clusters from specific date
+# Note:
+#   After setting KUBECONFIG, offers to copy to ~/.kube/config for persistence
 znap function use-ocp-cluster() {
     # Check if help is requested
     if [[ $1 == "help" ]]; then
@@ -279,7 +318,16 @@ znap function use-ocp-cluster() {
     fi
 }
 
-# cp KUBECONFIG to ~/.kube/config
+# Copy KUBECONFIG to ~/.kube/config
+# Usage: copyKUBECONFIG
+# Description: Copies the current KUBECONFIG file to ~/.kube/config
+#              Validates KUBECONFIG is set and file exists before copying
+# Environment:
+#   KUBECONFIG - Must be set to a valid kubeconfig file path
+# Returns: 1 if KUBECONFIG not set or file doesn't exist, 0 on success
+# Example:
+#   export KUBECONFIG=/path/to/cluster/auth/kubeconfig
+#   copyKUBECONFIG
 znap function copyKUBECONFIG() {
     [ -f $KUBECONFIG ] || {
         echo "KUBECONFIG not set"
