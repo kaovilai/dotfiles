@@ -1,4 +1,23 @@
-# Check for existing clusters and prompt user before proceeding
+# Check for existing OpenShift clusters and prompt user before proceeding
+#
+# Usage: check-for-existing-clusters [CLOUD_PROVIDER] [PATTERN]
+#        check-for-existing-clusters help
+# Description: Scans for existing OpenShift clusters and prompts user whether to:
+#              1) Destroy existing and create new
+#              2) Cancel operation
+#              3) Create alongside existing (with unique naming)
+# Parameters:
+#   CLOUD_PROVIDER - Optional: Filter by provider (aws, gcp, azure, rosa, all) [default: all]
+#   PATTERN        - Optional: Pattern to match in cluster names (e.g., 20250417, arm64, sts)
+# Environment:
+#   FORCE_NEW_CLUSTER - If "true", automatically selects option 3 (create alongside)
+#   DEBUG_CLUSTER_CHECK - If "true", enables debug output
+#   PROCEED_WITH_EXISTING_CLUSTERS - Set to "true" when user chooses option 3
+# Returns: 0 if should proceed with creation, 1 if operation cancelled
+# Example:
+#   check-for-existing-clusters "azure"           # Check only Azure clusters
+#   check-for-existing-clusters "aws" "20250114"  # Check AWS clusters from Jan 14, 2025
+#   FORCE_NEW_CLUSTER=true check-for-existing-clusters  # Auto-create alongside existing
 znap function check-for-existing-clusters() {
     # Check if help is requested
     if [[ $1 == "help" ]]; then
