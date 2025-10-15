@@ -1,4 +1,5 @@
 # Miscellaneous aliases
+alias copy-devcontainer-from-dotfiles='cp -r ~/git/dotfiles/.devcontainer .'
 alias occonsole='comet $(oc whoami --show-console)'
 alias eks-create='aws eks create-cluster --name tkaovila-eks --role-arn=$(aws iam get-role --role-name tkaovila-eks --output yaml | yq .Role.Arn) --resources-vpc-config subnetIds=$(aws ec2 describe-subnets --output yaml | yq -r ".Subnets[] | select(.Tags[] | .Value == \"tkaovila-eks-subnet\") | .SubnetId"),$(aws ec2 describe-subnets --output yaml | yq -r ".Subnets[] | select(.Tags[] | .Value == \"tkaovila-eks-subnet2\") | .SubnetId")'
 alias ollama-run='ollama run llama3.2:3b'
