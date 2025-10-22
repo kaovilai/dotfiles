@@ -62,6 +62,7 @@ alias termc='osascript -e "tell app \"Terminal\" to do script \"cd $(pwd) && cla
 alias audio-desk='SwitchAudioSource -t all -s "FiiO USB DAC K1" && SwitchAudioSource -t input -s "HD Pro Webcam C920"'
 alias audio-poly='SwitchAudioSource -t all -s "Poly V4320 Series"'
 alias c='f() { osascript -e "tell app \"Terminal\" to do script \"cd $HOME/experiments/ && claude \\\"$1\\\"\""}; f'
+alias ce='cd ~/experiments/ && claude'
 alias claude-review='f() { osascript -e "tell app \"Terminal\" to do script \"cd $HOME/experiments/ && claude \\\"/review $1\\\"\""}; f'
 alias cr='claude-review'
 alias gemini-review='f() { osascript -e "tell app \"Terminal\" to do script \"cd $HOME/experiments/ && gemini -p \\\"/review $1\\\"\""}; f'
