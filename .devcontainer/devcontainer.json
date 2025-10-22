@@ -9,6 +9,26 @@
       "ZSH_IN_DOCKER_VERSION": "1.2.0"
     }
   },
+  // Docker-outside-of-Docker Feature
+  // Purpose: Re-use the host Docker socket, adding the Docker CLI to the container
+  // This allows running Docker commands from inside the dev container using the host's Docker socket
+  //
+  // Usage:
+  // "features": {
+  //   "ghcr.io/devcontainers/features/docker-outside-of-docker:1": {
+  //     "version": "latest",              // Docker/Moby CLI version (default: latest)
+  //     "moby": true,                     // Install OSS Moby build instead of Docker CE (default: true)
+  //     "dockerDashComposeVersion": "v2", // Compose version: v1, v2, or none (default: v2)
+  //     "installDockerBuildx": true       // Install Docker Buildx (default: true)
+  //   }
+  // },
+  //
+  // Limitations:
+  // - Requires host running Docker
+  // - Host and container must have same chip architecture
+  // - Does not support bind mounting workspace folder by default
+  //
+  // Reference: https://github.com/devcontainers/features/blob/main/src/docker-outside-of-docker/README.md
   "runArgs": [
     "--cap-add=NET_ADMIN",
     "--cap-add=NET_RAW"
