@@ -143,11 +143,15 @@ gh-set-default-upstream() {
     echo "Error: No upstream remote found"
     return 1
   fi
-  
+
   # Extract owner/repo from the upstream URL
+  # Remove trailing slash and .git suffix first
+  upstream_url="${upstream_url%/}"
+  upstream_url="${upstream_url%.git}"
+
   local repo_spec
-  if [[ "$upstream_url" =~ github\.com[:/]([^/]+/[^/]+)(\.git)?$ ]]; then
-    repo_spec="${BASH_REMATCH[1]}"
+  if [[ "$upstream_url" =~ github\.com[:/](.+)$ ]]; then
+    repo_spec="${match[1]}"
     gh repo set-default "$repo_spec"
   else
     echo "Error: Could not parse upstream URL: $upstream_url"
