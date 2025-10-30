@@ -70,9 +70,11 @@ if [[ "$TERM_PROGRAM" != "vscode" ]]; then
     else
         unsetSOCKSproxy &!
     fi
-    # randomize mac address, requires wi-fi to be en0, check with `sudo networksetup -listallhardwareports`
-    # requires spoof-mac -> https://formulae.brew.sh/formula/spoof-mac
-    alias randomize-mac='sudo networksetup -setairportpower en0 off && sudo spoof-mac randomize wi-fi'
+    # MAC address randomization - uses ifconfig method (reliable on M4/Apple Silicon)
+    # Source the function first
+    source ~/git/dotfiles/zsh/functions/randomize-mac.zsh
+    # Create alias for backward compatibility
+    alias randomize-mac='randomize-mac-ifconfig'
 
     # To get git to work over ssh via 443 proxy,
     # replace .git/config `git@github.com:(.*)/`

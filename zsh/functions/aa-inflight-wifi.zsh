@@ -10,15 +10,23 @@ aa-inflight-wifi() {
     local CHECK_INTERVAL=5
     local MAX_ATTEMPTS=60  # Max attempts to reconnect (5 min timeout)
 
+    # Detect WiFi interface dynamically
+    local wifi_interface=$(networksetup -listallhardwareports | grep -A 1 "Wi-Fi" | grep "Device:" | awk '{print $2}')
+    if [[ -z "$wifi_interface" ]]; then
+        echo "Error: Could not detect WiFi interface"
+        return 1
+    fi
+
     echo "Starting AA Inflight WiFi automation..."
     echo "This will randomize your MAC address every 20 minutes for free WiFi"
     echo "Press Ctrl+C to stop"
 
-    # Function to check if we're connected to the right network
-    check_ssid() {
-        local current_ssid=$(networksetup -getairportnetwork en0 2>/dev/null | awk -F': ' '{print $2}')
-        [[ "$current_ssid" == "$SSID" ]]
-    }
+    # This func only work if wifi has internet already.
+    # # Function to check if we're connected to the right network
+    # check_ssid() {
+    #     local current_ssid=$(networksetup -getairportnetwork en0 2>/dev/null | awk -F': ' '{print $2}')
+    #     [[ "$current_ssid" == "$SSID" ]]
+    # }
 
     # Function to check internet connectivity
     check_internet() {
@@ -31,21 +39,20 @@ aa-inflight-wifi() {
     reconnect_wifi() {
         echo "$(date '+%Y-%m-%d %H:%M:%S') - Randomizing MAC address..."
 
-        # Forget the network first to ensure clean reconnection with new MAC
-        echo "Forgetting $SSID network..."
-        sudo networksetup -removepreferredwirelessnetwork en0 "$SSID" 2>/dev/null || true
+        # Source the MAC randomization function if not already loaded
+        if ! command -v randomize-mac-ifconfig &>/dev/null; then
+            source ~/git/dotfiles/zsh/functions/randomize-mac.zsh
+        fi
 
-        # Turn off WiFi before MAC randomization
-        sudo networksetup -setairportpower en0 off
+        # Use the new MAC randomization function with network forgetting
+        # This will forget the network and randomize the MAC in one operation
+        randomize-mac-ifconfig --network "$SSID" --interface "$wifi_interface"
 
-        # Randomize MAC address
-        sudo spoof-mac randomize wi-fi
-
-        # Small delay before turning WiFi back on
+        # Small delay to let the interface stabilize
         sleep 2
 
-        # Turn WiFi back on
-        sudo networksetup -setairportpower en0 on
+        # Turn WiFi back on (in case it was turned off)
+        sudo networksetup -setairportpower "$wifi_interface" on
 
         # Wait for WiFi interface to be ready
         echo "Waiting for WiFi interface to be ready..."
@@ -53,36 +60,38 @@ aa-inflight-wifi() {
 
         # Try to connect to the network
         echo "Attempting to connect to $SSID..."
-        sudo networksetup -setairportnetwork en0 "$SSID" 2>/dev/null || true
+        sudo networksetup -setairportnetwork "$wifi_interface" "$SSID" 2>/dev/null || true
 
-        # Wait for connection
-        echo "Waiting for connection to $SSID..."
-        local attempts=0
-        while ! check_ssid && [[ $attempts -lt $MAX_ATTEMPTS ]]; do
-            sleep $CHECK_INTERVAL
-            ((attempts++))
-            echo -n "."
-
-            # Try to connect again every 10 attempts
-            if [[ $((attempts % 10)) -eq 0 ]]; then
-                echo
-                echo "Retrying connection to $SSID..."
-                sudo networksetup -setairportnetwork en0 "$SSID" 2>/dev/null || true
-            fi
-        done
-        echo
-
-        if ! check_ssid; then
-            echo "Failed to connect to $SSID. Please connect manually."
-            echo "You may need to manually select the network from WiFi menu."
-            return 1
-        fi
-
-        echo "Connected to $SSID"
+        sleep 2
 
         # Open the WiFi login page
         echo "Opening WiFi login page..."
         open "$WIFI_URL"
+
+        # # Wait for connection
+        # echo "Waiting for connection to $SSID..."
+        # local attempts=0
+        # while ! check_ssid && [[ $attempts -lt $MAX_ATTEMPTS ]]; do
+        #     sleep $CHECK_INTERVAL
+        #     ((attempts++))
+        #     echo -n "."
+
+        #     # # Try to connect again every 10 attempts
+        #     # if [[ $((attempts % 10)) -eq 0 ]]; then
+        #     #     echo
+        #     #     echo "Retrying connection to $SSID..."
+        #     #     sudo networksetup -setairportnetwork en0 "$SSID" 2>/dev/null || true
+        #     # fi
+        # done
+        # echo
+
+        # if ! check_ssid; then
+        #     echo "Failed to connect to $SSID. Please connect manually."
+        #     echo "You may need to manually select the network from WiFi menu."
+        #     return 1
+        # fi
+
+        # echo "Connected to $SSID"
 
         # Wait for internet to become available
         echo "Waiting for internet connection (complete the login in your browser)..."
@@ -106,13 +115,13 @@ aa-inflight-wifi() {
     # Main loop
     while true; do
         # Check if we're on the AA inflight network
-        if ! check_ssid; then
-            echo "Not connected to $SSID network. Please connect first."
-            echo "Waiting for connection to $SSID..."
-            while ! check_ssid; do
-                sleep $CHECK_INTERVAL
-            done
-        fi
+        # if ! check_ssid; then
+        #     echo "Not connected to $SSID network. Please connect first."
+        #     echo "Waiting for connection to $SSID..."
+        #     while ! check_ssid; do
+        #         sleep $CHECK_INTERVAL
+        #     done
+        # fi
 
         # Perform the reconnection
         if reconnect_wifi; then
