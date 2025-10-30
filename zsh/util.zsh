@@ -480,7 +480,7 @@ znap function update-zshrc-from-dotfiles() {
 
 # Set DNS servers for IPv4 and/or IPv6
 # Usage: set-dns-servers [--ipv4 "8.8.8.8 8.8.4.4"] [--ipv6 "2001:4860:4860::8888 2001:4860:4860::8844"] [--service "Wi-Fi"]
-znap function set-dns-servers() {
+function set-dns-servers() {
     local ipv4_servers=""
     local ipv6_servers=""
     local service="Wi-Fi"  # Default network service
@@ -607,7 +607,7 @@ znap function set-dns-servers() {
 
 # Clear DNS servers to use network defaults (DHCP)
 # Usage: clear-dns-servers [--service "Wi-Fi"]
-znap function clear-dns-servers() {
+function clear-dns-servers() {
     local service="Wi-Fi"  # Default network service
 
     # Parse arguments
