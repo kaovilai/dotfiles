@@ -96,5 +96,4 @@ znap function give-me-ram(){
 }
 
 # AA Inflight WiFi automation - randomize MAC every 20 minutes for free WiFi
-znap function aa-inflight-wifi ~/git/dotfiles/zsh/functions/aa-inflight-wifi.zsh
-alias aawifi='aa-inflight-wifi'
+source ~/git/dotfiles/zsh/functions/aa-inflight-wifi.zsh
