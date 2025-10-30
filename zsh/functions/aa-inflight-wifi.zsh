@@ -31,32 +31,54 @@ aa-inflight-wifi() {
     reconnect_wifi() {
         echo "$(date '+%Y-%m-%d %H:%M:%S') - Randomizing MAC address..."
 
-        # Randomize MAC (spoof-mac handles WiFi off/on automatically)
-        # sudo networksetup -setairportpower en0 off  # Not needed, spoof-mac handles this
+        # Forget the network first to ensure clean reconnection with new MAC
+        echo "Forgetting $SSID network..."
+        sudo networksetup -removepreferredwirelessnetwork en0 "$SSID" 2>/dev/null || true
+
+        # Turn off WiFi before MAC randomization
+        sudo networksetup -setairportpower en0 off
+
+        # Randomize MAC address
         sudo spoof-mac randomize wi-fi
 
-        # Small delay for WiFi to reconnect after MAC change
+        # Small delay before turning WiFi back on
         sleep 2
 
-        # Ensure WiFi is back on (in case spoof-mac didn't turn it back on)
-        # sudo networksetup -setairportpower en0 on  # Usually not needed
+        # Turn WiFi back on
+        sudo networksetup -setairportpower en0 on
 
-        # Wait for WiFi to come back up
-        echo "Waiting for WiFi to reconnect..."
+        # Wait for WiFi interface to be ready
+        echo "Waiting for WiFi interface to be ready..."
+        sleep 3
+
+        # Try to connect to the network
+        echo "Attempting to connect to $SSID..."
+        sudo networksetup -setairportnetwork en0 "$SSID" 2>/dev/null || true
+
+        # Wait for connection
+        echo "Waiting for connection to $SSID..."
         local attempts=0
         while ! check_ssid && [[ $attempts -lt $MAX_ATTEMPTS ]]; do
             sleep $CHECK_INTERVAL
             ((attempts++))
             echo -n "."
+
+            # Try to connect again every 10 attempts
+            if [[ $((attempts % 10)) -eq 0 ]]; then
+                echo
+                echo "Retrying connection to $SSID..."
+                sudo networksetup -setairportnetwork en0 "$SSID" 2>/dev/null || true
+            fi
         done
         echo
 
         if ! check_ssid; then
-            echo "Failed to reconnect to $SSID. Please reconnect manually."
+            echo "Failed to connect to $SSID. Please connect manually."
+            echo "You may need to manually select the network from WiFi menu."
             return 1
         fi
 
-        echo "Reconnected to $SSID"
+        echo "Connected to $SSID"
 
         # Open the WiFi login page
         echo "Opening WiFi login page..."
