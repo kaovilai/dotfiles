@@ -94,3 +94,7 @@ fi
 znap function give-me-ram(){
     ps aux | grep -v grep | grep -E '/Messenger.app/|Acrobat|Fathom|Todoist|LINE' | sed -E 's/ +/ /g' | cut -d ' ' -f 2 | xargs kill -9
 }
+
+# AA Inflight WiFi automation - randomize MAC every 20 minutes for free WiFi
+znap function aa-inflight-wifi ~/git/dotfiles/zsh/functions/aa-inflight-wifi.zsh
+alias aawifi='aa-inflight-wifi'
