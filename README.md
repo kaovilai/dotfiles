@@ -178,3 +178,15 @@ echo "source ~/git/dotfiles/.zshrc" >> ~/.zshrc
 ```
 
 Replace USERNAME with your GitHub username.
+
+## Testing Changes
+
+Before committing changes to ZSH configuration files:
+
+```bash
+# Check syntax of modified file
+zsh -n ~/git/dotfiles/zsh/[modified-file].zsh
+
+# Source and test the changes
+source ~/git/dotfiles/zsh/[modified-file].zsh
+```
