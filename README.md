@@ -193,3 +193,5 @@ source ~/git/dotfiles/zsh/[modified-file].zsh
 # Test full shell reload
 exec zsh
 ```
+
+ <3
