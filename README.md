@@ -189,4 +189,7 @@ zsh -n ~/git/dotfiles/zsh/[modified-file].zsh
 
 # Source and test the changes
 source ~/git/dotfiles/zsh/[modified-file].zsh
+
+# Test full shell reload
+exec zsh
 ```
