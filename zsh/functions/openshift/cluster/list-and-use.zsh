@@ -132,10 +132,25 @@ znap function list-ocp-clusters() {
     # Check CRC
     if [ -f "$HOME/.crc/machines/crc/kubeconfig" ]; then
         echo "CodeReady Containers:"
+
+        # Check CRC status if crc command is available
+        local crc_status=""
+        if command -v crc &> /dev/null; then
+            crc_status=$(crc status 2>&1 | grep "CRC VM:" | awk '{print $3}')
+        fi
+
         if [ "$show_full" = true ]; then
-            echo "1. crc: $HOME/.crc/machines/crc/kubeconfig"
+            if [ -n "$crc_status" ]; then
+                echo "1. crc [$crc_status]: $HOME/.crc/machines/crc/kubeconfig"
+            else
+                echo "1. crc: $HOME/.crc/machines/crc/kubeconfig"
+            fi
         else
-            echo "1. crc"
+            if [ -n "$crc_status" ]; then
+                echo "1. crc [$crc_status]"
+            else
+                echo "1. crc"
+            fi
         fi
         echo ""
     else
@@ -244,8 +259,18 @@ znap function use-ocp-cluster() {
     # Check CRC
     if [[ -f "$HOME/.crc/machines/crc/kubeconfig" ]]; then
         if [[ -z $search_pattern || "crc" == *$search_pattern* ]]; then
+            # Check CRC status
+            local crc_status=""
+            if command -v crc &> /dev/null; then
+                crc_status=$(crc status 2>&1 | grep "CRC VM:" | awk '{print $3}')
+            fi
+
             kubeconfig_files+=("$HOME/.crc/machines/crc/kubeconfig")
-            cluster_names+=("crc (CodeReady Containers)")
+            if [[ -n "$crc_status" ]]; then
+                cluster_names+=("crc (CodeReady Containers) [$crc_status]")
+            else
+                cluster_names+=("crc (CodeReady Containers)")
+            fi
         fi
     fi
     
@@ -307,7 +332,20 @@ znap function use-ocp-cluster() {
     export KUBECONFIG="$selected_path"
     echo "Using cluster: ${cluster_names[$choice-1]}"
     echo "KUBECONFIG set to: $KUBECONFIG"
-    
+
+    # Check if this is CRC and warn if it's stopped
+    if [[ "$selected_path" == *".crc/machines/crc/kubeconfig"* ]]; then
+        if command -v crc &> /dev/null; then
+            local crc_vm_status=$(crc status 2>&1 | grep "CRC VM:" | awk '{print $3}')
+            if [[ "$crc_vm_status" == "Stopped" ]]; then
+                echo ""
+                echo "WARNING: CRC is stopped. You need to start it first:"
+                echo "  crc start"
+                echo ""
+            fi
+        fi
+    fi
+
     # Offer to copy to ~/.kube/config as well
     echo ""
     read "copy?Copy to ~/.kube/config? (y/n): "
