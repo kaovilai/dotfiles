@@ -14,6 +14,30 @@ znap function create-ocp-aws() {
     [[ -z "$OPENSHIFT_INSTALL" ]] && return 1
     local ARCHITECTURE=$2
     local ARCH_SUFFIX=${2}
+
+    # Detect host architecture for cross-arch support
+    local HOST_ARCH=""
+    case "$(uname -m)" in
+        "x86_64"|"amd64")
+            HOST_ARCH="amd64"
+            ;;
+        "arm64"|"aarch64")
+            HOST_ARCH="arm64"
+            ;;
+        *)
+            echo "ERROR: Unsupported host architecture: $(uname -m)"
+            return 1
+            ;;
+    esac
+
+    # Determine if we need multi-arch support
+    local USE_MULTI_ARCH="false"
+    if [[ "$HOST_ARCH" != "$ARCHITECTURE" ]]; then
+        echo "INFO: Cross-architecture deployment detected (host: $HOST_ARCH, target: $ARCHITECTURE)"
+        echo "INFO: Will use multi-arch release image to support $ARCHITECTURE clusters"
+        USE_MULTI_ARCH="true"
+    fi
+
     $OPENSHIFT_INSTALL version
     # Check if help is requested
     if [[ $1 == "help" ]]; then
@@ -70,13 +94,18 @@ znap function create-ocp-aws() {
     fi
     
     # Verify that the requested architecture is supported by the installer
-    if ! $OPENSHIFT_INSTALL version | grep -q "release architecture $ARCHITECTURE"; then
-        echo "WARN: $ARCHITECTURE architecture not supported in current release payload"
-        echo "WARN: To use $ARCHITECTURE, you need an openshift-install binary built for $ARCHITECTURE"
-        echo "WARN: Run 'openshift-install version' to check if 'release architecture $ARCHITECTURE' is present"
-        return 1
+    # Skip this check when using multi-arch (cross-architecture deployment)
+    if [[ "$USE_MULTI_ARCH" == "false" ]]; then
+        if ! $OPENSHIFT_INSTALL version | grep -q "release architecture $ARCHITECTURE"; then
+            echo "WARN: $ARCHITECTURE architecture not supported in current release payload"
+            echo "WARN: To use $ARCHITECTURE, you need an openshift-install binary built for $ARCHITECTURE"
+            echo "WARN: Run 'openshift-install version' to check if 'release architecture $ARCHITECTURE' is present"
+            return 1
+        else
+            echo "INFO: Using $ARCHITECTURE architecture for cluster nodes (supported by current release payload)"
+        fi
     else
-        echo "INFO: Using $ARCHITECTURE architecture for cluster nodes (supported by current release payload)"
+        echo "INFO: Using $ARCHITECTURE architecture for cluster nodes (via multi-arch release image)"
     fi
     
     # Safety check - ensure TODAY is not empty
@@ -159,11 +188,23 @@ znap function create-ocp-aws() {
     else
         stream=$(prompt_release_stream)
     fi
-    local RELEASE_IMAGE=$(get_release_image "$stream" "$ARCHITECTURE")
+
+    # Determine which architecture to use for release image
+    local RELEASE_ARCH="$ARCHITECTURE"
+    if [[ "$USE_MULTI_ARCH" == "true" ]]; then
+        RELEASE_ARCH="multi"
+        echo "INFO: Using multi-arch release image to support cross-architecture deployment"
+    fi
+
+    local RELEASE_IMAGE=$(get_release_image "$stream" "$RELEASE_ARCH")
     [[ -z "$RELEASE_IMAGE" ]] && return 1
-    
-    # Use the architecture-specific release image
-    echo "INFO: Using architecture-specific release image for $ARCHITECTURE: $RELEASE_IMAGE"
+
+    # Use the appropriate release image
+    if [[ "$USE_MULTI_ARCH" == "true" ]]; then
+        echo "INFO: Using multi-arch release image: $RELEASE_IMAGE"
+    else
+        echo "INFO: Using architecture-specific release image for $ARCHITECTURE: $RELEASE_IMAGE"
+    fi
     # Export the release image override
     export OPENSHIFT_INSTALL_RELEASE_IMAGE_OVERRIDE=$RELEASE_IMAGE
     echo "INFO: Exported OPENSHIFT_INSTALL_RELEASE_IMAGE_OVERRIDE=$RELEASE_IMAGE"
