@@ -93,19 +93,14 @@ znap function create-ocp-aws() {
         return 1
     fi
     
-    # Verify that the requested architecture is supported by the installer
-    # Skip this check when using multi-arch (cross-architecture deployment)
-    if [[ "$USE_MULTI_ARCH" == "false" ]]; then
-        if ! $OPENSHIFT_INSTALL version | grep -q "release architecture $ARCHITECTURE"; then
-            echo "WARN: $ARCHITECTURE architecture not supported in current release payload"
-            echo "WARN: To use $ARCHITECTURE, you need an openshift-install binary built for $ARCHITECTURE"
-            echo "WARN: Run 'openshift-install version' to check if 'release architecture $ARCHITECTURE' is present"
-            return 1
-        else
-            echo "INFO: Using $ARCHITECTURE architecture for cluster nodes (supported by current release payload)"
-        fi
+    # Note: We skip architecture validation of the installer's default release image
+    # because we always override it with OPENSHIFT_INSTALL_RELEASE_IMAGE_OVERRIDE.
+    # The installer binary can be any architecture (arm64/amd64) as long as it runs on the host.
+    # The cluster node architecture is determined by the release image we select later.
+    if [[ "$USE_MULTI_ARCH" == "true" ]]; then
+        echo "INFO: Cross-architecture deployment - will use multi-arch release image"
     else
-        echo "INFO: Using $ARCHITECTURE architecture for cluster nodes (via multi-arch release image)"
+        echo "INFO: Native architecture deployment - will use $ARCHITECTURE-specific release image"
     fi
     
     # Safety check - ensure TODAY is not empty
