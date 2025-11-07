@@ -16,25 +16,81 @@ znap function delete-ocp-aws() {
     
     # Check if help is requested
     if [[ $1 == "help" ]]; then
-        echo "Usage: delete-ocp-aws-$ARCH_SUFFIX [CLUSTER_NAME]"
-        echo "Delete an OpenShift cluster on AWS that was created with $ARCH_SUFFIX architecture"
+        echo "Usage: delete-ocp-aws [CLUSTER_NAME]"
+        echo "       delete-ocp-aws-arm64 [CLUSTER_NAME]"
+        echo "       delete-ocp-aws-amd64 [CLUSTER_NAME]"
+        echo "Delete an OpenShift cluster on AWS"
         echo ""
         echo "Options:"
         echo "  help          Display this help message"
-        echo "  CLUSTER_NAME  Optional: Specify a custom cluster name (default: tkaovila-YYYYMMDD-$ARCH_SUFFIX)"
+        echo "  CLUSTER_NAME  Optional: Specify a custom cluster name (default: auto-detected)"
         echo ""
         echo "This function:"
+        echo "  - Auto-detects architecture from existing cluster directories"
         echo "  - Destroys the cluster using openshift-install"
         echo "  - Removes the installation directory"
         echo ""
-        echo "Directory used: $OCP_MANIFESTS_DIR/$TODAY-aws-$ARCH_SUFFIX"
+        echo "If architecture is not specified and multiple clusters exist, you'll be prompted to choose."
         return 0
     fi
-    
+
     # Safety check - ensure TODAY is not empty
     if [[ -z "$TODAY" ]]; then
         echo "WARNING: TODAY variable is empty, using current date"
         TODAY=$(date +%Y%m%d)
+    fi
+
+    # Auto-detect architecture if not provided
+    if [[ -z "$ARCH_SUFFIX" ]]; then
+        echo "Auto-detecting AWS cluster architecture..."
+        local found_clusters=()
+        local found_archs=()
+
+        # Scan for AWS cluster directories matching today's date
+        if [[ -d "$OCP_MANIFESTS_DIR" ]]; then
+            for dir in "$OCP_MANIFESTS_DIR"/$TODAY-aws-*(/N); do
+                local dir_basename=$(basename "$dir")
+                # Extract architecture from directory name
+                if [[ $dir_basename =~ ^[0-9]{8}-aws-(arm64|amd64)(-[0-9]+)?$ ]]; then
+                    local arch=${match[1]}
+                    found_clusters+=("$dir_basename")
+                    found_archs+=("$arch")
+                fi
+            done
+        fi
+
+        # Handle based on number of matches found
+        if [[ ${#found_clusters[@]} -eq 0 ]]; then
+            echo "ERROR: No AWS clusters found for today ($TODAY)"
+            echo ""
+            echo "Usage:"
+            echo "  delete-ocp-aws-arm64    - Delete ARM64 cluster"
+            echo "  delete-ocp-aws-amd64    - Delete AMD64 cluster"
+            echo ""
+            echo "Or specify a directory:"
+            echo "  delete-ocp-aws-dir /path/to/cluster/directory"
+            return 1
+        elif [[ ${#found_clusters[@]} -eq 1 ]]; then
+            ARCH_SUFFIX="${found_archs[1]}"
+            echo "Found cluster: ${found_clusters[1]} (${ARCH_SUFFIX})"
+        else
+            echo "Found multiple AWS clusters for today:"
+            for i in {1..${#found_clusters[@]}}; do
+                echo "$i. ${found_clusters[$i]} (${found_archs[$i]})"
+            done
+            echo ""
+            read "choice?Enter choice (1-${#found_clusters[@]}): "
+
+            # Validate choice
+            if [[ ! $choice =~ ^[0-9]+$ || $choice -lt 1 || $choice -gt ${#found_clusters[@]} ]]; then
+                echo "ERROR: Invalid selection"
+                return 1
+            fi
+
+            ARCH_SUFFIX="${found_archs[$choice]}"
+            echo "Selected: ${found_clusters[$choice]} (${ARCH_SUFFIX})"
+        fi
+        echo ""
     fi
     
     OCP_CREATE_DIR=$OCP_MANIFESTS_DIR/$TODAY-aws-$ARCH_SUFFIX
@@ -117,9 +173,9 @@ znap function delete-ocp-aws-dir() {
     # Assuming format like 20250410-aws-arm64 or 20250410-aws-amd64
     # Also handle numbered suffixes like 20250410-aws-arm64-1
     if [[ $dir_basename =~ ^([0-9]{8})-aws-(arm64|amd64)(-[0-9]+)?$ ]]; then
-        local extracted_date=${BASH_REMATCH[1]}
-        local extracted_arch=${BASH_REMATCH[2]}
-        local extracted_suffix=${BASH_REMATCH[3]}
+        local extracted_date=${match[1]}
+        local extracted_arch=${match[2]}
+        local extracted_suffix=${match[3]}
         
         echo "Extracted date: $extracted_date, architecture: $extracted_arch, suffix: ${extracted_suffix:-none}"
         
