@@ -136,46 +136,90 @@ validate_env_vars() {
 get_openshift_install() {
     local ec_version=$(get_ocp_latest_ec_version)
     local stable_version=$(get_ocp_latest_stable_version)
-    
+
+    # Detect host architecture
+    local host_arch=""
+    case "$(uname -m)" in
+        "x86_64"|"amd64")
+            host_arch="amd64"
+            ;;
+        "arm64"|"aarch64")
+            host_arch="arm64"
+            ;;
+        *)
+            echo "ERROR: Unsupported architecture: $(uname -m)" >&2
+            return 1
+            ;;
+    esac
+
     # Check if user has set a specific version
     if [[ -n "$OPENSHIFT_INSTALL" ]]; then
         echo "$OPENSHIFT_INSTALL"
         return
     fi
-    
+
+    # Function to check binary architecture
+    local check_binary_arch() {
+        local binary=$1
+        local version_output=$($binary version 2>/dev/null | grep "release architecture")
+        if echo "$version_output" | grep -q "release architecture $host_arch"; then
+            return 0  # Correct architecture
+        else
+            return 1  # Wrong architecture
+        fi
+    }
+
     # Try EC version first
     if command -v "openshift-install-${ec_version}" &> /dev/null; then
-        echo "openshift-install-${ec_version}"
+        local binary="openshift-install-${ec_version}"
+        if check_binary_arch "$binary"; then
+            echo "$binary"
+            return 0
+        else
+            echo "WARN: Found $binary but it's not built for $host_arch architecture" >&2
+            echo "WARN: Would you like to re-download the correct $host_arch version? (y/n)" >&2
+            read -r redownload_choice
+            if [[ "$redownload_choice" == "y" || "$redownload_choice" == "Y" ]]; then
+                # Remove the incorrect binary
+                local binary_path=$(command -v "$binary")
+                echo "Removing incorrect binary: $binary_path" >&2
+                sudo rm "$binary_path"
+                # Fall through to installation below
+            else
+                echo "$binary"
+                return 0
+            fi
+        fi
+    fi
+
     # Try stable version
-    elif command -v "openshift-install-${stable_version}" &> /dev/null; then
-        echo "openshift-install-${stable_version}"
+    if command -v "openshift-install-${stable_version}" &> /dev/null; then
+        local binary="openshift-install-${stable_version}"
+        if check_binary_arch "$binary"; then
+            echo "$binary"
+            return 0
+        fi
+    fi
+
     # Try generic openshift-install
-    elif command -v "openshift-install" &> /dev/null; then
-        echo "openshift-install"
-    else
+    if command -v "openshift-install" &> /dev/null; then
+        local binary="openshift-install"
+        if check_binary_arch "$binary"; then
+            echo "$binary"
+            return 0
+        fi
+    fi
+
+    # No suitable binary found, offer to install
+    if true; then
         echo "ERROR: No openshift-install binary found" >&2
         echo "" >&2
         echo "Would you like to install openshift-install version ${ec_version}? (y/n)" >&2
         read -r install_choice
         
         if [[ "$install_choice" == "y" || "$install_choice" == "Y" ]]; then
-            echo "Installing openshift-install ${ec_version}..." >&2
-            
-            # Detect architecture
-            local arch=""
-            case "$(uname -m)" in
-                "x86_64"|"amd64")
-                    arch="amd64"
-                    ;;
-                "arm64"|"aarch64")
-                    arch="arm64"
-                    ;;
-                *)
-                    echo "ERROR: Unsupported architecture: $(uname -m)" >&2
-                    return 1
-                    ;;
-            esac
-            
+            echo "Installing openshift-install ${ec_version} for $host_arch architecture..." >&2
+
             # Detect OS
             local os=""
             case "$(uname -s)" in
@@ -192,7 +236,7 @@ get_openshift_install() {
             esac
             
             # Download URL
-            local url="https://mirror.openshift.com/pub/openshift-v4/clients/ocp-dev-preview/${ec_version}/openshift-install-${os}-${arch}.tar.gz"
+            local url="https://mirror.openshift.com/pub/openshift-v4/clients/ocp-dev-preview/${ec_version}/openshift-install-${os}-${host_arch}.tar.gz"
             
             # Create temporary directory
             local temp_dir=$(mktemp -d)
