@@ -158,24 +158,47 @@ get_openshift_install() {
         return
     fi
 
-    # Function to check binary architecture
+    # Function to check if binary is executable and get its architecture
     local check_binary_arch() {
         local binary=$1
+        # First check if the binary is executable
+        if ! $binary version &>/dev/null; then
+            return 2  # Binary not executable
+        fi
+
         local version_output=$($binary version 2>/dev/null | grep "release architecture")
-        if echo "$version_output" | grep -q "release architecture $host_arch"; then
+        local binary_arch=$(echo "$version_output" | awk '{print $3}')
+
+        if [[ "$binary_arch" == "$host_arch" ]]; then
             return 0  # Correct architecture
         else
-            return 1  # Wrong architecture
+            # Check if it's macOS where Rosetta can run amd64 on arm64
+            if [[ "$(uname)" == "Darwin" ]] && [[ "$host_arch" == "arm64" ]] && [[ "$binary_arch" == "amd64" ]]; then
+                # Binary is amd64 on arm64 macOS - Rosetta can handle this
+                # Return special code to indicate it works but is cross-arch
+                return 3
+            fi
+            return 1  # Wrong architecture and won't work
         fi
     }
 
     # Try EC version first
     if command -v "openshift-install-${ec_version}" &> /dev/null; then
         local binary="openshift-install-${ec_version}"
-        if check_binary_arch "$binary"; then
+        check_binary_arch "$binary"
+        local arch_status=$?
+
+        if [[ $arch_status -eq 0 ]]; then
+            # Correct architecture
             echo "$binary"
             return 0
-        else
+        elif [[ $arch_status -eq 3 ]]; then
+            # Cross-architecture but works via Rosetta on macOS
+            # Use it without prompting - it works fine
+            echo "$binary"
+            return 0
+        elif [[ $arch_status -eq 1 ]]; then
+            # Wrong architecture and won't work
             echo "WARN: Found $binary but it's not built for $host_arch architecture" >&2
             echo "WARN: Would you like to re-download the correct $host_arch version? (y/n)" >&2
             read -r redownload_choice
@@ -190,12 +213,15 @@ get_openshift_install() {
                 return 0
             fi
         fi
+        # If arch_status -eq 2 (not executable), fall through to try other binaries
     fi
 
     # Try stable version
     if command -v "openshift-install-${stable_version}" &> /dev/null; then
         local binary="openshift-install-${stable_version}"
-        if check_binary_arch "$binary"; then
+        check_binary_arch "$binary"
+        local arch_status=$?
+        if [[ $arch_status -eq 0 ]] || [[ $arch_status -eq 3 ]]; then
             echo "$binary"
             return 0
         fi
@@ -204,7 +230,9 @@ get_openshift_install() {
     # Try generic openshift-install
     if command -v "openshift-install" &> /dev/null; then
         local binary="openshift-install"
-        if check_binary_arch "$binary"; then
+        check_binary_arch "$binary"
+        local arch_status=$?
+        if [[ $arch_status -eq 0 ]] || [[ $arch_status -eq 3 ]]; then
             echo "$binary"
             return 0
         fi
