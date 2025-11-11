@@ -26,6 +26,9 @@ alias colima-multiplat='docker buildx rm colima-multiplat; docker buildx create 
 alias dockerplatforms-amdarm='echo linux/amd64,linux/arm64'
 alias dockerplatforms-amdarmibm='echo linux/amd64,linux/arm64,linux/s390x,linux/ppc64le'
 
+# Podman related aliases
+alias pbubi_manifest='podman build --platform $(dockerplatforms-amdarm) -f Dockerfile.ubi . --manifest $(ghcr_tag) && podman manifest push $(ghcr_tag) && ghcr_tag'
+
 # Helper functions for docker aliases
 alias ghcr_tag='echo ghcr.io/kaovilai/$(basename $PWD):$(current-branch)'
 alias ghcr_notag='echo ghcr.io/kaovilai/$(basename $PWD)'
