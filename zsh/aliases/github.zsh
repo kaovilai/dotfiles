@@ -160,3 +160,78 @@ gh-set-default-upstream() {
 }
 alias ghsdu='gh-set-default-upstream'
 alias gh-set-upstream-default='gh-set-default-upstream'
+
+# Delete a single tag from a GitHub Container Registry package
+gh-delete-package-tag() {
+  local org package tag
+
+  # Parse arguments - support both "org package tag" and "ghcr.io/org/package:tag" formats
+  if [ "$#" -eq 1 ]; then
+    # Parse ghcr.io/org/package:tag format
+    if [[ "$1" =~ ^ghcr\.io/([^/]+)/([^:]+):(.+)$ ]]; then
+      org="${match[1]}"
+      package="${match[2]}"
+      tag="${match[3]}"
+    else
+      echo "Error: Invalid format. Expected ghcr.io/org/package:tag"
+      echo ""
+      echo "Usage: gh-delete-package-tag <org> <package> <tag>"
+      echo "   or: gh-delete-package-tag ghcr.io/<org>/<package>:<tag>"
+      echo ""
+      echo "Examples:"
+      echo "  gh-delete-package-tag kubernetes-csi csi-snapshot-metadata multiarch-grpc-health-probe"
+      echo "  gh-delete-package-tag ghcr.io/kubernetes-csi/csi-snapshot-metadata:multiarch-grpc-health-probe"
+      return 1
+    fi
+  elif [ "$#" -eq 3 ]; then
+    # Use individual arguments
+    org="$1"
+    package="$2"
+    tag="$3"
+  else
+    echo "Usage: gh-delete-package-tag <org> <package> <tag>"
+    echo "   or: gh-delete-package-tag ghcr.io/<org>/<package>:<tag>"
+    echo ""
+    echo "Examples:"
+    echo "  gh-delete-package-tag kubernetes-csi csi-snapshot-metadata multiarch-grpc-health-probe"
+    echo "  gh-delete-package-tag ghcr.io/kubernetes-csi/csi-snapshot-metadata:multiarch-grpc-health-probe"
+    echo ""
+    echo "To list available tags first:"
+    echo "  gh api /orgs/<org>/packages/container/<package>/versions --jq '.[].metadata.container.tags[]'"
+    return 1
+  fi
+
+  echo "Looking for tag '$tag' in package '$org/$package'..."
+
+  # Find the version ID for the specified tag
+  local version_id=$(gh api "/orgs/$org/packages/container/$package/versions" \
+    --jq ".[] | select(.metadata.container.tags[]? == \"$tag\") | .id")
+
+  if [ -z "$version_id" ]; then
+    echo "Error: Tag '$tag' not found in package '$org/$package'"
+    echo ""
+    echo "Available tags:"
+    gh api "/orgs/$org/packages/container/$package/versions" --jq '.[].metadata.container.tags[]' | sort -u
+    return 1
+  fi
+
+  echo "Found version ID: $version_id"
+  echo ""
+  echo "This will delete tag '$tag' from package '$org/$package'"
+  echo -n "Are you sure? (y/N) "
+  read -r confirm
+
+  if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
+    echo "Deletion cancelled"
+    return 0
+  fi
+
+  echo "Deleting tag '$tag' (version ID: $version_id)..."
+  if gh api --method DELETE "/orgs/$org/packages/container/$package/versions/$version_id"; then
+    echo "Successfully deleted tag '$tag'"
+  else
+    echo "Error: Failed to delete tag '$tag'"
+    return 1
+  fi
+}
+alias ghpkgdel='gh-delete-package-tag'
