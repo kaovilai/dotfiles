@@ -64,10 +64,12 @@ alias audio-poly='SwitchAudioSource -t all -s "Poly V4320 Series"'
 alias restart-dock='killall Dock'
 alias c='f() { osascript -e "tell app \"Terminal\" to do script \"cd $HOME/experiments/ && claude \\\"$1\\\"\""}; f'
 alias ce='cd ~/experiments/ && claude'
+alias ced='cd ~/experiments/ && claude --dangerously-skip-permissions'
 alias claude-review='f() { osascript -e "tell app \"Terminal\" to do script \"cd $HOME/experiments/ && claude \\\"/review $1\\\"\""}; f'
 alias cr='claude-review'
 alias gemini-review='f() { osascript -e "tell app \"Terminal\" to do script \"cd $HOME/experiments/ && gemini -p \\\"/review $1\\\"\""}; f'
 alias gr='gemini-review'
+alias tailscale="/Applications/Tailscale.app/Contents/MacOS/Tailscale"
 znap function vid2gif(){
     local input="$1"
     local output="$HOME/Downloads/$(basename "${input%.*}").gif"
