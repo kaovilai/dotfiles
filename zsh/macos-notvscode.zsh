@@ -80,7 +80,7 @@ if [[ "$TERM_PROGRAM" != "vscode" ]]; then
     # replace .git/config `git@github.com:(.*)/`
     # with `ssh://git@ssh.github.com:443/$1/`
     if [[ "$WIFI_NAME" = "$TF_NETWORK_NAME" ]]; then
-        setTFproxy &!
+        # setTFproxy &!
         # mkdir -p ~/.ssh/tigerdotfiles/
         # echo "Host github.com
         # Hostname github.com
@@ -88,7 +88,7 @@ if [[ "$TERM_PROGRAM" != "vscode" ]]; then
         # ForwardAgent yes
         # ProxyCommand $(which socat) - PROXY:$TF_ROUTER_IP:%h:%p,proxyport=$TF_ROUTER_PROXY_PORT" > ~/.ssh/tigerdotfiles/config
     else
-        unsetTFproxy &!
+        # unsetTFproxy &!
     fi
 fi
 
