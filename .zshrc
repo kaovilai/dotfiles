@@ -31,7 +31,6 @@ source ~/git/dotfiles/zsh/alias.zsh
 # gpg tty
 export GPG_TTY=$(tty)
 # Export essential environment variables
-export CONTAINER_ENGINE=docker
 export BUILDX_ENABLED=true
 export BUILDX_PUSH=true
 export GCR_IMAGE_TAGS=""
