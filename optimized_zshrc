@@ -1,0 +1,99 @@
+#!/usr/bin/env zsh
+# Optimized .zshrc with performance improvements
+# Based on profiling results to minimize shell startup time
+
+# Don't put secrets here, put them in ~/secrets.zsh
+[[ -f ~/secrets.zsh ]] && source ~/secrets.zsh
+
+# History settings
+export HISTSIZE=100000 # number of commands stored in history
+export HISTFILESIZE=200000 # bytes in history file
+
+# Ensure dotfiles repo exists
+[[ -f ~/git/dotfiles/zsh/znap.zsh ]] || {
+  mkdir -p ~/git
+  git clone --depth 1 -- git@github.com:kaovilai/dotfiles.git ~/git/dotfiles
+}
+
+# Load essential color definitions first (needed for other modules)
+source ~/git/dotfiles/zsh/colors.zsh
+
+# Set essential environment variables early
+export GPG_TTY=$(tty)
+export CONTAINER_ENGINE=docker
+export BUILDX_ENABLED=true
+export BUILDX_PUSH=true
+export GCR_IMAGE_TAGS=""
+export BUILDX_PLATFORMS=linux/amd64,linux/arm64
+
+# Load optimized znap configuration (loads plugins asynchronously)
+source ~/git/dotfiles/zsh/optimized_znap.zsh
+
+# Load optimized completions (uses lazy loading)
+source ~/git/dotfiles/zsh/optimized_completions.zsh
+
+# Check for macOS in the background to avoid startup delay
+if [[ "$(uname -s)" = "Darwin" ]]; then
+  # Load macOS-specific configuration
+  { 
+    echo "macOS detected"
+    source ~/git/dotfiles/zsh/macos.zsh 
+  } &!
+fi
+
+# Load critical utility functions and paths
+source ~/git/dotfiles/zsh/paths.zsh
+source ~/git/dotfiles/zsh/util.zsh
+
+# Load all aliases
+source ~/git/dotfiles/zsh/alias.zsh
+
+# Launch tool-specific configurations in background for non-critical components
+{
+  # Load non-essential tool configs in the background
+  source ~/git/dotfiles/zsh/go.zsh
+  source ~/git/dotfiles/zsh/openshift-functions.zsh
+  source ~/git/dotfiles/zsh/aws.zsh
+  source ~/git/dotfiles/zsh/podman.zsh
+
+  # GitHub Copilot alias loading
+  if command -v gh &>/dev/null; then
+    eval "$(gh copilot alias -- zsh)"
+  fi
+
+  # Bun configuration
+  if [[ -s "$HOME/.bun/_bun" ]]; then
+    source "$HOME/.bun/_bun"
+    export BUN_INSTALL="$HOME/.bun"
+    export PATH="$BUN_INSTALL/bin:$PATH"
+  fi
+
+  # Additional PATH entries
+  export PATH="$HOME/.local/bin:$PATH"
+
+  # ghcup environment
+  [[ -f "$HOME/.ghcup/env" ]] && . "$HOME/.ghcup/env"
+
+  # Defer .zshrc sync check to avoid startup delay
+  (
+    sleep 0.5  # Short delay to ensure the terminal is ready
+    if ! diff ~/git/dotfiles/.zshrc ~/.zshrc &>/dev/null; then
+      echo "diff ~/git/dotfiles/.zshrc ~/.zshrc"
+      echo ".zshrc is out of sync with dotfiles"
+      echo "  ${RED}copy-to-dotfiles-from-zshrc${NC} to copy .zshrc to dotfiles and review diff"
+      echo "  ${RED}push-dotfiles-from-zshrc${NC} to push dotfiles"
+      echo "  ${RED}update-zshrc-from-dotfiles${NC} to update ~/.zshrc"
+    fi
+    
+    # Check git status in the background
+    if git -C ~/git/dotfiles status --porcelain | grep -q "M"; then
+      echo "dotfiles repo has uncommitted changes, run ${RED}edit-dotfiles${NC} to review"
+    fi
+  ) &!
+}
+
+# Define useful aliases
+alias edit-dotfiles="code ~/git/dotfiles/"
+
+# Performance optimization: Limit startup processes and defer non-critical operations
+# Add any user customizations below this line
