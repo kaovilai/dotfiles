@@ -19,6 +19,8 @@ brew "pinentry-mac"          # GPG pinentry for macOS
 brew "zsh"
 brew "tmux"
 brew "ripgrep"               # Fast grep (rg)
+brew "gnu-sed"               # GNU sed (gsed)
+brew "grep"                  # GNU grep
 brew "fzf"                   # Fuzzy finder
 brew "tree"
 brew "htop"
