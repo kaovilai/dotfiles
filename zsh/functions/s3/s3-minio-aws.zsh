@@ -1,6 +1,6 @@
 # AWS-specific MinIO deployment functions
 
-znap function create-minio-aws() {
+function create-minio-aws() {
     local name=""
     local region="${AWS_REGION:-us-east-1}"
     local instance_type=""
@@ -633,7 +633,7 @@ EOF
     return 0
 }
 
-znap function delete-minio-aws() {
+function delete-minio-aws() {
     local name=""
     local force=false
     
@@ -758,7 +758,7 @@ znap function delete-minio-aws() {
     echo -e "${GREEN}SUCCESS${NC}: MinIO deployment '$name' deleted successfully!"
 }
 
-znap function configure-minio-cluster-access() {
+function configure-minio-cluster-access() {
     local minio_name=""
     local cluster_name=""
     local namespace="default"

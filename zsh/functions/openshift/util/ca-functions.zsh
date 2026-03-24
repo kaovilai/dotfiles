@@ -22,7 +22,7 @@
 # Example:
 #   getOCrouterCA
 #   # Use with: curl --cacert router-ca.crt https://my-route.apps.cluster.com
-znap function getOCrouterCA(){
+function getOCrouterCA(){
     echo "Getting Ingress Router CA for server"
     oc whoami --show-server
     oc get secret router-ca -n openshift-ingress-operator -ojsonpath="{.data['tls\.crt']}" | base64 --decode > router-ca.crt
@@ -31,7 +31,7 @@ znap function getOCrouterCA(){
 # Remove router CA certificate file
 # Usage: rmRouterCA
 # Description: Deletes router-ca.crt from current directory
-znap function rmRouterCA(){
+function rmRouterCA(){
     echo "Removing Ingress Router CA"
     rm router-ca.crt
 }
@@ -45,7 +45,7 @@ znap function rmRouterCA(){
 # Example:
 #   getOCrouterCA
 #   trustOCRouterCAFromFileInCurrentDir
-znap function trustOCRouterCAFromFileInCurrentDir(){
+function trustOCRouterCAFromFileInCurrentDir(){
     if uname -s | grep -q Darwin; then
         echo "Mac OS detected, trusting oc router ca"
         sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain router-ca.crt
@@ -64,25 +64,25 @@ znap function trustOCRouterCAFromFileInCurrentDir(){
 #   - Requires sudo privileges
 # Example:
 #   trustOCRouterCA
-znap function trustOCRouterCA(){
+function trustOCRouterCA(){
     getOCrouterCA
     trustOCRouterCAFromFileInCurrentDir
     rmRouterCA
 }
 
-znap function getAPICA(){
+function getAPICA(){
     echo "Getting API CA for server"
     oc whoami --show-server
     # oc get secret router-certs-default -n openshift-ingress -ojsonpath="{.data['tls\.crt']}" | base64 --decode > api-ca.crt
     oc get secret kube-apiserver-to-kubelet-signer -n openshift-kube-apiserver-operator -ojsonpath="{.data['tls\.crt']}" | base64 --decode > api-ca.crt
 }
 
-znap function rmAPICA(){
+function rmAPICA(){
     echo "Removing API CA"
     rm api-ca.crt
 }
 
-znap function trustAPICAFromFileInCurrentDir(){
+function trustAPICAFromFileInCurrentDir(){
     if uname -s | grep -q Darwin; then
         echo "Mac OS detected"
         sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain api-ca.crt
@@ -92,7 +92,7 @@ znap function trustAPICAFromFileInCurrentDir(){
     fi
 }
 
-znap function trustAPICA(){
+function trustAPICA(){
     getAPICA
     trustAPICAFromFileInCurrentDir
     rmAPICA

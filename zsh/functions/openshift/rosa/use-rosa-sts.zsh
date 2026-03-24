@@ -1,4 +1,4 @@
-znap function use-rosa-sts() {
+function use-rosa-sts() {
     # Configure kubectl to use a ROSA STS cluster
     # Parameters:
     #   $1 - Can be:
@@ -241,10 +241,10 @@ znap function use-rosa-sts() {
     export CURRENT_ROSA_ARCH="$ARCH_SUFFIX"
 }
 
-znap function use-rosa-sts-arm64() {
+function use-rosa-sts-arm64() {
     use-rosa-sts "arm64"
 }
 
-znap function use-rosa-sts-amd64() {
+function use-rosa-sts-amd64() {
     use-rosa-sts "amd64"
 }

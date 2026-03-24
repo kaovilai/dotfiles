@@ -1,7 +1,7 @@
 # Claude settings management functions
 
 # Merge local Claude settings into global config with interactive prompts
-znap function merge-claude-settings() {
+function merge-claude-settings() {
     local local_settings=".claude/settings.local.json"
     local global_settings="${XDG_CONFIG_HOME:-$HOME/.config}/claude/settings.json"
     

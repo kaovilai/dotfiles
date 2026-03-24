@@ -1,4 +1,4 @@
-znap function installClusterOpenshiftInstall(){
+function installClusterOpenshiftInstall(){
     # Unset SSH_AUTH_SOCK on Darwin systems to avoid SSH errors
     if [[ "$(uname)" == "Darwin" ]]; then
         unset SSH_AUTH_SOCK

@@ -1,5 +1,5 @@
 # Function to copy kubeconfig from AWS OpenShift clusters to the default location
-znap function use-ocp-aws() {
+function use-ocp-aws() {
     # Core implementation for copying AWS OpenShift kubeconfig
     # Parameters:
     #   $1 - Command/option (help) or directory suffix
@@ -67,18 +67,18 @@ znap function use-ocp-aws() {
     return 0
 }
 
-znap function use-ocp-aws-arm64() {
+function use-ocp-aws-arm64() {
     # ARM64 wrapper function
     use-ocp-aws "$1" "arm64"
 }
 
-znap function use-ocp-aws-amd64() {
+function use-ocp-aws-amd64() {
     # AMD64 wrapper function
     use-ocp-aws "$1" "amd64"
 }
 
 # Function to use a specific AWS OpenShift cluster from a directory path
-znap function use-ocp-aws-dir() {
+function use-ocp-aws-dir() {
     # Use AWS OpenShift cluster based on a directory name
     # This extracts the date (TODAY) and architecture from the directory name
     # Parameters:

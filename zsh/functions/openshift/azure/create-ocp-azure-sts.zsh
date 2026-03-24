@@ -1,6 +1,6 @@
 # create a cluster with azure workload identity using CCO manual mode
 # pre-req: ssh-add ~/.ssh/id_rsa
-znap function create-ocp-azure-sts(){
+function create-ocp-azure-sts(){
     # Unset SSH_AUTH_SOCK on Darwin systems to avoid SSH errors
     if [[ "$(uname)" == "Darwin" ]]; then
         unset SSH_AUTH_SOCK
