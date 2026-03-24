@@ -474,8 +474,18 @@ function update-zshrc-from-dotfiles() {
     fi
 
     echo "Updating .zshrc from dotfiles repository..."
-    cp "$HOME/git/dotfiles/.zshrc" "$HOME/.zshrc"
-    echo "Updated. Reload your shell or run 'source ~/.zshrc' to apply changes."
+    diff --color "$HOME/.zshrc" "$HOME/git/dotfiles/.zshrc" && {
+        echo "No changes to apply."
+        return 0
+    }
+    echo
+    read "reply?Apply these changes? [y/N] "
+    if [[ "$reply" =~ ^[Yy]$ ]]; then
+        cp "$HOME/git/dotfiles/.zshrc" "$HOME/.zshrc"
+        echo "Updated. Reload your shell or run 'source ~/.zshrc' to apply changes."
+    else
+        echo "Aborted."
+    fi
 }
 
 # Set DNS servers for IPv4 and/or IPv6
