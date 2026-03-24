@@ -1,4 +1,4 @@
-znap function create-rosa-sts() {
+function create-rosa-sts() {
     # Core implementation for ROSA STS cluster creation
     # Parameters:
     #   $1 - Command/option (help, delete, no-delete, --force-new)
@@ -244,12 +244,12 @@ znap function create-rosa-sts() {
     [[ -n "$PROCEED_WITH_EXISTING_CLUSTERS" ]] && unset PROCEED_WITH_EXISTING_CLUSTERS
 }
 
-znap function create-rosa-sts-arm64() {
+function create-rosa-sts-arm64() {
     # ARM64 wrapper function
     create-rosa-sts "$1" "arm64"
 }
 
-znap function create-rosa-sts-amd64() {
+function create-rosa-sts-amd64() {
     # AMD64 wrapper function
     create-rosa-sts "$1" "amd64"
 }

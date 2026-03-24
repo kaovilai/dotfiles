@@ -1,4 +1,4 @@
-znap function create-ocp-aws() {
+function create-ocp-aws() {
     # Core implementation for AWS OpenShift cluster creation
     # Parameters:
     #   $1 - Command/option (help, gather, delete, no-delete, --force-new)
@@ -254,12 +254,12 @@ publish: External"
     [[ -n "$PROCEED_WITH_EXISTING_CLUSTERS" ]] && unset PROCEED_WITH_EXISTING_CLUSTERS
 }
 
-znap function create-ocp-aws-arm64() {
+function create-ocp-aws-arm64() {
     # ARM64 wrapper function
     create-ocp-aws "$1" "arm64"
 }
 
-znap function create-ocp-aws-amd64() {
+function create-ocp-aws-amd64() {
     # AMD64 wrapper function
     create-ocp-aws "$1" "amd64"
 }

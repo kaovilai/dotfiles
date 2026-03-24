@@ -3,12 +3,12 @@
 # ORG=openshift REPO=$(basename $PWD) BRANCH=oadp-1.2 PACKAGE=google.golang.org/grpc@v1.56.3 ISSUE="CVE-2023-44487-gRPC-Go" && git checkout $ORG/$BRANCH && git checkout -b $ISSUE-$BRANCH && go get $package && go mod tidy && git add go.mod go.sum && git commit -m "$BRANCH: CVE-2023-44487 gRPC-Go HTTP/2 Rapid Reset vulnerability" --signoff && gh pr create --base $BRANCH --repo $ORG/velero-plugin-for-gcp
 
 # Usage: cherrypick-pr <#PR-number> ...
-znap function cherrypick-pr() {
+function cherrypick-pr() {
     echo $* | xargs -n 1 -I {} sh -c 'git cherry-pick $(gh pr view {} --json commits | jq ".commits[].oid" --raw-output | xargs)'
 }
 
 # Usage: cherrypick-pr-to-branch <#PR-number> <remote/branch> <new-branch-name>
-znap function cherrypick-pr-to-branch() {
+function cherrypick-pr-to-branch() {
     local PR_NUMBER=$1
     local BRANCH=$2
     local NEW_BRANCH=$3
@@ -18,7 +18,7 @@ znap function cherrypick-pr-to-branch() {
 }
 
 # Helper function to create a new changelog for velero repos
-znap function new-changelog(){
+function new-changelog() {
     GH_LOGIN=$(gh pr view --json author --jq .author.login 2> /dev/null)
     GH_PR_NUMBER=$(gh pr view --json number --jq .number 2> /dev/null)
     CHANGELOG_BODY="$(gh pr view --json title --jq .title)"
@@ -31,11 +31,11 @@ znap function new-changelog(){
     echo "\"$CHANGELOG_BODY\" added to ./changelogs/unreleased/$GH_PR_NUMBER-$GH_LOGIN"
 }
 
-znap function code-git(){
+function code-git() {
     code ~/git/$1
 }
 
-znap function go-mod-upgrade(){
+function go-mod-upgrade() {
     # first argument is the package to upgrade
     if [[ -z "$1" ]]; then
     echo "Usage: go-mod-upgrade <package>"
@@ -53,7 +53,7 @@ znap function go-mod-upgrade(){
 # $4 is text to prefix commit/PR title such as "CVE-2025-22869: "
 # Examples: GOTOOLCHAIN=go1.23.6 go-mod-upgrade-dirs "velero*" golang.org/x/oauth2@v0.27.0
 # Examples: GOTOOLCHAIN=go1.23.6 go-mod-upgrade-dirs "velero*" golang.org/x/crypto@v0.35.0 "gsed -i \"s/golang:1.22-bookworm/golang:1.23-bookworm/g\" Dockerfile && git add Dockerfile" CVE-2025-22869
-znap function go-mod-upgrade-dirs(){
+function go-mod-upgrade-dirs() {
     find . -type d -maxdepth 1 -name "$1" -exec sh -c "cd {} && pwd && \
         git fetch upstream && (git checkout upstream/main || git checkout upstream/master || git checkout upstream/oadp-dev) && \
         (git checkout -b $2 || git checkout $2) && \
@@ -71,7 +71,7 @@ znap function go-mod-upgrade-dirs(){
 # Examples: exec-dirs "velero*" golang.org/x/oauth2@v0.27.0 "snyk test"
 #   find . -type f -name \"Dockerfile*\" -name \"Tiltfile\" -exec sed s/golang:1.22.10/golang:1.23.6/g {} \; \
 #   find . -type f -name \"Dockerfile*\" -name \"Tiltfile\" -exec git add {} \;"
-znap function exec-dirs(){
+function exec-dirs() {
     find . -type d -maxdepth 1 -name "$1" -exec sh -c "cd {} && pwd && git fetch upstream && (git checkout upstream/main || git checkout upstream/master || git checkout upstream/oadp-dev) && (git checkout -b $2 || git checkout $2) && sh -c \"$3\"" \;
 }
 
@@ -83,7 +83,7 @@ znap function exec-dirs(){
 # $3: base branch
 # $4: branch checkout name
 # $5: command
-znap function exec-dirs-ds(){
+function exec-dirs-ds() {
     local pattern="$1"
     local ds_name="$2"
     local base_branch="$3"
@@ -132,7 +132,7 @@ znap function exec-dirs-ds(){
 }
 
 # Echo-only version of exec-dirs-ds (for testing what would happen)
-znap function exec-dirs-ds-echo(){
+function exec-dirs-ds-echo() {
     local pattern="$1"
     local ds_name="$2"
     local base_branch="$3"
@@ -152,13 +152,13 @@ znap function exec-dirs-ds-echo(){
 
 # open all dirs matching patterh in code
 # ex: code-dirs "velero*"
-znap function code-dirs() {
+function code-dirs() {
     find . -type d -maxdepth 1 -name "$1" | parallel code {}
 }
 
 # open all dirs matching patterh in finder
 # ex: finder-dirs "velero*"
-znap function finder-dirs() {
+function finder-dirs() {
     find . -type d -maxdepth 1 -name "$1" | parallel open -a Finder {}
 }
 
@@ -167,7 +167,7 @@ znap function finder-dirs() {
 if [[ "$TERM_PROGRAM" != "vscode" ]]; then
     # Get the current WiFi standard (Wi-Fi 5, 6, 6E, 7)
     # Usage: wifi-standard
-    znap function wifi-standard() {
+    function wifi-standard() {
         # Debug: uncomment to see when function is called
         echo "DEBUG: wifi-standard function called" >&2
         local wifi_info=$(system_profiler SPAirPortDataType 2>/dev/null)
@@ -226,7 +226,7 @@ if [[ "$TERM_PROGRAM" != "vscode" ]]; then
 
     # Move files to SD volume and create a symlink in their place to save disk space
     # Usage: symlink-to-sd
-    znap function symlink-to-sd() {
+    function symlink-to-sd() {
         local current_dir="$(pwd)"
         local current_name="$(basename "$current_dir")"
         local parent_dir="$(dirname "$current_dir")"
@@ -302,7 +302,7 @@ if [[ "$TERM_PROGRAM" != "vscode" ]]; then
 
     # Undo the symlink-to-sd operation by moving files back from SD volume
     # Usage: unsymlink-from-sd [--keep-sd-files]
-    znap function unsymlink-from-sd() {
+    function unsymlink-from-sd() {
         local current_path="$(pwd)"
         local parent_dir="$(dirname "$current_path")"
         local dir_name="$(basename "$current_path")"
@@ -397,7 +397,7 @@ if [[ "$TERM_PROGRAM" != "vscode" ]]; then
 
     # view current prs in dirs matched by find . -type d -maxdepth 1 -name "<$1>"
     # view-pr-dirs "velero*"
-    znap function view-pr-dirs() {
+    function view-pr-dirs() {
         find . -type d -maxdepth 1 -name "$1" -exec sh -c "cd {} && pwd && gh pr view --web" \;
     }
 
@@ -405,7 +405,7 @@ if [[ "$TERM_PROGRAM" != "vscode" ]]; then
     # Useful when moving to a new machine where the SD volume exists but original symlinks don't
     # Usage: relink-from-sd <sd-path> [<local-path>]
     # Example: relink-from-sd /Volumes/SD/Users/olduser/git/project /Users/newuser/git/project
-    znap function relink-from-sd() {
+    function relink-from-sd() {
         local sd_path="$1"
         local local_path="$2"
         
@@ -467,7 +467,7 @@ if [[ "$TERM_PROGRAM" != "vscode" ]]; then
 fi
 
 # Update local .zshrc from the dotfiles repository
-znap function update-zshrc-from-dotfiles() {
+function update-zshrc-from-dotfiles() {
     if [ ! -d "$HOME/git/dotfiles" ]; then
         echo "Error: Dotfiles repository not found at $HOME/git/dotfiles"
         return 1

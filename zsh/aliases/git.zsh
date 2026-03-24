@@ -48,7 +48,7 @@ alias oco-signoff-push-force='oco && gcas && gpf'
 alias oco-confirm-signoff-push-force='(oco -y || (open -a Ollama && oco -y)) && gcas && gpf'
 
 # Branch rename function for master to oadp-dev
-znap function git-rename-master-to-oadp-dev() {
+function git-rename-master-to-oadp-dev() {
   echo "Renaming master branch to oadp-dev..."
   git branch -m master oadp-dev
   echo "Fetching origin..."
@@ -64,7 +64,7 @@ alias grm2oadp='git-rename-master-to-oadp-dev'
 # Worktree functions
 alias gwl='git worktree list'
 
-znap function git-worktree-code() {
+function git-worktree-code() {
   # Create a worktree in parent directory with name <current-dir-basename>-<param1> and open in VS Code
   if [ -z "$1" ]; then
     echo "Error: Missing branch name parameter"
@@ -110,7 +110,7 @@ alias gwc='git-worktree-code'
 # Note: For best experience with arrow key navigation, install fzf:
 #   - On macOS: brew install fzf
 #   - On Linux: apt/yum install fzf or follow https://github.com/junegunn/fzf#installation
-znap function pr-me() {
+function pr-me() {
   # List PRs by the current user and allow interactive selection for checkout
   # Usage: pr-me [worktree|wt]
   # If "worktree" or "wt" is passed as an argument, checkout to a worktree using gwc

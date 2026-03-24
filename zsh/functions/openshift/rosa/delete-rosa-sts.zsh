@@ -1,4 +1,4 @@
-znap function delete-rosa-sts() {
+function delete-rosa-sts() {
     # Delete a ROSA STS cluster and all associated resources
     # Parameters:
     #   $1 - Architecture suffix (arm64 or amd64)
@@ -115,10 +115,10 @@ znap function delete-rosa-sts() {
     fi
 }
 
-znap function delete-rosa-sts-arm64() {
+function delete-rosa-sts-arm64() {
     delete-rosa-sts "arm64"
 }
 
-znap function delete-rosa-sts-amd64() {
+function delete-rosa-sts-amd64() {
     delete-rosa-sts "amd64"
 }

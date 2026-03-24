@@ -5,11 +5,11 @@ AT_HOME='(ioreg -p IOUSB | grep "Plugable USBC-6950U" > /dev/null && ioreg -p IO
 DISPLAYLINK_CONNECTED='(system_profiler SPDisplaysDataType | grep ARZOPA > /dev/null || system_profiler SPDisplaysDataType | grep TYPE-C > /dev/null)'
 RESTART_DISPLAYLINK='(osascript -e "quit app \"DisplayLink Manager\""; while pgrep DisplayLinkUserAgent > /dev/null; do sleep 0.1; done; open -a DisplayLink\ Manager)'
 
-znap function setTTLforHotspot(){
+function setTTLforHotspot(){
     sudo sysctl -w net.inet.ip.ttl=65
 }
 
-znap function setTFproxy(){
+function setTFproxy(){
     export TF_ROUTER_IP=$(networksetup -getinfo Wi-Fi | grep -e "^Router" | cut -d " " -f 2)
     export TF_ROUTER_PROXY_PORT=8228
     export http_proxy=$TF_ROUTER_IP:$TF_ROUTER_PROXY_PORT
@@ -20,14 +20,14 @@ znap function setTFproxy(){
     networksetup -setsecurewebproxystate Wi-Fi on
 }
 
-znap function unsetTFproxy(){
+function unsetTFproxy(){
     networksetup -setwebproxystate Wi-Fi off
     networksetup -setsecurewebproxystate Wi-Fi off
     unset http_proxy
     unset https_proxy
 }
 
-znap function setSOCKSproxy(){
+function setSOCKSproxy(){
     # Allow IP override via parameter, otherwise get from router
     if [[ -n "$1" ]]; then
         export SOCKS_ROUTER_IP="$1"
@@ -39,11 +39,11 @@ znap function setSOCKSproxy(){
     networksetup -setsocksfirewallproxystate Wi-Fi on
 }
 
-znap function unsetSOCKSproxy(){
+function unsetSOCKSproxy(){
     networksetup -setsocksfirewallproxystate Wi-Fi off
 }
 
-znap function getSOCKSproxy(){
+function getSOCKSproxy(){
     local router_ip="${SOCKS_ROUTER_IP:-$(networksetup -getinfo Wi-Fi | grep -e "^Router" | cut -d " " -f 2)}"
     local proxy_port="${SOCKS_ROUTER_PROXY_PORT:-1888}"
 
@@ -93,7 +93,7 @@ if [[ "$TERM_PROGRAM" != "vscode" ]]; then
 fi
 
 # kill apps that are not essential
-znap function give-me-ram(){
+function give-me-ram(){
     ps aux | grep -v grep | grep -E '/Messenger.app/|Acrobat|Fathom|Todoist|LINE' | sed -E 's/ +/ /g' | cut -d ' ' -f 2 | xargs kill -9
 }
 

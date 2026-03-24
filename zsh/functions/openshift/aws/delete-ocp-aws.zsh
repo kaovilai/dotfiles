@@ -1,4 +1,4 @@
-znap function delete-ocp-aws() {
+function delete-ocp-aws() {
     # Core implementation for AWS OpenShift cluster deletion
     # Parameters:
     #   $1 - Cluster name or help
@@ -126,17 +126,17 @@ znap function delete-ocp-aws() {
     ((rm -r $OCP_CREATE_DIR && echo "removed existing create dir") || (true && echo "no existing install dir")) || return 1
 }
 
-znap function delete-ocp-aws-arm64() {
+function delete-ocp-aws-arm64() {
     # ARM64 deletion wrapper function
     delete-ocp-aws "$1" "arm64"
 }
 
-znap function delete-ocp-aws-amd64() {
+function delete-ocp-aws-amd64() {
     # AMD64 deletion wrapper function
     delete-ocp-aws "$1" "amd64"
 }
 
-znap function delete-ocp-aws-dir() {
+function delete-ocp-aws-dir() {
     # Delete AWS OpenShift cluster based on a directory name
     # This extracts the date (TODAY) and architecture from the directory name
     # Parameters:

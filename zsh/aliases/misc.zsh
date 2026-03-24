@@ -72,7 +72,7 @@ alias cr='claude-review'
 alias gemini-review='f() { osascript -e "tell app \"Terminal\" to do script \"cd $HOME/experiments/ && gemini -p \\\"/review $1\\\"\""}; f'
 alias gr='gemini-review'
 alias tailscale="/Applications/Tailscale.app/Contents/MacOS/Tailscale"
-znap function vid2gif(){
+function vid2gif(){
     local input="$1"
     local output="$HOME/Downloads/$(basename "${input%.*}").gif"
     

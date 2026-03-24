@@ -1,5 +1,5 @@
 # Function to copy kubeconfig from the Azure STS cluster to the default location
-znap function use-ocp-azure-sts(){
+function use-ocp-azure-sts(){
     # Check if help is requested
     if [[ $1 == "help" ]]; then
         echo "Usage: use-ocp-azure-sts [directory-suffix]"
@@ -61,7 +61,7 @@ znap function use-ocp-azure-sts(){
 }
 
 # Function to use a specific Azure STS cluster from a directory path
-znap function use-ocp-azure-sts-dir() {
+function use-ocp-azure-sts-dir() {
     # Use Azure STS OpenShift cluster based on a directory name
     # Parameters:
     #   $1 - Directory name (e.g., ~/OCP/manifests/20250410-azure-sts)

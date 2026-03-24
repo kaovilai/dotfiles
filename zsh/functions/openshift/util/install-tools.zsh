@@ -24,7 +24,7 @@
 #   export ocpclientos="mac"
 #   export ocpclientarch="arm64"
 #   install-oc
-znap function install-oc(){
+function install-oc(){
     curl --silent https://mirror.openshift.com/pub/openshift-v4/clients/ocp/latest/openshift-client-$ocpclientos-$ocpclientarch.tar.gz -o ~/Downloads/openshift-client-$ocpclientos-$ocpclientarch.tar.gz && \
     tar -xvf ~/Downloads/openshift-client-$ocpclientos-$ocpclientarch.tar.gz -C ~/Downloads && \
     sudo mv ~/Downloads/oc /usr/local/bin && \
@@ -44,7 +44,7 @@ znap function install-oc(){
 #   export ocpclientos="linux"
 #   export ocpclientarch="amd64"
 #   install-ocp-installer
-znap function install-ocp-installer(){
+function install-ocp-installer(){
     curl --silent https://mirror.openshift.com/pub/openshift-v4/clients/ocp/latest/openshift-install-$ocpclientos-$ocpclientarch.tar.gz -o ~/Downloads/openshift-install-$ocpclientos-$ocpclientarch.tar.gz && \
     tar -xvf ~/Downloads/openshift-install-$ocpclientos-$ocpclientarch.tar.gz -C ~/Downloads && \
     sudo mv ~/Downloads/openshift-install /usr/local/bin
@@ -61,7 +61,7 @@ znap function install-ocp-installer(){
 #   - latest-openshift-minor-version-arm64 function must be available
 # Example:
 #   install-ccoctl
-znap function install-ccoctl(){
+function install-ccoctl(){
     go install github.com/openshift/cloud-credential-operator/cmd/ccoctl@release-$(latest-openshift-minor-version-arm64)
 }
 
@@ -73,7 +73,7 @@ znap function install-ccoctl(){
 #   - Go must be installed
 # Example:
 #   install-opm
-znap function install-opm(){
+function install-opm(){
     go install github.com/operator-framework/operator-registry/cmd/opm@latest
 }
 
@@ -87,7 +87,7 @@ znap function install-opm(){
 # Example:
 #   openshift-patch-versions-arm64
 #   latest=$(openshift-patch-versions-arm64 | tail -n 1)
-znap function openshift-patch-versions-arm64(){
+function openshift-patch-versions-arm64(){
     curl --silent https://openshift-release-artifacts-arm64.apps.ci.l2s4.p1.openshiftapps.com/ | grep -vE $OPENSHIFT_REJECT_VERSIONS_EXPRESSION | cut -d '"' -f 2 | sed "s/\///g" | grep -vE "<|>|en|utf|^$" | grep -ve "\.\." | sort -V | awk -F. '{if(!a[$1"."$2]++)print $1"."$2"."$NF}'
 }
 
@@ -101,7 +101,7 @@ znap function openshift-patch-versions-arm64(){
 # Example:
 #   openshift-patch-versions-amd64
 #   latest=$(openshift-patch-versions-amd64 | tail -n 1)
-znap function openshift-patch-versions-amd64(){
+function openshift-patch-versions-amd64(){
     curl --silent https://openshift-release-artifacts.apps.ci.l2s4.p1.openshiftapps.com/ | grep -vE $OPENSHIFT_REJECT_VERSIONS_EXPRESSION | cut -d '"' -f 2 | sed "s/\///g" | grep -vE "<|>|en|utf|^$" | grep -ve "\.\." | sort -V | awk -F. '{if(!a[$1"."$2]++)print $1"."$2"."$NF}'
 }
 

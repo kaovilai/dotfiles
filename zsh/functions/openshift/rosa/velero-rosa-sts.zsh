@@ -30,7 +30,7 @@ _get_rosa_cluster_name() {
 
 # Function to create Velero identity (IAM role and policy) for current ROSA cluster
 # Run this after ROSA cluster creation to get vars for velero install for OADP
-znap function create-velero-identity-for-rosa-cluster() {
+function create-velero-identity-for-rosa-cluster() {
     # Get ROSA cluster name
     local CLUSTER_NAME=$(_get_rosa_cluster_name)
     
@@ -194,7 +194,7 @@ EOF
 }
 
 # Function to create S3 bucket for Velero backups
-znap function create-velero-container-for-rosa-cluster() {
+function create-velero-container-for-rosa-cluster() {
     # Get ROSA cluster name
     local CLUSTER_NAME=$(_get_rosa_cluster_name)
     
@@ -321,7 +321,7 @@ EOF
 }
 
 # Function to create BackupStorageLocation YAML for Velero with ROSA STS
-znap function create-velero-bsl-for-rosa-cluster() {
+function create-velero-bsl-for-rosa-cluster() {
     # Get ROSA cluster name
     local CLUSTER_NAME=$(_get_rosa_cluster_name)
     
@@ -404,7 +404,7 @@ EOF
 }
 
 # Function to create DataProtectionApplication YAML for OADP with ROSA STS
-znap function create-velero-dpa-for-rosa-cluster() {
+function create-velero-dpa-for-rosa-cluster() {
     # Get ROSA cluster name
     local CLUSTER_NAME=$(_get_rosa_cluster_name)
     
@@ -543,7 +543,7 @@ EOF
 }
 
 # Function to validate IAM role assignments for Velero ROSA resources
-znap function validate-velero-role-assignments-for-rosa-cluster() {
+function validate-velero-role-assignments-for-rosa-cluster() {
     # Check if connected to cluster
     if ! oc whoami --show-server &>/dev/null; then
         echo "ERROR: Not connected to an OpenShift cluster. Please login first."
@@ -748,7 +748,7 @@ znap function validate-velero-role-assignments-for-rosa-cluster() {
 }
 
 # Function to setup complete Velero/OADP for current ROSA cluster
-znap function setup-velero-oadp-for-rosa-cluster() {
+function setup-velero-oadp-for-rosa-cluster() {
     echo "Starting complete Velero/OADP setup for ROSA cluster..."
     echo "================================================================"
     
@@ -992,7 +992,7 @@ EOF
 }
 
 # Function to cleanup Velero resources for ROSA cluster
-znap function cleanup-velero-rosa-resources() {
+function cleanup-velero-rosa-resources() {
     # Check if connected to cluster
     if ! oc whoami --show-server &>/dev/null; then
         echo "ERROR: Not connected to an OpenShift cluster. Please login first."
