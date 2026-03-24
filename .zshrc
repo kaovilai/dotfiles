@@ -43,8 +43,6 @@ export BUILDX_INSTANCE=default
 source ~/git/dotfiles/zsh/paths.zsh
 # source ~/git/dotfiles/zsh/command-cache.zsh
 # source ~/git/dotfiles/zsh/cached-commands.zsh
-# Load GitHub Copilot aliases
-eval "$(gh copilot alias -- zsh)"
 # source ~/git/dotfiles/zsh/aws.zsh
   source ~/git/dotfiles/zsh/functions/openshift/load.zsh
   source ~/git/dotfiles/zsh/functions/claude/functions.zsh
