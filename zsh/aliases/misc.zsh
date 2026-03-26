@@ -71,6 +71,8 @@ alias claude-container='podman run --rm -it -v "$(pwd):/workspace:Z" -v "$HOME/.
 alias claude-dangerously-container='podman run --rm -it -v "$(pwd):/workspace:Z" -v "$HOME/.config/claude-container:/claude" -v "$HOME/.config/gcloud:/home/node/.config/gcloud:ro" -e CLAUDE_CONFIG_DIR=/claude -e CLAUDE_CODE_USE_VERTEX -e ANTHROPIC_VERTEX_PROJECT_ID -e CLOUD_ML_REGION -e ANTHROPIC_VERTEX_BASE_URL ghcr.io/kaovilai/claude-container:latest claude --dangerously-skip-permissions'
 alias claude='happy'
 alias claude-dangerously='happy --dangerously-skip-permissions'
+alias claude-worktree='claude --worktree'
+alias cwt='claude-worktree'
 alias claude-review='f() { osascript -e "tell app \"Terminal\" to do script \"cd $HOME/experiments/ && happy \\\"/review $1\\\"\""}; f'
 alias cr='claude-review'
 alias gemini-review='f() { osascript -e "tell app \"Terminal\" to do script \"cd $HOME/experiments/ && gemini -p \\\"/review $1\\\"\""}; f'
