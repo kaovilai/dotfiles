@@ -78,6 +78,30 @@ alias cr='claude-review'
 alias gemini-review='f() { osascript -e "tell app \"Terminal\" to do script \"cd $HOME/experiments/ && gemini -p \\\"/review $1\\\"\""}; f'
 alias gr='gemini-review'
 alias tailscale="/Applications/Tailscale.app/Contents/MacOS/Tailscale"
+# Find and kill orphaned zsh processes that are busy-spinning CPU.
+# Detects: PPID=1 (parent died) + no TTY (lost terminal) + state R (busy-loop on closed fd)
+function kill-orphan-zsh(){
+    local pids
+    local pids_csv
+    pids_csv=$(ps -eo pid,ppid,stat,tty,command | awk '$2 == 1 && $3 ~ /^R/ && $4 == "??" && /\/bin\/zsh -il/ {printf sep $1; sep=","}')
+    if [[ -z "$pids_csv" ]]; then
+        echo "No orphaned busy-spinning zsh processes found."
+        return 0
+    fi
+    pids=${pids_csv//,/ }
+    echo "Orphaned busy-spinning zsh processes (PPID=1, no TTY, state R):"
+    ps -o pid,ppid,%cpu,stat,tty,lstart,command -p ${=pids} 2>/dev/null
+    echo ""
+    if [[ "$1" == "--dry-run" ]]; then
+        echo "Dry run — no processes killed."
+    elif [[ "$1" == "-f" ]]; then
+        echo "Killing orphaned zsh processes..."
+        kill ${=pids} 2>/dev/null || kill -9 ${=pids} 2>/dev/null
+        echo "Done."
+    else
+        echo "Run 'kill-orphan-zsh -f' to kill, or '--dry-run' to preview only."
+    fi
+}
 function vid2gif(){
     local input="$1"
     local output="$HOME/Downloads/$(basename "${input%.*}").gif"
