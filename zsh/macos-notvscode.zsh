@@ -1,9 +1,20 @@
 # Heavy operations and network-related functions
 # This file is sourced only when not in VS Code to keep terminal startup fast
 
-AT_HOME='(ioreg -p IOUSB | grep "Plugable USBC-6950U" > /dev/null && ioreg -p IOUSB | grep "TS4" > /dev/null && networksetup -getnetworkserviceenabled Thunderbolt\ Ethernet\ Slot\ 2 | grep Enabled > /dev/null)'
-DISPLAYLINK_CONNECTED='(system_profiler SPDisplaysDataType | grep ARZOPA > /dev/null || system_profiler SPDisplaysDataType | grep TYPE-C > /dev/null)'
-RESTART_DISPLAYLINK='(osascript -e "quit app \"DisplayLink Manager\""; while pgrep DisplayLinkUserAgent > /dev/null; do sleep 0.1; done; open -a DisplayLink\ Manager)'
+is_at_home() {
+    ioreg -p IOUSB | grep -q "Plugable USBC-6950U" &&
+    ioreg -p IOUSB | grep -q "TS4" &&
+    networksetup -getnetworkserviceenabled "Thunderbolt Ethernet Slot 2" | grep -q Enabled
+}
+is_displaylink_connected() {
+    system_profiler SPDisplaysDataType | grep -q ARZOPA ||
+    system_profiler SPDisplaysDataType | grep -q TYPE-C
+}
+restart_displaylink() {
+    osascript -e 'quit app "DisplayLink Manager"'
+    while pgrep DisplayLinkUserAgent > /dev/null; do sleep 0.1; done
+    open -a "DisplayLink Manager"
+}
 
 setTTLforHotspot(){
     sudo sysctl -w net.inet.ip.ttl=65
@@ -62,7 +73,7 @@ if [[ "$TERM_PROGRAM" != "vscode" ]]; then
   WIFI_NAME=$(networksetup -getairportnetwork en0 2>/dev/null | cut -d " " -f 4)
   
   # Run home setup check in background
-  eval $AT_HOME && (eval $DISPLAYLINK_CONNECTED || eval $RESTART_DISPLAYLINK) &!
+  (is_at_home && (is_displaylink_connected || restart_displaylink)) &!
   
   # Handle proxy setup based on network
   if [[ "$WIFI_NAME" = "PASSAWIT's Z Fold7" ]]; then
