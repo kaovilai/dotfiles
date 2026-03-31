@@ -133,7 +133,7 @@ if [ -n "$(command -v sw_vers)" ]; then
     export ocpclientos='mac'
     export ocpclientarch=$(arch)
 else
-    if [ -n $(command -v lsb_release) ]; then
+    if [ -n "$(command -v lsb_release)" ]; then
         export ocpclientos='linux'
         export ocpclientarch=$(dpkg --print-architecture)
     else
