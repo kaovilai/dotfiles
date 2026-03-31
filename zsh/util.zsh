@@ -473,6 +473,17 @@ update-zshrc-from-dotfiles() {
         return 1
     fi
 
+    # If already symlinked, no copying needed
+    if [[ -L "$HOME/.zshrc" && "$(readlink "$HOME/.zshrc")" == *"git/dotfiles/.zshrc" ]]; then
+        echo "~/.zshrc is already symlinked to the dotfiles repo. Changes are live automatically."
+        return 0
+    fi
+
+    # Recommend symlink instead of copying
+    echo "Tip: Symlink instead of copying so changes are always live:"
+    echo "  ln -sf ~/git/dotfiles/.zshrc ~/.zshrc"
+    echo ""
+
     echo "Updating .zshrc from dotfiles repository..."
     diff --color "$HOME/.zshrc" "$HOME/git/dotfiles/.zshrc" && {
         echo "No changes to apply."
