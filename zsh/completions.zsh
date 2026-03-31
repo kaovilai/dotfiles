@@ -91,7 +91,7 @@ if has_command oc; then
 fi
 
 # Podman completion - use centralized cache location
-if [ -n "$(command -v podman)" ]; then
+if has_command podman; then
   local podman_completion_file="$ZSH_COMPLETION_CACHE_DIR/_podman"
   
   if [[ -f "$podman_completion_file" ]]; then
@@ -108,34 +108,85 @@ if [ -n "$(command -v podman)" ]; then
   fi
 fi
 
-# Rosa CLI
-if [ "$(command -v rosa)" ]; then
-  rosa completion zsh > "${fpath[1]}/_rosa" &!
+# Rosa CLI - cached
+if has_command rosa; then
+  local rosa_completion_cache="$ZSH_COMPLETION_CACHE_DIR/_rosa_generated"
+  if completion_cache_expired "$rosa_completion_cache" 604800; then
+    rosa completion zsh > "$rosa_completion_cache" 2>/dev/null
+  fi
+  [[ -f "$rosa_completion_cache" ]] && cat "$rosa_completion_cache" > "${fpath[1]}/_rosa" &!
 fi
 
-# CCOCTL
-if [ "$(command -v ccoctl)" ]; then
-  ccoctl completion zsh > "${fpath[1]}/_ccoctl" &!
+# CCOCTL - cached
+if has_command ccoctl; then
+  local ccoctl_completion_cache="$ZSH_COMPLETION_CACHE_DIR/_ccoctl_generated"
+  if completion_cache_expired "$ccoctl_completion_cache" 604800; then
+    ccoctl completion zsh > "$ccoctl_completion_cache" 2>/dev/null
+  fi
+  [[ -f "$ccoctl_completion_cache" ]] && cat "$ccoctl_completion_cache" > "${fpath[1]}/_ccoctl" &!
 fi
 
-# Velero
-if [ "$(command -v velero)" ]; then
-  velero completion zsh > "${fpath[1]}/_velero" &!
+# Velero - cached
+if has_command velero; then
+  local velero_completion_cache="$ZSH_COMPLETION_CACHE_DIR/_velero_generated"
+  if completion_cache_expired "$velero_completion_cache" 604800; then
+    velero completion zsh > "$velero_completion_cache" 2>/dev/null
+  fi
+  [[ -f "$velero_completion_cache" ]] && cat "$velero_completion_cache" > "${fpath[1]}/_velero" &!
 fi
 
-# YQ
-if [ "$(command -v yq)" ]; then
-  yq completion zsh > "${fpath[1]}/_yq" &!
+# YQ - cached
+if has_command yq; then
+  local yq_completion_cache="$ZSH_COMPLETION_CACHE_DIR/_yq_generated"
+  if completion_cache_expired "$yq_completion_cache" 604800; then
+    yq completion zsh > "$yq_completion_cache" 2>/dev/null
+  fi
+  [[ -f "$yq_completion_cache" ]] && cat "$yq_completion_cache" > "${fpath[1]}/_yq" &!
 fi
 
-# Kind
-if [ "$(command -v kind)" ]; then
-  kind completion zsh > "${fpath[1]}/_kind" &!
+# Kind - cached
+if has_command kind; then
+  local kind_completion_cache="$ZSH_COMPLETION_CACHE_DIR/_kind_generated"
+  if completion_cache_expired "$kind_completion_cache" 604800; then
+    kind completion zsh > "$kind_completion_cache" 2>/dev/null
+  fi
+  [[ -f "$kind_completion_cache" ]] && cat "$kind_completion_cache" > "${fpath[1]}/_kind" &!
 fi
 
-# Pipenv
-if [ "$(command -v pipenv)" ]; then
-  _PIPENV_COMPLETE=zsh_source pipenv > "${fpath[1]}/_pipenv" &!
+# Helm - cached
+if has_command helm; then
+  local helm_completion_cache="$ZSH_COMPLETION_CACHE_DIR/_helm_generated"
+  if completion_cache_expired "$helm_completion_cache" 604800; then
+    helm completion zsh > "$helm_completion_cache" 2>/dev/null
+  fi
+  [[ -f "$helm_completion_cache" ]] && cat "$helm_completion_cache" > "${fpath[1]}/_helm" &!
+fi
+
+# Kustomize - cached
+if has_command kustomize; then
+  local kustomize_completion_cache="$ZSH_COMPLETION_CACHE_DIR/_kustomize_generated"
+  if completion_cache_expired "$kustomize_completion_cache" 604800; then
+    kustomize completion zsh > "$kustomize_completion_cache" 2>/dev/null
+  fi
+  [[ -f "$kustomize_completion_cache" ]] && cat "$kustomize_completion_cache" > "${fpath[1]}/_kustomize" &!
+fi
+
+# Direnv - cached
+if has_command direnv; then
+  local direnv_completion_cache="$ZSH_COMPLETION_CACHE_DIR/_direnv_generated"
+  if completion_cache_expired "$direnv_completion_cache" 604800; then
+    direnv hook zsh > "$direnv_completion_cache" 2>/dev/null
+  fi
+  [[ -f "$direnv_completion_cache" ]] && source "$direnv_completion_cache"
+fi
+
+# Pipenv - cached
+if has_command pipenv; then
+  local pipenv_completion_cache="$ZSH_COMPLETION_CACHE_DIR/_pipenv_generated"
+  if completion_cache_expired "$pipenv_completion_cache" 604800; then
+    _PIPENV_COMPLETE=zsh_source pipenv > "$pipenv_completion_cache" 2>/dev/null
+  fi
+  [[ -f "$pipenv_completion_cache" ]] && cat "$pipenv_completion_cache" > "${fpath[1]}/_pipenv" &!
 fi
 
 # IBM Cloud completion - if needed
