@@ -100,7 +100,7 @@ create-ocp-azure-sts(){
             --region $AZURE_REGION \
             --storage-account-name $STORAGE_ACCOUNT_NAME \
             --delete-oidc-resource-group && echo "cleaned up ccoctl azure resources") || true
-            rm -rf $OCP_CREATE_DIR && echo "removed existing create dir" || echo "no existing install dir"
+            rm -rf "$OCP_CREATE_DIR" && echo "removed existing create dir" || echo "no existing install dir"
         else
             echo "Directory $OCP_CREATE_DIR does not exist, nothing to delete"
         fi
