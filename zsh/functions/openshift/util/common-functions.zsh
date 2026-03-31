@@ -321,6 +321,10 @@ handle_registry_login() {
             open "https://oauth-openshift.apps.ci.l2s4.p1.openshiftapps.com/oauth/authorize?client_id=openshift-browser-client&redirect_uri=https%3A%2F%2Foauth-openshift.apps.ci.l2s4.p1.openshiftapps.com%2Foauth%2Ftoken%2Fdisplay&response_type=code"
             echo "Login URL opened in browser. Please copy the login command from the browser and paste it below:"
             read login_command
+            if [[ "$login_command" != podman\ login* && "$login_command" != oc\ login* && "$login_command" != docker\ login* ]]; then
+                echo "ERROR: Only 'podman login', 'oc login', or 'docker login' commands are accepted"
+                return 1
+            fi
             echo "Executing login command..."
             eval "$login_command"
         else
