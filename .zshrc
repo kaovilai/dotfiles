@@ -1,7 +1,5 @@
-# expected content of ~/.zshrc
-# ```
-# source ~/git/dotfiles/.zshrc
-# ```
+# ~/.zshrc should be a symlink to this file:
+#   ln -sf ~/git/dotfiles/.zshrc ~/.zshrc
 # -- Essential initialization section (happens in foreground) --
 # profiling start
 # zmodload zsh/zprof
