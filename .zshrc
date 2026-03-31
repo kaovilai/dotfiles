@@ -41,13 +41,9 @@ export BUILDX_INSTANCE=default
 [[ "$(uname -s)" = "Darwin" ]] && source ~/git/dotfiles/zsh/macos.zsh
 # Essential utilities (needed for basic shell functionality)
 source ~/git/dotfiles/zsh/paths.zsh
-# source ~/git/dotfiles/zsh/command-cache.zsh
-# source ~/git/dotfiles/zsh/cached-commands.zsh
-# source ~/git/dotfiles/zsh/aws.zsh
   source ~/git/dotfiles/zsh/functions/openshift/load.zsh
   source ~/git/dotfiles/zsh/functions/claude/functions.zsh
   source ~/git/dotfiles/zsh/functions/s3/load.zsh
-# source ~/git/dotfiles/zsh/podman.zsh
 source ~/git/dotfiles/zsh/util.zsh
 if [[ "$TERM_PROGRAM" != "vscode" ]]; then
   # Git status check
@@ -64,17 +60,3 @@ fi
     source ~/git/dotfiles/zsh/completions.zsh
   fi
 } &
-# # bun completions
-# [ -s "~/.bun/_bun" ] && source "~/.bun/_bun"
-
-
-# # bun
-# export BUN_INSTALL="$HOME/.bun"
-# export PATH="$BUN_INSTALL/bin:$PATH"
-
-# export PATH="$HOME/.local/bin:$PATH"
-
-# [ -f "~/.ghcup/env" ] && . "~/.ghcup/env" # ghcup-env
-
-# profiling end
-# zprof

@@ -76,20 +76,6 @@ if [[ "$TERM_PROGRAM" != "vscode" ]]; then
     # Create alias for backward compatibility
     alias randomize-mac='randomize-mac-ifconfig'
 
-    # To get git to work over ssh via 443 proxy,
-    # replace .git/config `git@github.com:(.*)/`
-    # with `ssh://git@ssh.github.com:443/$1/`
-    if [[ "$WIFI_NAME" = "$TF_NETWORK_NAME" ]]; then
-        # setTFproxy &!
-        # mkdir -p ~/.ssh/tigerdotfiles/
-        # echo "Host github.com
-        # Hostname github.com
-        # ServerAliveInterval 55
-        # ForwardAgent yes
-        # ProxyCommand $(which socat) - PROXY:$TF_ROUTER_IP:%h:%p,proxyport=$TF_ROUTER_PROXY_PORT" > ~/.ssh/tigerdotfiles/config
-    else
-        # unsetTFproxy &!
-    fi
 fi
 
 # kill apps that are not essential
