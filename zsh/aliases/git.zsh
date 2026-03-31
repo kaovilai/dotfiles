@@ -78,7 +78,7 @@ git-worktree-code() {
     branch_name="${match[1]}"
   fi
   
-  local current_repo=$(basename $(pwd))
+  local current_repo=${PWD:t}
   local dir="../$current_repo-$branch_name"
   
   # Check if branch exists

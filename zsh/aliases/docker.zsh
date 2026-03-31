@@ -30,6 +30,6 @@ alias dockerplatforms-amdarmibm='echo linux/amd64,linux/arm64,linux/s390x,linux/
 alias pbubi_manifest='podman build --platform $(dockerplatforms-amdarm) -f Dockerfile.ubi . --manifest $(ghcr_tag) && podman manifest push $(ghcr_tag) && ghcr_tag'
 
 # Helper functions for docker aliases
-alias ghcr_tag='echo ghcr.io/kaovilai/$(basename $PWD):$(current-branch)'
-alias ghcr_notag='echo ghcr.io/kaovilai/$(basename $PWD)'
+alias ghcr_tag='echo ghcr.io/kaovilai/${PWD:t}:$(current-branch)'
+alias ghcr_notag='echo ghcr.io/kaovilai/${PWD:t}'
 alias ghcr_tag-web='comet https://$(ghcr_tag)'
