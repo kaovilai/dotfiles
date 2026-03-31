@@ -22,9 +22,6 @@ install-pkg-from-url(){
 
 PATH=$PATH:/Library/Frameworks/Python.framework/Versions/Current/bin
 
-# https://docs.brew.sh/Shell-Completion says need to be done before compinit which is in znap.zsh sourced right after this in .zshrc
-FPATH="$(brew --prefix)/share/zsh/site-functions:${FPATH}"
-
 # Source heavy operations only when not in VS Code
 if [[ "$TERM_PROGRAM" != "vscode" ]]; then
     source ~/git/dotfiles/zsh/macos-notvscode.zsh
