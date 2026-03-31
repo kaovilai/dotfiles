@@ -6,6 +6,8 @@
 # profiling start
 # zmodload zsh/zprof
 
+# Brew completions FPATH must be set before compinit (in znap.zsh)
+[[ "$(uname -s)" = "Darwin" ]] && FPATH="$(brew --prefix)/share/zsh/site-functions:${FPATH}"
 source ~/git/dotfiles/zsh/znap.zsh
 [[ -f ~/git/dotfiles/zsh/znap.zsh ]] || sh -c "mkdir -p ~/git && git clone --depth 1 -- \
     git@github.com:kaovilai/dotfiles.git ~/git/dotfiles"
