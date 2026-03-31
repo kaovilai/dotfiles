@@ -24,7 +24,7 @@
 #   export ocpclientos="mac"
 #   export ocpclientarch="arm64"
 #   install-oc
-function install-oc(){
+install-oc(){
     curl --silent https://mirror.openshift.com/pub/openshift-v4/clients/ocp/latest/openshift-client-$ocpclientos-$ocpclientarch.tar.gz -o ~/Downloads/openshift-client-$ocpclientos-$ocpclientarch.tar.gz && \
     tar -xvf ~/Downloads/openshift-client-$ocpclientos-$ocpclientarch.tar.gz -C ~/Downloads && \
     sudo mv ~/Downloads/oc /usr/local/bin && \
@@ -44,7 +44,7 @@ function install-oc(){
 #   export ocpclientos="linux"
 #   export ocpclientarch="amd64"
 #   install-ocp-installer
-function install-ocp-installer(){
+install-ocp-installer(){
     curl --silent https://mirror.openshift.com/pub/openshift-v4/clients/ocp/latest/openshift-install-$ocpclientos-$ocpclientarch.tar.gz -o ~/Downloads/openshift-install-$ocpclientos-$ocpclientarch.tar.gz && \
     tar -xvf ~/Downloads/openshift-install-$ocpclientos-$ocpclientarch.tar.gz -C ~/Downloads && \
     sudo mv ~/Downloads/openshift-install /usr/local/bin
@@ -61,7 +61,7 @@ function install-ocp-installer(){
 #   - latest-openshift-minor-version-arm64 function must be available
 # Example:
 #   install-ccoctl
-function install-ccoctl(){
+install-ccoctl(){
     go install github.com/openshift/cloud-credential-operator/cmd/ccoctl@release-$(latest-openshift-minor-version-arm64)
 }
 
@@ -73,7 +73,7 @@ function install-ccoctl(){
 #   - Go must be installed
 # Example:
 #   install-opm
-function install-opm(){
+install-opm(){
     go install github.com/operator-framework/operator-registry/cmd/opm@latest
 }
 

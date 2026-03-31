@@ -11,14 +11,14 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
-function create_minio_config_dir() {
+create_minio_config_dir() {
     if [[ ! -d "$MINIO_DEPLOYMENTS_DIR" ]]; then
         echo -e "${BLUE}INFO${NC}: Creating MinIO deployments directory: $MINIO_DEPLOYMENTS_DIR"
         mkdir -p "$MINIO_DEPLOYMENTS_DIR"
     fi
 }
 
-function save_minio_config() {
+save_minio_config() {
     local name=$1
     local config_data=$2
     
@@ -29,7 +29,7 @@ function save_minio_config() {
     echo -e "${GREEN}INFO${NC}: Configuration saved to $config_file"
 }
 
-function load_minio_config() {
+load_minio_config() {
     local name=$1
     local config_file="$MINIO_DEPLOYMENTS_DIR/${name}.json"
     
@@ -43,7 +43,7 @@ function load_minio_config() {
     cat "$config_file"
 }
 
-function list-minio-deployments() {
+list-minio-deployments() {
     echo -e "${BLUE}INFO${NC}: MinIO deployments:"
     
     if [[ ! -d "$MINIO_DEPLOYMENTS_DIR" ]] || [[ -z "$(ls -A "$MINIO_DEPLOYMENTS_DIR" 2>/dev/null)" ]]; then
@@ -64,7 +64,7 @@ function list-minio-deployments() {
     done
 }
 
-function get-minio-connection-info() {
+get-minio-connection-info() {
     local name=""
     
     # Parse arguments
@@ -140,7 +140,7 @@ function get-minio-connection-info() {
     fi
 }
 
-function generate_self_signed_cert() {
+generate_self_signed_cert() {
     local hostname=$1
     local cert_dir=$2
     local cert_name=${3:-"minio-cert"}
@@ -206,7 +206,7 @@ EOF
     fi
 }
 
-function trust_certificate_in_system() {
+trust_certificate_in_system() {
     local cert_file=$1
     
     if [[ -z "$cert_file" || ! -f "$cert_file" ]]; then
@@ -237,7 +237,7 @@ function trust_certificate_in_system() {
     fi
 }
 
-function remove_certificate_from_system() {
+remove_certificate_from_system() {
     local cert_file=$1
     
     if [[ -z "$cert_file" ]]; then
@@ -260,7 +260,7 @@ function remove_certificate_from_system() {
     fi
 }
 
-function test_minio_connection() {
+test_minio_connection() {
     local name=$1
     
     if [[ -z "$name" ]]; then
@@ -302,7 +302,7 @@ function test_minio_connection() {
     unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY
 }
 
-function remove_minio_config() {
+remove_minio_config() {
     local name=$1
     
     if [[ -z "$name" ]]; then
@@ -320,7 +320,7 @@ function remove_minio_config() {
     fi
 }
 
-function download-minio-certificate() {
+download-minio-certificate() {
     local name=""
     local force=false
 
@@ -457,7 +457,7 @@ function download-minio-certificate() {
 
 # Function to ensure default bucket exists
 # Function to check MinIO Docker container status (requires SSH access)
-function check-minio-docker-status() {
+check-minio-docker-status() {
     local name="$1"
     local key_name="$2"
 
@@ -524,7 +524,7 @@ function check-minio-docker-status() {
     fi
 }
 
-function ensure_default_bucket() {
+ensure_default_bucket() {
     local deployment_name="$1"
     local bucket_name="${2:-default-bucket}"
     
@@ -564,7 +564,7 @@ function ensure_default_bucket() {
 }
 
 # Function to create Velero DataProtectionApplication for MinIO
-function create-velero-dpa-for-minio() {
+create-velero-dpa-for-minio() {
     local cluster_name="${1:-$(oc config current-context 2>/dev/null | cut -d'/' -f2 | cut -d':' -f1)}"
     local bucket_name="${2:-velero}"
     local namespace="${3:-openshift-adp}"

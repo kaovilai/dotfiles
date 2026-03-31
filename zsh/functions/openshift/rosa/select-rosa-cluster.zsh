@@ -1,4 +1,4 @@
-function select-rosa-cluster() {
+select-rosa-cluster() {
     # Interactively select and connect to a ROSA cluster
     # Uses fzf if available, otherwise provides numbered menu
 

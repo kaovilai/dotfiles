@@ -1,4 +1,4 @@
-function delete-rosa-sts() {
+delete-rosa-sts() {
     # Delete a ROSA STS cluster and all associated resources
     # Parameters:
     #   $1 - Architecture suffix (arm64 or amd64)

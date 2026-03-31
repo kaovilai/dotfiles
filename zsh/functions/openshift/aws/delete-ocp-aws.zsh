@@ -1,4 +1,4 @@
-function delete-ocp-aws() {
+delete-ocp-aws() {
     # Core implementation for AWS OpenShift cluster deletion
     # Parameters:
     #   $1 - Cluster name or help
@@ -136,7 +136,7 @@ function delete-ocp-aws-amd64() {
     delete-ocp-aws "$1" "amd64"
 }
 
-function delete-ocp-aws-dir() {
+delete-ocp-aws-dir() {
     # Delete AWS OpenShift cluster based on a directory name
     # This extracts the date (TODAY) and architecture from the directory name
     # Parameters:

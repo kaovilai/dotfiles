@@ -22,7 +22,7 @@
 # Example:
 #   list-ocp-clusters
 #   list-ocp-clusters --full
-function list-ocp-clusters() {
+list-ocp-clusters() {
     # Check if help is requested
     if [[ $1 == "help" ]]; then
         echo "Usage: list-ocp-clusters [OPTIONS]"
@@ -176,7 +176,7 @@ function list-ocp-clusters() {
 #   use-ocp-cluster 20250114           # Show clusters from specific date
 # Note:
 #   After setting KUBECONFIG, offers to copy to ~/.kube/config for persistence
-function use-ocp-cluster() {
+use-ocp-cluster() {
     # Check if help is requested
     if [[ $1 == "help" ]]; then
         echo "Usage: use-ocp-cluster [PATTERN]"
@@ -366,7 +366,7 @@ function use-ocp-cluster() {
 # Example:
 #   export KUBECONFIG=/path/to/cluster/auth/kubeconfig
 #   copyKUBECONFIG
-function copyKUBECONFIG() {
+copyKUBECONFIG() {
     [ -f $KUBECONFIG ] || {
         echo "KUBECONFIG not set"
         return 1

@@ -1,5 +1,5 @@
 # Function to copy kubeconfig from AWS OpenShift clusters to the default location
-function use-ocp-aws() {
+use-ocp-aws() {
     # Core implementation for copying AWS OpenShift kubeconfig
     # Parameters:
     #   $1 - Command/option (help) or directory suffix
@@ -78,7 +78,7 @@ function use-ocp-aws-amd64() {
 }
 
 # Function to use a specific AWS OpenShift cluster from a directory path
-function use-ocp-aws-dir() {
+use-ocp-aws-dir() {
     # Use AWS OpenShift cluster based on a directory name
     # This extracts the date (TODAY) and architecture from the directory name
     # Parameters:

@@ -17,7 +17,7 @@
 # Example:
 #   watchAllPodLogsInNamespace openshift-adp
 #   watchAllPodLogsInNamespace my-app
-function watchAllPodLogsInNamespace(){
+watchAllPodLogsInNamespace(){
     if [ -z "$1" ]; then
         echo "No namespace supplied"
         return 1
@@ -33,7 +33,7 @@ function watchAllPodLogsInNamespace(){
 #   $1 - namespace: OpenShift namespace name
 # Example:
 #   watchAllPodErrorsInNamespace openshift-adp
-function watchAllPodErrorsInNamespace(){
+watchAllPodErrorsInNamespace(){
     if [ -z "$1" ]; then
         echo "No namespace supplied"
         return 1
@@ -52,7 +52,7 @@ function watchAllPodErrorsInNamespace(){
 # Example:
 #   patchCSVreplicas oadp-operator.v1.2.0 2
 #   patchCSVreplicas my-operator.v1.0.0 0  # Scale down to 0
-function patchCSVreplicas(){
+patchCSVreplicas(){
     if [ -z "$1" ]; then
         echo "No CSV name supplied"
         return 1
@@ -71,7 +71,7 @@ function patchCSVreplicas(){
 '
 }
 
-function agdKubeAdminPassword(){
+agdKubeAdminPassword(){
  if [$1 = ""]; then 
   echo "No GUID supplied"
   return 1

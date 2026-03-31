@@ -3,12 +3,12 @@
 # ORG=openshift REPO=$(basename $PWD) BRANCH=oadp-1.2 PACKAGE=google.golang.org/grpc@v1.56.3 ISSUE="CVE-2023-44487-gRPC-Go" && git checkout $ORG/$BRANCH && git checkout -b $ISSUE-$BRANCH && go get $package && go mod tidy && git add go.mod go.sum && git commit -m "$BRANCH: CVE-2023-44487 gRPC-Go HTTP/2 Rapid Reset vulnerability" --signoff && gh pr create --base $BRANCH --repo $ORG/velero-plugin-for-gcp
 
 # Usage: cherrypick-pr <#PR-number> ...
-function cherrypick-pr() {
+cherrypick-pr() {
     echo $* | xargs -n 1 -I {} sh -c 'git cherry-pick $(gh pr view {} --json commits | jq ".commits[].oid" --raw-output | xargs)'
 }
 
 # Usage: cherrypick-pr-to-branch <#PR-number> <remote/branch> <new-branch-name>
-function cherrypick-pr-to-branch() {
+cherrypick-pr-to-branch() {
     local PR_NUMBER=$1
     local BRANCH=$2
     local NEW_BRANCH=$3
@@ -18,7 +18,7 @@ function cherrypick-pr-to-branch() {
 }
 
 # Helper function to create a new changelog for velero repos
-function new-changelog() {
+new-changelog() {
     GH_LOGIN=$(gh pr view --json author --jq .author.login 2> /dev/null)
     GH_PR_NUMBER=$(gh pr view --json number --jq .number 2> /dev/null)
     CHANGELOG_BODY="$(gh pr view --json title --jq .title)"
@@ -31,11 +31,11 @@ function new-changelog() {
     echo "\"$CHANGELOG_BODY\" added to ./changelogs/unreleased/$GH_PR_NUMBER-$GH_LOGIN"
 }
 
-function code-git() {
+code-git() {
     code ~/git/$1
 }
 
-function go-mod-upgrade() {
+go-mod-upgrade() {
     # first argument is the package to upgrade
     if [[ -z "$1" ]]; then
     echo "Usage: go-mod-upgrade <package>"
@@ -53,7 +53,7 @@ function go-mod-upgrade() {
 # $4 is text to prefix commit/PR title such as "CVE-2025-22869: "
 # Examples: GOTOOLCHAIN=go1.23.6 go-mod-upgrade-dirs "velero*" golang.org/x/oauth2@v0.27.0
 # Examples: GOTOOLCHAIN=go1.23.6 go-mod-upgrade-dirs "velero*" golang.org/x/crypto@v0.35.0 "gsed -i \"s/golang:1.22-bookworm/golang:1.23-bookworm/g\" Dockerfile && git add Dockerfile" CVE-2025-22869
-function go-mod-upgrade-dirs() {
+go-mod-upgrade-dirs() {
     find . -type d -maxdepth 1 -name "$1" -exec sh -c "cd {} && pwd && \
         git fetch upstream && (git checkout upstream/main || git checkout upstream/master || git checkout upstream/oadp-dev) && \
         (git checkout -b $2 || git checkout $2) && \
@@ -71,7 +71,7 @@ function go-mod-upgrade-dirs() {
 # Examples: exec-dirs "velero*" golang.org/x/oauth2@v0.27.0 "snyk test"
 #   find . -type f -name \"Dockerfile*\" -name \"Tiltfile\" -exec sed s/golang:1.22.10/golang:1.23.6/g {} \; \
 #   find . -type f -name \"Dockerfile*\" -name \"Tiltfile\" -exec git add {} \;"
-function exec-dirs() {
+exec-dirs() {
     find . -type d -maxdepth 1 -name "$1" -exec sh -c "cd {} && pwd && git fetch upstream && (git checkout upstream/main || git checkout upstream/master || git checkout upstream/oadp-dev) && (git checkout -b $2 || git checkout $2) && sh -c \"$3\"" \;
 }
 
@@ -83,7 +83,7 @@ function exec-dirs() {
 # $3: base branch
 # $4: branch checkout name
 # $5: command
-function exec-dirs-ds() {
+exec-dirs-ds() {
     local pattern="$1"
     local ds_name="$2"
     local base_branch="$3"
@@ -132,7 +132,7 @@ function exec-dirs-ds() {
 }
 
 # Echo-only version of exec-dirs-ds (for testing what would happen)
-function exec-dirs-ds-echo() {
+exec-dirs-ds-echo() {
     local pattern="$1"
     local ds_name="$2"
     local base_branch="$3"
@@ -152,13 +152,13 @@ function exec-dirs-ds-echo() {
 
 # open all dirs matching patterh in code
 # ex: code-dirs "velero*"
-function code-dirs() {
+code-dirs() {
     find . -type d -maxdepth 1 -name "$1" | parallel code {}
 }
 
 # open all dirs matching patterh in finder
 # ex: finder-dirs "velero*"
-function finder-dirs() {
+finder-dirs() {
     find . -type d -maxdepth 1 -name "$1" | parallel open -a Finder {}
 }
 
@@ -467,7 +467,7 @@ if [[ "$TERM_PROGRAM" != "vscode" ]]; then
 fi
 
 # Update local .zshrc from the dotfiles repository
-function update-zshrc-from-dotfiles() {
+update-zshrc-from-dotfiles() {
     if [ ! -d "$HOME/git/dotfiles" ]; then
         echo "Error: Dotfiles repository not found at $HOME/git/dotfiles"
         return 1
@@ -490,7 +490,7 @@ function update-zshrc-from-dotfiles() {
 
 # Set DNS servers for IPv4 and/or IPv6
 # Usage: set-dns-servers [--ipv4 "8.8.8.8 8.8.4.4"] [--ipv6 "2001:4860:4860::8888 2001:4860:4860::8844"] [--service "Wi-Fi"]
-function set-dns-servers() {
+set-dns-servers() {
     local ipv4_servers=""
     local ipv6_servers=""
     local service="Wi-Fi"  # Default network service
@@ -617,7 +617,7 @@ function set-dns-servers() {
 
 # Clear DNS servers to use network defaults (DHCP)
 # Usage: clear-dns-servers [--service "Wi-Fi"]
-function clear-dns-servers() {
+clear-dns-servers() {
     local service="Wi-Fi"  # Default network service
 
     # Parse arguments
