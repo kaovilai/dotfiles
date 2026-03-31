@@ -18,7 +18,7 @@
 #   check-for-existing-clusters "azure"           # Check only Azure clusters
 #   check-for-existing-clusters "aws" "20250114"  # Check AWS clusters from Jan 14, 2025
 #   FORCE_NEW_CLUSTER=true check-for-existing-clusters  # Auto-create alongside existing
-function check-for-existing-clusters() {
+check-for-existing-clusters() {
     # Check if help is requested
     if [[ $1 == "help" ]]; then
         echo "Usage: check-for-existing-clusters [CLOUD_PROVIDER] [PATTERN]"

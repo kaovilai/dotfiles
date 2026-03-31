@@ -1,4 +1,4 @@
-function delete-ocp-gcp-wif(){
+delete-ocp-gcp-wif(){
     # Unset SSH_AUTH_SOCK on Darwin systems to avoid SSH errors
     if [[ "$(uname)" == "Darwin" ]]; then
         unset SSH_AUTH_SOCK
@@ -72,7 +72,7 @@ $OPENSHIFT_INSTALL destroy bootstrap --dir $OCP_CREATE_DIR || echo "no existing 
     ((rm -r $OCP_CREATE_DIR && echo "removed existing create dir") || (true && echo "no existing install dir")) || return 1
 }
 
-function delete-ocp-gcp-wif-dir() {
+delete-ocp-gcp-wif-dir() {
     # Delete GCP-WIF OpenShift cluster based on a directory name
     # This extracts the date (TODAY) from the directory name
     # Parameters:

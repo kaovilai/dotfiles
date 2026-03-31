@@ -16,7 +16,7 @@ alias terminal='open -a Terminal .'
 
 alias install-pkg='sudo installer -target LocalSystem -pkg'
 
-function install-pkg-from-url(){
+install-pkg-from-url(){
     curl -L -o ~/Downloads/$(basename $1) $1 && install-pkg ~/Downloads/$(basename $1)
 }
 

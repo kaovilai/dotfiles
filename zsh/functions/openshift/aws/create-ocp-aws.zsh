@@ -1,4 +1,4 @@
-function create-ocp-aws() {
+create-ocp-aws() {
     # Core implementation for AWS OpenShift cluster creation
     # Parameters:
     #   $1 - Command/option (help, gather, delete, no-delete, --force-new)

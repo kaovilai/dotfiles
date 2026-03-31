@@ -1,4 +1,4 @@
-function crc-start-version(){
+crc-start-version(){
     # check X.Y.Z version is specified
     if [ -z "$1" ]; then
         echo "No version supplied, try 2.43.0 or check https://github.com/crc-org/crc/releases"

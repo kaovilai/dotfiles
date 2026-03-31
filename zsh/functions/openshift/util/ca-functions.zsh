@@ -22,7 +22,7 @@
 # Example:
 #   getOCrouterCA
 #   # Use with: curl --cacert router-ca.crt https://my-route.apps.cluster.com
-function getOCrouterCA(){
+getOCrouterCA(){
     echo "Getting Ingress Router CA for server"
     oc whoami --show-server
     oc get secret router-ca -n openshift-ingress-operator -ojsonpath="{.data['tls\.crt']}" | base64 --decode > router-ca.crt
@@ -31,7 +31,7 @@ function getOCrouterCA(){
 # Remove router CA certificate file
 # Usage: rmRouterCA
 # Description: Deletes router-ca.crt from current directory
-function rmRouterCA(){
+rmRouterCA(){
     echo "Removing Ingress Router CA"
     rm router-ca.crt
 }
@@ -45,7 +45,7 @@ function rmRouterCA(){
 # Example:
 #   getOCrouterCA
 #   trustOCRouterCAFromFileInCurrentDir
-function trustOCRouterCAFromFileInCurrentDir(){
+trustOCRouterCAFromFileInCurrentDir(){
     if uname -s | grep -q Darwin; then
         echo "Mac OS detected, trusting oc router ca"
         sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain router-ca.crt
@@ -64,25 +64,25 @@ function trustOCRouterCAFromFileInCurrentDir(){
 #   - Requires sudo privileges
 # Example:
 #   trustOCRouterCA
-function trustOCRouterCA(){
+trustOCRouterCA(){
     getOCrouterCA
     trustOCRouterCAFromFileInCurrentDir
     rmRouterCA
 }
 
-function getAPICA(){
+getAPICA(){
     echo "Getting API CA for server"
     oc whoami --show-server
     # oc get secret router-certs-default -n openshift-ingress -ojsonpath="{.data['tls\.crt']}" | base64 --decode > api-ca.crt
     oc get secret kube-apiserver-to-kubelet-signer -n openshift-kube-apiserver-operator -ojsonpath="{.data['tls\.crt']}" | base64 --decode > api-ca.crt
 }
 
-function rmAPICA(){
+rmAPICA(){
     echo "Removing API CA"
     rm api-ca.crt
 }
 
-function trustAPICAFromFileInCurrentDir(){
+trustAPICAFromFileInCurrentDir(){
     if uname -s | grep -q Darwin; then
         echo "Mac OS detected"
         sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain api-ca.crt
@@ -92,7 +92,7 @@ function trustAPICAFromFileInCurrentDir(){
     fi
 }
 
-function trustAPICA(){
+trustAPICA(){
     getAPICA
     trustAPICAFromFileInCurrentDir
     rmAPICA

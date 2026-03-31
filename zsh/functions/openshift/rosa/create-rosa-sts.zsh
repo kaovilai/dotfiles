@@ -1,4 +1,4 @@
-function create-rosa-sts() {
+create-rosa-sts() {
     # Core implementation for ROSA STS cluster creation
     # Parameters:
     #   $1 - Command/option (help, delete, no-delete, --force-new)

@@ -1,4 +1,4 @@
-function use-rosa-sts() {
+use-rosa-sts() {
     # Configure kubectl to use a ROSA STS cluster
     # Parameters:
     #   $1 - Can be:

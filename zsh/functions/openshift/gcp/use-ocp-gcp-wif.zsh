@@ -1,5 +1,5 @@
 # Function to copy kubeconfig from the GCP WIF cluster to the default location
-function use-ocp-gcp-wif(){
+use-ocp-gcp-wif(){
     # Check if help is requested
     if [[ $1 == "help" ]]; then
         echo "Usage: use-ocp-gcp-wif [directory-suffix]"
@@ -61,7 +61,7 @@ function use-ocp-gcp-wif(){
 }
 
 # Function to use a specific GCP WIF cluster from a directory path
-function use-ocp-gcp-wif-dir() {
+use-ocp-gcp-wif-dir() {
     # Use GCP WIF OpenShift cluster based on a directory name
     # Parameters:
     #   $1 - Directory name (e.g., ~/OCP/manifests/20250410-gcp-wif)

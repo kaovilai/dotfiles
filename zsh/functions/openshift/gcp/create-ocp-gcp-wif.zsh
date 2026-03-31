@@ -1,6 +1,6 @@
 # create a cluster with gcp workload identity using CCO manual mode
 # pre-req: ssh-add ~/.ssh/id_rsa
-function create-ocp-gcp-wif(){
+create-ocp-gcp-wif(){
     # Unset SSH_AUTH_SOCK on Darwin systems to avoid SSH errors
     if [[ "$(uname)" == "Darwin" ]]; then
         unset SSH_AUTH_SOCK
