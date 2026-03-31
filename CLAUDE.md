@@ -9,9 +9,16 @@ This is a dotfiles repository containing ZSH shell configuration files and utili
 ## Common Commands
 
 ### Dotfiles Management
+
+**Recommended**: Symlink `~/.zshrc` to the repo so changes are instantly live:
+```bash
+ln -sf ~/git/dotfiles/.zshrc ~/.zshrc
+```
+
+Legacy commands (for non-symlink setups):
 - `copy-to-dotfiles-from-zshrc` - Copy local .zshrc to the dotfiles repo
-- `push-dotfiles-from-zshrc` - Push changes to the dotfiles repository  
-- `update-zshrc-from-dotfiles` - Update local .zshrc from the dotfiles repo
+- `push-dotfiles-from-zshrc` - Push changes to the dotfiles repository
+- `update-zshrc-from-dotfiles` - Update local .zshrc from the dotfiles repo (recommends symlink)
 
 ### Updating .zshrc
 When making changes to the ZSH configuration:
@@ -26,9 +33,9 @@ When making changes to the ZSH configuration:
    ```bash
    # Test specific file
    source ~/git/dotfiles/zsh/[modified-file].zsh
-   
-   # Update local .zshrc with changes
-   update-zshrc-from-dotfiles
+
+   # If symlinked, changes are already live — just reload:
+   exec zsh
    ```
 
 3. **Commit and push**:
