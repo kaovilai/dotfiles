@@ -120,7 +120,7 @@ exec-dirs-ds() {
                 git push --force -u origin $branch_full || { echo "\033[1;31mFailed to push branch\033[0m"; return 1; }
                 
                 echo "Creating PR..."
-                repo_name=$(basename $dir)
+                repo_name=${dir:t}
                 gh pr create --repo $ds_name/$repo_name --base $base_branch --title "$base_branch-$branch_name" || { 
                     echo "\033[1;31mFailed to create PR, but branch was pushed. Create PR manually for $ds_name/$repo_name\033[0m";
                 }
@@ -146,7 +146,7 @@ exec-dirs-ds-echo() {
         echo "  Would checkout $ds_name/$base_branch"
         echo "  Would create/reset branch $ds_name-$base_branch-$branch_name"
         echo "  Would execute: $cmd"
-        echo "  Would push branch and create PR to $ds_name/$(basename $dir) base $base_branch"
+        echo "  Would push branch and create PR to $ds_name/${dir:t} base $base_branch"
     done
 }
 

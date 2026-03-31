@@ -9,8 +9,8 @@ alias velero-makecontainer-velero-restore-helper-cluster-arch='make container IM
 alias cluster-arch="kubectl get nodes -o jsonpath='{range .items[0]}{.status.nodeInfo.operatingSystem}{\"/\"}{.status.nodeInfo.architecture}{end}'"
 # without linux/
 alias cluster-arch-only="kubectl get nodes -o jsonpath='{range .items[0]}{.status.nodeInfo.architecture}{end}'"
-alias ocregistry_tag='echo $(oc-registry-route)/$(basename $PWD):$(current-branch)'
-alias ocregistry_notag='echo $(oc-registry-route)/$(basename $PWD)'
+alias ocregistry_tag='echo $(oc-registry-route)/${PWD:t}:$(current-branch)'
+alias ocregistry_notag='echo $(oc-registry-route)/${PWD:t}'
 
 # Wait for deployments and follow logs
 logs-velero() {

@@ -17,7 +17,7 @@ alias terminal='open -a Terminal .'
 alias install-pkg='sudo installer -target LocalSystem -pkg'
 
 install-pkg-from-url(){
-    curl -L -o ~/Downloads/$(basename $1) $1 && install-pkg ~/Downloads/$(basename $1)
+    curl -Lm 60 -o ~/Downloads/${1:t} "$1" && install-pkg ~/Downloads/${1:t}
 }
 
 PATH=$PATH:/Library/Frameworks/Python.framework/Versions/Current/bin
