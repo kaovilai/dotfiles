@@ -46,11 +46,12 @@ source ~/git/dotfiles/zsh/paths.zsh
   source ~/git/dotfiles/zsh/functions/s3/load.zsh
 source ~/git/dotfiles/zsh/util.zsh
 if [[ "$TERM_PROGRAM" != "vscode" ]]; then
-  # Git status check
-  if git -C ~/git/dotfiles status --porcelain | grep -q "M"; then
-    echo "dotfiles repo has uncommitted changes, run ${RED}edit-dotfiles${NC} to review"
-    echo
-  fi
+  # Git status check (background to avoid blocking startup)
+  {
+    if git -C ~/git/dotfiles status --porcelain | grep -q "M"; then
+      print "dotfiles repo has uncommitted changes, run ${RED}edit-dotfiles${NC} to review"
+    fi
+  } &!
 fi
 # -- Non-essential initialization (happens in background) --
 {
