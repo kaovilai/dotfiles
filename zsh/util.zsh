@@ -150,13 +150,13 @@ exec-dirs-ds-echo() {
     done
 }
 
-# open all dirs matching patterh in code
+# open all dirs matching pattern in code
 # ex: code-dirs "velero*"
 code-dirs() {
     find . -type d -maxdepth 1 -name "$1" | parallel code {}
 }
 
-# open all dirs matching patterh in finder
+# open all dirs matching pattern in finder
 # ex: finder-dirs "velero*"
 finder-dirs() {
     find . -type d -maxdepth 1 -name "$1" | parallel open -a Finder {}
