@@ -133,17 +133,6 @@ if [ "$(command -v kind)" ]; then
   kind completion zsh > "${fpath[1]}/_kind" &!
 fi
 
-# Google Cloud SDK configuration - lazy load only when gcloud is needed
-if [ -f '~/google-cloud-sdk/path.zsh.inc' ] && [ -f '~/google-cloud-sdk/completion.zsh.inc' ]; then
-  # Create a lazy-loading wrapper for gcloud
-  gcloud() {
-    unfunction gcloud
-    source '~/google-cloud-sdk/path.zsh.inc'
-    source '~/google-cloud-sdk/completion.zsh.inc'
-    gcloud "$@"
-  }
-fi
-
 # Pipenv
 if [ "$(command -v pipenv)" ]; then
   _PIPENV_COMPLETE=zsh_source pipenv > "${fpath[1]}/_pipenv" &!
