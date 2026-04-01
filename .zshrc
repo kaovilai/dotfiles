@@ -16,7 +16,13 @@ function timezsh() {
 
 # Don't put secrets here, put them in ~/secrets.zsh
 # edit ~/.zshrc first then run copy-to-dotfiles-from-zshrc to copy to dotfiles
-[[ -f ~/secrets.zsh ]] && source ~/secrets.zsh
+if [[ -f ~/secrets.zsh ]]; then
+  local secrets_perms=$(stat -f "%Lp" ~/secrets.zsh)
+  if [[ "$secrets_perms" != "600" ]]; then
+    print -P "%F{yellow}[dotfiles] Warning: ~/secrets.zsh has permissions $secrets_perms (should be 600)%f" >&2
+  fi
+  source ~/secrets.zsh
+fi
 export HISTSIZE=100000 # number of commands stored in history
 export HISTFILESIZE=200000 # bytes in history file
 source ~/git/dotfiles/zsh/colors.zsh
@@ -52,8 +58,15 @@ source ~/git/dotfiles/zsh/util.zsh
 if [[ "$TERM_PROGRAM" != "vscode" ]]; then
   # Git status check (background to avoid blocking startup)
   {
-    if git -C ~/git/dotfiles status --porcelain | grep -q "M"; then
-      print "dotfiles repo has uncommitted changes, run ${RED}edit-dotfiles${NC} to review"
+    if command -v gtimeout &>/dev/null; then
+      if gtimeout 2 git -C ~/git/dotfiles status --porcelain 2>/dev/null | grep -q "M"; then
+        print "dotfiles repo has uncommitted changes, run ${RED}edit-dotfiles${NC} to review"
+      fi
+    else
+      print -P "%F{yellow}[dotfiles] Install coreutils for git timeout support: brew install coreutils%f" >&2
+      if git -C ~/git/dotfiles status --porcelain 2>/dev/null | grep -q "M"; then
+        print "dotfiles repo has uncommitted changes, run ${RED}edit-dotfiles${NC} to review"
+      fi
     fi
   } &!
 fi
