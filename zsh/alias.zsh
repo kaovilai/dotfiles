@@ -1,12 +1,17 @@
+# Safe source: reports errors without killing the shell
+_safe_source() {
+  source "$1" 2>&1 || print -P "%F{red}[dotfiles] Failed to source: $1%f" >&2
+}
+
 # Load all alias categories
-source ~/git/dotfiles/zsh/aliases/docker.zsh
-source ~/git/dotfiles/zsh/aliases/go.zsh
-source ~/git/dotfiles/zsh/aliases/git.zsh
-source ~/git/dotfiles/zsh/aliases/github.zsh
-source ~/git/dotfiles/zsh/aliases/code.zsh
-source ~/git/dotfiles/zsh/aliases/ibmcloud.zsh
-source ~/git/dotfiles/zsh/aliases/velero.zsh
-source ~/git/dotfiles/zsh/aliases/misc.zsh
+_safe_source ~/git/dotfiles/zsh/aliases/docker.zsh
+_safe_source ~/git/dotfiles/zsh/aliases/go.zsh
+_safe_source ~/git/dotfiles/zsh/aliases/git.zsh
+_safe_source ~/git/dotfiles/zsh/aliases/github.zsh
+_safe_source ~/git/dotfiles/zsh/aliases/code.zsh
+_safe_source ~/git/dotfiles/zsh/aliases/ibmcloud.zsh
+_safe_source ~/git/dotfiles/zsh/aliases/velero.zsh
+_safe_source ~/git/dotfiles/zsh/aliases/misc.zsh
 
 # Migration utilities
-source ~/git/dotfiles/zsh/functions/migrate-laptop.zsh
+_safe_source ~/git/dotfiles/zsh/functions/migrate-laptop.zsh
