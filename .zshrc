@@ -41,7 +41,7 @@ export BUILDX_INSTANCE=default
 [[ "$(uname -s)" = "Darwin" ]] && source ~/git/dotfiles/zsh/macos.zsh
 # Essential utilities (needed for basic shell functionality)
 source ~/git/dotfiles/zsh/paths.zsh
-  source ~/git/dotfiles/zsh/functions/openshift/load.zsh
+  source ~/git/dotfiles/zsh/functions/openshift/load-lazy.zsh
   source ~/git/dotfiles/zsh/functions/claude/functions.zsh
   source ~/git/dotfiles/zsh/functions/s3/load.zsh
 source ~/git/dotfiles/zsh/util.zsh
