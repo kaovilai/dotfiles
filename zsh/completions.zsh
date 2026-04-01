@@ -1,29 +1,8 @@
 
-# Cache settings
-export ZSH_COMPLETION_CACHE_DIR="$HOME/.zsh-completion-cache"
-[[ -d $ZSH_COMPLETION_CACHE_DIR ]] || mkdir -p "$ZSH_COMPLETION_CACHE_DIR"
-
-# Function to check if completion file cache is expired
-completion_cache_expired() {
-  local file="$1"
-  local max_age="${2:-604800}"  # Default: 7 days in seconds (configurable)
-
-  if [[ ! -f "$file" ]]; then
-    return 0  # Cache expired (file doesn't exist)
-  fi
-
-  # Get file modification time (cache stat result to avoid duplicate calls)
-  local file_stat=$(stat -f "%m %Sm" -t "%Y-%m-%d %H:%M:%S" "$file" 2>/dev/null) || return 0
-  local file_time=${file_stat%% *}
-  local current_time=$(date +%s)
-  local file_age=$((current_time - file_time))
-
-  if [[ $file_age -gt $max_age ]]; then
-    return 0  # Cache expired
-  else
-    return 1  # Cache still valid
-  fi
-}
+# Cache infrastructure provided by command-cache.zsh (sourced via .zshrc or below)
+if [[ -z "$ZSH_COMPLETION_CACHE_DIR" ]]; then
+  source ~/git/dotfiles/zsh/command-cache.zsh
+fi
 
 # -- PHASE 1: Essential completions (foreground) --
 
@@ -47,7 +26,7 @@ if has_command docker; then
   
   # Update check and download in the background
   if [[ "$TERM_PROGRAM" != "vscode" ]]; then
-    if completion_cache_expired "$docker_completion_file" 2592000; then  # 30 days for stable tools
+    if completion_cache_expired "$docker_completion_file" $CACHE_TTL_STABLE; then  # 30 days for stable tools
       (curl -sLm 10 https://raw.githubusercontent.com/docker/docker-ce/master/components/cli/contrib/completion/zsh/_docker > "${docker_completion_file}.tmp" && 
       mv "${docker_completion_file}.tmp" "$docker_completion_file" || 
       rm -f "${docker_completion_file}.tmp") &!
@@ -66,7 +45,7 @@ fi
 # GitHub CLI completion - cache for stable tools
 if has_command gh; then
   local gh_completion_cache="$ZSH_COMPLETION_CACHE_DIR/_gh_generated"
-  if completion_cache_expired "$gh_completion_cache" 604800; then  # 7 days
+  if completion_cache_expired "$gh_completion_cache"; then  # 7 days
     gh completion -s zsh > "$gh_completion_cache" 2>/dev/null
   fi
   [[ -f "$gh_completion_cache" ]] && cat "$gh_completion_cache" > "${fpath[1]}/_gh" &!
@@ -75,7 +54,7 @@ fi
 # Kubernetes CLI - cache for stable tools
 if has_command kubectl; then
   local kubectl_completion_cache="$ZSH_COMPLETION_CACHE_DIR/_kubectl_generated"
-  if completion_cache_expired "$kubectl_completion_cache" 604800; then  # 7 days
+  if completion_cache_expired "$kubectl_completion_cache"; then
     kubectl completion zsh > "$kubectl_completion_cache" 2>/dev/null
   fi
   [[ -f "$kubectl_completion_cache" ]] && cat "$kubectl_completion_cache" > "${fpath[1]}/_kubectl" &!
@@ -84,7 +63,7 @@ fi
 # OpenShift Client - cache for stable tools
 if has_command oc; then
   local oc_completion_cache="$ZSH_COMPLETION_CACHE_DIR/_oc_generated"
-  if completion_cache_expired "$oc_completion_cache" 604800; then  # 7 days
+  if completion_cache_expired "$oc_completion_cache"; then
     oc completion zsh > "$oc_completion_cache" 2>/dev/null
   fi
   [[ -f "$oc_completion_cache" ]] && cat "$oc_completion_cache" > "${fpath[1]}/_oc" &!
@@ -100,7 +79,7 @@ if has_command podman; then
   
   # Update check and download in the background
   if [[ "$TERM_PROGRAM" != "vscode" ]]; then
-    if completion_cache_expired "$podman_completion_file" 2592000; then  # 30 days for stable tools
+    if completion_cache_expired "$podman_completion_file" $CACHE_TTL_STABLE; then  # 30 days for stable tools
       (curl -sLm 10 https://raw.githubusercontent.com/containers/podman/main/completions/zsh/_podman > "${podman_completion_file}.tmp" && 
       mv "${podman_completion_file}.tmp" "$podman_completion_file" || 
       rm -f "${podman_completion_file}.tmp") &!
@@ -111,7 +90,7 @@ fi
 # Rosa CLI - cached
 if has_command rosa; then
   local rosa_completion_cache="$ZSH_COMPLETION_CACHE_DIR/_rosa_generated"
-  if completion_cache_expired "$rosa_completion_cache" 604800; then
+  if completion_cache_expired "$rosa_completion_cache"; then
     rosa completion zsh > "$rosa_completion_cache" 2>/dev/null
   fi
   [[ -f "$rosa_completion_cache" ]] && cat "$rosa_completion_cache" > "${fpath[1]}/_rosa" &!
@@ -120,7 +99,7 @@ fi
 # CCOCTL - cached
 if has_command ccoctl; then
   local ccoctl_completion_cache="$ZSH_COMPLETION_CACHE_DIR/_ccoctl_generated"
-  if completion_cache_expired "$ccoctl_completion_cache" 604800; then
+  if completion_cache_expired "$ccoctl_completion_cache"; then
     ccoctl completion zsh > "$ccoctl_completion_cache" 2>/dev/null
   fi
   [[ -f "$ccoctl_completion_cache" ]] && cat "$ccoctl_completion_cache" > "${fpath[1]}/_ccoctl" &!
@@ -129,7 +108,7 @@ fi
 # Velero - cached
 if has_command velero; then
   local velero_completion_cache="$ZSH_COMPLETION_CACHE_DIR/_velero_generated"
-  if completion_cache_expired "$velero_completion_cache" 604800; then
+  if completion_cache_expired "$velero_completion_cache"; then
     velero completion zsh > "$velero_completion_cache" 2>/dev/null
   fi
   [[ -f "$velero_completion_cache" ]] && cat "$velero_completion_cache" > "${fpath[1]}/_velero" &!
@@ -138,7 +117,7 @@ fi
 # YQ - cached
 if has_command yq; then
   local yq_completion_cache="$ZSH_COMPLETION_CACHE_DIR/_yq_generated"
-  if completion_cache_expired "$yq_completion_cache" 604800; then
+  if completion_cache_expired "$yq_completion_cache"; then
     yq completion zsh > "$yq_completion_cache" 2>/dev/null
   fi
   [[ -f "$yq_completion_cache" ]] && cat "$yq_completion_cache" > "${fpath[1]}/_yq" &!
@@ -147,7 +126,7 @@ fi
 # Kind - cached
 if has_command kind; then
   local kind_completion_cache="$ZSH_COMPLETION_CACHE_DIR/_kind_generated"
-  if completion_cache_expired "$kind_completion_cache" 604800; then
+  if completion_cache_expired "$kind_completion_cache"; then
     kind completion zsh > "$kind_completion_cache" 2>/dev/null
   fi
   [[ -f "$kind_completion_cache" ]] && cat "$kind_completion_cache" > "${fpath[1]}/_kind" &!
@@ -156,7 +135,7 @@ fi
 # Helm - cached
 if has_command helm; then
   local helm_completion_cache="$ZSH_COMPLETION_CACHE_DIR/_helm_generated"
-  if completion_cache_expired "$helm_completion_cache" 604800; then
+  if completion_cache_expired "$helm_completion_cache"; then
     helm completion zsh > "$helm_completion_cache" 2>/dev/null
   fi
   [[ -f "$helm_completion_cache" ]] && cat "$helm_completion_cache" > "${fpath[1]}/_helm" &!
@@ -165,7 +144,7 @@ fi
 # Kustomize - cached
 if has_command kustomize; then
   local kustomize_completion_cache="$ZSH_COMPLETION_CACHE_DIR/_kustomize_generated"
-  if completion_cache_expired "$kustomize_completion_cache" 604800; then
+  if completion_cache_expired "$kustomize_completion_cache"; then
     kustomize completion zsh > "$kustomize_completion_cache" 2>/dev/null
   fi
   [[ -f "$kustomize_completion_cache" ]] && cat "$kustomize_completion_cache" > "${fpath[1]}/_kustomize" &!
@@ -174,7 +153,7 @@ fi
 # Direnv - cached
 if has_command direnv; then
   local direnv_completion_cache="$ZSH_COMPLETION_CACHE_DIR/_direnv_generated"
-  if completion_cache_expired "$direnv_completion_cache" 604800; then
+  if completion_cache_expired "$direnv_completion_cache"; then
     direnv hook zsh > "$direnv_completion_cache" 2>/dev/null
   fi
   [[ -f "$direnv_completion_cache" ]] && source "$direnv_completion_cache"
@@ -183,7 +162,7 @@ fi
 # Pipenv - cached
 if has_command pipenv; then
   local pipenv_completion_cache="$ZSH_COMPLETION_CACHE_DIR/_pipenv_generated"
-  if completion_cache_expired "$pipenv_completion_cache" 604800; then
+  if completion_cache_expired "$pipenv_completion_cache"; then
     _PIPENV_COMPLETE=zsh_source pipenv > "$pipenv_completion_cache" 2>/dev/null
   fi
   [[ -f "$pipenv_completion_cache" ]] && cat "$pipenv_completion_cache" > "${fpath[1]}/_pipenv" &!
@@ -202,7 +181,7 @@ if has_command claude || has_command happy; then
     # Also register completions for happy (claude is aliased to happy)
     sed 's/^#compdef claude/#compdef claude happy/' "$claude_completion_file" > "${fpath[1]}/_happy" &!
   fi
-  if completion_cache_expired "$claude_completion_file" 604800; then  # 7 days
+  if completion_cache_expired "$claude_completion_file"; then  # 7 days
     (curl -sLm 10 https://raw.githubusercontent.com/wbingli/zsh-claudecode-completion/main/_claude > "${claude_completion_file}.tmp" &&
     mv "${claude_completion_file}.tmp" "$claude_completion_file" &&
     cp "$claude_completion_file" "${fpath[1]}/_claude" &&

@@ -1,14 +1,22 @@
 #!/bin/zsh
-# command-cache.zsh - Enhanced command output caching
+# command-cache.zsh - Unified caching infrastructure for commands and completions
 
-# Directory for cached command outputs
+# Configurable TTL constants (seconds)
+export CACHE_TTL_DEFAULT=3600       # 1 hour - command output cache
+export CACHE_TTL_COMPLETION=604800  # 7 days - completion generation
+export CACHE_TTL_STABLE=2592000     # 30 days - stable tool completions (docker, podman)
+
+# Cache directories
 export ZSH_COMMAND_CACHE_DIR="$HOME/.zsh-command-cache"
+export ZSH_COMPLETION_CACHE_DIR="$HOME/.zsh-completion-cache"
 [[ -d $ZSH_COMMAND_CACHE_DIR ]] || mkdir -p "$ZSH_COMMAND_CACHE_DIR"
+[[ -d $ZSH_COMPLETION_CACHE_DIR ]] || mkdir -p "$ZSH_COMPLETION_CACHE_DIR"
 
-# Function to check if cache is expired (shared with completions.zsh)
-command_cache_expired() {
+# Unified function to check if a cache file is expired
+# Usage: cache_file_expired <file> [max_age_seconds]
+cache_file_expired() {
   local file="$1"
-  local max_age="${2:-3600}"  # Default: 1 hour in seconds (configurable)
+  local max_age="${2:-$CACHE_TTL_DEFAULT}"
 
   if [[ ! -f "$file" ]]; then
     return 0  # Cache expired (file doesn't exist)
@@ -26,6 +34,10 @@ command_cache_expired() {
     return 1  # Cache still valid
   fi
 }
+
+# Backward-compatible aliases
+command_cache_expired() { cache_file_expired "$@"; }
+completion_cache_expired() { cache_file_expired "${1}" "${2:-$CACHE_TTL_COMPLETION}"; }
 
 # Function to execute a command with caching
 # Usage: cached_exec [cache_time_seconds] [cache_key] command_to_run

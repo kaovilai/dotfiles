@@ -1,8 +1,11 @@
 #!/usr/bin/env bash
 # ~/.bashrc: executed by bash for non-login shells
 # This is the dotfiles .bashrc file
-# Your ~/.bashrc should point here with:
-# [[ -f ~/git/dotfiles/.bashrc ]] && source ~/git/dotfiles/.bashrc
+# Recommended: Symlink ~/.bashrc to the repo so changes are instantly live:
+#   ln -sf ~/git/dotfiles/.bashrc ~/.bashrc
+#
+# Legacy alternative (source instead of symlink):
+#   [[ -f ~/git/dotfiles/.bashrc ]] && source ~/git/dotfiles/.bashrc
 
 # If not running interactively, don't do anything
 [[ $- != *i* ]] && return
@@ -34,4 +37,8 @@ alias grep='grep --color=auto'
 PS1='\[\033[01;32m\]\u@\h\[\033[00m\]:\[\033[01;34m\]\w\[\033[00m\]\$ '
 
 # ===== Additional Configuration =====
-# Load any additional configurations
+# Cargo environment
+[[ -f "$HOME/.cargo/env" ]] && source "$HOME/.cargo/env"
+
+# npm global binaries
+export PATH=~/.npm-global/bin:$PATH
