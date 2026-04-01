@@ -11,25 +11,25 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
-create_minio_config_dir() {
+create-minio-config-dir() {
     if [[ ! -d "$MINIO_DEPLOYMENTS_DIR" ]]; then
         echo -e "${BLUE}INFO${NC}: Creating MinIO deployments directory: $MINIO_DEPLOYMENTS_DIR"
         mkdir -p "$MINIO_DEPLOYMENTS_DIR"
     fi
 }
 
-save_minio_config() {
+save-minio-config() {
     local name=$1
     local config_data=$2
     
-    create_minio_config_dir
+    create-minio-config-dir
     local config_file="$MINIO_DEPLOYMENTS_DIR/${name}.json"
     
     echo "$config_data" > "$config_file"
     echo -e "${GREEN}INFO${NC}: Configuration saved to $config_file"
 }
 
-load_minio_config() {
+load-minio-config() {
     local name=$1
     local config_file="$MINIO_DEPLOYMENTS_DIR/${name}.json"
     
@@ -87,7 +87,7 @@ get-minio-connection-info() {
         return 1
     fi
     
-    if ! config=$(load_minio_config "$name"); then
+    if ! config=$(load-minio-config "$name"); then
         return 1
     fi
     
@@ -140,7 +140,7 @@ get-minio-connection-info() {
     fi
 }
 
-generate_self_signed_cert() {
+generate-self-signed-cert() {
     local hostname=$1
     local cert_dir=$2
     local cert_name=${3:-"minio-cert"}
@@ -206,7 +206,7 @@ EOF
     fi
 }
 
-trust_certificate_in_system() {
+trust-certificate-in-system() {
     local cert_file=$1
     
     if [[ -z "$cert_file" || ! -f "$cert_file" ]]; then
@@ -237,7 +237,7 @@ trust_certificate_in_system() {
     fi
 }
 
-remove_certificate_from_system() {
+remove-certificate-from-system() {
     local cert_file=$1
     
     if [[ -z "$cert_file" ]]; then
@@ -260,16 +260,16 @@ remove_certificate_from_system() {
     fi
 }
 
-test_minio_connection() {
+test-minio-connection() {
     local name=$1
     
     if [[ -z "$name" ]]; then
         echo -e "${RED}ERROR${NC}: MinIO deployment name is required"
-        echo "Usage: test_minio_connection <deployment-name>"
+        echo "Usage: test-minio-connection <deployment-name>"
         return 1
     fi
     
-    if ! config=$(load_minio_config "$name"); then
+    if ! config=$(load-minio-config "$name"); then
         return 1
     fi
     
@@ -302,7 +302,7 @@ test_minio_connection() {
     unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY
 }
 
-remove_minio_config() {
+remove-minio-config() {
     local name=$1
     
     if [[ -z "$name" ]]; then
@@ -362,7 +362,7 @@ download-minio-certificate() {
         return 1
     fi
 
-    if ! config=$(load_minio_config "$name"); then
+    if ! config=$(load-minio-config "$name"); then
         return 1
     fi
 
@@ -422,7 +422,7 @@ download-minio-certificate() {
 
             # Update the config file with the certificate path
             local updated_config=$(echo "$config" | jq --arg cert_file "$cert_file" '.cert_file = $cert_file')
-            save_minio_config "$name" "$updated_config"
+            save-minio-config "$name" "$updated_config"
 
             echo -e "${GREEN}SUCCESS${NC}: Certificate downloaded successfully"
             echo -e "${BLUE}INFO${NC}: Certificate saved to: $cert_file"
@@ -433,8 +433,8 @@ download-minio-certificate() {
 
             echo -e ""
             echo -e "${BLUE}Next steps:${NC}"
-            echo -e "  1. Trust the certificate: trust_certificate_in_system $cert_file"
-            echo -e "  2. Test connection: test_minio_connection $name"
+            echo -e "  1. Trust the certificate: trust-certificate-in-system $cert_file"
+            echo -e "  2. Test connection: test-minio-connection $name"
             echo -e "  3. Use MinIO: get-minio-connection-info --name $name"
 
             return 0
@@ -467,7 +467,7 @@ check-minio-docker-status() {
         return 1
     fi
 
-    if ! config=$(load_minio_config "$name"); then
+    if ! config=$(load-minio-config "$name"); then
         return 1
     fi
 
@@ -524,13 +524,13 @@ check-minio-docker-status() {
     fi
 }
 
-ensure_default_bucket() {
+ensure-default-bucket() {
     local deployment_name="$1"
     local bucket_name="${2:-default-bucket}"
     
     if [[ -z "$deployment_name" ]]; then
         echo -e "${RED}ERROR${NC}: Deployment name is required"
-        echo "Usage: ensure_default_bucket <deployment-name> [bucket-name]"
+        echo "Usage: ensure-default-bucket <deployment-name> [bucket-name]"
         return 1
     fi
     

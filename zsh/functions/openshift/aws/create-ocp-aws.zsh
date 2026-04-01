@@ -10,7 +10,7 @@ create-ocp-aws() {
     fi
     
     # Get openshift-install binary
-    local OPENSHIFT_INSTALL=$(get_openshift_install)
+    local OPENSHIFT_INSTALL=$(get-openshift-install)
     [[ -z "$OPENSHIFT_INSTALL" ]] && return 1
     local ARCHITECTURE=$2
     local ARCH_SUFFIX=${2}
@@ -114,7 +114,7 @@ create-ocp-aws() {
     local OCP_CREATE_DIR_BASE="$OCP_MANIFESTS_DIR/$TODAY-aws-$ARCH_SUFFIX"
     
     # Generate unique cluster name if needed
-    local unique_result=$(generate_unique_cluster_name "$CLUSTER_BASE_NAME" "$OCP_CREATE_DIR_BASE")
+    local unique_result=$(generate-unique-cluster-name "$CLUSTER_BASE_NAME" "$OCP_CREATE_DIR_BASE")
     [[ -z "$unique_result" ]] && return 1
     local CLUSTER_NAME=$(echo "$unique_result" | grep "cluster_name:" | cut -d: -f2)
     local OCP_CREATE_DIR=$(echo "$unique_result" | grep "cluster_dir:" | cut -d: -f2)
@@ -181,7 +181,7 @@ create-ocp-aws() {
         echo "Automatically selecting Early Candidate release stream"
         unset AUTO_SELECT_EC
     else
-        stream=$(prompt_release_stream)
+        stream=$(prompt-release-stream)
     fi
 
     # Determine which architecture to use for release image
@@ -191,7 +191,7 @@ create-ocp-aws() {
         echo "INFO: Using multi-arch release image to support cross-architecture deployment"
     fi
 
-    local RELEASE_IMAGE=$(get_release_image "$stream" "$RELEASE_ARCH")
+    local RELEASE_IMAGE=$(get-release-image "$stream" "$RELEASE_ARCH")
     [[ -z "$RELEASE_IMAGE" ]] && return 1
 
     # Use the appropriate release image
@@ -206,7 +206,7 @@ create-ocp-aws() {
     mkdir -p $OCP_CREATE_DIR || return 1
     
     {
-        create_install_config_header
+        create-install-config-header
         echo "baseDomain: $AWS_BASEDOMAIN
 compute:
 - architecture: $ARCHITECTURE
@@ -236,7 +236,7 @@ platform:
   aws:
     region: $AWS_REGION
 publish: External"
-        add_credentials_to_install_config
+        add-credentials-to-install-config
     } > $OCP_CREATE_DIR/install-config.yaml || return 1
     
     echo "created install-config.yaml"
@@ -245,7 +245,7 @@ publish: External"
     
     # Create the cluster with error handling
     if ! $OPENSHIFT_INSTALL create cluster --dir $OCP_CREATE_DIR --log-level=info; then
-        cleanup_on_failure "$OCP_CREATE_DIR" "$CLUSTER_NAME" "aws"
+        cleanup-on-failure "$OCP_CREATE_DIR" "$CLUSTER_NAME" "aws"
         return 1
     fi
     

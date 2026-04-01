@@ -571,7 +571,7 @@ EOF
             created_at: $created_at
         }')
     
-    save_minio_config "$name" "$config_data"
+    save-minio-config "$name" "$config_data"
     
     echo -e "${GREEN}SUCCESS${NC}: MinIO deployment '$name' created successfully!"
     echo -e ""
@@ -592,8 +592,8 @@ EOF
     echo -e ""
     echo -e "${BLUE}Next steps:${NC}"
     if [[ "$cert_downloaded" == true ]]; then
-        echo -e "  1. Trust the certificate: trust_certificate_in_system $cert_file"
-        echo -e "  2. Test connection: test_minio_connection $name"
+        echo -e "  1. Trust the certificate: trust-certificate-in-system $cert_file"
+        echo -e "  2. Test connection: test-minio-connection $name"
     else
         echo -e "  1. Wait a few minutes for setup to complete"
         echo -e "  2. Download certificate: download-minio-certificate $name"
@@ -618,11 +618,11 @@ EOF
         sleep 30
         
         # Try to verify/create bucket
-        if ensure_default_bucket "$name" "$bucket_name"; then
+        if ensure-default-bucket "$name" "$bucket_name"; then
             echo -e "${GREEN}SUCCESS${NC}: Default bucket '$bucket_name' is ready!"
         else
             echo -e "${YELLOW}WARN${NC}: Default bucket verification failed, but you can create it manually later"
-            echo -e "${YELLOW}HINT${NC}: Run 'ensure_default_bucket $name' once MinIO is fully started"
+            echo -e "${YELLOW}HINT${NC}: Run 'ensure-default-bucket $name' once MinIO is fully started"
         fi
         
         # Clean up credentials from environment
@@ -672,7 +672,7 @@ delete-minio-aws() {
         return 1
     fi
     
-    local config=$(load_minio_config "$name")
+    local config=$(load-minio-config "$name")
     if [[ $? -ne 0 ]]; then
         return 1
     fi
@@ -742,7 +742,7 @@ delete-minio-aws() {
     # Remove certificate from system trust store
     if [[ -n "$cert_file" && "$cert_file" != "null" && -f "$cert_file" ]]; then
         echo -e "${BLUE}INFO${NC}: Removing certificate from system trust store"
-        remove_certificate_from_system "$cert_file"
+        remove-certificate-from-system "$cert_file"
         
         # Remove certificate files
         local cert_dir=$(dirname "$cert_file")
@@ -753,7 +753,7 @@ delete-minio-aws() {
     fi
     
     # Remove configuration
-    remove_minio_config "$name"
+    remove-minio-config "$name"
     
     echo -e "${GREEN}SUCCESS${NC}: MinIO deployment '$name' deleted successfully!"
 }
@@ -812,7 +812,7 @@ configure-minio-cluster-access() {
     fi
     
     # Load MinIO config
-    local config=$(load_minio_config "$minio_name")
+    local config=$(load-minio-config "$minio_name")
     if [[ $? -ne 0 ]]; then
         return 1
     fi

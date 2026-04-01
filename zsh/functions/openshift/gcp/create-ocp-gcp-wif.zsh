@@ -7,7 +7,7 @@ create-ocp-gcp-wif(){
     fi
     
     # Get openshift-install binary
-    local OPENSHIFT_INSTALL=$(get_openshift_install)
+    local OPENSHIFT_INSTALL=$(get-openshift-install)
     [[ -z "$OPENSHIFT_INSTALL" ]] && return 1
     $OPENSHIFT_INSTALL version
     # Check if help is requested
@@ -56,7 +56,7 @@ create-ocp-gcp-wif(){
     local OCP_CREATE_DIR_BASE="$OCP_MANIFESTS_DIR/$TODAY-gcp-wif"
     
     # Generate unique cluster name if needed
-    local unique_result=$(generate_unique_cluster_name "$CLUSTER_BASE_NAME" "$OCP_CREATE_DIR_BASE")
+    local unique_result=$(generate-unique-cluster-name "$CLUSTER_BASE_NAME" "$OCP_CREATE_DIR_BASE")
     [[ -z "$unique_result" ]] && return 1
     local CLUSTER_NAME=$(echo "$unique_result" | grep "cluster_name:" | cut -d: -f2)
     local OCP_CREATE_DIR=$(echo "$unique_result" | grep "cluster_dir:" | cut -d: -f2)
@@ -88,7 +88,7 @@ create-ocp-gcp-wif(){
     fi
     
     # Validate required GCP environment variables
-    validate_env_vars "gcp" \
+    validate-env-vars "gcp" \
         GCP_PROJECT_ID \
         GCP_REGION \
         GCP_BASEDOMAIN || return 1
@@ -130,9 +130,9 @@ create-ocp-gcp-wif(){
         echo "Automatically selecting Early Candidate release stream"
         unset AUTO_SELECT_EC
     else
-        stream=$(prompt_release_stream)
+        stream=$(prompt-release-stream)
     fi
-    local RELEASE_IMAGE=$(get_release_image "$stream" "multi")
+    local RELEASE_IMAGE=$(get-release-image "$stream" "multi")
     [[ -z "$RELEASE_IMAGE" ]] && return 1
     
     echo "INFO: Using release image: $RELEASE_IMAGE"
@@ -141,12 +141,12 @@ create-ocp-gcp-wif(){
     BASE_RELEASE_IMAGE_REGISTRY=$(echo $RELEASE_IMAGE | awk -F/ '{print $1}')
 
     # Handle registry login and pull secret update
-    handle_registry_login "$BASE_RELEASE_IMAGE_REGISTRY"
-    update_pull_secret_with_podman "$BASE_RELEASE_IMAGE_REGISTRY"
+    handle-registry-login "$BASE_RELEASE_IMAGE_REGISTRY"
+    update-pull-secret-with-podman "$BASE_RELEASE_IMAGE_REGISTRY"
     mkdir -p $OCP_CREATE_DIR || return 1
     
     {
-        create_install_config_header
+        create-install-config-header
         echo "baseDomain: $GCP_BASEDOMAIN
 compute:
 - architecture: amd64
@@ -178,7 +178,7 @@ platform:
     region: $GCP_REGION
 publish: External
 credentialsMode: Manual # needed for WIF"
-        add_credentials_to_install_config
+        add-credentials-to-install-config
     } > $OCP_CREATE_DIR/install-config.yaml || return 1
     
     echo "created install-config.yaml"
@@ -206,7 +206,7 @@ ccoctl gcp create-all \
     
     # Create the cluster with error handling
     if ! $OPENSHIFT_INSTALL create cluster --dir $OCP_CREATE_DIR --log-level=info; then
-        cleanup_on_failure "$OCP_CREATE_DIR" "$CLUSTER_NAME" "gcp"
+        cleanup-on-failure "$OCP_CREATE_DIR" "$CLUSTER_NAME" "gcp"
         return 1
     fi
     

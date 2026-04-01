@@ -6,6 +6,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 This is a dotfiles repository containing ZSH shell configuration files and utilities for a productive development environment. The main entry point is `.zshrc` which sources all necessary configuration files.
 
+## Conventions
+
+### Naming
+- **All public functions and aliases must use `kebab-case`** (e.g., `create-ocp-aws`, `set-tf-proxy`)
+- Private/internal helper functions may use `_underscore_prefix` (e.g., `_lazy_load_openshift`)
+- Single-word functions are exempt from this rule (e.g., `progress`, `error`)
+- When renaming a function, add a backwards-compatibility alias mapping the old name to the new name
+
 ## Common Commands
 
 ### Dotfiles Management
