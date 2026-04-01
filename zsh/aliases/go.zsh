@@ -22,3 +22,15 @@ alias grfw='golangci-lint-with-retry() {
   echo "Timeout: golangci-lint still busy after $max_attempts attempts"
   return 1
 }; golangci-lint-with-retry'
+
+# Vulnerability scanning
+alias govulncheck='govulncheck ./...'
+
+# Go test shortcuts
+alias gotest-race='go test -race ./...'
+alias gotest-v='go test -v ./...'
+alias gotest-cover='go test -coverprofile=coverage.out ./... && go tool cover -html=coverage.out'
+
+# Cross-compilation presets
+alias gobuild-linux-amd64='GOOS=linux GOARCH=amd64 go build'
+alias gobuild-linux-arm64='GOOS=linux GOARCH=arm64 go build'

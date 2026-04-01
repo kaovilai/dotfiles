@@ -30,6 +30,8 @@ brew "yq"                    # YAML processor
 
 # Development tools
 brew "go"
+brew "govulncheck"               # Go vulnerability scanner
+brew "delve"                     # Go debugger
 brew "node"
 brew "python@3.11"
 brew "rust"
