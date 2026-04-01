@@ -9,9 +9,6 @@ fi
 # VS Code shell integration (if we're running in VS Code)
 [[ "$TERM_PROGRAM" == "vscode" ]] && . "$(code --locate-shell-integration-path zsh)"
 
-# Source command cache helper
-source ~/git/dotfiles/zsh/cached-commands.zsh
-
 # AWS uses its own completer mechanism (critical for AWS workflows)
 if has_command aws_completer; then
   complete -C aws_completer aws

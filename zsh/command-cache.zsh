@@ -123,6 +123,30 @@ command_cache_clear() {
   echo "Command cache cleared"
 }
 
+# -- Command existence caching (in-memory) --
+# Avoids repeated PATH lookups during shell initialization
+
+typeset -gA _command_cache
+
+# Check if a command exists (cached in-memory)
+has_command() {
+    local cmd=$1
+    if [[ -z "${_command_cache[$cmd]+x}" ]]; then
+        if command -v "$cmd" >/dev/null 2>&1; then
+            _command_cache[$cmd]=1
+        else
+            _command_cache[$cmd]=0
+        fi
+    fi
+    return $(( 1 - $_command_cache[$cmd] ))
+}
+
+# Pre-cache common commands during shell startup
+for cmd in docker podman kubectl oc gh aws gcloud rosa velero yq kind pipenv pyenv nvm; do
+    has_command "$cmd" &
+done
+wait
+
 # Example usage:
 # cache 3600 kubectl-get-pods kubectl get pods  # Cache for 1 hour with explicit key
 # cache 86400 "ls -la"                          # Cache for 1 day with command as key
