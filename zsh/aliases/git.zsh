@@ -134,6 +134,10 @@ pr-me() {
     # Extract PR number from selection (first column)
     if [[ -n "$selected" ]]; then
       local pr_number=$(echo "$selected" | awk '{print $1}' | sed 's/#//')
+      if [[ ! "$pr_number" =~ ^[0-9]+$ ]]; then
+        echo "Error: Could not extract valid PR number from selection"
+        return 1
+      fi
     else
       # User cancelled
       return 0

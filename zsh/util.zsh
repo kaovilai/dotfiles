@@ -566,6 +566,26 @@ set-dns-servers() {
         return 1
     fi
 
+    # Validate IPv4 address format
+    if [[ -n "$ipv4_servers" ]]; then
+        for ip in ${=ipv4_servers}; do
+            if [[ ! "$ip" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
+                echo "Error: Invalid IPv4 address format: $ip"
+                return 1
+            fi
+        done
+    fi
+
+    # Validate IPv6 address format
+    if [[ -n "$ipv6_servers" ]]; then
+        for ip in ${=ipv6_servers}; do
+            if [[ ! "$ip" =~ ^[0-9a-fA-F:]+$ ]]; then
+                echo "Error: Invalid IPv6 address format: $ip"
+                return 1
+            fi
+        done
+    fi
+
     # Check if running on macOS
     if [[ "$(uname)" != "Darwin" ]]; then
         echo "Error: This function is only supported on macOS"

@@ -17,7 +17,12 @@ alias terminal='open -a Terminal .'
 alias install-pkg='sudo installer -target LocalSystem -pkg'
 
 install-pkg-from-url(){
-    curl -Lm 60 -o ~/Downloads/${1:t} "$1" && install-pkg ~/Downloads/${1:t}
+    if [[ ! "$1" =~ ^https:// ]]; then
+        echo "Error: Only HTTPS URLs are supported"
+        return 1
+    fi
+    echo "Warning: Installing unverified package from URL. No checksum verification."
+    curl -Lm 60 -o ~/Downloads/"${1:t}" "$1" && install-pkg ~/Downloads/"${1:t}"
 }
 
 PATH=$PATH:/Library/Frameworks/Python.framework/Versions/Current/bin
