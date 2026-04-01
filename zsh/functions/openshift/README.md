@@ -64,7 +64,7 @@ When found, it provides options to:
 
 - `list-ocp-clusters`: List all available clusters with optional details
 - `use-ocp-cluster`: Interactively select and use a cluster by setting KUBECONFIG
-- `installClusterOpenshiftInstall`: Install a cluster using local install-config.yaml
+- `install-cluster-openshift-install`: Install a cluster using local install-config.yaml
 
 ## Adding New Functions
 

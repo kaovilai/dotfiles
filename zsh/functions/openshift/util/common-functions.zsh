@@ -4,62 +4,62 @@
 # creation scripts (AWS, Azure, GCP, ROSA).
 #
 # Functions provided:
-#   - prompt_release_stream: Interactive release stream selection (dev-preview/stable)
-#   - get_release_image: Get release image URL for specific stream and architecture
-#   - validate_env_vars: Validate required environment variables are set
-#   - get_openshift_install: Find or install openshift-install binary
-#   - handle_registry_login: Login to container registries (podman)
-#   - update_pull_secret_with_podman: Update pull-secret.txt with registry credentials
-#   - create_install_config_header: Generate standard install-config.yaml header
-#   - add_credentials_to_install_config: Add pull secret and SSH key to install-config
-#   - generate_unique_cluster_name: Generate unique cluster name to avoid conflicts
-#   - cleanup_on_failure: Clean up resources when cluster creation fails
+#   - prompt-release-stream: Interactive release stream selection (dev-preview/stable)
+#   - get-release-image: Get release image URL for specific stream and architecture
+#   - validate-env-vars: Validate required environment variables are set
+#   - get-openshift-install: Find or install openshift-install binary
+#   - handle-registry-login: Login to container registries (podman)
+#   - update-pull-secret-with-podman: Update pull-secret.txt with registry credentials
+#   - create-install-config-header: Generate standard install-config.yaml header
+#   - add-credentials-to-install-config: Add pull secret and SSH key to install-config
+#   - generate-unique-cluster-name: Generate unique cluster name to avoid conflicts
+#   - cleanup-on-failure: Clean up resources when cluster creation fails
 
 # Function to prompt for release stream selection
-# Usage: stream=$(prompt_release_stream)
+# Usage: stream=$(prompt-release-stream)
 # Description: Interactively prompts user to select between dev-preview (EC) or stable release
 # Returns: "dev-preview" or "stable" to stdout
-prompt_release_stream() {
+prompt-release-stream() {
     echo "" >&2
     echo "Select OpenShift release stream:" >&2
-    echo "1) 4-dev-preview (Early Candidate) - Version: $(get_ocp_latest_ec_version)" >&2
-    echo "2) 4-stable (Release Candidate)   - Version: $(get_ocp_latest_stable_version)" >&2
+    echo "1) 4-dev-preview (Early Candidate) - Version: $(get-ocp-latest-ec-version)" >&2
+    echo "2) 4-stable (Release Candidate)   - Version: $(get-ocp-latest-stable-version)" >&2
     echo "" >&2
     echo -n "Enter your choice (1 or 2): " >&2
     read stream_choice
     
     if [[ "$stream_choice" == "2" ]]; then
-        echo "INFO: Using 4-stable release stream (version: $(get_ocp_latest_stable_version))" >&2
+        echo "INFO: Using 4-stable release stream (version: $(get-ocp-latest-stable-version))" >&2
         echo "stable"
     else
-        echo "INFO: Using 4-dev-preview release stream (version: $(get_ocp_latest_ec_version))" >&2
+        echo "INFO: Using 4-dev-preview release stream (version: $(get-ocp-latest-ec-version))" >&2
         echo "dev-preview"
     fi
 }
 
 # Function to get release image based on stream and architecture
-# Usage: image=$(get_release_image "stable" "amd64")
-#        image=$(get_release_image "dev-preview" "arm64")
-#        image=$(get_release_image "stable" "multi")
+# Usage: image=$(get-release-image "stable" "amd64")
+#        image=$(get-release-image "dev-preview" "arm64")
+#        image=$(get-release-image "stable" "multi")
 # Description: Gets the appropriate release image URL for the given stream and architecture
 # Parameters:
 #   $1 - stream: "stable" or "dev-preview"
 #   $2 - architecture: "amd64", "arm64", or "multi" (multi-arch)
 # Returns: Release image URL to stdout, exits with 1 on error
-get_release_image() {
+get-release-image() {
     local stream=$1
     local architecture=$2
     
     if [[ "$stream" == "stable" ]]; then
         case "$architecture" in
             "amd64"|"x86_64")
-                get_ocp_functions_release_image_stable_amd64
+                get-ocp-release-image-stable-amd64
                 ;;
             "arm64"|"aarch64")
-                get_ocp_functions_release_image_stable_arm64
+                get-ocp-release-image-stable-arm64
                 ;;
             "multi")
-                get_ocp_functions_release_image_stable_multi
+                get-ocp-release-image-stable-multi
                 ;;
             *)
                 echo "ERROR: Unknown architecture: $architecture" >&2
@@ -69,13 +69,13 @@ get_release_image() {
     else
         case "$architecture" in
             "amd64"|"x86_64")
-                get_ocp_functions_release_image_amd64
+                get-ocp-release-image-amd64
                 ;;
             "arm64"|"aarch64")
-                get_ocp_functions_release_image_arm64
+                get-ocp-release-image-arm64
                 ;;
             "multi")
-                get_ocp_functions_release_image_multi
+                get-ocp-release-image-multi
                 ;;
             *)
                 echo "ERROR: Unknown architecture: $architecture" >&2
@@ -86,16 +86,16 @@ get_release_image() {
 }
 
 # Function to validate environment variables
-# Usage: validate_env_vars "aws" AWS_REGION AWS_PROFILE
-#        validate_env_vars "azure" AZURE_SUBSCRIPTION_ID AZURE_TENANT_ID
+# Usage: validate-env-vars "aws" AWS_REGION AWS_PROFILE
+#        validate-env-vars "azure" AZURE_SUBSCRIPTION_ID AZURE_TENANT_ID
 # Description: Validates that all required environment variables are set
 # Parameters:
 #   $1 - provider: Cloud provider name (for error messages only)
 #   $@ - variable names to validate
 # Returns: 0 if all variables are set, 1 if any are missing
 # Example:
-#   validate_env_vars "azure" AZURE_SUBSCRIPTION_ID AZURE_TENANT_ID || return 1
-validate_env_vars() {
+#   validate-env-vars "azure" AZURE_SUBSCRIPTION_ID AZURE_TENANT_ID || return 1
+validate-env-vars() {
     local provider=$1
     shift
     local required_vars=("$@")
@@ -121,7 +121,7 @@ validate_env_vars() {
 }
 
 # Function to get openshift-install binary
-# Usage: OPENSHIFT_INSTALL=$(get_openshift_install)
+# Usage: OPENSHIFT_INSTALL=$(get-openshift-install)
 # Description: Finds an appropriate openshift-install binary or offers to install one
 #              Checks for versioned binaries (e.g., openshift-install-4.17.0) first,
 #              then falls back to generic 'openshift-install' command.
@@ -130,12 +130,12 @@ validate_env_vars() {
 # Environment:
 #   OPENSHIFT_INSTALL - If set, uses this path instead of searching
 # Example:
-#   local installer=$(get_openshift_install)
+#   local installer=$(get-openshift-install)
 #   [[ -z "$installer" ]] && return 1
 #   $installer version
-get_openshift_install() {
-    local ec_version=$(get_ocp_latest_ec_version)
-    local stable_version=$(get_ocp_latest_stable_version)
+get-openshift-install() {
+    local ec_version=$(get-ocp-latest-ec-version)
+    local stable_version=$(get-ocp-latest-stable-version)
 
     # Detect host architecture
     local host_arch=""
@@ -303,15 +303,15 @@ get_openshift_install() {
 }
 
 # Function to handle registry login
-# Usage: handle_registry_login "registry.ci.openshift.org"
-#        handle_registry_login "quay.io"
+# Usage: handle-registry-login "registry.ci.openshift.org"
+#        handle-registry-login "quay.io"
 # Description: Ensures user is logged into the specified container registry using podman
 #              For registry.ci.openshift.org, opens browser for OAuth login
 # Parameters:
 #   $1 - registry: Registry hostname to login to
 # Example:
-#   handle_registry_login "registry.ci.openshift.org"
-handle_registry_login() {
+#   handle-registry-login "registry.ci.openshift.org"
+handle-registry-login() {
     local registry=$1
     
     echo "INFO: Checking if podman is logged into $registry"
@@ -337,7 +337,7 @@ handle_registry_login() {
 }
 
 # Function to update pull secret with podman credentials
-# Usage: update_pull_secret_with_podman "registry.ci.openshift.org"
+# Usage: update-pull-secret-with-podman "registry.ci.openshift.org"
 # Description: Updates ~/pull-secret.txt with credentials from podman auth file
 #              for the specified registry. Skips quay.io as it's already included.
 # Parameters:
@@ -346,9 +346,9 @@ handle_registry_login() {
 #   - Must be logged into the registry via podman
 #   - ~/pull-secret.txt must exist
 # Example:
-#   handle_registry_login "$registry"
-#   update_pull_secret_with_podman "$registry"
-update_pull_secret_with_podman() {
+#   handle-registry-login "$registry"
+#   update-pull-secret-with-podman "$registry"
+update-pull-secret-with-podman() {
     local registry=$1
     
     if [[ "$registry" == "quay.io" ]]; then
@@ -396,29 +396,29 @@ update_pull_secret_with_podman() {
 }
 
 # Function to create standard install-config.yaml header
-# Usage: create_install_config_header > install-config.yaml
+# Usage: create-install-config-header > install-config.yaml
 # Description: Outputs the standard OpenShift install-config.yaml header
 # Returns: YAML header to stdout
-create_install_config_header() {
+create-install-config-header() {
     echo "additionalTrustBundlePolicy: Proxyonly
 apiVersion: v1"
 }
 
 # Function to add pull secret and SSH key to install-config
-# Usage: add_credentials_to_install_config >> install-config.yaml
+# Usage: add-credentials-to-install-config >> install-config.yaml
 # Description: Outputs pull secret and SSH key sections for install-config.yaml
 # Prerequisites:
 #   - ~/pull-secret.txt must exist
 #   - ~/.ssh/id_rsa.pub must exist
 # Returns: YAML credentials section to stdout
-add_credentials_to_install_config() {
+add-credentials-to-install-config() {
     echo "pullSecret: '$(cat ~/pull-secret.txt)'
 sshKey: |
   $(cat ~/.ssh/id_rsa.pub)"
 }
 
 # Function to generate unique cluster name and directory
-# Usage: result=$(generate_unique_cluster_name "tkaovila-20250114-sts" "/path/to/dir")
+# Usage: result=$(generate-unique-cluster-name "tkaovila-20250114-sts" "/path/to/dir")
 #        cluster_name=$(echo "$result" | grep "cluster_name:" | cut -d: -f2)
 #        cluster_dir=$(echo "$result" | grep "cluster_dir:" | cut -d: -f2)
 # Description: Generates unique cluster name by appending suffix if conflicts exist
@@ -430,9 +430,9 @@ sshKey: |
 # Environment:
 #   PROCEED_WITH_EXISTING_CLUSTERS - If "true", appends -1, -2, etc. to avoid conflicts
 # Example:
-#   local unique=$(generate_unique_cluster_name "$CLUSTER_NAME" "$OCP_CREATE_DIR")
+#   local unique=$(generate-unique-cluster-name "$CLUSTER_NAME" "$OCP_CREATE_DIR")
 #   [[ -z "$unique" ]] && return 1
-generate_unique_cluster_name() {
+generate-unique-cluster-name() {
     local base_name=$1
     local base_dir=$2
     local suffix=""
@@ -470,7 +470,7 @@ generate_unique_cluster_name() {
 }
 
 # Function to cleanup cluster resources on failure
-# Usage: cleanup_on_failure "$OCP_CREATE_DIR" "$CLUSTER_NAME" "azure"
+# Usage: cleanup-on-failure "$OCP_CREATE_DIR" "$CLUSTER_NAME" "azure"
 # Description: Attempts to gather bootstrap logs and provides cleanup guidance
 #              when cluster creation fails
 # Parameters:
@@ -480,10 +480,10 @@ generate_unique_cluster_name() {
 # Returns: Always returns 1 (failure status)
 # Example:
 #   if ! $OPENSHIFT_INSTALL create cluster --dir $dir; then
-#       cleanup_on_failure "$dir" "$name" "aws"
+#       cleanup-on-failure "$dir" "$name" "aws"
 #       return 1
 #   fi
-cleanup_on_failure() {
+cleanup-on-failure() {
     local cluster_dir=$1
     local cluster_name=$2
     local provider=$3
@@ -492,7 +492,7 @@ cleanup_on_failure() {
     
     # Try to gather bootstrap logs first
     if [[ -d "$cluster_dir" ]]; then
-        local openshift_install=$(get_openshift_install)
+        local openshift_install=$(get-openshift-install)
         if [[ -n "$openshift_install" ]]; then
             echo "Attempting to gather bootstrap logs..."
             $openshift_install gather bootstrap --dir "$cluster_dir" || true

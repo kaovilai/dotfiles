@@ -1,26 +1,26 @@
 # Heavy operations and network-related functions
 # This file is sourced only when not in VS Code to keep terminal startup fast
 
-is_at_home() {
+is-at-home() {
     ioreg -p IOUSB | grep -q "Plugable USBC-6950U" &&
     ioreg -p IOUSB | grep -q "TS4" &&
     networksetup -getnetworkserviceenabled "Thunderbolt Ethernet Slot 2" | grep -q Enabled
 }
-is_displaylink_connected() {
+is-displaylink-connected() {
     system_profiler SPDisplaysDataType | grep -q ARZOPA ||
     system_profiler SPDisplaysDataType | grep -q TYPE-C
 }
-restart_displaylink() {
+restart-displaylink() {
     osascript -e 'quit app "DisplayLink Manager"'
     while pgrep DisplayLinkUserAgent > /dev/null; do sleep 0.1; done
     open -a "DisplayLink Manager"
 }
 
-setTTLforHotspot(){
+set-ttl-for-hotspot(){
     sudo sysctl -w net.inet.ip.ttl=65
 }
 
-setTFproxy(){
+set-tf-proxy(){
     export TF_ROUTER_IP=$(networksetup -getinfo Wi-Fi | grep -e "^Router" | cut -d " " -f 2)
     export TF_ROUTER_PROXY_PORT=8228
     export http_proxy=$TF_ROUTER_IP:$TF_ROUTER_PROXY_PORT
@@ -31,14 +31,14 @@ setTFproxy(){
     networksetup -setsecurewebproxystate Wi-Fi on
 }
 
-unsetTFproxy(){
+unset-tf-proxy(){
     networksetup -setwebproxystate Wi-Fi off
     networksetup -setsecurewebproxystate Wi-Fi off
     unset http_proxy
     unset https_proxy
 }
 
-setSOCKSproxy(){
+set-socks-proxy(){
     # Allow IP override via parameter, otherwise get from router
     if [[ -n "$1" ]]; then
         export SOCKS_ROUTER_IP="$1"
@@ -50,11 +50,11 @@ setSOCKSproxy(){
     networksetup -setsocksfirewallproxystate Wi-Fi on
 }
 
-unsetSOCKSproxy(){
+unset-socks-proxy(){
     networksetup -setsocksfirewallproxystate Wi-Fi off
 }
 
-getSOCKSproxy(){
+get-socks-proxy(){
     local router_ip="${SOCKS_ROUTER_IP:-$(networksetup -getinfo Wi-Fi | grep -e "^Router" | cut -d " " -f 2)}"
     local proxy_port="${SOCKS_ROUTER_PROXY_PORT:-1888}"
 
@@ -73,13 +73,13 @@ if [[ "$TERM_PROGRAM" != "vscode" ]]; then
   WIFI_NAME=$(networksetup -getairportnetwork en0 2>/dev/null | cut -d " " -f 4)
   
   # Run home setup check in background
-  (is_at_home && (is_displaylink_connected || restart_displaylink)) &!
+  (is-at-home && (is-displaylink-connected || restart-displaylink)) &!
   
   # Handle proxy setup based on network
   if [[ "$WIFI_NAME" = "PASSAWIT's Z Fold7" ]]; then
-        (curl --silent --socks5 $SOCKS_ROUTER_IP:$SOCKS_ROUTER_PROXY_PORT http://www.google.com && setSOCKSproxy) &!
+        (curl --silent --socks5 $SOCKS_ROUTER_IP:$SOCKS_ROUTER_PROXY_PORT http://www.google.com && set-socks-proxy) &!
     else
-        unsetSOCKSproxy &!
+        unset-socks-proxy &!
     fi
     # MAC address randomization - uses ifconfig method (reliable on M4/Apple Silicon)
     # Source the function first
@@ -96,3 +96,11 @@ give-me-ram(){
 
 # AA Inflight WiFi automation - randomize MAC every 20 minutes for free WiFi
 source ~/git/dotfiles/zsh/functions/aa-inflight-wifi.zsh
+
+# Backwards compatibility aliases for renamed functions
+alias setTTLforHotspot='set-ttl-for-hotspot'
+alias setTFproxy='set-tf-proxy'
+alias unsetTFproxy='unset-tf-proxy'
+alias setSOCKSproxy='set-socks-proxy'
+alias unsetSOCKSproxy='unset-socks-proxy'
+alias getSOCKSproxy='get-socks-proxy'

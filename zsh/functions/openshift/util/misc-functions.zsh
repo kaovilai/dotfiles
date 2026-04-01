@@ -3,21 +3,21 @@
 # Functions for monitoring pods, patching resources, and cluster management
 #
 # Functions provided:
-#   - watchAllPodLogsInNamespace: Stream logs from all pods in a namespace
-#   - watchAllPodErrorsInNamespace: Stream and filter errors from all pods
-#   - patchCSVreplicas: Patch ClusterServiceVersion replica count
-#   - agdKubeAdminPassword: Get kubeadmin password for AgnosticD cluster
+#   - watch-all-pod-logs-in-namespace: Stream logs from all pods in a namespace
+#   - watch-all-pod-errors-in-namespace: Stream and filter errors from all pods
+#   - patch-csv-replicas: Patch ClusterServiceVersion replica count
+#   - agd-kubeadmin-password: Get kubeadmin password for AgnosticD cluster
 
 # Stream logs from all pods in a namespace
-# Usage: watchAllPodLogsInNamespace <NAMESPACE>
+# Usage: watch-all-pod-logs-in-namespace <NAMESPACE>
 # Description: Follows logs from all pods in a namespace in parallel
 #              Uses 100 parallel processes for efficient log streaming
 # Parameters:
 #   $1 - namespace: OpenShift namespace name
 # Example:
-#   watchAllPodLogsInNamespace openshift-adp
-#   watchAllPodLogsInNamespace my-app
-watchAllPodLogsInNamespace(){
+#   watch-all-pod-logs-in-namespace openshift-adp
+#   watch-all-pod-logs-in-namespace my-app
+watch-all-pod-logs-in-namespace(){
     if [ -z "$1" ]; then
         echo "No namespace supplied"
         return 1
@@ -26,14 +26,14 @@ watchAllPodLogsInNamespace(){
 }
 
 # Stream and filter errors from all pods in a namespace
-# Usage: watchAllPodErrorsInNamespace <NAMESPACE>
+# Usage: watch-all-pod-errors-in-namespace <NAMESPACE>
 # Description: Follows logs from all pods, filters for "error", and prefixes with pod name
 #              Uses 100 parallel processes for efficient monitoring
 # Parameters:
 #   $1 - namespace: OpenShift namespace name
 # Example:
-#   watchAllPodErrorsInNamespace openshift-adp
-watchAllPodErrorsInNamespace(){
+#   watch-all-pod-errors-in-namespace openshift-adp
+watch-all-pod-errors-in-namespace(){
     if [ -z "$1" ]; then
         echo "No namespace supplied"
         return 1
@@ -43,16 +43,16 @@ watchAllPodErrorsInNamespace(){
 }
 
 # Patch ClusterServiceVersion replica count
-# Usage: patchCSVreplicas <CSV_NAME> <REPLICAS>
+# Usage: patch-csv-replicas <CSV_NAME> <REPLICAS>
 # Description: Updates the replica count for an operator's ClusterServiceVersion
 #              Useful for scaling operator pods
 # Parameters:
 #   $1 - CSV name: Name of the ClusterServiceVersion
 #   $2 - replicas: Desired number of replicas
 # Example:
-#   patchCSVreplicas oadp-operator.v1.2.0 2
-#   patchCSVreplicas my-operator.v1.0.0 0  # Scale down to 0
-patchCSVreplicas(){
+#   patch-csv-replicas oadp-operator.v1.2.0 2
+#   patch-csv-replicas my-operator.v1.0.0 0  # Scale down to 0
+patch-csv-replicas(){
     if [ -z "$1" ]; then
         echo "No CSV name supplied"
         return 1
@@ -71,8 +71,8 @@ patchCSVreplicas(){
 '
 }
 
-agdKubeAdminPassword(){
- if [$1 = ""]; then 
+agd-kubeadmin-password(){
+ if [$1 = ""]; then
   echo "No GUID supplied"
   return 1
  else
@@ -80,3 +80,9 @@ agdKubeAdminPassword(){
   cat "~/.agnosticd/$1/ocp4-cluster_$1_kubeadmin-password"
  fi
 }
+
+# Backwards compatibility aliases for renamed functions
+alias watchAllPodLogsInNamespace='watch-all-pod-logs-in-namespace'
+alias watchAllPodErrorsInNamespace='watch-all-pod-errors-in-namespace'
+alias patchCSVreplicas='patch-csv-replicas'
+alias agdKubeAdminPassword='agd-kubeadmin-password'

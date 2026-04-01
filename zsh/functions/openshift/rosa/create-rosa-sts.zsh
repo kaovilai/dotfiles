@@ -95,7 +95,7 @@ create-rosa-sts() {
     local ROSA_CREATE_DIR="$OCP_MANIFESTS_DIR/$TODAY-rosa-sts-$ARCH_SUFFIX"
     
     # Generate unique cluster name if needed
-    local unique_result=$(generate_unique_cluster_name "$CLUSTER_BASE_NAME" "$ROSA_CREATE_DIR")
+    local unique_result=$(generate-unique-cluster-name "$CLUSTER_BASE_NAME" "$ROSA_CREATE_DIR")
     [[ -z "$unique_result" ]] && return 1
     local CLUSTER_NAME=$(echo "$unique_result" | grep "cluster_name:" | cut -d: -f2)
     local ROSA_CREATE_DIR=$(echo "$unique_result" | grep "cluster_dir:" | cut -d: -f2)
@@ -207,7 +207,7 @@ create-rosa-sts() {
     if ! eval "$rosa_cmd" 2>&1 | tee "$ROSA_CREATE_DIR/rosa-create.log"; then
         echo "ERROR: Failed to create ROSA cluster"
         echo "Check logs at: $ROSA_CREATE_DIR/rosa-create.log"
-        cleanup_on_failure "$ROSA_CREATE_DIR" "$CLUSTER_NAME" "rosa-sts"
+        cleanup-on-failure "$ROSA_CREATE_DIR" "$CLUSTER_NAME" "rosa-sts"
         return 1
     fi
     

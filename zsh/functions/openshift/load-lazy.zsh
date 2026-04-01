@@ -14,12 +14,14 @@ _lazy_load_openshift() {
 
 # Create lazy-loading wrappers for all OpenShift functions
 for func in \
-    add_credentials_to_install_config \
-    agdKubeAdminPassword \
+    add-credentials-to-install-config \
+    agd-kubeadmin-password \
     check-for-existing-clusters \
+    cleanup-on-failure \
     cleanup-velero-rosa-resources \
-    copyKUBECONFIG \
+    copy-kubeconfig \
     crc-start-version \
+    create-install-config-header \
     create-ocp-aws \
     create-ocp-azure-sts \
     create-ocp-gcp-wif \
@@ -36,7 +38,6 @@ for func in \
     create-velero-identity-for-azure-cluster \
     create-velero-identity-for-gcp-cluster \
     create-velero-identity-for-rosa-cluster \
-    create_install_config_header \
     delete-ocp-aws \
     delete-ocp-aws-dir \
     delete-ocp-azure-sts \
@@ -44,37 +45,37 @@ for func in \
     delete-ocp-gcp-wif \
     delete-ocp-gcp-wif-dir \
     delete-rosa-sts \
-    generate_unique_cluster_name \
-    getAPICA \
-    getOCrouterCA \
-    get_ocp_functions_release_image_multi \
-    get_ocp_functions_release_image_stable_multi \
-    get_ocp_latest_ec_version \
-    get_ocp_latest_stable_version \
-    get_openshift_install \
-    get_release_image \
-    handle_registry_login \
+    generate-unique-cluster-name \
+    get-api-ca \
+    get-oc-router-ca \
+    get-ocp-latest-ec-version \
+    get-ocp-latest-stable-version \
+    get-ocp-release-image-multi \
+    get-ocp-release-image-stable-multi \
+    get-openshift-install \
+    get-release-image \
+    handle-registry-login \
     install-ccoctl \
+    install-cluster-openshift-install \
     install-oc \
     install-ocp-installer \
     install-opm \
-    installClusterOpenshiftInstall \
     list-ocp-clusters \
-    patchCSVreplicas \
-    prompt_release_stream \
-    retry_ccoctl_azure \
-    rmAPICA \
-    rmRouterCA \
+    patch-csv-replicas \
+    prompt-release-stream \
+    retry-ccoctl-azure \
+    rm-api-ca \
+    rm-router-ca \
     save-cluster-login \
     select-rosa-cluster \
     setup-velero-oadp-for-azure-cluster \
     setup-velero-oadp-for-gcp-cluster \
     setup-velero-oadp-for-rosa-cluster \
-    trustAPICA \
-    trustAPICAFromFileInCurrentDir \
-    trustOCRouterCA \
-    trustOCRouterCAFromFileInCurrentDir \
-    update_pull_secret_with_podman \
+    trust-api-ca \
+    trust-api-ca-from-file \
+    trust-oc-router-ca \
+    trust-oc-router-ca-from-file \
+    update-pull-secret-with-podman \
     use-ocp-aws \
     use-ocp-aws-dir \
     use-ocp-azure-sts \
@@ -83,12 +84,17 @@ for func in \
     use-ocp-gcp-wif \
     use-ocp-gcp-wif-dir \
     use-rosa-sts \
+    validate-env-vars \
     validate-velero-role-assignments-for-azure-cluster \
     validate-velero-role-assignments-for-rosa-cluster \
-    watchAllPodErrorsInNamespace \
-    watchAllPodLogsInNamespace; do
+    watch-all-pod-errors-in-namespace \
+    watch-all-pod-logs-in-namespace; do
     eval "${func}() { _lazy_load_openshift; ${func} \"\$@\"; }"
 done
+
+# Backwards compatibility aliases for renamed camelCase/snake_case functions
+alias copyKUBECONFIG='copy-kubeconfig'
+alias installClusterOpenshiftInstall='install-cluster-openshift-install'
 
 # Always set aliases as they're lightweight
 alias kubectl=oc

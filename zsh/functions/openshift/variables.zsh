@@ -43,19 +43,19 @@ znap get_latest_multi_release_image() {
 }
 
 # Functions to get latest EC version and release images dynamically at runtime
-get_ocp_latest_ec_version() {
+get-ocp-latest-ec-version() {
     get_latest_ec_version
 }
 
-function get_ocp_functions_release_image_amd64() {
+function get-ocp-release-image-amd64() {
     get_latest_amd64_release_image
 }
 
-function get_ocp_functions_release_image_arm64() {
+function get-ocp-release-image-arm64() {
     get_latest_arm64_release_image
 }
 
-get_ocp_functions_release_image_multi() {
+get-ocp-release-image-multi() {
     get_latest_multi_release_image
 }
 
@@ -105,19 +105,19 @@ znap get_latest_stable_version() {
 }
 
 # Functions to get latest stable version and release images dynamically at runtime
-get_ocp_latest_stable_version() {
+get-ocp-latest-stable-version() {
     get_latest_stable_version
 }
 
-function get_ocp_functions_release_image_stable_amd64() {
+function get-ocp-release-image-stable-amd64() {
     get_latest_stable_amd64_release_image
 }
 
-function get_ocp_functions_release_image_stable_arm64() {
+function get-ocp-release-image-stable-arm64() {
     get_latest_stable_arm64_release_image
 }
 
-get_ocp_functions_release_image_stable_multi() {
+get-ocp-release-image-stable-multi() {
     get_latest_stable_multi_release_image
 }
 

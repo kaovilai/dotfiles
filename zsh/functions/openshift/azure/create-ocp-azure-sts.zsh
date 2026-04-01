@@ -7,7 +7,7 @@ create-ocp-azure-sts(){
     fi
     
     # Get openshift-install binary
-    local OPENSHIFT_INSTALL=$(get_openshift_install)
+    local OPENSHIFT_INSTALL=$(get-openshift-install)
     [[ -z "$OPENSHIFT_INSTALL" ]] && return 1
     $OPENSHIFT_INSTALL version
     # Check if help is requested
@@ -70,7 +70,7 @@ create-ocp-azure-sts(){
     local OCP_CREATE_DIR_BASE="$OCP_MANIFESTS_DIR/$TODAY-azure-sts"
     
     # Generate unique cluster name if needed
-    local unique_result=$(generate_unique_cluster_name "$CLUSTER_BASE_NAME" "$OCP_CREATE_DIR_BASE")
+    local unique_result=$(generate-unique-cluster-name "$CLUSTER_BASE_NAME" "$OCP_CREATE_DIR_BASE")
     [[ -z "$unique_result" ]] && return 1
     local CLUSTER_NAME=$(echo "$unique_result" | grep "cluster_name:" | cut -d: -f2)
     local OCP_CREATE_DIR=$(echo "$unique_result" | grep "cluster_dir:" | cut -d: -f2)
@@ -94,7 +94,7 @@ create-ocp-azure-sts(){
         if [[ -d "$OCP_CREATE_DIR" ]]; then
             $OPENSHIFT_INSTALL destroy cluster --dir $OCP_CREATE_DIR || echo "no existing cluster"
             $OPENSHIFT_INSTALL destroy bootstrap --dir $OCP_CREATE_DIR || echo "no existing bootstrap"
-            (retry_ccoctl_azure azure delete \
+            (retry-ccoctl-azure azure delete \
             --name $CLUSTER_NAME \
             --subscription-id $AZURE_SUBSCRIPTION_ID \
             --region $AZURE_REGION \
@@ -111,7 +111,7 @@ create-ocp-azure-sts(){
     fi
     
     # Validate required Azure environment variables
-    validate_env_vars "azure" \
+    validate-env-vars "azure" \
         AZURE_SUBSCRIPTION_ID \
         AZURE_TENANT_ID \
         AZURE_REGION \
@@ -399,9 +399,9 @@ create-ocp-azure-sts(){
         echo "Automatically selecting Early Candidate release stream"
         unset AUTO_SELECT_EC
     else
-        stream=$(prompt_release_stream)
+        stream=$(prompt-release-stream)
     fi
-    local RELEASE_IMAGE=$(get_release_image "$stream" "multi")
+    local RELEASE_IMAGE=$(get-release-image "$stream" "multi")
     [[ -z "$RELEASE_IMAGE" ]] && return 1
     
     echo "INFO: Using release image: $RELEASE_IMAGE"
@@ -409,8 +409,8 @@ create-ocp-azure-sts(){
     BASE_RELEASE_IMAGE_REGISTRY=$(echo $RELEASE_IMAGE | awk -F/ '{print $1}')
 
     # Handle registry login and pull secret update
-    handle_registry_login "$BASE_RELEASE_IMAGE_REGISTRY"
-    update_pull_secret_with_podman "$BASE_RELEASE_IMAGE_REGISTRY"
+    handle-registry-login "$BASE_RELEASE_IMAGE_REGISTRY"
+    update-pull-secret-with-podman "$BASE_RELEASE_IMAGE_REGISTRY"
     mkdir -p $OCP_CREATE_DIR && \
     echo "additionalTrustBundlePolicy: Proxyonly
 apiVersion: v1
@@ -470,7 +470,7 @@ echo "extracting credential-requests" && oc adm release extract \
 # Create Azure service principal and credentials using ccoctl with retry logic
 echo "INFO: Running ccoctl azure create-all with retry logic for eventual consistency handling..."
 echo "INFO: Using installation resource group: $CLUSTER_RESOURCE_GROUP"
-retry_ccoctl_azure azure create-all \
+retry-ccoctl-azure azure create-all \
 --name $CLUSTER_NAME \
 --subscription-id $AZURE_SUBSCRIPTION_ID \
 --tenant-id $AZURE_TENANT_ID \
@@ -486,7 +486,7 @@ retry_ccoctl_azure azure create-all \
     
     # Create the cluster with error handling
     if ! $OPENSHIFT_INSTALL create cluster --dir $OCP_CREATE_DIR --log-level=info; then
-        cleanup_on_failure "$OCP_CREATE_DIR" "$CLUSTER_NAME" "azure"
+        cleanup-on-failure "$OCP_CREATE_DIR" "$CLUSTER_NAME" "azure"
         return 1
     fi
     

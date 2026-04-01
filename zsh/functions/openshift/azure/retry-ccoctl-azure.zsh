@@ -2,7 +2,7 @@
 # This addresses the Azure equivalent of OCPBUGS-44933 (which only fixed GCP)
 # Also handles role assignment timeouts that occur due to replication delays
 
-retry_ccoctl_azure() {
+retry-ccoctl-azure() {
     local max_retries=5
     local retry_count=0
     local wait_time=5

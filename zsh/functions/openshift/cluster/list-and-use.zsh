@@ -5,7 +5,7 @@
 # Functions provided:
 #   - list-ocp-clusters: List all installed OpenShift clusters across all providers
 #   - use-ocp-cluster: Interactively select and set KUBECONFIG to a cluster
-#   - copyKUBECONFIG: Copy current KUBECONFIG to ~/.kube/config
+#   - copy-kubeconfig: Copy current KUBECONFIG to ~/.kube/config
 
 # List all installed OpenShift clusters
 # Usage: list-ocp-clusters [--full]
@@ -34,7 +34,7 @@ list-ocp-clusters() {
         echo ""
         echo "This function searches for OpenShift clusters in the following locations:"
         echo "  - $OCP_MANIFESTS_DIR (AWS and GCP installations)"
-        echo "  - ~/clusters (using installClusterOpenshiftInstall function)"
+        echo "  - ~/clusters (using install-cluster-openshift-install function)"
         echo "  - ~/.crc/machines/crc (CodeReady Containers)"
         echo ""
         return 0
@@ -357,7 +357,7 @@ use-ocp-cluster() {
 }
 
 # Copy KUBECONFIG to ~/.kube/config
-# Usage: copyKUBECONFIG
+# Usage: copy-kubeconfig
 # Description: Copies the current KUBECONFIG file to ~/.kube/config
 #              Validates KUBECONFIG is set and file exists before copying
 # Environment:
@@ -365,8 +365,8 @@ use-ocp-cluster() {
 # Returns: 1 if KUBECONFIG not set or file doesn't exist, 0 on success
 # Example:
 #   export KUBECONFIG=/path/to/cluster/auth/kubeconfig
-#   copyKUBECONFIG
-copyKUBECONFIG() {
+#   copy-kubeconfig
+copy-kubeconfig() {
     [ -f $KUBECONFIG ] || {
         echo "KUBECONFIG not set"
         return 1
