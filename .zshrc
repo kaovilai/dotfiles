@@ -53,6 +53,7 @@ source ~/git/dotfiles/zsh/paths.zsh
   source ~/git/dotfiles/zsh/functions/claude/functions.zsh
   source ~/git/dotfiles/zsh/functions/s3/load.zsh
 source ~/git/dotfiles/zsh/functions/git-utils.zsh
+  source ~/git/dotfiles/zsh/functions/podman-utils.zsh
   source ~/git/dotfiles/zsh/functions/dns.zsh
   source ~/git/dotfiles/zsh/functions/symlink-sd.zsh
   source ~/git/dotfiles/zsh/functions/wifi.zsh
