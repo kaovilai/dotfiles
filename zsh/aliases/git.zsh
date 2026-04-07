@@ -108,6 +108,55 @@ git-worktree-code() {
 }
 alias gwc='git-worktree-code'
 
+# Interactively select and remove a git worktree
+git-worktree-remove() {
+  local worktrees=$(git worktree list)
+  local count=$(echo "$worktrees" | wc -l | tr -d ' ')
+
+  if [[ "$count" -le 1 ]]; then
+    echo "No removable worktrees found (only the main worktree exists)"
+    return 1
+  fi
+
+  # Skip the first line (main worktree)
+  local removable=$(echo "$worktrees" | tail -n +2)
+
+  echo "Current worktrees:"
+  echo "$worktrees"
+  echo ""
+
+  local selected
+  if command -v fzf >/dev/null 2>&1; then
+    selected=$(echo "$removable" | fzf --height 40% --reverse --header "Select a worktree to remove (Ctrl+C to cancel)")
+  else
+    echo "Select a worktree to remove (or Ctrl+C to cancel):"
+    local wt_lines=("${(@f)removable}")
+    select choice in "${wt_lines[@]}"; do
+      if [[ -n "$choice" ]]; then
+        selected="$choice"
+        break
+      fi
+    done
+  fi
+
+  if [[ -z "$selected" ]]; then
+    return 0
+  fi
+
+  local wt_path=$(echo "$selected" | awk '{print $1}')
+  echo "Removing worktree: $wt_path"
+
+  if ! git worktree remove "$wt_path"; then
+    echo ""
+    echo -n "Removal failed. Force remove? (y/N) "
+    read -r confirm
+    if [[ "$confirm" =~ ^[Yy]$ ]]; then
+      git worktree remove --force "$wt_path"
+    fi
+  fi
+}
+alias gwr='git-worktree-remove'
+
 # PR management functions
 # Note: For best experience with arrow key navigation, install fzf:
 #   - On macOS: brew install fzf
