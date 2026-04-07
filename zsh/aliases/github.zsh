@@ -1,32 +1,66 @@
 # GitHub CLI related aliases
 alias gh-pr-view='gh pr view --web'
 
-# Clone and open repo in VS Code
+# Clone repo to ~/git/<repo-name> and open in VS Code
 ghcc() {
   if [ -z "$1" ]; then
     echo "Usage: ghcc <repo>"
     echo "Example: ghcc owner/repo or ghcc https://github.com/owner/repo"
     return 1
   fi
-  
+
   local repo_spec="$1"
   local repo_name
-  
+
   # Handle full GitHub URLs
   if [[ "$1" =~ ^https?://github\.com/(.+)$ ]]; then
-    # Extract owner/repo from URL
     repo_spec="${BASH_REMATCH[1]}"
-    # Remove .git suffix if present
     repo_spec="${repo_spec%.git}"
   fi
-  
+
   # Extract just the repo name for the directory
   repo_name=$(basename "$repo_spec")
-  
-  # Clone the repo
-  gh repo clone "$repo_spec" && cd "$repo_name" && code .
+  local target_dir="$HOME/git/$repo_name"
+
+  if [[ -d "$target_dir" ]]; then
+    echo "Directory $target_dir already exists, opening in VS Code..."
+    cd "$target_dir" && code .
+    return 0
+  fi
+
+  gh repo clone "$repo_spec" "$target_dir" && cd "$target_dir" && code .
 }
 alias ghclone='ghcc'
+
+# Clone GitLab repo to ~/git/<repo-name> and open in VS Code
+glcc() {
+  if [ -z "$1" ]; then
+    echo "Usage: glcc <repo>"
+    echo "Example: glcc group/repo or glcc https://gitlab.com/group/repo"
+    return 1
+  fi
+
+  local repo_spec="$1"
+  local repo_name
+
+  # Handle full GitLab URLs
+  if [[ "$1" =~ ^https?://[^/]+/(.+)$ ]]; then
+    repo_spec="${match[1]}"
+    repo_spec="${repo_spec%.git}"
+  fi
+
+  repo_name=$(basename "$repo_spec")
+  local target_dir="$HOME/git/$repo_name"
+
+  if [[ -d "$target_dir" ]]; then
+    echo "Directory $target_dir already exists, opening in VS Code..."
+    cd "$target_dir" && code .
+    return 0
+  fi
+
+  glab repo clone "$repo_spec" "$target_dir" && cd "$target_dir" && code .
+}
+alias glclone='glcc'
 
 # Fork, clone and open repo in VS Code
 ghfc() {
@@ -38,7 +72,7 @@ ghfc() {
   
   local repo_spec="$1"
   local repo_name
-  local target_dir="${2:-$PWD}"  # Use second argument or current directory
+  local target_dir="${2:-$HOME/git}"  # Use second argument or ~/git
   
   # Handle full GitHub URLs
   if [[ "$1" =~ ^https?://github\.com/(.+)$ ]]; then
