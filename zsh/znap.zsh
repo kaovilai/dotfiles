@@ -20,6 +20,9 @@ znap prompt sindresorhus/pure
 # -- Essential plugins (foreground) --
 # Syntax highlighting is loaded in foreground for immediate feedback
 znap source zsh-users/zsh-syntax-highlighting
+# Tame zsh-autocomplete: require 2+ chars before suggesting from history
+zstyle ':autocomplete:*' default-context history-incremental-search-backward
+zstyle ':autocomplete:*' min-input 2
 znap source marlonrichert/zsh-autocomplete
 
 # -- Non-essential plugins (background) --
