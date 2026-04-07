@@ -36,6 +36,8 @@ alias current-branch='git branch --show-current'
 alias recent-branches='git branch --sort=committerdate | tail -n 10'
 alias rev-sha-short='git rev-parse --short HEAD'
 alias code-lastcommitted='code $(git log --name-only --pretty=format: | head -n 1)'
+alias code-git-exclude='code .git/info/exclude'
+alias git-exclude-claude='echo "CLAUDE.md" >> .git/info/exclude'
 alias dco='git rebase HEAD~$(gh pr view --json commits -q ".commits | length") --signoff'
 alias dco-push='dco && git push --force'
 
