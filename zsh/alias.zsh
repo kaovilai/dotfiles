@@ -13,5 +13,8 @@ _safe_source ~/git/dotfiles/zsh/aliases/ibmcloud.zsh
 _safe_source ~/git/dotfiles/zsh/aliases/velero.zsh
 _safe_source ~/git/dotfiles/zsh/aliases/misc.zsh
 
+# Linux dev environments
+_safe_source ~/git/dotfiles/zsh/functions/linux-dev.zsh
+
 # Migration utilities
 _safe_source ~/git/dotfiles/zsh/functions/migrate-laptop.zsh
