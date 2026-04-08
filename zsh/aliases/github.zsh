@@ -14,7 +14,7 @@ ghcc() {
 
   # Handle full GitHub URLs
   if [[ "$1" =~ ^https?://github\.com/(.+)$ ]]; then
-    repo_spec="${BASH_REMATCH[1]}"
+    repo_spec="${match[1]}"
     repo_spec="${repo_spec%.git}"
   fi
 
@@ -77,7 +77,7 @@ ghfc() {
   # Handle full GitHub URLs
   if [[ "$1" =~ ^https?://github\.com/(.+)$ ]]; then
     # Extract owner/repo from URL
-    repo_spec="${BASH_REMATCH[1]}"
+    repo_spec="${match[1]}"
     # Remove .git suffix if present
     repo_spec="${repo_spec%.git}"
   fi
