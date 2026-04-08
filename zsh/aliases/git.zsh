@@ -127,7 +127,7 @@ git-worktree-remove() {
 
   local selected
   if command -v fzf >/dev/null 2>&1; then
-    selected=$(echo "$removable" | fzf --height 40% --reverse --header "Select a worktree to remove (Ctrl+C to cancel)")
+    selected=$(echo "$removable" | fzf --multi --height 40% --reverse --header "Select worktrees to remove (Tab to multi-select, Enter to confirm)")
   else
     echo "Select a worktree to remove (or Ctrl+C to cancel):"
     local wt_lines=("${(@f)removable}")
@@ -143,17 +143,20 @@ git-worktree-remove() {
     return 0
   fi
 
-  local wt_path=$(echo "$selected" | awk '{print $1}')
-  echo "Removing worktree: $wt_path"
+  local wt_paths=("${(@f)selected}")
+  for entry in "${wt_paths[@]}"; do
+    local wt_path=$(echo "$entry" | awk '{print $1}')
+    echo "Removing worktree: $wt_path"
 
-  if ! git worktree remove "$wt_path"; then
-    echo ""
-    echo -n "Removal failed. Force remove? (y/N) "
-    read -r confirm
-    if [[ "$confirm" =~ ^[Yy]$ ]]; then
-      git worktree remove --force "$wt_path"
+    if ! git worktree remove "$wt_path"; then
+      echo ""
+      echo -n "Force remove $wt_path? (y/N) "
+      read -r confirm
+      if [[ "$confirm" =~ ^[Yy]$ ]]; then
+        git worktree remove --force "$wt_path"
+      fi
     fi
-  fi
+  done
 }
 alias gwr='git-worktree-remove'
 
