@@ -103,16 +103,33 @@ migrate-to-new-laptop() {
     
     # Step 2: Check for Brewfile
     if [[ -f ~/git/dotfiles/Brewfile ]]; then
-        progress "Found Brewfile. Installing all packages..."
-        read -p "Install all packages from Brewfile? (y/n): " use_brewfile
-        
-        if [[ "$use_brewfile" == "y" ]]; then
-            cd ~/git/dotfiles
-            brew bundle || warning "Some packages failed to install"
-            success "Packages installed from Brewfile"
+        progress "Found Brewfile. Installing packages..."
+
+        if command -v fzf >/dev/null 2>&1; then
+            # Use fzf to let user select which packages to install
+            local all_packages=$(grep -E '^(brew|cask|tap|vscode)' ~/git/dotfiles/Brewfile)
+            local selected=$(echo "$all_packages" | fzf --multi --height 60% --reverse \
+                --header "Select packages to install (Tab to select, Enter to confirm, Ctrl+A to select all)" \
+                --bind 'ctrl-a:select-all')
+
+            if [[ -n "$selected" ]]; then
+                local tmpfile=$(mktemp)
+                echo "$selected" > "$tmpfile"
+                brew bundle --file="$tmpfile" || warning "Some packages failed to install"
+                rm "$tmpfile"
+                success "Selected packages installed"
+            else
+                warning "No packages selected"
+            fi
         else
-            # Fallback to manual installation
-            install_packages_manually
+            read -p "Install all packages from Brewfile? (y/n): " use_brewfile
+            if [[ "$use_brewfile" == "y" ]]; then
+                cd ~/git/dotfiles
+                brew bundle || warning "Some packages failed to install"
+                success "Packages installed from Brewfile"
+            else
+                install_packages_manually
+            fi
         fi
     else
         warning "No Brewfile found. Installing essential packages manually..."
