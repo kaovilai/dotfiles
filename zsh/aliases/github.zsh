@@ -15,6 +15,7 @@ ghcc() {
   # Handle full GitHub URLs
   if [[ "$1" =~ ^https?://github\.com/(.+)$ ]]; then
     repo_spec="${match[1]}"
+    repo_spec="${repo_spec%/}"
     repo_spec="${repo_spec%.git}"
   fi
 
@@ -46,6 +47,7 @@ glcc() {
   # Handle full GitLab URLs
   if [[ "$1" =~ ^https?://[^/]+/(.+)$ ]]; then
     repo_spec="${match[1]}"
+    repo_spec="${repo_spec%/}"
     repo_spec="${repo_spec%.git}"
   fi
 
@@ -78,6 +80,7 @@ ghfc() {
   if [[ "$1" =~ ^https?://github\.com/(.+)$ ]]; then
     # Extract owner/repo from URL
     repo_spec="${match[1]}"
+    repo_spec="${repo_spec%/}"
     # Remove .git suffix if present
     repo_spec="${repo_spec%.git}"
   fi
