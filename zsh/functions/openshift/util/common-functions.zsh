@@ -20,19 +20,29 @@
 # Description: Interactively prompts user to select between dev-preview (EC) or stable release
 # Returns: "dev-preview" or "stable" to stdout
 prompt-release-stream() {
-    echo "" >&2
-    echo "Select OpenShift release stream:" >&2
-    echo "1) 4-dev-preview (Early Candidate) - Version: $(get-ocp-latest-ec-version)" >&2
-    echo "2) 4-stable (Release Candidate)   - Version: $(get-ocp-latest-stable-version)" >&2
-    echo "" >&2
-    echo -n "Enter your choice (1 or 2): " >&2
-    read stream_choice
-    
+    local ec_ver=$(get-ocp-latest-ec-version)
+    local stable_ver=$(get-ocp-latest-stable-version)
+    local options="1) 4-dev-preview (Early Candidate) - Version: $ec_ver
+2) 4-stable (Release Candidate)   - Version: $stable_ver"
+
+    local stream_choice
+    if command -v fzf >/dev/null 2>&1; then
+        local selected=$(echo "$options" | fzf --height 40% --reverse --header "Select OpenShift release stream" </dev/tty)
+        stream_choice=$(echo "$selected" | awk -F')' '{print $1}')
+    else
+        echo "" >&2
+        echo "Select OpenShift release stream:" >&2
+        echo "$options" >&2
+        echo "" >&2
+        echo -n "Enter your choice (1 or 2): " >&2
+        read stream_choice
+    fi
+
     if [[ "$stream_choice" == "2" ]]; then
-        echo "INFO: Using 4-stable release stream (version: $(get-ocp-latest-stable-version))" >&2
+        echo "INFO: Using 4-stable release stream (version: $stable_ver)" >&2
         echo "stable"
     else
-        echo "INFO: Using 4-dev-preview release stream (version: $(get-ocp-latest-ec-version))" >&2
+        echo "INFO: Using 4-dev-preview release stream (version: $ec_ver)" >&2
         echo "dev-preview"
     fi
 }
