@@ -291,22 +291,34 @@ use-ocp-cluster() {
         return 0
     fi
     
-    # Show selection menu
-    echo "Available clusters:"
+    # Build selection list with indices
+    local selection_list=""
     for i in $(seq 1 ${#kubeconfig_files[@]}); do
-        echo "$i. ${cluster_names[$i-1]}"
+        selection_list+="$i. ${cluster_names[$i-1]}"$'\n'
     done
-    
-    # Prompt for selection
-    echo ""
-    read "choice?Enter cluster number (1-${#kubeconfig_files[@]}): "
-    
-    # Validate choice
-    if [[ ! $choice =~ ^[0-9]+$ || $choice -lt 1 || $choice -gt ${#kubeconfig_files[@]} ]]; then
-        echo "Invalid selection"
-        return 1
+    selection_list=${selection_list%$'\n'}
+
+    local selected
+    if command -v fzf >/dev/null 2>&1; then
+        selected=$(echo "$selection_list" | fzf --height 40% --reverse --header "Select a cluster (type to filter)")
+    else
+        echo "Available clusters:"
+        echo "$selection_list"
+        echo ""
+        read "choice?Enter cluster number (1-${#kubeconfig_files[@]}): "
+        if [[ ! $choice =~ ^[0-9]+$ || $choice -lt 1 || $choice -gt ${#kubeconfig_files[@]} ]]; then
+            echo "Invalid selection"
+            return 1
+        fi
+        selected="$choice. ${cluster_names[$choice-1]}"
     fi
-    
+
+    if [[ -z "$selected" ]]; then
+        return 0
+    fi
+
+    local choice=$(echo "$selected" | awk -F'.' '{print $1}')
+
     # Handle special ROSA clusters
     local selected_path="${kubeconfig_files[$choice-1]}"
     if [[ "$selected_path" == ROSA:* ]]; then
