@@ -8,6 +8,9 @@ This is a dotfiles repository containing ZSH shell configuration files and utili
 
 ## Conventions
 
+### Shell
+- **All code in this repo is ZSH, not Bash.** Use ZSH-specific syntax: `$match` for regex captures (not `$BASH_REMATCH`), `${match[1]}` indexing, `=~` with `$match`, etc.
+
 ### Naming
 - **All public functions and aliases must use `kebab-case`** (e.g., `create-ocp-aws`, `set-tf-proxy`)
 - Private/internal helper functions may use `_underscore_prefix` (e.g., `_lazy_load_openshift`)
