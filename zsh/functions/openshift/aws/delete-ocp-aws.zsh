@@ -75,18 +75,31 @@ delete-ocp-aws() {
             echo "Found cluster: ${found_clusters[1]} (${ARCH_SUFFIX})"
         else
             echo "Found multiple AWS clusters for today:"
+            local selection_list=""
             for i in {1..${#found_clusters[@]}}; do
-                echo "$i. ${found_clusters[$i]} (${found_archs[$i]})"
+                selection_list+="$i. ${found_clusters[$i]} (${found_archs[$i]})"$'\n'
             done
-            echo ""
-            read "choice?Enter choice (1-${#found_clusters[@]}): "
+            selection_list=${selection_list%$'\n'}
 
-            # Validate choice
-            if [[ ! $choice =~ ^[0-9]+$ || $choice -lt 1 || $choice -gt ${#found_clusters[@]} ]]; then
-                echo "ERROR: Invalid selection"
-                return 1
+            local selected
+            if command -v fzf >/dev/null 2>&1; then
+                selected=$(echo "$selection_list" | fzf --height 40% --reverse --header "Select a cluster to delete")
+            else
+                echo "$selection_list"
+                echo ""
+                read "choice?Enter choice (1-${#found_clusters[@]}): "
+                if [[ ! $choice =~ ^[0-9]+$ || $choice -lt 1 || $choice -gt ${#found_clusters[@]} ]]; then
+                    echo "ERROR: Invalid selection"
+                    return 1
+                fi
+                selected="$choice."
             fi
 
+            if [[ -z "$selected" ]]; then
+                return 0
+            fi
+
+            local choice=$(echo "$selected" | awk -F'.' '{print $1}')
             ARCH_SUFFIX="${found_archs[$choice]}"
             echo "Selected: ${found_clusters[$choice]} (${ARCH_SUFFIX})"
         fi
