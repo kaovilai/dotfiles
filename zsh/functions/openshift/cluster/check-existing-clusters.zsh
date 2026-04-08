@@ -296,13 +296,25 @@ check-for-existing-clusters() {
     
     # Prompt for action
     echo ""
-    echo "Options:"
-    echo "1. Destroy existing cluster(s) and create new one"
-    echo "2. Cancel operation"
-    echo "3. Force continue (create alongside existing clusters)"
-    echo ""
-    read "choice?Enter choice (1-3): "
-    
+    local options="1. Destroy existing cluster(s) and create new one
+2. Cancel operation
+3. Force continue (create alongside existing clusters)"
+
+    local choice
+    if command -v fzf >/dev/null 2>&1; then
+        local selected=$(echo "$options" | fzf --height 40% --reverse --header "Select an action")
+        if [[ -z "$selected" ]]; then
+            echo "Operation cancelled."
+            return 1
+        fi
+        choice=$(echo "$selected" | awk -F'.' '{print $1}')
+    else
+        echo "Options:"
+        echo "$options"
+        echo ""
+        read "choice?Enter choice (1-3): "
+    fi
+
     case "$choice" in
         1)
             echo "Destroying existing cluster(s)..."
