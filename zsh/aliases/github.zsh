@@ -264,3 +264,81 @@ gh-delete-package-tag() {
   fi
 }
 alias ghpkgdel='gh-delete-package-tag'
+
+# Batch-review GitHub PRs: open diffs in VS Code, then approve via fzf
+# Accepts messy input (bullets, spaces, markdown) - extracts URLs and owner/repo#num patterns
+review-prs() {
+  local raw_input=""
+
+  if [[ $# -gt 0 ]]; then
+    raw_input="$*"$'\n'
+  else
+    echo "Paste PR references (empty line to finish):"
+    local line
+    while IFS= read -r line; do
+      [[ -z "$line" ]] && break
+      raw_input+="$line"$'\n'
+    done
+  fi
+
+  # Extract PR references from input (handles bullets, markdown, surrounding text)
+  local pr_refs=()
+  local word
+  for word in ${=raw_input}; do
+    if [[ "$word" =~ https?://github\.com/([^/]+/[^/]+)/pull/([0-9]+) ]]; then
+      pr_refs+=("${match[1]}#${match[2]}")
+    elif [[ "$word" =~ ([A-Za-z0-9._-]+/[A-Za-z0-9._-]+)#([0-9]+) ]]; then
+      pr_refs+=("${match[1]}#${match[2]}")
+    fi
+  done
+  pr_refs=(${(u)pr_refs})
+
+  if [[ ${#pr_refs[@]} -eq 0 ]]; then
+    echo "No PR references found"
+    return 1
+  fi
+
+  echo "Found ${#pr_refs[@]} PRs: ${pr_refs[*]}"
+
+  local tmpdir=$(mktemp -d)
+  local pids=()
+
+  for ref in "${pr_refs[@]}"; do
+    local repo="${ref%#*}"
+    local pr_num="${ref#*#}"
+
+    local diff_file="$tmpdir/${repo//\//_}_${pr_num}.diff"
+    echo "Fetching diff for $ref..."
+    gh pr diff "$pr_num" --repo "$repo" > "$diff_file" 2>/dev/null
+    code --wait "$diff_file" &
+    pids+=($!)
+  done
+
+  echo "Opened ${#pr_refs[@]} diffs in VS Code. Waiting for all tabs to close..."
+  for pid in "${pids[@]}"; do
+    wait "$pid"
+  done
+  rm -rf "$tmpdir"
+
+  echo -n "Approval comment (default: /lgtm): "
+  local comment
+  read -r comment
+  [[ -z "$comment" ]] && comment="/lgtm"
+
+  local selected
+  selected=$(printf '%s\n' "${pr_refs[@]}" | \
+    fzf --multi --bind 'start:select-all' \
+        --prompt="Approve PRs > " \
+        --header="TAB to toggle, Enter to confirm") || {
+    echo "No PRs approved."
+    return 0
+  }
+
+  echo "$selected" | while IFS= read -r label; do
+    local repo="${label%#*}"
+    local pr_num="${label#*#}"
+    echo "Approving $label..."
+    gh pr review "$pr_num" --repo "$repo" --approve --body "$comment"
+  done
+  echo "Done."
+}
