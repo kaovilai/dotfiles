@@ -104,6 +104,17 @@ kill-orphan-zsh(){
         echo "Run 'kill-orphan-zsh -f' to kill, or '--dry-run' to preview only."
     fi
 }
+function ocr(){
+    local input="$1"
+    if [[ ! -f "$input" ]]; then
+        echo "Error: Input file '$input' not found"
+        return 1
+    fi
+    local ext="${input##*.}"
+    local base="${input%.*}"
+    local output="${base}-ocr.${ext}"
+    ocrmypdf --force-ocr "$input" "$output" && open "$output"
+}
 function vid2gif(){
     local input="$1"
     local output="$HOME/Downloads/$(basename "${input%.*}").gif"
