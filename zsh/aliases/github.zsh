@@ -29,7 +29,19 @@ ghcc() {
     return 0
   fi
 
-  gh repo clone "$repo_spec" "$target_dir" && cd "$target_dir" && code .
+  if ! gh repo clone "$repo_spec" "$target_dir" 2>/dev/null; then
+    echo "Repository '$repo_spec' not found."
+    echo -n "Create private repo '$repo_name'? (y/N) "
+    local confirm
+    read -r confirm
+    if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
+      echo "Aborted."
+      return 1
+    fi
+    gh repo create "$repo_name" --private || return 1
+    gh repo clone "$repo_name" "$target_dir" || return 1
+  fi
+  cd "$target_dir" && code .
 }
 alias ghclone='ghcc'
 
