@@ -15,7 +15,7 @@ delete-ocp-gcp-wif(){
         echo ""
         echo "Options:"
         echo "  help          Display this help message"
-        echo "  CLUSTER_NAME  Optional: Specify a custom cluster name (default: tkaovila-YYYYMMDD-wif)"
+        echo "  CLUSTER_NAME  Optional: Specify a custom cluster name (default: tkaovila-YYMMDD-wif)"
         echo ""
         echo "This function:"
         echo "  - Destroys the cluster using openshift-install"
@@ -29,7 +29,7 @@ delete-ocp-gcp-wif(){
     # Safety check - ensure TODAY is not empty
     if [[ -z "$TODAY" ]]; then
         echo "WARNING: TODAY variable is empty, using current date"
-        TODAY=$(date +%Y%m%d)
+        TODAY=$(date +%y%m%d)
     fi
     
     OCP_CREATE_DIR=$OCP_MANIFESTS_DIR/$TODAY-gcp-wif
@@ -108,7 +108,7 @@ delete-ocp-gcp-wif-dir() {
     # Extract date from directory name
     # Assuming format like 20250410-gcp-wif
     # Also handle numbered suffixes like 20250410-gcp-wif-1
-    if [[ $dir_basename =~ ^([0-9]{8})-gcp-wif(-[0-9]+)?$ ]]; then
+    if [[ $dir_basename =~ ^([0-9]{6,8})-gcp-wif(-[0-9]+)?$ ]]; then
         local extracted_date=${match[1]}
         local extracted_suffix=${match[2]}
         
@@ -148,7 +148,7 @@ delete-ocp-gcp-wif-dir() {
         TODAY=$original_today
     else
         echo "ERROR: Directory name format not recognized: $dir_basename"
-        echo "Expected format: YYYYMMDD-gcp-wif (e.g., 20250410-gcp-wif)"
+        echo "Expected format: YYMMDD-gcp-wif (e.g., 260428-gcp-wif) or legacy YYYYMMDD-gcp-wif"
         echo "Using current date as fallback"
         
         # Use current date as fallback

@@ -15,7 +15,7 @@ delete-ocp-azure-sts(){
         echo ""
         echo "Options:"
         echo "  help          Display this help message"
-        echo "  CLUSTER_NAME  Optional: Specify a custom cluster name (default: tkaovila-YYYYMMDD-sts)"
+        echo "  CLUSTER_NAME  Optional: Specify a custom cluster name (default: tkaovila-YYMMDD-sts)"
         echo ""
         echo "This function:"
         echo "  - Destroys the cluster using openshift-install"
@@ -29,7 +29,7 @@ delete-ocp-azure-sts(){
     # Safety check - ensure TODAY is not empty
     if [[ -z "$TODAY" ]]; then
         echo "WARNING: TODAY variable is empty, using current date"
-        TODAY=$(date +%Y%m%d)
+        TODAY=$(date +%y%m%d)
     fi
     
     OCP_CREATE_DIR=$OCP_MANIFESTS_DIR/$TODAY-azure-sts
@@ -116,7 +116,7 @@ delete-ocp-azure-sts-dir() {
     # Extract date from directory name
     # Assuming format like 20250410-azure-sts
     # Also handle numbered suffixes like 20250410-azure-sts-1
-    if [[ $dir_basename =~ ^([0-9]{8})-azure-sts(-[0-9]+)?$ ]]; then
+    if [[ $dir_basename =~ ^([0-9]{6,8})-azure-sts(-[0-9]+)?$ ]]; then
         local extracted_date=${match[1]}
         local extracted_suffix=${match[2]}
         
@@ -156,7 +156,7 @@ delete-ocp-azure-sts-dir() {
         TODAY=$original_today
     else
         echo "ERROR: Directory name format not recognized: $dir_basename"
-        echo "Expected format: YYYYMMDD-azure-sts (e.g., 20250410-azure-sts)"
+        echo "Expected format: YYMMDD-azure-sts (e.g., 260428-azure-sts) or legacy YYYYMMDD-azure-sts"
         echo "Using current date as fallback"
         
         # Use current date as fallback

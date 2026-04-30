@@ -37,7 +37,7 @@ delete-ocp-aws() {
     # Safety check - ensure TODAY is not empty
     if [[ -z "$TODAY" ]]; then
         echo "WARNING: TODAY variable is empty, using current date"
-        TODAY=$(date +%Y%m%d)
+        TODAY=$(date +%y%m%d)
     fi
 
     # Auto-detect architecture if not provided
@@ -51,7 +51,7 @@ delete-ocp-aws() {
             for dir in "$OCP_MANIFESTS_DIR"/$TODAY-aws-*(/N); do
                 local dir_basename=$(basename "$dir")
                 # Extract architecture from directory name
-                if [[ $dir_basename =~ ^[0-9]{8}-aws-(arm64|amd64)(-[0-9]+)?$ ]]; then
+                if [[ $dir_basename =~ ^[0-9]{6,8}-aws-(arm64|amd64)(-[0-9]+)?$ ]]; then
                     local arch=${match[1]}
                     found_clusters+=("$dir_basename")
                     found_archs+=("$arch")
@@ -243,7 +243,7 @@ delete-ocp-aws-dir() {
         TODAY=$original_today
     else
         echo "ERROR: Directory name format not recognized: $dir_basename"
-        echo "Expected format: YYYYMMDD-aws-ARCH (e.g., 20250410-aws-arm64)"
+        echo "Expected format: YYMMDD-aws-ARCH (e.g., 260428-aws-arm64) or legacy YYYYMMDD-aws-ARCH"
         echo "Using current date and arm64 architecture as fallback"
         
         # Use current date and arm64 as fallback
