@@ -12,9 +12,6 @@ create-ocp-aws() {
     # Get openshift-install binary
     local OPENSHIFT_INSTALL=$(get-openshift-install)
     [[ -z "$OPENSHIFT_INSTALL" ]] && return 1
-    local ARCHITECTURE=$2
-    local ARCH_SUFFIX=${2}
-
     # Detect host architecture for cross-arch support
     local HOST_ARCH=""
     case "$(uname -m)" in
@@ -29,6 +26,9 @@ create-ocp-aws() {
             return 1
             ;;
     esac
+
+    local ARCHITECTURE=${2:-$HOST_ARCH}
+    local ARCH_SUFFIX=$ARCHITECTURE
 
     # Determine if we need multi-arch support
     local USE_MULTI_ARCH="false"
@@ -106,7 +106,7 @@ create-ocp-aws() {
     # Safety check - ensure TODAY is not empty
     if [[ -z "$TODAY" ]]; then
         echo "WARNING: TODAY variable is empty, using current date"
-        TODAY=$(date +%Y%m%d)
+        TODAY=$(date +%y%m%d)
     fi
     
     # Set initial cluster name and directory

@@ -130,6 +130,47 @@ validate-env-vars() {
     return 0
 }
 
+# Internal helper to download openshift-install binary
+_download-openshift-install() {
+    local version=$1
+    local arch=$2
+
+    echo "Installing openshift-install ${version} for $arch architecture..." >&2
+
+    local os=""
+    case "$(uname -s)" in
+        "Darwin") os="mac" ;;
+        "Linux") os="linux" ;;
+        *)
+            echo "ERROR: Unsupported OS: $(uname -s)" >&2
+            return 1
+            ;;
+    esac
+
+    local url="https://mirror.openshift.com/pub/openshift-v4/clients/ocp-dev-preview/${version}/openshift-install-${os}-${arch}.tar.gz"
+    local temp_dir=$(mktemp -d)
+
+    echo "Downloading from: $url" >&2
+    if curl -sL "$url" -o "${temp_dir}/openshift-install.tar.gz"; then
+        tar -xzf "${temp_dir}/openshift-install.tar.gz" -C "${temp_dir}"
+        if sudo mv "${temp_dir}/openshift-install" "/usr/local/bin/openshift-install-${version}"; then
+            sudo chmod +x "/usr/local/bin/openshift-install-${version}"
+            echo "Successfully installed openshift-install-${version}" >&2
+            rm -rf "${temp_dir}"
+            echo "openshift-install-${version}"
+            return 0
+        else
+            echo "ERROR: Failed to install openshift-install to /usr/local/bin" >&2
+            rm -rf "${temp_dir}"
+            return 1
+        fi
+    else
+        echo "ERROR: Failed to download openshift-install" >&2
+        rm -rf "${temp_dir}"
+        return 1
+    fi
+}
+
 # Function to get openshift-install binary
 # Usage: OPENSHIFT_INSTALL=$(get-openshift-install)
 # Description: Finds an appropriate openshift-install binary or offers to install one
@@ -213,11 +254,13 @@ get-openshift-install() {
             echo "WARN: Would you like to re-download the correct $host_arch version? (y/n)" >&2
             read -r redownload_choice
             if [[ "$redownload_choice" == "y" || "$redownload_choice" == "Y" ]]; then
-                # Remove the incorrect binary
+                # Remove the incorrect binary and download correct version
                 local binary_path=$(command -v "$binary")
                 echo "Removing incorrect binary: $binary_path" >&2
                 sudo rm "$binary_path"
-                # Fall through to installation below
+                # Jump directly to download
+                _download-openshift-install "$ec_version" "$host_arch"
+                return $?
             else
                 echo "$binary"
                 return 0
@@ -256,55 +299,8 @@ get-openshift-install() {
         read -r install_choice
         
         if [[ "$install_choice" == "y" || "$install_choice" == "Y" ]]; then
-            echo "Installing openshift-install ${ec_version} for $host_arch architecture..." >&2
-
-            # Detect OS
-            local os=""
-            case "$(uname -s)" in
-                "Darwin")
-                    os="mac"
-                    ;;
-                "Linux")
-                    os="linux"
-                    ;;
-                *)
-                    echo "ERROR: Unsupported OS: $(uname -s)" >&2
-                    return 1
-                    ;;
-            esac
-            
-            # Download URL
-            local url="https://mirror.openshift.com/pub/openshift-v4/clients/ocp-dev-preview/${ec_version}/openshift-install-${os}-${host_arch}.tar.gz"
-            
-            # Create temporary directory
-            local temp_dir=$(mktemp -d)
-            
-            # Download and extract
-            echo "Downloading from: $url" >&2
-            if curl -sL "$url" -o "${temp_dir}/openshift-install.tar.gz"; then
-                tar -xzf "${temp_dir}/openshift-install.tar.gz" -C "${temp_dir}"
-                
-                # Install to /usr/local/bin with version suffix
-                if sudo mv "${temp_dir}/openshift-install" "/usr/local/bin/openshift-install-${ec_version}"; then
-                    sudo chmod +x "/usr/local/bin/openshift-install-${ec_version}"
-                    echo "Successfully installed openshift-install-${ec_version}" >&2
-                    
-                    # Clean up
-                    rm -rf "${temp_dir}"
-                    
-                    # Return the installed binary
-                    echo "openshift-install-${ec_version}"
-                    return 0
-                else
-                    echo "ERROR: Failed to install openshift-install to /usr/local/bin" >&2
-                    rm -rf "${temp_dir}"
-                    return 1
-                fi
-            else
-                echo "ERROR: Failed to download openshift-install" >&2
-                rm -rf "${temp_dir}"
-                return 1
-            fi
+            _download-openshift-install "$ec_version" "$host_arch"
+            return $?
         else
             echo "Please install openshift-install or set OPENSHIFT_INSTALL variable" >&2
             return 1

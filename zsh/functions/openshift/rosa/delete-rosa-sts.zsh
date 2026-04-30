@@ -8,7 +8,7 @@ delete-rosa-sts() {
     # Safety check - ensure TODAY is not empty
     if [[ -z "$TODAY" ]]; then
         echo "WARNING: TODAY variable is empty, using current date"
-        TODAY=$(date +%Y%m%d)
+        TODAY=$(date +%y%m%d)
     fi
     
     # Set cluster name and directory
