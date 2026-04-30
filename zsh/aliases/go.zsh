@@ -34,3 +34,6 @@ alias gotest-cover='go test -coverprofile=coverage.out ./... && go tool cover -h
 # Cross-compilation presets
 alias gobuild-linux-amd64='GOOS=linux GOARCH=amd64 go build'
 alias gobuild-linux-arm64='GOOS=linux GOARCH=arm64 go build'
+
+# Update all golang.org/x dependencies
+alias go-update-x='go list -m all | grep golang.org/x | cut -d'"'"' '"'"' -f1 | xargs go get && go mod tidy'
