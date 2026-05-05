@@ -45,6 +45,7 @@ export GCR_IMAGE_TAGS=""
 export BUILDX_PLATFORMS=linux/amd64,linux/arm64
 # For velero to not create new instances
 export BUILDX_INSTANCE=default
+export HAPPY_CLAUDE_PATH=~/.local/bin/claude
 # Load OS-specific essentials (lightweight aliases always loaded)
 [[ "$(uname -s)" = "Darwin" ]] && source ~/git/dotfiles/zsh/macos.zsh
 # Essential utilities (needed for basic shell functionality)
