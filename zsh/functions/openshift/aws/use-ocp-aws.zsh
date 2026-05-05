@@ -5,7 +5,7 @@ use-ocp-aws() {
     #   $1 - Command/option (help) or directory suffix
     #   $2 - Architecture (arm64 or amd64)
     
-    local ARCH_SUFFIX=$2
+    local ARCH_SUFFIX=${2:-$(uname -m | sed 's/x86_64/amd64/' | sed 's/aarch64/arm64/')}
     
     # Check if help is requested
     if [[ $1 == "help" ]]; then
