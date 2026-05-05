@@ -29,6 +29,71 @@ alias dockerplatforms-amdarmibm='echo linux/amd64,linux/arm64,linux/s390x,linux/
 # Podman related aliases
 alias pbubi_manifest='podman build --platform "$(dockerplatforms-amdarm)" -f Dockerfile.ubi . --manifest "$(ghcr_tag)" && podman manifest push "$(ghcr_tag)" && ghcr_tag'
 
+# Socktainer socket symlink functions
+# https://github.com/socktainer/socktainer#quick-start
+
+function socktainer-symlink-docker() {
+  sudo ln -sf "$HOME/.socktainer/container.sock" /var/run/docker.sock
+  echo "Symlinked socktainer socket -> /var/run/docker.sock"
+}
+
+function socktainer-symlink-docker-undo() {
+  sudo rm -f /var/run/docker.sock
+  echo "Removed /var/run/docker.sock symlink"
+}
+
+function socktainer-symlink-podman() {
+  local podman_sock_dir="${TMPDIR%/}/storage-run-$(id -u)/podman"
+  mkdir -p "$podman_sock_dir"
+  ln -sf "$HOME/.socktainer/container.sock" "$podman_sock_dir/podman.sock"
+  echo "Symlinked socktainer socket -> $podman_sock_dir/podman.sock"
+}
+
+function socktainer-symlink-podman-undo() {
+  rm -f "${TMPDIR%/}/storage-run-$(id -u)/podman/podman.sock"
+  echo "Removed podman socket symlink"
+}
+
+function socktainer-symlink-all() {
+  socktainer-symlink-docker
+  socktainer-symlink-podman
+}
+
+function socktainer-symlink-all-undo() {
+  socktainer-symlink-docker-undo
+  socktainer-symlink-podman-undo
+}
+
+function socktainer-export-docker() {
+  export DOCKER_HOST="unix://$HOME/.socktainer/container.sock"
+  echo "DOCKER_HOST=$DOCKER_HOST"
+}
+
+function socktainer-export-docker-undo() {
+  unset DOCKER_HOST
+  echo "Unset DOCKER_HOST"
+}
+
+function socktainer-export-podman() {
+  export CONTAINER_HOST="unix://$HOME/.socktainer/container.sock"
+  echo "CONTAINER_HOST=$CONTAINER_HOST"
+}
+
+function socktainer-export-podman-undo() {
+  unset CONTAINER_HOST
+  echo "Unset CONTAINER_HOST"
+}
+
+function socktainer-export-all() {
+  socktainer-export-docker
+  socktainer-export-podman
+}
+
+function socktainer-export-all-undo() {
+  socktainer-export-docker-undo
+  socktainer-export-podman-undo
+}
+
 # Helper functions for docker aliases
 alias ghcr_tag='echo "ghcr.io/kaovilai/${PWD:t}:$(current-branch)"'
 alias ghcr_notag='echo "ghcr.io/kaovilai/${PWD:t}"'
