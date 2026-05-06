@@ -94,6 +94,10 @@ function socktainer-export-all-undo() {
   socktainer-export-podman-undo
 }
 
+# Auth file aliases
+alias docker-auth='echo ~/.docker/config.json'
+alias podman-auth='echo ${XDG_RUNTIME_DIR:-~/.config}/containers/auth.json'
+
 # Helper functions for docker aliases
 alias ghcr_tag='echo "ghcr.io/kaovilai/${PWD:t}:$(current-branch)"'
 alias ghcr_notag='echo "ghcr.io/kaovilai/${PWD:t}"'
