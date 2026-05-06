@@ -187,6 +187,15 @@ if has_command claude || has_command happy; then
   fi
 fi
 
+# Netbird - cached
+if has_command netbird; then
+  local netbird_completion_cache="$ZSH_COMPLETION_CACHE_DIR/_netbird_generated"
+  if completion_cache_expired "$netbird_completion_cache"; then
+    netbird completion zsh > "$netbird_completion_cache" 2>/dev/null
+  fi
+  [[ -f "$netbird_completion_cache" ]] && cat "$netbird_completion_cache" > "${fpath[1]}/_netbird" &!
+fi
+
 # Custom code-git completion
 cat << EOF > "${fpath[1]}/_code-git" &!
 #compdef code-git
