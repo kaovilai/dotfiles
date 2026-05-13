@@ -73,6 +73,7 @@ alias claude-container='podman run --rm -it -v "$(pwd):/workspace:Z" -v "$HOME/.
 alias claude-dangerously-container='podman run --rm -it -v "$(pwd):/workspace:Z" -v "$HOME/.config/claude-container:/claude" -v "$HOME/.config/gcloud:/home/node/.config/gcloud:ro" -e CLAUDE_CONFIG_DIR=/claude -e CLAUDE_CODE_USE_VERTEX -e ANTHROPIC_VERTEX_PROJECT_ID -e CLOUD_ML_REGION -e ANTHROPIC_VERTEX_BASE_URL ghcr.io/kaovilai/claude-container:latest claude --enable-auto-mode --permission-mode auto --dangerously-skip-permissions'
 alias gcloud-token='gcloud auth print-access-token'
 alias claude-install='~/.local/bin/claude install'
+alias claude-local='~/.local/bin/claude'
 alias claude='happy --enable-auto-mode --permission-mode auto'
 alias claude-dangerously='happy --enable-auto-mode --permission-mode auto --dangerously-skip-permissions'
 alias claude-worktree='claude --worktree'
