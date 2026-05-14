@@ -143,11 +143,21 @@ exec-dirs-ds-echo() {
 # open all dirs matching pattern in code
 # ex: code-dirs "velero*"
 code-dirs() {
+    if ! command -v parallel &> /dev/null; then
+        echo "❌ parallel not found. Install it with: brew install parallel"
+        return 1
+    fi
+
     find . -type d -maxdepth 1 -name "$1" | parallel code {}
 }
 
 # open all dirs matching pattern in finder
 # ex: finder-dirs "velero*"
 finder-dirs() {
+    if ! command -v parallel &> /dev/null; then
+        echo "❌ parallel not found. Install it with: brew install parallel"
+        return 1
+    fi
+
     find . -type d -maxdepth 1 -name "$1" | parallel open -a Finder {}
 }
