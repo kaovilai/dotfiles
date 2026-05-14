@@ -2,7 +2,10 @@
 # Run with: brew bundle --file=~/git/dotfiles/Brewfile
 
 # Taps
+tap "nvidia/openshell"
+tap "oven-sh/bun"
 tap "snyk/tap"
+tap "socktainer/tap"
 
 # Essential CLI tools
 brew "git"
@@ -60,7 +63,6 @@ brew "spoof-mac"             # MAC address spoofing
 
 # Document and media tools
 brew "ffmpeg"
-brew "imagemagick"
 brew "poppler"               # PDF rendering library
 brew "ocrmypdf"              # OCR for PDFs
 
@@ -71,16 +73,27 @@ brew "cfssl"                 # CloudFlare SSL toolkit
 
 # AI tools
 brew "gptme"                 # GPT terminal assistant
+brew "nvidia/openshell/openshell" # NVIDIA OpenShell
 
 # Misc tools
+brew "cliclick"              # macOS mouse/keyboard automation
+brew "container"             # Container runtime
 brew "copyparty"             # File sharing server
+brew "googleworkspace-cli"   # Google Workspace CLI
 brew "switchaudio-osx"       # Audio device switcher
 
 # Security
 brew "snyk/tap/snyk"         # Snyk vulnerability scanner
+brew "trivy"                 # Container vulnerability scanner
+
+# Runtime tools
+brew "oven-sh/bun/bun"       # Fast JS runtime
+brew "socktainer/tap/socktainer" # Container socket manager
 
 # Cask applications
+cask "ghostty"               # GPU-accelerated terminal
 cask "gstreamer-runtime"
+cask "openscad@snapshot"     # 3D CAD modeler
 
 # VS Code extensions
 vscode "aaron-bond.better-comments"
@@ -109,7 +122,6 @@ vscode "editorconfig.editorconfig"
 vscode "esbenp.prettier-vscode"
 vscode "formulahendry.auto-rename-tag"
 vscode "github.codespaces"
-vscode "github.copilot-chat"
 vscode "github.github-vscode-theme"
 vscode "github.remotehub"
 vscode "github.vscode-github-actions"
@@ -134,6 +146,7 @@ vscode "jsynowiec.vscode-insertdatestring"
 vscode "justusadam.language-haskell"
 vscode "keesschollaart.vscode-home-assistant"
 vscode "lextudio.restructuredtext-pack"
+vscode "llvm-vs-code-extensions.lldb-dap"
 vscode "maelvalais.autoconf"
 vscode "maziac.hex-hover-converter"
 vscode "me-dutour-mathieu.vscode-github-actions"
@@ -145,6 +158,7 @@ vscode "monish.regexsnippets"
 vscode "mrmlnc.vscode-duplicate"
 vscode "ms-azuretools.vscode-containers"
 vscode "ms-azuretools.vscode-docker"
+vscode "ms-dotnettools.vscode-dotnet-runtime"
 vscode "ms-kubernetes-tools.vscode-kubernetes-tools"
 vscode "ms-mssql.data-workspace-vscode"
 vscode "ms-mssql.mssql"
@@ -202,6 +216,7 @@ vscode "scala-lang.scala"
 vscode "searking.preview-vscode"
 vscode "sohamkamani.code-eol"
 vscode "sourcegraph.cody-ai"
+vscode "swiftlang.swift-vscode"
 vscode "tomoki1207.pdf"
 vscode "tumido.cron-explained"
 vscode "tyriar.sort-lines"
