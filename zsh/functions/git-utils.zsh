@@ -37,7 +37,7 @@ go-mod-upgrade() {
     echo "Example: go-mod-upgrade github.com/openshift/oadp-operator@v1.2.0"
     return 1
     fi
-    go get $1 && go mod tidy && git add go.mod go.sum && git commit -sm "go-mod-upgrade: $1"
+    go get "$1" && go mod tidy && git add go.mod go.sum && git commit -sm "go-mod-upgrade: $1"
 }
 
 # run go mod upgrade for each dir matched by find . -type d -maxdepth 1 -name "<$1>"
