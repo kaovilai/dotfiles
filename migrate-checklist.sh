@@ -40,4 +40,4 @@ echo "□ 11. Verify setup"
 echo "      verify-migration"
 echo ""
 echo "Press any key to start..."
-read -n 1
+read -r -n 1
