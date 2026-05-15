@@ -36,3 +36,4 @@ Use the pull request metadata, changed files, repository contents, and available
 Follow repository conventions from `CLAUDE.md` when relevant.
 
 Only add a comment when you find at least one specific, actionable issue worth flagging. If the changes look good, do not create a comment.
+If there are no code changes (e.g., only lock file updates), do not create a comment.
