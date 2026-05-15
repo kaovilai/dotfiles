@@ -52,11 +52,14 @@ jobs:
         run: gh-aw compile
 
       - name: Fail if lock files are stale
-        env:
-          GH_AW_VERSION: ${{ env.GH_AW_TAG }}
         run: |
           if git status --porcelain -- .github/workflows/*.lock.yml | grep -q .; then
-            echo "::error::Lock files are stale. Upgrade gh-aw locally and recompile:"
+            COMMITTED_VERSION=$(grep -h 'gh-aw-metadata' .github/workflows/*.lock.yml | head -1 | sed 's/.*"compiler_version":"\([^"]*\)".*/\1/')
+            echo "::error::Lock files are stale."
+            echo "::error::Committed lock files were compiled with: ${COMMITTED_VERSION:-unknown}"
+            echo "::error::Latest gh-aw prerelease is: $GH_AW_TAG"
+            echo "::error::"
+            echo "::error::To fix, upgrade gh-aw locally and recompile:"
             echo "::error::  1. gh release download $GH_AW_TAG --repo github/gh-aw --pattern darwin-arm64 --dir /tmp/gh-aw"
             echo "::error::  2. cp /tmp/gh-aw/darwin-arm64 \$(find ~/.local/share/gh/extensions/gh-aw -name gh-aw -type f) && chmod +x \$(find ~/.local/share/gh/extensions/gh-aw -name gh-aw -type f)"
             echo "::error::  3. gh aw compile && git add .github/workflows/*.lock.yml .github/aw/ && git commit -m 'chore: recompile lock files'"
