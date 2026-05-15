@@ -95,7 +95,7 @@ aa-inflight-wifi() {
 
         # Wait for internet to become available
         echo "Waiting for internet connection (complete the login in your browser)..."
-        attempts=0
+        local attempts=0
         while ! check_internet && [[ $attempts -lt $MAX_ATTEMPTS ]]; do
             sleep $CHECK_INTERVAL
             ((attempts++))
