@@ -467,7 +467,7 @@ import-wifi-credentials() {
     fi
     
     progress "Starting WiFi import..."
-    cd "$import_dir"
+    cd "$import_dir" || { error "Failed to cd into $import_dir"; return 1; }
     ./import-wifi.sh
 }
 
