@@ -20,6 +20,7 @@ on:
 permissions:
   contents: read
   issues: write
+  pull-requests: write
 
 jobs:
   validate-shell-files:
@@ -85,6 +86,7 @@ jobs:
           from pathlib import Path
 
           marker = "<!-- shell-ci-shellcheck -->"
+          truncation_suffix = "\n... (truncated)"
 
           def read_text(path):
               file_path = Path(path)
@@ -95,7 +97,7 @@ jobs:
           def trim(text, limit):
               if len(text) <= limit:
                   return text
-              return text[: limit - 16] + "\n... (truncated)"
+              return text[: limit - len(truncation_suffix)] + truncation_suffix
 
           report = trim(read_text(os.environ["REPORT_FILE"]), 50000)
           diff = trim(read_text(os.environ["DIFF_FILE"]), 50000)
