@@ -23,7 +23,7 @@ _lazy_load_linux_dev() {
     fi
 }
 for func in podman-linux az-linux gcp-linux; do
-    eval "${func}() { _lazy_load_linux_dev; ${func} \"\$@\"; }"
+    eval "${func}() { _lazy_load_linux_dev || return 1; ${func} \"\$@\"; }"
 done
 
 # Migration utilities (lazy-loaded — ~634 lines only parsed when first used)
@@ -44,5 +44,5 @@ for func in \
     backup-before-migration \
     update-brewfile \
     brewfile-cleanup; do
-    eval "${func}() { _lazy_load_migrate; ${func} \"\$@\"; }"
+    eval "${func}() { _lazy_load_migrate || return 1; ${func} \"\$@\"; }"
 done

@@ -37,5 +37,5 @@ for func in \
     save-minio-config \
     test-minio-connection \
     trust-certificate-in-system; do
-    eval "${func}() { _lazy_load_s3; ${func} \"\$@\"; }"
+    eval "${func}() { _lazy_load_s3 || return 1; ${func} \"\$@\"; }"
 done
