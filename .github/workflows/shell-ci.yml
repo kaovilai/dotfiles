@@ -38,11 +38,12 @@ jobs:
       - name: Check ZSH syntax
         run: |
           set -euo pipefail
-          find . -type f \( -name '*.zsh' -o -name '.zshrc' \) -print0 |
-            while IFS= read -r -d '' file; do
-              echo "Checking ZSH syntax: $file"
-              zsh -n "$file"
-            done
+          mapfile -d '' zsh_files < <(find . -type f \( -name '*.zsh' -o -name '.zshrc' \) -print0)
+
+          for file in "${zsh_files[@]}"; do
+            echo "Checking ZSH syntax: $file"
+            zsh -n "$file"
+          done
 
       - name: ShellCheck shell scripts
         id: shellcheck
@@ -63,12 +64,19 @@ jobs:
 
           printf 'Running ShellCheck on %s\n' "${files[@]}"
 
-          if shellcheck "${files[@]}" 2>&1 | tee "${report_file}"; then
+          set +e
+          shellcheck "${files[@]}" > "${report_file}" 2>&1
+          status=$?
+          set -e
+
+          cat "${report_file}"
+
+          if [ "${status}" -eq 0 ]; then
             exit 0
           fi
 
           shellcheck -f diff "${files[@]}" > "${diff_file}" || true
-          exit 1
+          exit "${status}"
 
       - name: Comment ShellCheck diff on pull request
         if: github.event_name == 'pull_request' && steps.shellcheck.outcome == 'failure'
@@ -97,7 +105,7 @@ jobs:
           def trim(text, limit):
               if len(text) <= limit:
                   return text
-              return text[: limit - len(truncation_suffix)] + truncation_suffix
+              return text[:limit - len(truncation_suffix)] + truncation_suffix
 
           report = trim(read_text(os.environ["REPORT_FILE"]), 50000)
           diff = trim(read_text(os.environ["DIFF_FILE"]), 50000)
