@@ -17,9 +17,9 @@ cherrypick-pr-to-branch() {
 
 # Helper function to create a new changelog for velero repos
 new-changelog() {
-    GH_LOGIN=$(gh pr view --json author --jq .author.login 2> /dev/null)
-    GH_PR_NUMBER=$(gh pr view --json number --jq .number 2> /dev/null)
-    CHANGELOG_BODY="$(gh pr view --json title --jq .title)"
+    local GH_LOGIN=$(gh pr view --json author --jq .author.login 2> /dev/null)
+    local GH_PR_NUMBER=$(gh pr view --json number --jq .number 2> /dev/null)
+    local CHANGELOG_BODY="$(gh pr view --json title --jq .title)"
     if [ "$GH_LOGIN" = "" ]; then \
         echo "branch does not have PR or cli not logged in, try 'gh auth login' or 'gh pr create'"; \
         return 1; \
