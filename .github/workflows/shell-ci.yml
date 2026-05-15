@@ -25,6 +25,9 @@ permissions:
 jobs:
   validate-shell-files:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
 
     steps:
       - name: Checkout repository
