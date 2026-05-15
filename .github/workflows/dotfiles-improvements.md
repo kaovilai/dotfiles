@@ -43,11 +43,13 @@ This is a ZSH dotfiles repo. Key conventions from CLAUDE.md:
 
 Before doing anything, gather the current state:
 
-1. Search for all open issues with title prefix `[dotfiles-improvement]`
+1. Search for all open AND closed issues with title prefix `[dotfiles-improvement]`
 2. Search for all open PRs with title prefix `[dotfiles-improvement]`
 3. Build a list of topics already covered by existing issues/PRs
 
 **Do NOT create duplicate issues or PRs for topics already covered.**
+
+**CRITICAL: Track every issue you create during this run.** Before calling `create_issue`, check your own output so far — if you already created an issue for the same file+function+topic in this run, do NOT create it again. Never emit two `create_issue` calls with the same or similar title.
 
 ## Step 2: Scan for Improvements
 
