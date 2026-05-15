@@ -6,7 +6,7 @@
 
 # Brew completions FPATH must be set before compinit (in znap.zsh)
 # Avoid slow brew --prefix subprocess; check well-known paths directly
-if [[ "$(uname -s)" = "Darwin" ]]; then
+if [[ "$OSTYPE" == darwin* ]]; then
   if [[ -d /opt/homebrew/share/zsh/site-functions ]]; then      # Apple Silicon
     FPATH="/opt/homebrew/share/zsh/site-functions:${FPATH}"
   elif [[ -d /usr/local/share/zsh/site-functions ]]; then       # Intel
@@ -26,9 +26,11 @@ function timezsh() {
 # Don't put secrets here, put them in ~/secrets.zsh
 # edit ~/.zshrc first then run copy-to-dotfiles-from-zshrc to copy to dotfiles
 if [[ -f ~/secrets.zsh ]]; then
-  local secrets_perms=$(stat -f "%Lp" ~/secrets.zsh)
-  if [[ "$secrets_perms" != "600" ]]; then
-    print -P "%F{yellow}[dotfiles] Warning: ~/secrets.zsh has permissions $secrets_perms (should be 600)%f" >&2
+  zmodload -F zsh/stat b:zstat
+  local -a secrets_stat
+  zstat -A secrets_stat +mode ~/secrets.zsh
+  if (( (secrets_stat[1] & 8#777) != 8#600 )); then
+    print -P "%F{yellow}[dotfiles] Warning: ~/secrets.zsh has unexpected permissions (should be 600)%f" >&2
   fi
   source ~/secrets.zsh
 fi
@@ -44,7 +46,7 @@ alias edit-dotfiles='code ~/git/dotfiles/'
 alias edit-agents='code ~/.claude/agents/'
 source ~/git/dotfiles/zsh/alias.zsh
 # gpg tty
-export GPG_TTY=$(tty)
+export GPG_TTY=$TTY
 # Export essential environment variables
 export BUILDX_ENABLED=true
 export BUILDX_PUSH=true
@@ -54,7 +56,7 @@ export BUILDX_PLATFORMS=linux/amd64,linux/arm64
 export BUILDX_INSTANCE=default
 export HAPPY_CLAUDE_PATH=~/.local/bin/claude
 # Load OS-specific essentials (lightweight aliases always loaded)
-[[ "$(uname -s)" = "Darwin" ]] && source ~/git/dotfiles/zsh/macos.zsh
+[[ "$OSTYPE" == darwin* ]] && source ~/git/dotfiles/zsh/macos.zsh
 # Essential utilities (needed for basic shell functionality)
 source ~/git/dotfiles/zsh/paths.zsh
   source ~/git/dotfiles/zsh/functions/openshift/load-lazy.zsh
@@ -62,9 +64,39 @@ source ~/git/dotfiles/zsh/paths.zsh
   source ~/git/dotfiles/zsh/functions/s3/load-lazy.zsh
 source ~/git/dotfiles/zsh/functions/git-utils.zsh
   source ~/git/dotfiles/zsh/functions/podman-utils.zsh
-  source ~/git/dotfiles/zsh/functions/dns.zsh
-  source ~/git/dotfiles/zsh/functions/symlink-sd.zsh
-  source ~/git/dotfiles/zsh/functions/wifi.zsh
+
+# DNS utilities (lazy-loaded — ~215 lines only parsed when first used)
+typeset -g DNS_FUNCTIONS_LOADED=0
+_lazy_load_dns() {
+    if [[ $DNS_FUNCTIONS_LOADED -eq 0 ]]; then
+        source ~/git/dotfiles/zsh/functions/dns.zsh && DNS_FUNCTIONS_LOADED=1
+    fi
+}
+for func in set-dns-servers clear-dns-servers; do
+    eval "${func}() { _lazy_load_dns || return 1; ${func} \"\$@\"; }"
+done
+
+# SD card symlink utilities (lazy-loaded — ~240 lines only parsed when first used)
+typeset -g SYMLINK_SD_LOADED=0
+_lazy_load_symlink_sd() {
+    if [[ $SYMLINK_SD_LOADED -eq 0 ]]; then
+        source ~/git/dotfiles/zsh/functions/symlink-sd.zsh && SYMLINK_SD_LOADED=1
+    fi
+}
+for func in symlink-to-sd unsymlink-from-sd relink-from-sd; do
+    eval "${func}() { _lazy_load_symlink_sd || return 1; ${func} \"\$@\"; }"
+done
+
+# WiFi utilities (lazy-loaded — ~62 lines only parsed when first used)
+typeset -g WIFI_FUNCTIONS_LOADED=0
+_lazy_load_wifi() {
+    if [[ $WIFI_FUNCTIONS_LOADED -eq 0 ]]; then
+        source ~/git/dotfiles/zsh/functions/wifi.zsh && WIFI_FUNCTIONS_LOADED=1
+    fi
+}
+for func in wifi-standard; do
+    eval "${func}() { _lazy_load_wifi || return 1; ${func} \"\$@\"; }"
+done
 source ~/git/dotfiles/zsh/util.zsh
 if [[ "$TERM_PROGRAM" != "vscode" ]]; then
   # Git status check (background to avoid blocking startup)

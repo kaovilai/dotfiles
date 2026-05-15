@@ -44,6 +44,22 @@ The shell uses `&!` to disown background jobs, preventing them from being termin
 3. **Primary functionality** (git, command-line tools) loads in first background phase
 4. **Secondary functionality** (completions, documentation helpers) loads in second background phase
 
+### Lazy-Loaded Modules
+
+The following modules use lazy-loading stubs — their source files are only parsed when a function is first invoked:
+
+| Module | File | Functions | Lines saved |
+|--------|------|-----------|-------------|
+| OpenShift | `functions/openshift/load-lazy.zsh` | ~75 functions | ~3000 |
+| S3/MinIO | `functions/s3/load-lazy.zsh` | 16 functions | ~1700 |
+| Linux dev | `alias.zsh` (inline stubs) | `podman-linux`, `az-linux`, `gcp-linux` | ~756 |
+| Migration | `alias.zsh` (inline stubs) | `migrate-to-new-laptop`, etc. | ~634 |
+| DNS | `.zshrc` (inline stubs) | `set-dns-servers`, `clear-dns-servers` | ~215 |
+| SD symlinks | `.zshrc` (inline stubs) | `symlink-to-sd`, `unsymlink-from-sd`, `relink-from-sd` | ~240 |
+| WiFi | `.zshrc` (inline stubs) | `wifi-standard` | ~62 |
+
+**Pattern**: Each lazy-loaded module uses a guard variable (`typeset -g MODULE_LOADED=0`), a loader function that sources the real file on first call, and `eval`-generated wrapper functions that call the loader then re-dispatch.
+
 ### Completion System
 
 The completion system has been optimized for maximum efficiency:

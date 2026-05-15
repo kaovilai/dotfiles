@@ -34,21 +34,3 @@ znap source zsh-users/zsh-syntax-highlighting
 zstyle ':autocomplete:*' min-input 2
 znap source marlonrichert/zsh-autocomplete
 
-# -- Non-essential plugins (background) --
-{
-} &!
-
-
-# -- Asynchronous evaluations --
-# Start background initializations
-{
-  # Shell integrations and environment setup
-  # [[ -n "$ITERM_PROFILE" ]] && znap eval iterm2 'curl -fsSL https://iterm2.com/shell_integration/zsh'
-
-  # Node version manager (if installed)
-  # [[ -s "$HOME/.nvm/nvm.sh" ]] && znap eval nvm-init "$HOME/.nvm/nvm.sh"
-
-  # Python virtual environment managers
-  # command -v pyenv >/dev/null && znap eval pyenv-init 'pyenv init -'
-  # command -v pipenv >/dev/null && znap eval pipenv-shell 'pipenv --completion'
-} &!
