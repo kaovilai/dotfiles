@@ -58,7 +58,7 @@ jobs:
       - name: Fail if committed lock files are stale
         if: github.event_name == 'pull_request' && steps.stale-lock-files.outputs.changed == 'true'
         run: |
-          echo "::error::Agentic workflow lock files are out of date. Run 'gh aw compile' and commit the updated .lock.yml files."
+          echo "::error::Agentic workflow lock files are out of date. Run 'gh-aw compile' and commit the updated .lock.yml files."
           exit 1
 
       - name: Open pull request with refreshed lock files
