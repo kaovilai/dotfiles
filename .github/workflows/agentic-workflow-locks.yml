@@ -1,0 +1,78 @@
+name: Agentic Workflow Lock Files
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/*.md"
+      - ".github/workflows/*.lock.yml"
+  push:
+    branches:
+      - master
+    paths:
+      - ".github/workflows/*.md"
+      - ".github/workflows/*.lock.yml"
+  schedule:
+    # Weekly drift check in case the latest gh-aw compiler changes generated output.
+    - cron: "17 4 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  update-lock-files:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install gh-aw
+        run: |
+          mkdir -p "$RUNNER_TEMP/gh-aw/bin"
+          curl -fsSL https://github.com/github/gh-aw/releases/latest/download/linux-amd64 -o "$RUNNER_TEMP/gh-aw/linux-amd64"
+          curl -fsSL https://github.com/github/gh-aw/releases/latest/download/checksums.txt -o "$RUNNER_TEMP/gh-aw/checksums.txt"
+          (
+            cd "$RUNNER_TEMP/gh-aw" &&
+            grep ' linux-amd64$' checksums.txt | sha256sum --check --status
+          )
+          mv "$RUNNER_TEMP/gh-aw/linux-amd64" "$RUNNER_TEMP/gh-aw/bin/gh-aw"
+          chmod +x "$RUNNER_TEMP/gh-aw/bin/gh-aw"
+          echo "$RUNNER_TEMP/gh-aw/bin" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/gh-aw/bin/gh-aw" version
+
+      - name: Compile agentic workflows
+        run: gh-aw compile
+
+      - name: Detect stale lock files
+        id: stale-lock-files
+        run: |
+          if git status --porcelain -- .github/workflows/*.lock.yml | grep -q .; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            git --no-pager diff -- .github/workflows/*.lock.yml
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Fail if committed lock files are stale
+        if: github.event_name == 'pull_request' && steps.stale-lock-files.outputs.changed == 'true'
+        run: |
+          echo "::error::Agentic workflow lock files are out of date. Run 'gh-aw compile' and commit the updated .lock.yml files."
+          exit 1
+
+      - name: Open pull request with refreshed lock files
+        if: github.event_name != 'pull_request' && steps.stale-lock-files.outputs.changed == 'true'
+        uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8.1.1
+        with:
+          add-paths: |
+            .github/workflows/*.lock.yml
+          branch: automation/update-aw-lock-files
+          commit-message: "chore: update agentic workflow lock files"
+          delete-branch: true
+          title: "chore: update agentic workflow lock files"
+          body: |
+            This PR refreshes generated agentic workflow lock files.
+
+            - Triggered by `${{ github.workflow }}`
+            - Source run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
