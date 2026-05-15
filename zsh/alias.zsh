@@ -17,8 +17,9 @@ _safe_source ~/git/dotfiles/zsh/aliases/misc.zsh
 typeset -g LINUX_DEV_LOADED=0
 _lazy_load_linux_dev() {
     if [[ $LINUX_DEV_LOADED -eq 0 ]]; then
-        source ~/git/dotfiles/zsh/functions/linux-dev.zsh
-        LINUX_DEV_LOADED=1
+        # Sourcing redefines functions by the same names, replacing these wrappers
+        # via ZSH dynamic dispatch — no recursion on success.
+        source ~/git/dotfiles/zsh/functions/linux-dev.zsh && LINUX_DEV_LOADED=1
     fi
 }
 for func in podman-linux az-linux gcp-linux; do
@@ -29,8 +30,9 @@ done
 typeset -g MIGRATE_LAPTOP_LOADED=0
 _lazy_load_migrate() {
     if [[ $MIGRATE_LAPTOP_LOADED -eq 0 ]]; then
-        source ~/git/dotfiles/zsh/functions/migrate-laptop.zsh
-        MIGRATE_LAPTOP_LOADED=1
+        # Sourcing redefines functions by the same names, replacing these wrappers
+        # via ZSH dynamic dispatch — no recursion on success.
+        source ~/git/dotfiles/zsh/functions/migrate-laptop.zsh && MIGRATE_LAPTOP_LOADED=1
     fi
 }
 for func in \
