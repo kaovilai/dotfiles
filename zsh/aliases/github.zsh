@@ -25,7 +25,7 @@ ghcc() {
 
   if [[ -d "$target_dir" ]]; then
     echo "Directory $target_dir already exists, opening in VS Code..."
-    cd "$target_dir" && code .
+    code "$target_dir"
     return 0
   fi
 
@@ -41,7 +41,7 @@ ghcc() {
     gh repo create "$repo_name" --private || return 1
     gh repo clone "$repo_name" "$target_dir" || return 1
   fi
-  cd "$target_dir" && code .
+  code "$target_dir"
 }
 alias ghclone='ghcc'
 
@@ -68,11 +68,11 @@ glcc() {
 
   if [[ -d "$target_dir" ]]; then
     echo "Directory $target_dir already exists, opening in VS Code..."
-    cd "$target_dir" && code .
+    code "$target_dir"
     return 0
   fi
 
-  glab repo clone "$repo_spec" "$target_dir" && cd "$target_dir" && code .
+  glab repo clone "$repo_spec" "$target_dir" && code "$target_dir"
 }
 alias glclone='glcc'
 
@@ -113,14 +113,12 @@ ghfc() {
   # Clone the forked repo
   echo "Cloning fork..."
   if gh repo clone "$gh_user/$repo_name" "$target_dir/$repo_name"; then
-    cd "$target_dir/$repo_name"
-    
     # Add upstream remote
     local upstream_url="https://github.com/$repo_spec.git"
-    git remote add upstream "$upstream_url"
+    git -C "$target_dir/$repo_name" remote add upstream "$upstream_url"
     echo "Added upstream remote: $upstream_url"
-    
-    code .
+
+    code "$target_dir/$repo_name"
   else
     echo "Failed to clone forked repository"
     return 1
