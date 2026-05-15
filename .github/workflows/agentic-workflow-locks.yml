@@ -12,6 +12,7 @@ on:
       - ".github/workflows/*.md"
       - ".github/workflows/*.lock.yml"
   schedule:
+    # Weekly drift check in case the latest gh-aw compiler changes generated output.
     - cron: "17 4 * * 1"
   workflow_dispatch:
 
@@ -29,11 +30,20 @@ jobs:
 
       - name: Install gh-aw
         run: |
-          curl -fsSL https://raw.githubusercontent.com/github/gh-aw/main/install-gh-aw.sh | bash
-          gh aw version
+          mkdir -p "$RUNNER_TEMP/gh-aw/bin"
+          curl -fsSL https://github.com/github/gh-aw/releases/latest/download/linux-amd64 -o "$RUNNER_TEMP/gh-aw/linux-amd64"
+          curl -fsSL https://github.com/github/gh-aw/releases/latest/download/checksums.txt -o "$RUNNER_TEMP/gh-aw/checksums.txt"
+          (
+            cd "$RUNNER_TEMP/gh-aw" &&
+            grep ' linux-amd64$' checksums.txt | sha256sum --check --status
+          )
+          mv "$RUNNER_TEMP/gh-aw/linux-amd64" "$RUNNER_TEMP/gh-aw/bin/gh-aw"
+          chmod +x "$RUNNER_TEMP/gh-aw/bin/gh-aw"
+          echo "$RUNNER_TEMP/gh-aw/bin" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/gh-aw/bin/gh-aw" version
 
       - name: Compile agentic workflows
-        run: gh aw compile
+        run: gh-aw compile
 
       - name: Detect stale lock files
         id: stale-lock-files
