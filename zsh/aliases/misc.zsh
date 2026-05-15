@@ -116,6 +116,10 @@ function ocr(){
         echo "Error: Input file '$input' not found"
         return 1
     fi
+    if ! command -v ocrmypdf &> /dev/null; then
+        echo "Error: ocrmypdf is not installed. Install with: brew install ocrmypdf"
+        return 1
+    fi
     local ext="${input##*.}"
     local base="${input%.*}"
     local output="${base}-ocr.${ext}"
