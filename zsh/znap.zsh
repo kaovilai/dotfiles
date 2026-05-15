@@ -4,11 +4,12 @@ zstyle ':znap:*' repos-dir ~/.zsh-snap
 zstyle ':znap:*:*' ttl 604800  # Cache for 7 days (in seconds)
 
 autoload -Uz compinit
-# Skip the slow security check when zcompdump was updated within the last 24 hours
+# mh+24 matches files modified MORE than 24h ago (i.e. old/stale).
+# Run full security check when stale; use cached (-C) when fresh (< 24h old).
 if [[ -n ${ZDOTDIR:-$HOME}/.zcompdump(#qN.mh+24) ]]; then
-  compinit
+  compinit          # dump is old: rebuild and re-check fpath security
 else
-  compinit -C
+  compinit -C       # dump is fresh: skip security scan for faster startup
 fi
 
 # Download Znap, if it's not there yet.
