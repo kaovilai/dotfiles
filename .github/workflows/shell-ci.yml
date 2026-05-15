@@ -1,0 +1,189 @@
+name: Shell CI
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - ".zshrc"
+      - "**/*.zsh"
+      - "*.sh"
+      - "**/*.sh"
+      - ".github/workflows/shell-ci.yml"
+  push:
+    paths:
+      - ".zshrc"
+      - "**/*.zsh"
+      - "*.sh"
+      - "**/*.sh"
+      - ".github/workflows/shell-ci.yml"
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+jobs:
+  validate-shell-files:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install validation tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y zsh shellcheck
+
+      - name: Check ZSH syntax
+        run: |
+          set -euo pipefail
+          mapfile -d '' zsh_files < <(find . -type f \( -name '*.zsh' -o -name '.zshrc' \) -print0)
+
+          for file in "${zsh_files[@]}"; do
+            echo "Checking ZSH syntax: $file"
+            zsh -n "$file"
+          done
+
+      - name: ShellCheck shell scripts
+        id: shellcheck
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          report_file="${RUNNER_TEMP}/shellcheck-report.txt"
+          diff_file="${RUNNER_TEMP}/shellcheck.diff"
+          : > "${report_file}"
+          : > "${diff_file}"
+
+          mapfile -d '' files < <(find . -type f -name '*.sh' -print0)
+
+          if [ "${#files[@]}" -eq 0 ]; then
+            echo "No .sh files found"
+            exit 0
+          fi
+
+          printf 'Running ShellCheck on %s\n' "${files[@]}"
+
+          set +e
+          shellcheck "${files[@]}" > "${report_file}" 2>&1
+          status=$?
+          set -e
+
+          cat "${report_file}"
+
+          if [ "${status}" -eq 0 ]; then
+            exit 0
+          fi
+
+          shellcheck -f diff "${files[@]}" > "${diff_file}" || true
+          exit "${status}"
+
+      - name: Comment ShellCheck diff on pull request
+        if: github.event_name == 'pull_request' && steps.shellcheck.outcome == 'failure'
+        env:
+          COMMENTS_URL: ${{ github.event.pull_request.comments_url }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPORT_FILE: ${{ runner.temp }}/shellcheck-report.txt
+          DIFF_FILE: ${{ runner.temp }}/shellcheck.diff
+        run: |
+          python3 <<'PY'
+          import json
+          import os
+          import textwrap
+          import urllib.request
+          from pathlib import Path
+
+          marker = "<!-- shell-ci-shellcheck -->"
+          truncation_suffix = "\n... (truncated)"
+
+          def read_text(path):
+              file_path = Path(path)
+              if not file_path.exists():
+                  return ""
+              return file_path.read_text(encoding="utf-8").strip()
+
+          def trim(text, limit):
+              if len(text) <= limit:
+                  return text
+              return text[:limit - len(truncation_suffix)] + truncation_suffix
+
+          report = trim(read_text(os.environ["REPORT_FILE"]), 50000)
+          diff = trim(read_text(os.environ["DIFF_FILE"]), 50000)
+
+          diff_section = (
+              "```diff\n" + diff + "\n```"
+              if diff
+              else "_ShellCheck did not emit an auto-fix diff for these findings._"
+          )
+
+          body = textwrap.dedent(
+              f"""\
+              {marker}
+              ShellCheck failed for this pull request. Please update the PR with the changes below.
+
+              <details>
+              <summary>ShellCheck output</summary>
+
+              ```text
+              {report}
+              ```
+              </details>
+
+              <details>
+              <summary>Suggested diff to apply</summary>
+
+              {diff_section}
+              </details>
+              """
+          )
+
+          headers = {
+              "Accept": "application/vnd.github+json",
+              "Authorization": f"Bearer {os.environ['GITHUB_TOKEN']}",
+              "X-GitHub-Api-Version": "2022-11-28",
+              "Content-Type": "application/json",
+          }
+          comments_url = os.environ["COMMENTS_URL"]
+
+          with urllib.request.urlopen(
+              urllib.request.Request(comments_url, headers=headers)
+          ) as response:
+              comments = json.load(response)
+
+          existing_comment = next(
+              (
+                  comment
+                  for comment in comments
+                  if marker in comment.get("body", "")
+                  and comment.get("user", {}).get("login") == "github-actions[bot]"
+              ),
+              None,
+          )
+
+          payload = json.dumps({"body": body}).encode("utf-8")
+
+          if existing_comment:
+              request = urllib.request.Request(
+                  existing_comment["url"],
+                  data=payload,
+                  headers=headers,
+                  method="PATCH",
+              )
+          else:
+              request = urllib.request.Request(
+                  comments_url,
+                  data=payload,
+                  headers=headers,
+                  method="POST",
+              )
+
+          with urllib.request.urlopen(request):
+              pass
+          PY
+
+      - name: Fail job when ShellCheck finds issues
+        if: steps.shellcheck.outcome == 'failure'
+        run: exit 1
