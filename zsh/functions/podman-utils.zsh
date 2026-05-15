@@ -8,6 +8,11 @@ check-qemu-stuck() {
     echo "🔍 Checking for stuck QEMU processes..."
     echo
 
+    if ! command -v podman &>/dev/null; then
+        echo "❌ podman not found. Install it with: brew install podman"
+        return 1
+    fi
+
     # Check if podman machine is running
     if ! podman machine list | grep -q "Currently running"; then
         echo "❌ No podman machine is running"
