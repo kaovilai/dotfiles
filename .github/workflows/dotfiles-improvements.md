@@ -85,7 +85,8 @@ For each issue you just created:
 1. Check all open PR branches to see if your change would conflict
 2. Use `git merge-tree` and `git merge-base` to verify the change merges cleanly against `master` and against each open PR branch
 3. **If the change merges cleanly with master and all open PR branches**:
-   - Create a PR with the fix, referencing the issue with `Fixes #<issue_number>`
+   - Commit the fix with a message that includes `Closes #<issue_number>` (e.g., `fix: add command guard in foo.zsh (Closes #42)`)
+   - Create a PR whose description includes `Closes #<issue_number>` so the issue is auto-closed on merge
    - Each PR should touch exactly one logical concern
    - Run `zsh -n` on modified files to verify syntax
 4. **If the change would NOT merge cleanly**:
@@ -108,4 +109,4 @@ After processing, add a comment on each issue you created summarizing:
 - **Always validate ZSH syntax** with `zsh -n` before proposing
 - **Check for duplicates first** — search issues AND PRs before creating anything
 - **Prefer the smallest possible change** — a 1-3 line fix is ideal
-- **Reference the issue in the PR body** with `Fixes #<number>`
+- **Reference the issue in commit messages AND the PR body** with `Closes #<number>` so the issue is auto-closed on merge
