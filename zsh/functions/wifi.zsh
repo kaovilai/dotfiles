@@ -5,8 +5,6 @@ if [[ "$TERM_PROGRAM" != "vscode" ]]; then
 # Get the current WiFi standard (Wi-Fi 5, 6, 6E, 7)
 # Usage: wifi-standard
 function wifi-standard() {
-    # Debug: uncomment to see when function is called
-    echo "DEBUG: wifi-standard function called" >&2
     local wifi_info=$(system_profiler SPAirPortDataType 2>/dev/null)
 
     # Check if WiFi is connected by looking for "Status: Connected"
