@@ -82,7 +82,7 @@ exec-dirs-ds() {
     local echo_only=false
 
     # Use find to locate matching directories
-    find . -type d -maxdepth 1 -name "$pattern" | while read dir; do
+    find . -type d -maxdepth 1 -name "$pattern" | while read -r dir; do
         (
             echo "\033[1;34mProcessing $dir...\033[0m"
             cd "$dir" || { echo "\033[1;31mFailed to cd into $dir\033[0m"; return 1; }
@@ -130,7 +130,7 @@ exec-dirs-ds-echo() {
     local cmd="$5"
 
     # Pass the same arguments but set a flag to only echo commands
-    find . -type d -maxdepth 1 -name "$pattern" | while read dir; do
+    find . -type d -maxdepth 1 -name "$pattern" | while read -r dir; do
         echo "\033[1;34mWould process $dir\033[0m"
         echo "  Would fetch $ds_name"
         echo "  Would checkout $ds_name/$base_branch"
