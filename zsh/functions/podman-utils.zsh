@@ -72,6 +72,11 @@ check-qemu-stuck() {
 # Usage: kill-stuck-qemu
 # Kill stuck QEMU processes in podman machine (interactive with fzf)
 kill-stuck-qemu() {
+    if ! command -v podman &>/dev/null; then
+        echo "❌ podman not found. Install it with: brew install podman"
+        return 1
+    fi
+
     echo "🔍 Finding stuck QEMU processes..."
 
     # Get detailed process info
