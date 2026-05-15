@@ -75,12 +75,12 @@ randomize-mac-ifconfig() {
     # Generate new MAC by changing the last digit randomly
     # This ensures we're only making a minimal change which is less likely to be rejected
     local last_digit=$(printf '%x' $((RANDOM % 16)))
-    local new_mac=$(echo "$current_mac" | sed "s/\(.*\).$/\1$last_digit/")
+    local new_mac="${current_mac%?}$last_digit"
 
     # Ensure we're not setting it to the same MAC
     while [[ "$new_mac" == "$current_mac" ]]; do
         last_digit=$(printf '%x' $((RANDOM % 16)))
-        new_mac=$(echo "$current_mac" | sed "s/\(.*\).$/\1$last_digit/")
+        new_mac="${current_mac%?}$last_digit"
     done
 
     [[ "$quiet" == false ]] && echo "New MAC: $new_mac"

@@ -5,6 +5,11 @@
 check-qemu-stuck() {
     local machine_name="${1:-podman-machine-default}"
 
+    if ! command -v podman &>/dev/null; then
+        echo "❌ podman not found. Install it with: brew install podman"
+        return 1
+    fi
+
     echo "🔍 Checking for stuck QEMU processes..."
     echo
 
