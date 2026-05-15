@@ -141,11 +141,7 @@ has_command() {
     return $(( 1 - $_command_cache[$cmd] ))
 }
 
-# Pre-cache common commands during shell startup
-for cmd in docker podman kubectl oc gh aws gcloud rosa velero yq kind pipenv pyenv nvm; do
-    has_command "$cmd" &
-done
-wait
+# has_command lazily caches results in _command_cache on first use per session
 
 # Example usage:
 # cache 3600 kubectl-get-pods kubectl get pods  # Cache for 1 hour with explicit key

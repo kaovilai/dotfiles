@@ -5,7 +5,14 @@
 # zmodload zsh/zprof
 
 # Brew completions FPATH must be set before compinit (in znap.zsh)
-[[ "$(uname -s)" = "Darwin" ]] && FPATH="$(brew --prefix)/share/zsh/site-functions:${FPATH}"
+# Avoid slow brew --prefix subprocess; check well-known paths directly
+if [[ "$(uname -s)" = "Darwin" ]]; then
+  if [[ -d /opt/homebrew/share/zsh/site-functions ]]; then      # Apple Silicon
+    FPATH="/opt/homebrew/share/zsh/site-functions:${FPATH}"
+  elif [[ -d /usr/local/share/zsh/site-functions ]]; then       # Intel
+    FPATH="/usr/local/share/zsh/site-functions:${FPATH}"
+  fi
+fi
 # Custom user completions
 FPATH="$HOME/.zsh/completions:${FPATH}"
 source ~/git/dotfiles/zsh/znap.zsh
@@ -52,7 +59,7 @@ export HAPPY_CLAUDE_PATH=~/.local/bin/claude
 source ~/git/dotfiles/zsh/paths.zsh
   source ~/git/dotfiles/zsh/functions/openshift/load-lazy.zsh
   source ~/git/dotfiles/zsh/functions/claude/functions.zsh
-  source ~/git/dotfiles/zsh/functions/s3/load.zsh
+  source ~/git/dotfiles/zsh/functions/s3/load-lazy.zsh
 source ~/git/dotfiles/zsh/functions/git-utils.zsh
   source ~/git/dotfiles/zsh/functions/podman-utils.zsh
   source ~/git/dotfiles/zsh/functions/dns.zsh

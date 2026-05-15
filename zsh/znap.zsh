@@ -4,7 +4,12 @@ zstyle ':znap:*' repos-dir ~/.zsh-snap
 zstyle ':znap:*:*' ttl 604800  # Cache for 7 days (in seconds)
 
 autoload -Uz compinit
-compinit
+# Skip the slow security check when zcompdump was updated within the last 24 hours
+if [[ -n ${ZDOTDIR:-$HOME}/.zcompdump(#qN.mh+24) ]]; then
+  compinit
+else
+  compinit -C
+fi
 
 # Download Znap, if it's not there yet.
 [[ -f ~/git/zsh-snap/znap.zsh ]] ||
