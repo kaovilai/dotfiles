@@ -1,0 +1,68 @@
+name: Agentic Workflow Lock Files
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/*.md"
+      - ".github/workflows/*.lock.yml"
+  push:
+    branches:
+      - master
+    paths:
+      - ".github/workflows/*.md"
+      - ".github/workflows/*.lock.yml"
+  schedule:
+    - cron: "17 4 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  update-lock-files:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install gh-aw
+        run: |
+          curl -fsSL https://raw.githubusercontent.com/github/gh-aw/main/install-gh-aw.sh | bash
+          gh aw version
+
+      - name: Compile agentic workflows
+        run: gh aw compile
+
+      - name: Detect stale lock files
+        id: stale-lock-files
+        run: |
+          if git status --porcelain -- .github/workflows/*.lock.yml | grep -q .; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            git --no-pager diff -- .github/workflows/*.lock.yml
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Fail if committed lock files are stale
+        if: github.event_name == 'pull_request' && steps.stale-lock-files.outputs.changed == 'true'
+        run: |
+          echo "::error::Agentic workflow lock files are out of date. Run 'gh aw compile' and commit the updated .lock.yml files."
+          exit 1
+
+      - name: Open pull request with refreshed lock files
+        if: github.event_name != 'pull_request' && steps.stale-lock-files.outputs.changed == 'true'
+        uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8.1.1
+        with:
+          add-paths: |
+            .github/workflows/*.lock.yml
+          branch: automation/update-aw-lock-files
+          commit-message: "chore: update agentic workflow lock files"
+          delete-branch: true
+          title: "chore: update agentic workflow lock files"
+          body: |
+            This PR refreshes generated agentic workflow lock files.
+
+            - Triggered by `${{ github.workflow }}`
+            - Source run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
