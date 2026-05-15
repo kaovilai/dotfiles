@@ -28,11 +28,15 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Install gh-aw
+      - name: Install gh-aw (prerelease)
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
+          TAG=$(gh release list --repo github/gh-aw --limit 1 --json tagName --jq '.[0].tagName')
+          echo "Installing gh-aw $TAG"
           mkdir -p "$RUNNER_TEMP/gh-aw/bin"
-          curl -fsSL https://github.com/github/gh-aw/releases/latest/download/linux-amd64 -o "$RUNNER_TEMP/gh-aw/linux-amd64"
-          curl -fsSL https://github.com/github/gh-aw/releases/latest/download/checksums.txt -o "$RUNNER_TEMP/gh-aw/checksums.txt"
+          curl -fsSL "https://github.com/github/gh-aw/releases/download/${TAG}/linux-amd64" -o "$RUNNER_TEMP/gh-aw/linux-amd64"
+          curl -fsSL "https://github.com/github/gh-aw/releases/download/${TAG}/checksums.txt" -o "$RUNNER_TEMP/gh-aw/checksums.txt"
           (
             cd "$RUNNER_TEMP/gh-aw" &&
             grep ' linux-amd64$' checksums.txt | sha256sum --check --status
