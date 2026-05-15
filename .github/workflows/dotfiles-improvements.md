@@ -68,39 +68,39 @@ Review the ZSH files in the `zsh/` directory looking for **one or two** small im
 - Changes to OpenShift cluster creation workflows (too risky for automated changes)
 - Anything that changes existing behavior — only additive improvements
 
-## Step 3: Create Issue for Each Improvement
+## Step 3: Attempt Implementation
 
 For each improvement found (that doesn't already have an open issue/PR):
 
-1. Create a GitHub issue describing:
+1. Check all open PR branches to see if your change would conflict
+2. Use `git merge-tree` and `git merge-base` to verify the change merges cleanly against `master` and against each open PR branch
+3. Commit the fix on a new branch (e.g., `fix/dotfiles-<short-slug>`) and run `zsh -n` on modified files to verify syntax
+4. **If the change merges cleanly with master and all open PR branches**:
+   - Create a PR from the branch
+   - Each PR should touch exactly one logical concern
+5. **If the change would NOT merge cleanly**:
+   - Keep the branch (do NOT create the PR)
+   - Note which open PR(s) conflict and why
+
+## Step 4: Create Issue for Each Improvement
+
+After the implementation attempt in Step 3, create a GitHub issue for each improvement:
+
+1. The issue body **must** include one of the following:
+   - If a PR was created: a link to the PR (e.g., `Pull request: #<pr_number>` or the full URL `https://github.com/kaovilai/dotfiles/pull/<pr_number>`) — **preferred**
+   - If no PR was created (conflict case): the branch compare link (e.g., `Branch: https://github.com/kaovilai/dotfiles/compare/<branch-name>`) so a reviewer can create the PR manually
+2. The issue body should also describe:
    - What file and function/section is affected
    - What the current code does
    - What the improvement is and why it matters
    - The specific code change proposed
-
-## Step 4: Attempt Pull Request (Only for Clean Merges)
-
-For each issue you just created:
-
-1. Check all open PR branches to see if your change would conflict
-2. Use `git merge-tree` and `git merge-base` to verify the change merges cleanly against `master` and against each open PR branch
-3. **If the change merges cleanly with master and all open PR branches**:
-   - Commit the fix with a message that includes `Closes #<issue_number>` (e.g., `fix: add command guard in foo.zsh (Closes #42)`)
-   - Create a PR whose description includes `Closes #<issue_number>` so the issue is auto-closed on merge
-   - Each PR should touch exactly one logical concern
-   - Run `zsh -n` on modified files to verify syntax
-4. **If the change would NOT merge cleanly**:
-   - Add a comment on the issue explaining:
-     - Which open PR(s) conflict
-     - Why the merge would fail
-     - That a follow-up agent will handle this after the conflicting PR(s) merge
-   - Do NOT create the PR
+3. If a PR was created, ensure it includes `Closes #<issue_number>` in its description so the issue is auto-closed on merge
 
 ## Step 5: Summary
 
 After processing, add a comment on each issue you created summarizing:
-- Whether a PR was created or not
-- If not, which PRs are blocking and why
+- Whether a PR was created (with the PR URL) or not
+- If not, which PRs are blocking and why, and the branch compare link for manual review
 
 ## Important Rules
 
@@ -109,4 +109,6 @@ After processing, add a comment on each issue you created summarizing:
 - **Always validate ZSH syntax** with `zsh -n` before proposing
 - **Check for duplicates first** — search issues AND PRs before creating anything
 - **Prefer the smallest possible change** — a 1-3 line fix is ideal
-- **Reference the issue in commit messages AND the PR body** with `Closes #<number>` so the issue is auto-closed on merge
+- **Always include a PR link or branch compare link in every issue description** — the PR URL is preferred; if no PR was created, include the branch compare URL so the change can be reviewed manually
+- **Create the issue AFTER the PR attempt** so the PR URL or branch compare link can be embedded directly in the issue body
+- **Reference the issue in the PR body** with `Closes #<number>` so the issue is auto-closed on merge
