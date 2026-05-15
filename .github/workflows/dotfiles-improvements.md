@@ -19,6 +19,7 @@ safe-outputs:
     title-prefix: "[dotfiles-improvement] "
     labels: [automation, improvement]
   create-pull-request:
+    max: 5
     title-prefix: "[dotfiles-improvement] "
     labels: [automation, improvement]
     reviewers: [tkaovila]
@@ -51,7 +52,7 @@ Before doing anything, gather the current state:
 
 ## Step 2: Scan for Improvements
 
-Review the ZSH files in the `zsh/` directory looking for **one or two** small improvements. Focus on:
+Review the ZSH files in the `zsh/` directory looking for **up to five** small improvements. Focus on:
 
 ### High Value Improvements
 - Missing `command -v` guards before using external tools
