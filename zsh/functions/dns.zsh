@@ -88,7 +88,7 @@ set-dns-servers() {
     fi
 
     # Check if running on macOS
-    if [[ "$(uname)" != "Darwin" ]]; then
+    if [[ "$OSTYPE" != darwin* ]]; then
         echo "Error: This function is only supported on macOS"
         return 1
     fi
@@ -185,7 +185,7 @@ clear-dns-servers() {
     done
 
     # Check if running on macOS
-    if [[ "$(uname)" != "Darwin" ]]; then
+    if [[ "$OSTYPE" != darwin* ]]; then
         echo "Error: This function is only supported on macOS"
         return 1
     fi
