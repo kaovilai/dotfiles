@@ -2,7 +2,7 @@
 
 # Usage: cherrypick-pr <#PR-number> ...
 cherrypick-pr() {
-    echo $* | xargs -n 1 -I {} sh -c 'git cherry-pick $(gh pr view {} --json commits | jq ".commits[].oid" --raw-output | xargs)'
+    printf '%s\n' "$@" | xargs -n 1 -I {} sh -c 'git cherry-pick $(gh pr view {} --json commits | jq ".commits[].oid" --raw-output | xargs)'
 }
 
 # Usage: cherrypick-pr-to-branch <#PR-number> <remote/branch> <new-branch-name>
