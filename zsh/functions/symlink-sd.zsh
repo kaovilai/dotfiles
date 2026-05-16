@@ -38,7 +38,7 @@ function symlink-to-sd() {
 
     # Copy hidden files separately (since * doesn't match them)
     # Use find to avoid issues with .* expanding to include . and ..
-    find "$current_dir" -maxdepth 1 -name ".*" -type f -o -name ".*" -type d ! -path "$current_dir" | while read file; do
+    find "$current_dir" -maxdepth 1 -name ".*" -type f -o -name ".*" -type d ! -path "$current_dir" | while IFS= read -r file; do
         cp -R "$file" "$sd_target/" 2>/dev/null || echo "Warning: Could not copy $(basename "$file")"
     done
 
@@ -50,7 +50,7 @@ function symlink-to-sd() {
     cp -R "$sd_target/"* "$sd_backup/" 2>/dev/null || true
 
     # Backup hidden files using find to avoid issues with .* expansion
-    find "$sd_target" -maxdepth 1 -name ".*" -type f -o -name ".*" -type d ! -path "$sd_target" | while read file; do
+    find "$sd_target" -maxdepth 1 -name ".*" -type f -o -name ".*" -type d ! -path "$sd_target" | while IFS= read -r file; do
         cp -R "$file" "$sd_backup/" 2>/dev/null || echo "Warning: Could not backup $(basename "$file")"
     done
 
@@ -136,7 +136,7 @@ function unsymlink-from-sd() {
     fi
 
     # Copy hidden files separately using find to avoid .* expansion issues
-    find "$symlink_target" -maxdepth 1 -name ".*" -type f -o -name ".*" -type d ! -path "$symlink_target" | while read file; do
+    find "$symlink_target" -maxdepth 1 -name ".*" -type f -o -name ".*" -type d ! -path "$symlink_target" | while IFS= read -r file; do
         cp -R "$file" "$temp_dir/" 2>/dev/null || echo "Warning: Could not copy $(basename "$file")"
     done
 
@@ -150,7 +150,7 @@ function unsymlink-from-sd() {
     mv "$temp_dir"/* "$dir_name/" 2>/dev/null || true
 
     # Move hidden files using find to avoid expansion issues
-    find "$temp_dir" -maxdepth 1 -name ".*" -type f -o -name ".*" -type d ! -path "$temp_dir" | while read file; do
+    find "$temp_dir" -maxdepth 1 -name ".*" -type f -o -name ".*" -type d ! -path "$temp_dir" | while IFS= read -r file; do
         mv "$file" "$dir_name/" 2>/dev/null || echo "Warning: Could not move $(basename "$file")"
     done
 
