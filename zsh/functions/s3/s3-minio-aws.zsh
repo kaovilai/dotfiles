@@ -333,7 +333,7 @@ for i in {1..30}; do
         log "MinIO is ready after $((i*5)) seconds"
         break
     fi
-    if [ $i -eq 30 ]; then
+    if [[ $i -eq 30 ]]; then
         log "ERROR: MinIO failed to start after 150 seconds"
         docker logs minio >> /var/log/minio-setup.log 2>&1
         exit 1
@@ -364,7 +364,7 @@ for i in {1..5}; do
         log "Bucket '$BUCKET_NAME' already exists"
         break
     fi
-    if [ $i -eq 5 ]; then
+    if [[ $i -eq 5 ]]; then
         log "WARNING: Could not create bucket '$BUCKET_NAME' after 5 attempts"
     else
         log "Retrying bucket creation... (attempt $i/5)"
