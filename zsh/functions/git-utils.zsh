@@ -29,10 +29,15 @@ new-changelog() {
         echo "❌ gh not found. Install it with: brew install gh"
         return 1
     fi
-    local GH_LOGIN GH_PR_NUMBER CHANGELOG_BODY
-    GH_LOGIN=$(gh pr view --json author --jq .author.login 2> /dev/null)
-    GH_PR_NUMBER=$(gh pr view --json number --jq .number 2> /dev/null)
-    CHANGELOG_BODY=$(gh pr view --json title --jq .title 2> /dev/null)
+    if ! command -v jq &>/dev/null; then
+        echo "❌ jq not found. Install it with: brew install jq"
+        return 1
+    fi
+    local GH_PR_JSON GH_LOGIN GH_PR_NUMBER CHANGELOG_BODY
+    GH_PR_JSON=$(gh pr view --json author,number,title 2>/dev/null)
+    GH_LOGIN=$(echo "$GH_PR_JSON" | jq -r '.author.login' 2>/dev/null)
+    GH_PR_NUMBER=$(echo "$GH_PR_JSON" | jq -r '.number' 2>/dev/null)
+    CHANGELOG_BODY=$(echo "$GH_PR_JSON" | jq -r '.title' 2>/dev/null)
     if [[ -z "$GH_LOGIN" ]]; then
         echo "branch does not have PR or cli not logged in, try 'gh auth login' or 'gh pr create'"
         return 1
