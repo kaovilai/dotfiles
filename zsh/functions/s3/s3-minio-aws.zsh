@@ -471,9 +471,9 @@ EOF
                 local key_path=""
                 # Check common key locations
                 if [[ -f ~/.ssh/${key_name}.pem ]]; then
-                    key_path="~/.ssh/${key_name}.pem"
+                    key_path="$HOME/.ssh/${key_name}.pem"
                 elif [[ -f ~/.ssh/${key_name} ]]; then
-                    key_path="~/.ssh/${key_name}"
+                    key_path="$HOME/.ssh/${key_name}"
                 elif [[ -f ${key_name} ]]; then
                     key_path="${key_name}"
                 fi

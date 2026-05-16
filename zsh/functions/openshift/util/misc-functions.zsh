@@ -72,12 +72,12 @@ patch-csv-replicas(){
 }
 
 agd-kubeadmin-password(){
- if [$1 = ""]; then
+ if [[ -z "$1" ]]; then
   echo "No GUID supplied"
   return 1
  else
   echo "parsing guid $1"
-  cat "~/.agnosticd/$1/ocp4-cluster_$1_kubeadmin-password"
+  cat ~/.agnosticd/"$1"/ocp4-cluster_"$1"_kubeadmin-password
  fi
 }
 
