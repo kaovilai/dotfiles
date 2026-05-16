@@ -85,25 +85,14 @@ For each improvement found (that doesn't already have an open issue/PR):
    - Keep the branch (do NOT create the PR)
    - Note which open PR(s) conflict and why
 
-## Step 4: Create Issue for Each Improvement
+## Step 4: Create Issue Only When No PR Was Created
 
-After the implementation attempt in Step 3, create a GitHub issue for each improvement:
+If an improvement's PR was successfully created, **do NOT create a separate issue** — the PR is sufficient tracking.
 
-1. The issue body **must** include one of the following:
-   - If a PR was created: a link to the PR (e.g., `Pull request: #<pr_number>` or the full URL `https://github.com/kaovilai/dotfiles/pull/<pr_number>`) — **preferred**
-   - If no PR was created (conflict case): the branch compare link (e.g., `Branch: https://github.com/kaovilai/dotfiles/compare/<branch-name>`) so a reviewer can create the PR manually
-2. The issue body should also describe:
-   - What file and function/section is affected
-   - What the current code does
-   - What the improvement is and why it matters
-   - The specific code change proposed
-3. If a PR was created, ensure it includes `Closes #<issue_number>` in its description so the issue is auto-closed on merge
-
-## Step 5: Summary
-
-After processing, add a comment on each issue you created summarizing:
-- Whether a PR was created (with the PR URL) or not
-- If not, which PRs are blocking and why, and the branch compare link for manual review
+Only create an issue when a PR could NOT be created (conflict case):
+1. Include the branch compare link (e.g., `Branch: https://github.com/kaovilai/dotfiles/compare/<branch-name>`)
+2. Describe what file/function is affected, the current behavior, and the proposed fix
+3. Note which open PR(s) conflict and why
 
 ## Important Rules
 
@@ -112,6 +101,4 @@ After processing, add a comment on each issue you created summarizing:
 - **Always validate ZSH syntax** with `zsh -n` before proposing
 - **Check for duplicates first** — search issues AND PRs before creating anything
 - **Prefer the smallest possible change** — a 1-3 line fix is ideal
-- **Always include a PR link or branch compare link in every issue description** — the PR URL is preferred; if no PR was created, include the branch compare URL so the change can be reviewed manually
-- **Create the issue AFTER the PR attempt** so the PR URL or branch compare link can be embedded directly in the issue body
-- **Reference the issue in the PR body** with `Closes #<number>` so the issue is auto-closed on merge
+- **Do NOT create an issue when a PR already exists for the same improvement**
