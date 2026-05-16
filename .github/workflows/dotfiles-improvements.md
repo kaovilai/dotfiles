@@ -50,7 +50,9 @@ Before doing anything, gather the current state:
 2. Search for all open PRs with title prefix `[dotfiles-improvement]`
 3. Build a list of topics already covered by existing issues/PRs
 
-**Do NOT create duplicate issues or PRs for topics already covered.**
+**Do NOT create duplicate issues or PRs for topics already covered.** If an existing open issue or PR already covers the same files or improvement category you are about to propose, **stop** — call `noop` with a message like "Duplicate of #N".
+
+**Never include `Closes #N` or `Fixes #N` in an issue body** — only use closing keywords in PR descriptions. Using them in issues causes unintended auto-closing of other issues.
 
 ## Step 2: Scan for Improvements
 
