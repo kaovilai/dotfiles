@@ -14,6 +14,10 @@ alias ocregistry_notag='echo "$(oc-registry-route)/${PWD:t}"'
 
 # Wait for deployments and follow logs
 logs-velero() {
+  if ! command -v oc &>/dev/null; then
+    echo "❌ oc not found. Install it with: brew install openshift-cli"
+    return 1
+  fi
   local ns="${1:-$(oc config view --minify -o jsonpath='{.contexts[0].context.namespace}')}"
   until oc get deployment/velero -n "$ns" &>/dev/null; do 
     echo "Waiting for velero deployment to exist in namespace $ns..."
@@ -24,6 +28,10 @@ logs-velero() {
 }
 
 logs-oadp() {
+  if ! command -v oc &>/dev/null; then
+    echo "❌ oc not found. Install it with: brew install openshift-cli"
+    return 1
+  fi
   local ns="${1:-$(oc config view --minify -o jsonpath='{.contexts[0].context.namespace}')}"
   until oc get deployment/openshift-adp-controller-manager -n "$ns" &>/dev/null; do 
     echo "Waiting for openshift-adp-controller-manager deployment to exist in namespace $ns..."
