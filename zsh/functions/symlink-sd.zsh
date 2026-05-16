@@ -94,7 +94,7 @@ function unsymlink-from-sd() {
     # Check if current directory is a symlink
     if [[ ! -L "$current_path" ]]; then
         # Try parent directory if we're inside a symlinked directory
-        cd ..
+        cd .. || { echo "Error: Failed to cd to parent directory"; return 1; }
         if [[ -L "$(pwd)" ]]; then
             current_path="$(pwd)"
             parent_dir="$(dirname "$current_path")"
