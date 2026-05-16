@@ -72,6 +72,11 @@ glcc() {
     return 0
   fi
 
+  if ! command -v glab &>/dev/null; then
+    echo "❌ glab not found. Install it with: brew install glab"
+    return 1
+  fi
+
   glab repo clone "$repo_spec" "$target_dir" && code "$target_dir"
 }
 alias glclone='glcc'
