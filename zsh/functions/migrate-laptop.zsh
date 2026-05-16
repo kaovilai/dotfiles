@@ -124,7 +124,7 @@ migrate-to-new-laptop() {
         else
             read "use_brewfile?Install all packages from Brewfile? (y/n): "
             if [[ "$use_brewfile" == "y" ]]; then
-                cd ~/git/dotfiles
+                cd ~/git/dotfiles || { warning "Failed to cd to ~/git/dotfiles"; return 1; }
                 brew bundle || warning "Some packages failed to install"
                 success "Packages installed from Brewfile"
             else
