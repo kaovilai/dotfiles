@@ -1,7 +1,11 @@
 # Description: General-purpose small utilities
 
 code-git() {
-    code ~/git/$1
+    if [[ -z "$1" ]]; then
+        echo "Usage: code-git <repo-name>"
+        return 1
+    fi
+    code ~/git/"$1"
 }
 
 # # Non Essentials -- for vscode
