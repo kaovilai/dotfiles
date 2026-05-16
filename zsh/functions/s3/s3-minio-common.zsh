@@ -154,6 +154,11 @@ generate-self-signed-cert() {
         echo -e "${RED}ERROR${NC}: hostname and cert_dir are required"
         return 1
     fi
+
+    if ! command -v openssl &>/dev/null; then
+        echo -e "${RED}ERROR${NC}: openssl not found. Install it with: brew install openssl"
+        return 1
+    fi
     
     mkdir -p "$cert_dir"
     
@@ -249,7 +254,12 @@ remove-certificate-from-system() {
         echo -e "${RED}ERROR${NC}: Certificate file path is required"
         return 1
     fi
-    
+
+    if ! command -v openssl &>/dev/null; then
+        echo -e "${RED}ERROR${NC}: openssl not found. Install it with: brew install openssl"
+        return 1
+    fi
+
     if [[ "$(uname -s)" == "Darwin" ]]; then
         echo -e "${BLUE}INFO${NC}: Removing certificate from macOS system trust store"
         if [[ -f "$cert_file" ]]; then
@@ -365,6 +375,11 @@ download-minio-certificate() {
     if [[ -z "$name" ]]; then
         echo -e "${RED}ERROR${NC}: MinIO deployment name is required"
         echo "Usage: download-minio-certificate --name <deployment-name> [--force]"
+        return 1
+    fi
+
+    if ! command -v openssl &>/dev/null; then
+        echo -e "${RED}ERROR${NC}: openssl not found. Install it with: brew install openssl"
         return 1
     fi
 
