@@ -280,6 +280,11 @@ alias ghpkgdel='gh-delete-package-tag'
 review-prs() {
   local raw_input=""
 
+  if ! command -v fzf &>/dev/null; then
+    echo "❌ fzf not found. Install it with: brew install fzf"
+    return 1
+  fi
+
   if [[ $# -gt 0 ]]; then
     raw_input="$*"$'\n'
   else
