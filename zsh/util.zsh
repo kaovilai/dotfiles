@@ -19,7 +19,7 @@ fi
 
 # Update local .zshrc from the dotfiles repository
 update-zshrc-from-dotfiles() {
-    if [ ! -d "$HOME/git/dotfiles" ]; then
+    if [[ ! -d "$HOME/git/dotfiles" ]]; then
         echo "Error: Dotfiles repository not found at $HOME/git/dotfiles"
         return 1
     fi
