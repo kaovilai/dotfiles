@@ -299,6 +299,7 @@ use-ocp-cluster() {
     selection_list=${selection_list%$'\n'}
 
     local selected
+    local choice
     if command -v fzf >/dev/null 2>&1; then
         selected=$(echo "$selection_list" | fzf --height 40% --reverse --header "Select a cluster (type to filter)")
     else
@@ -317,7 +318,7 @@ use-ocp-cluster() {
         return 0
     fi
 
-    local choice=$(echo "$selected" | awk -F'.' '{print $1}')
+    choice=$(echo "$selected" | awk -F'.' '{print $1}')
 
     # Handle special ROSA clusters
     local selected_path="${kubeconfig_files[$choice-1]}"
@@ -360,6 +361,7 @@ use-ocp-cluster() {
 
     # Offer to copy to ~/.kube/config as well
     echo ""
+    local copy
     read "copy?Copy to ~/.kube/config? (y/n): "
     if [[ $copy == "y" || $copy == "Y" ]]; then
         mkdir -p ~/.kube
