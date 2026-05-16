@@ -24,6 +24,10 @@ new-changelog() {
         echo "branch does not have PR or cli not logged in, try 'gh auth login' or 'gh pr create'"
         return 1
     fi
+    if [[ -z "$GH_PR_NUMBER" ]]; then
+        echo "Could not determine PR number. Make sure the branch has an open PR."
+        return 1
+    fi
     mkdir -p ./changelogs/unreleased/ && \
     echo "$CHANGELOG_BODY" > "./changelogs/unreleased/$GH_PR_NUMBER-$GH_LOGIN" && \
     echo "\"$CHANGELOG_BODY\" added to ./changelogs/unreleased/$GH_PR_NUMBER-$GH_LOGIN"
