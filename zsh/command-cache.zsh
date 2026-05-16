@@ -76,7 +76,7 @@ cached_exec() {
   # Run command and cache output
   mkdir -p "$(dirname "$cache_file")"
   "$@" | tee "${cache_file}.tmp"
-  local exit_code=${PIPESTATUS[0]}
+  local exit_code=${pipestatus[1]}
   
   if [[ $exit_code -eq 0 ]]; then
     mv "${cache_file}.tmp" "$cache_file"
