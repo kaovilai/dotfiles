@@ -321,6 +321,7 @@ review-prs() {
   echo "Found ${#pr_refs[@]} PRs: ${pr_refs[*]}"
 
   local tmpdir=$(mktemp -d)
+  trap "rm -rf \"$tmpdir\"" EXIT INT TERM
   local pids=()
 
   for ref in "${pr_refs[@]}"; do
