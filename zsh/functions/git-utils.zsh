@@ -25,7 +25,7 @@ new-changelog() {
         return 1
     fi
     mkdir -p ./changelogs/unreleased/ && \
-    echo $CHANGELOG_BODY > ./changelogs/unreleased/$GH_PR_NUMBER-$GH_LOGIN && \
+    echo "$CHANGELOG_BODY" > "./changelogs/unreleased/$GH_PR_NUMBER-$GH_LOGIN" && \
     echo "\"$CHANGELOG_BODY\" added to ./changelogs/unreleased/$GH_PR_NUMBER-$GH_LOGIN"
 }
 
