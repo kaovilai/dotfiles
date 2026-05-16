@@ -294,16 +294,18 @@ test-minio-connection() {
     fi
     
     echo -e "${BLUE}INFO${NC}: Running: $aws_cmd"
+    local result=0
     if eval "$aws_cmd"; then
         echo -e "${GREEN}SUCCESS${NC}: Connection to MinIO deployment '$name' successful!"
     else
         echo -e "${RED}ERROR${NC}: Failed to connect to MinIO deployment '$name'"
         echo -e "${YELLOW}HINT${NC}: Try running: get-minio-connection-info --name $name"
-        return 1
+        result=1
     fi
-    
-    # Clean up environment
+
+    # Clean up environment (always, even on failure)
     unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY
+    return $result
 }
 
 remove-minio-config() {
