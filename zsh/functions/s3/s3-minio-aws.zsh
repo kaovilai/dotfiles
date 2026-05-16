@@ -720,6 +720,7 @@ delete-minio-aws() {
         echo -e "  Endpoint: $endpoint"
         echo -e ""
         echo -n "Are you sure you want to continue? (yes/no): "
+        local confirmation
         read confirmation
         
         if [[ "$confirmation" != "yes" && "$confirmation" != "y" ]]; then
