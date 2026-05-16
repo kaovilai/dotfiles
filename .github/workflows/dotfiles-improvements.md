@@ -21,7 +21,7 @@ safe-outputs:
     title-prefix: "[dotfiles-improvement] "
     labels: [automation, improvement]
   create-pull-request:
-    max: 5
+    max: 1
     title-prefix: "[dotfiles-improvement] "
     labels: [automation, improvement]
     reviewers: [tkaovila]
@@ -32,7 +32,7 @@ safe-outputs:
 
 # Dotfiles Improvement Scanner
 
-You are a ZSH dotfiles expert. Your job is to periodically review the shell configuration files in this repository and propose **small, focused, additive improvements** — one improvement per PR.
+You are a ZSH dotfiles expert. Your job is to periodically review the shell configuration files in this repository and propose **small, focused, additive improvements** — grouping fixes of the same type into a single PR.
 
 ## Repository Context
 
@@ -54,7 +54,7 @@ Before doing anything, gather the current state:
 
 ## Step 2: Scan for Improvements
 
-Review the ZSH files in the `zsh/` directory looking for **up to five** small improvements. Focus on:
+Review the ZSH files in the `zsh/` directory looking for improvements. Pick ONE category below and find ALL instances of that problem type across the codebase:
 
 ### High Value Improvements
 - Missing `command -v` guards before using external tools
@@ -71,19 +71,16 @@ Review the ZSH files in the `zsh/` directory looking for **up to five** small im
 - Changes to OpenShift cluster creation workflows (too risky for automated changes)
 - Anything that changes existing behavior — only additive improvements
 
-## Step 3: Attempt Implementation
+## Step 3: Implement All Fixes in One PR
 
-For each improvement found (that doesn't already have an open issue/PR):
+Bundle all fixes of the same category into a single branch and PR:
 
-1. Check all open PR branches to see if your change would conflict
-2. Use `git merge-tree` and `git merge-base` to verify the change merges cleanly against `master` and against each open PR branch
-3. Commit the fix on a new branch (e.g., `fix/dotfiles-<short-slug>`) and run `zsh -n` on modified files to verify syntax
-4. **If the change merges cleanly with master and all open PR branches**:
-   - Create a PR from the branch
-   - Each PR should touch exactly one logical concern
-5. **If the change would NOT merge cleanly**:
-   - Keep the branch (do NOT create the PR)
-   - Note which open PR(s) conflict and why
+1. Create one branch (e.g., `fix/dotfiles-<category-slug>`)
+2. Apply all fixes of the chosen category across all affected files
+3. Run `zsh -n` on each modified file to verify syntax
+4. Use `git merge-tree` and `git merge-base` to verify the branch merges cleanly against `master` and against each open PR branch
+5. **If the branch merges cleanly**: Create ONE PR containing all fixes
+6. **If it would NOT merge cleanly**: Note which open PR(s) conflict and why
 
 ## Step 4: Create Issue Only When No PR Was Created
 
@@ -96,7 +93,7 @@ Only create an issue when a PR could NOT be created (conflict case):
 
 ## Important Rules
 
-- **One improvement per PR** — keep changes atomic
+- **One category per PR** — bundle all fixes of the same type (e.g., all missing `command -v` guards) into a single PR
 - **Never modify existing behavior** — only add guards, safety checks, or new helpers
 - **Always validate ZSH syntax** with `zsh -n` before proposing
 - **Check for duplicates first** — search issues AND PRs before creating anything
