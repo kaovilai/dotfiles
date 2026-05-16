@@ -2,6 +2,14 @@
 
 # Usage: cherrypick-pr <#PR-number> ...
 cherrypick-pr() {
+    if ! command -v gh &>/dev/null; then
+        echo "❌ gh not found. Install it with: brew install gh"
+        return 1
+    fi
+    if ! command -v jq &>/dev/null; then
+        echo "❌ jq not found. Install it with: brew install jq"
+        return 1
+    fi
     printf '%s\n' "$@" | xargs -n 1 -I {} sh -c 'git cherry-pick $(gh pr view {} --json commits | jq ".commits[].oid" --raw-output | xargs)'
 }
 
