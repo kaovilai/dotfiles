@@ -283,6 +283,10 @@ test-minio-connection() {
         echo "Usage: test-minio-connection <deployment-name>"
         return 1
     fi
+    if ! command -v aws &>/dev/null; then
+        echo -e "${RED}ERROR${NC}: aws not found. Install it with: brew install awscli"
+        return 1
+    fi
     
     local config
     if ! config=$(load-minio-config "$name"); then
@@ -380,6 +384,10 @@ download-minio-certificate() {
 
     if ! command -v openssl &>/dev/null; then
         echo -e "${RED}ERROR${NC}: openssl not found. Install it with: brew install openssl"
+        return 1
+    fi
+    if ! command -v curl &>/dev/null; then
+        echo -e "${RED}ERROR${NC}: curl not found. Install it with: brew install curl"
         return 1
     fi
 
@@ -488,6 +496,10 @@ check-minio-docker-status() {
         echo "Usage: check-minio-docker-status <deployment-name> [key-name]"
         return 1
     fi
+    if ! command -v curl &>/dev/null; then
+        echo -e "${RED}ERROR${NC}: curl not found. Install it with: brew install curl"
+        return 1
+    fi
 
     local config
     if ! config=$(load-minio-config "$name"); then
@@ -554,6 +566,10 @@ ensure-default-bucket() {
     if [[ -z "$deployment_name" ]]; then
         echo -e "${RED}ERROR${NC}: Deployment name is required"
         echo "Usage: ensure-default-bucket <deployment-name> [bucket-name]"
+        return 1
+    fi
+    if ! command -v aws &>/dev/null; then
+        echo -e "${RED}ERROR${NC}: aws not found. Install it with: brew install awscli"
         return 1
     fi
     
