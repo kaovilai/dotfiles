@@ -7,6 +7,10 @@ ghcc() {
     echo "❌ gh not found. Install it with: brew install gh"
     return 1
   fi
+  if ! command -v code &>/dev/null; then
+    echo "❌ code not found. Install VS Code and run: Shell Command: Install 'code' command in PATH"
+    return 1
+  fi
   if [[ -z "$1" ]]; then
     echo "Usage: ghcc <repo>"
     echo "Example: ghcc owner/repo or ghcc https://github.com/owner/repo"
@@ -51,6 +55,10 @@ alias ghclone='ghcc'
 
 # Clone GitLab repo to ~/git/<repo-name> and open in VS Code
 glcc() {
+  if ! command -v code &>/dev/null; then
+    echo "❌ code not found. Install VS Code and run: Shell Command: Install 'code' command in PATH"
+    return 1
+  fi
   if [[ -z "$1" ]]; then
     echo "Usage: glcc <repo>"
     echo "Example: glcc group/repo or glcc https://gitlab.com/group/repo"
@@ -87,6 +95,10 @@ alias glclone='glcc'
 
 # Fork, clone and open repo in VS Code
 ghfc() {
+  if ! command -v code &>/dev/null; then
+    echo "❌ code not found. Install VS Code and run: Shell Command: Install 'code' command in PATH"
+    return 1
+  fi
   if [[ -z "$1" ]]; then
     echo "Usage: ghfc <repo>"
     echo "Example: ghfc owner/repo or ghfc https://github.com/owner/repo"
@@ -296,6 +308,11 @@ review-prs() {
 
   if ! command -v fzf &>/dev/null; then
     echo "❌ fzf not found. Install it with: brew install fzf"
+    return 1
+  fi
+
+  if ! command -v code &>/dev/null; then
+    echo "❌ code not found. Install VS Code and run: Shell Command: Install 'code' command in PATH"
     return 1
   fi
 

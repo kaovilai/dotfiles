@@ -69,6 +69,10 @@ alias gwl='git worktree list'
 
 git-worktree-code() {
   # Create a worktree in parent directory with name <current-dir-basename>-<param1> and open in VS Code
+  if ! command -v code &>/dev/null; then
+    echo "❌ code not found. Install VS Code and run: Shell Command: Install 'code' command in PATH"
+    return 1
+  fi
   if [[ -z "$1" ]]; then
     echo "Error: Missing branch name parameter"
     echo "Usage: git-worktree-code <branch-name>"
