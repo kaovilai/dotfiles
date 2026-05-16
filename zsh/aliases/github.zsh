@@ -361,7 +361,8 @@ review-prs() {
 
   echo "Found ${#pr_refs[@]} PRs: ${pr_refs[*]}"
 
-  local tmpdir=$(mktemp -d)
+  local tmpdir
+  tmpdir=$(mktemp -d) || { echo "❌ Failed to create temp directory"; return 1; }
   trap "rm -rf \"$tmpdir\"" EXIT INT TERM
   local pids=()
 

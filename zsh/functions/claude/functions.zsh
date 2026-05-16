@@ -58,7 +58,8 @@ merge-claude-settings() {
         read -r response
         if [[ "$response" =~ ^[Yy]$ ]]; then
             # Add this permission immediately (use --arg for proper string escaping)
-            local temp_file=$(mktemp)
+            local temp_file
+            temp_file=$(mktemp) || { echo "  ✗ Failed to create temp file"; continue; }
             jq --arg new_perm "$perm" '
                 .permissions.allow += [$new_perm]
                 | .permissions.allow |= unique
