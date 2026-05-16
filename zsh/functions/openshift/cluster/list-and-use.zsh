@@ -54,7 +54,7 @@ list-ocp-clusters() {
         local count=0
         
         # Find all directories with auth/kubeconfig files
-        while IFS= read -r -d $'\0' dir; do
+        while IFS= read -r -d '' dir; do
             if [[ -f "$dir/kubeconfig" ]]; then
                 local cluster_dir=$(dirname "$dir")
                 local cluster_name=$(basename "$cluster_dir")
@@ -84,7 +84,7 @@ list-ocp-clusters() {
         done < <(find "$OCP_MANIFESTS_DIR" -type d -name "auth" -print0 2>/dev/null | sort -z)
         
         # Check for ROSA clusters that might not have kubeconfig files yet
-        while IFS= read -r -d $'\0' dir; do
+        while IFS= read -r -d '' dir; do
             if [[ ! -f "$dir/auth/kubeconfig" && -f "$dir/cluster-admin.txt" ]]; then
                 local cluster_name=$(basename "$dir")
                 count=$((count+1))
@@ -198,7 +198,7 @@ use-ocp-cluster() {
     
     # Find all cloud provider clusters
     if [ -d "$OCP_MANIFESTS_DIR" ]; then
-        while IFS= read -r -d $'\0' dir; do
+        while IFS= read -r -d '' dir; do
             if [[ -f "$dir/kubeconfig" ]]; then
                 local cluster_dir=$(dirname "$dir")
                 local cluster_name=$(basename "$cluster_dir")
@@ -226,7 +226,7 @@ use-ocp-cluster() {
         done < <(find "$OCP_MANIFESTS_DIR" -type d -name "auth" -print0 2>/dev/null | sort -z)
         
         # Check for ROSA clusters that might not have kubeconfig files yet
-        while IFS= read -r -d $'\0' dir; do
+        while IFS= read -r -d '' dir; do
             if [[ ! -f "$dir/auth/kubeconfig" && -f "$dir/cluster-admin.txt" ]]; then
                 local cluster_name=$(basename "$dir")
                 
