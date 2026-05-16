@@ -124,6 +124,7 @@ set-dns-servers() {
         scutil_commands+="d.init\n"
 
         # Add each IPv6 DNS server (ZSH arrays are 1-indexed)
+        local ip
         for ip in "${ipv6_array[@]}"; do
             scutil_commands+="d.add ServerAddresses * $ip\n"
         done
