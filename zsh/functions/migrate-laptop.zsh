@@ -598,6 +598,10 @@ EOF
 
 # Function to update Brewfile from current system
 update-brewfile() {
+    if ! command -v brew &>/dev/null; then
+        error "brew not found. Install Homebrew: https://brew.sh"
+        return 1
+    fi
     progress "Updating Brewfile from current system..."
     
     if [[ ! -f ~/git/dotfiles/Brewfile ]]; then
@@ -626,6 +630,10 @@ update-brewfile() {
 
 # Function to clean up packages not in Brewfile
 brewfile-cleanup() {
+    if ! command -v brew &>/dev/null; then
+        error "brew not found. Install Homebrew: https://brew.sh"
+        return 1
+    fi
     progress "Checking for packages not in Brewfile..."
     
     if [[ ! -f ~/git/dotfiles/Brewfile ]]; then
