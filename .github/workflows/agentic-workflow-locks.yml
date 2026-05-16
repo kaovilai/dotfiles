@@ -7,7 +7,7 @@ on:
       - ".github/workflows/*.lock.yml"
   push:
     branches:
-      - master
+      - main
     paths:
       - ".github/workflows/*.md"
       - ".github/workflows/*.lock.yml"

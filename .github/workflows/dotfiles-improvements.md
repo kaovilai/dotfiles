@@ -1,7 +1,7 @@
 ---
 on:
   push:
-    branches: [main, master]
+    branches: [main]
   schedule: weekly
   workflow_dispatch:
 engine: copilot
@@ -80,7 +80,7 @@ Bundle all fixes of the same category into a single branch and PR:
 1. Create one branch (e.g., `fix/dotfiles-<category-slug>`)
 2. Apply all fixes of the chosen category across all affected files
 3. Run `zsh -n` on each modified file to verify syntax
-4. Use `git merge-tree` and `git merge-base` to verify the branch merges cleanly against `master` and against each open PR branch
+4. Use `git merge-tree` and `git merge-base` to verify the branch merges cleanly against `main` and against each open PR branch
 5. **If the branch merges cleanly**: Create ONE PR containing all fixes
 6. **If it would NOT merge cleanly**: Note which open PR(s) conflict and why
 
