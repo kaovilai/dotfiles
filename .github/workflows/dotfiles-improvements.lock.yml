@@ -52,7 +52,6 @@ on:
   push:
     branches:
     - main
-    - master
   schedule:
   - cron: "9 13 * * 2"
     # Friendly format: weekly (scattered)
