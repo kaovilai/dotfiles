@@ -430,7 +430,8 @@ az-linux() {
 
     # --- Create VM ---
     echo -e "${BLUE}INFO${NC}: Creating VM $vm_name ($vm_size, $architecture)..."
-    local vm_info=$(az vm create \
+    local vm_info
+    vm_info=$(az vm create \
         --resource-group "$rg_name" \
         --name "$vm_name" \
         --image "$image_urn" \
