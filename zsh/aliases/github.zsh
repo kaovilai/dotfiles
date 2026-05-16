@@ -56,6 +56,10 @@ glcc() {
     echo "Example: glcc group/repo or glcc https://gitlab.com/group/repo"
     return 1
   fi
+  if ! command -v code &>/dev/null; then
+    echo "❌ code not found. Install VS Code and run: Shell Command: Install 'code' command in PATH"
+    return 1
+  fi
 
   local repo_spec="$1"
   local repo_name
@@ -92,7 +96,11 @@ ghfc() {
     echo "Example: ghfc owner/repo or ghfc https://github.com/owner/repo"
     return 1
   fi
-  
+  if ! command -v code &>/dev/null; then
+    echo "❌ code not found. Install VS Code and run: Shell Command: Install 'code' command in PATH"
+    return 1
+  fi
+
   local repo_spec="$1"
   local repo_name
   local target_dir="${2:-$HOME/git}"  # Use second argument or ~/git
@@ -296,6 +304,10 @@ review-prs() {
 
   if ! command -v fzf &>/dev/null; then
     echo "❌ fzf not found. Install it with: brew install fzf"
+    return 1
+  fi
+  if ! command -v code &>/dev/null; then
+    echo "❌ code not found. Install VS Code and run: Shell Command: Install 'code' command in PATH"
     return 1
   fi
 

@@ -74,6 +74,10 @@ git-worktree-code() {
     echo "Usage: git-worktree-code <branch-name>"
     return 1
   fi
+  if ! command -v code &>/dev/null; then
+    echo "❌ code not found. Install VS Code and run: Shell Command: Install 'code' command in PATH"
+    return 1
+  fi
   
   # Extract Jira issue key from URL if provided
   local branch_name="$1"
