@@ -75,6 +75,10 @@ alias oadp-set-reviewers='set-oadp-pr-review-users'
 
 # Review PRs from a specific author
 pr-review-user() {
+  if ! command -v gh &>/dev/null; then
+    echo "❌ gh not found. Install it with: brew install gh"
+    return 1
+  fi
   local user="${1:-kaovilai}"
   local repo="${2:-vmware-tanzu/velero}"
   gh pr list --repo "$repo" --author "$user" --state open --json url --jq '.[].url' | xargs -I {} zsh -ic 'claude-review {}'
