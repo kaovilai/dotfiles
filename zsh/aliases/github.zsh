@@ -7,7 +7,7 @@ ghcc() {
     echo "❌ gh not found. Install it with: brew install gh"
     return 1
   fi
-  if [ -z "$1" ]; then
+  if [[ -z "$1" ]]; then
     echo "Usage: ghcc <repo>"
     echo "Example: ghcc owner/repo or ghcc https://github.com/owner/repo"
     return 1
@@ -51,7 +51,7 @@ alias ghclone='ghcc'
 
 # Clone GitLab repo to ~/git/<repo-name> and open in VS Code
 glcc() {
-  if [ -z "$1" ]; then
+  if [[ -z "$1" ]]; then
     echo "Usage: glcc <repo>"
     echo "Example: glcc group/repo or glcc https://gitlab.com/group/repo"
     return 1
@@ -87,7 +87,7 @@ alias glclone='glcc'
 
 # Fork, clone and open repo in VS Code
 ghfc() {
-  if [ -z "$1" ]; then
+  if [[ -z "$1" ]]; then
     echo "Usage: ghfc <repo>"
     echo "Example: ghfc owner/repo or ghfc https://github.com/owner/repo"
     return 1
@@ -192,7 +192,7 @@ alias changelog-not-required='((gh pr view --json labels | jq .labels | grep -q 
 # Set GitHub default repository to upstream
 gh-set-default-upstream() {
   local upstream_url=$(git remote get-url upstream 2>/dev/null)
-  if [ -z "$upstream_url" ]; then
+  if [[ -z "$upstream_url" ]]; then
     echo "Error: No upstream remote found"
     return 1
   fi
@@ -219,7 +219,7 @@ gh-delete-package-tag() {
   local org package tag
 
   # Parse arguments - support both "org package tag" and "ghcr.io/org/package:tag" formats
-  if [ "$#" -eq 1 ]; then
+  if [[ "$#" -eq 1 ]]; then
     # Parse ghcr.io/org/package:tag format
     if [[ "$1" =~ ^ghcr\.io/([^/]+)/([^:]+):(.+)$ ]]; then
       org="${match[1]}"
@@ -236,7 +236,7 @@ gh-delete-package-tag() {
       echo "  gh-delete-package-tag ghcr.io/kubernetes-csi/csi-snapshot-metadata:multiarch-grpc-health-probe"
       return 1
     fi
-  elif [ "$#" -eq 3 ]; then
+  elif [[ "$#" -eq 3 ]]; then
     # Use individual arguments
     org="$1"
     package="$2"
@@ -260,7 +260,7 @@ gh-delete-package-tag() {
   local version_id=$(gh api "/orgs/$org/packages/container/$package/versions" \
     --jq ".[] | select(.metadata.container.tags[]? == \"$tag\") | .id")
 
-  if [ -z "$version_id" ]; then
+  if [[ -z "$version_id" ]]; then
     echo "Error: Tag '$tag' not found in package '$org/$package'"
     echo ""
     echo "Available tags:"
