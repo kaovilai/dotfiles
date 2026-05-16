@@ -44,6 +44,10 @@ load-minio-config() {
 }
 
 list-minio-deployments() {
+    if ! command -v jq &>/dev/null; then
+        echo "❌ jq not found. Install it with: brew install jq"
+        return 1
+    fi
     echo -e "${BLUE}INFO${NC}: MinIO deployments:"
     
     if [[ ! -d "$MINIO_DEPLOYMENTS_DIR" ]] || [[ -z "$(ls -A "$MINIO_DEPLOYMENTS_DIR" 2>/dev/null)" ]]; then
