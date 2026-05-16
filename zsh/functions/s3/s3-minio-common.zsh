@@ -5,11 +5,11 @@
 export MINIO_DEPLOYMENTS_DIR="$HOME/.minio-deployments"
 
 # Colors for output (matching your existing patterns)
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-NC='\033[0m' # No Color
+: ${RED:='\033[0;31m'}
+: ${GREEN:='\033[0;32m'}
+: ${YELLOW:='\033[1;33m'}
+: ${BLUE:='\033[0;34m'}
+: ${NC:='\033[0m'}
 
 create-minio-config-dir() {
     if [[ ! -d "$MINIO_DEPLOYMENTS_DIR" ]]; then
