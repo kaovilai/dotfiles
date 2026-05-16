@@ -379,13 +379,11 @@ use-ocp-cluster() {
 #   export KUBECONFIG=/path/to/cluster/auth/kubeconfig
 #   copy-kubeconfig
 copy-kubeconfig() {
-    [ -f $KUBECONFIG ] || {
-        echo "KUBECONFIG not set"
+    if [[ ! -f "$KUBECONFIG" ]]; then
+        echo "KUBECONFIG not set or file does not exist"
         return 1
-    }
-    [ -f $KUBECONFIG ] && {
-        echo "KUBECONFIG set to $KUBECONFIG"
-        echo "Copying to ~/.kube/config"
-        cp $KUBECONFIG ~/.kube/config
-    }
+    fi
+    echo "KUBECONFIG set to $KUBECONFIG"
+    echo "Copying to ~/.kube/config"
+    cp "$KUBECONFIG" ~/.kube/config
 }
