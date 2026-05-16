@@ -228,7 +228,7 @@ trust-certificate-in-system() {
         return 1
     fi
     
-    if [[ "$(uname -s)" == "Darwin" ]]; then
+    if [[ "$OSTYPE" == darwin* ]]; then
         echo -e "${BLUE}INFO${NC}: Adding certificate to macOS system trust store"
         sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain "$cert_file"
         if [[ $? -eq 0 ]]; then
@@ -264,7 +264,7 @@ remove-certificate-from-system() {
         return 1
     fi
 
-    if [[ "$(uname -s)" == "Darwin" ]]; then
+    if [[ "$OSTYPE" == darwin* ]]; then
         echo -e "${BLUE}INFO${NC}: Removing certificate from macOS system trust store"
         if [[ -f "$cert_file" ]]; then
             sudo security delete-certificate -c "$(openssl x509 -noout -subject -in "$cert_file" | sed 's/subject= //')" /Library/Keychains/System.keychain 2>/dev/null || true
