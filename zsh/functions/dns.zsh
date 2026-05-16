@@ -133,7 +133,7 @@ set-dns-servers() {
         scutil_commands+="quit\n"
 
         # Apply the IPv6 DNS settings
-        if echo -e "$scutil_commands" | sudo scutil; then
+        if printf "%b" "$scutil_commands" | sudo scutil; then
             echo "✓ IPv6 DNS servers set successfully"
         else
             echo "Note: IPv6 DNS setting requires manual configuration"
