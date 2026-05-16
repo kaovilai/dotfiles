@@ -109,7 +109,7 @@ list-ocp-clusters() {
         local count=0
         
         # Find all directories with auth/kubeconfig files
-        for dir in $(find $HOME/clusters -type d -name "auth" 2>/dev/null | sort); do
+        while IFS= read -r -d '' dir; do
             if [[ -f "$dir/kubeconfig" ]]; then
                 local cluster_dir=$(dirname "$dir")
                 local cluster_name=$(basename "$cluster_dir")
@@ -121,7 +121,7 @@ list-ocp-clusters() {
                     echo "$count. $cluster_name"
                 fi
             fi
-        done
+        done < <(find "$HOME/clusters" -type d -name "auth" -print0 2>/dev/null | sort -z)
         
         if [ $count -eq 0 ]; then
             echo "   No local clusters found"
@@ -242,7 +242,7 @@ use-ocp-cluster() {
     
     # Find all local clusters
     if [ -d "$HOME/clusters" ]; then
-        for dir in $(find $HOME/clusters -type d -name "auth" 2>/dev/null | sort); do
+        while IFS= read -r -d '' dir; do
             if [[ -f "$dir/kubeconfig" ]]; then
                 local cluster_dir=$(dirname "$dir")
                 local cluster_name=$(basename "$cluster_dir")
@@ -253,7 +253,7 @@ use-ocp-cluster() {
                     cluster_names+=("$cluster_name (Local)")
                 fi
             fi
-        done
+        done < <(find "$HOME/clusters" -type d -name "auth" -print0 2>/dev/null | sort -z)
     fi
     
     # Check CRC
