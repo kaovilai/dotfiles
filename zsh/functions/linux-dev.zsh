@@ -216,7 +216,8 @@ ec2-linux() {
     # --- Launch ---
     local instance_id
     echo -e "${BLUE}INFO${NC}: Launching $instance_type ($ami_arch)..."
-    local instance_info=$(aws ec2 run-instances \
+    local instance_info
+    instance_info=$(aws ec2 run-instances \
         --region "$region" \
         --image-id "$ami_id" \
         --count 1 \
