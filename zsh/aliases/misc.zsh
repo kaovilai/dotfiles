@@ -46,7 +46,7 @@ alias activepieces-restart='
         
         if [[ -n "$MACHINE_IDS" ]]; then
             echo "Found activepieces machines to clean up"
-            for ID in $MACHINE_IDS; do
+            for ID in ${(f)MACHINE_IDS}; do
                 echo "Deleting Tailscale machine: $ID"
                 curl -s -X DELETE -H "Authorization: Bearer $TAILSCALE_API_KEY" \
                          "https://api.tailscale.com/api/v2/device/$ID"
