@@ -3,12 +3,12 @@
 # Laptop Migration Functions
 # Automates the process of setting up a new macOS laptop with your dotfiles
 
-# Color codes for output
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-NC='\033[0m' # No Color
+# Color codes for output — conditional so we don't overwrite user-defined values
+: ${RED:='\033[0;31m'}
+: ${GREEN:='\033[0;32m'}
+: ${YELLOW:='\033[1;33m'}
+: ${BLUE:='\033[0;34m'}
+: ${NC:='\033[0m'}
 
 # Progress indicator
 progress() {
@@ -489,48 +489,62 @@ list-wifi-networks() {
     networksetup -listpreferredwirelessnetworks "$wifi_interface"
 }
 
+_verify_check() {
+    local name="$1"
+    local command="$2"
+
+    (( _verify_checks_total++ ))
+
+    if eval "$command" >/dev/null 2>&1; then
+        success "$name"
+        (( _verify_checks_passed++ ))
+    else
+        error "$name"
+    fi
+}
+
 # Function to verify migration
 verify-migration() {
     echo "${BLUE}Verifying migration setup...${NC}"
     echo ""
     
-    local checks_passed=0
-    local checks_total=0
+    local _verify_checks_passed=0
+    local _verify_checks_total=0
     
     # Check function
     check() {
         local name="$1"
         local command="$2"
-        ((checks_total++))
+        ((_verify_checks_total++))
         
         if eval "$command" >/dev/null 2>&1; then
             success "$name"
-            ((checks_passed++))
+            ((_verify_checks_passed++))
         else
             error "$name"
         fi
     }
     
     # Run checks
-    check "Homebrew" "command_exists brew"
-    check "Git" "command_exists git"
-    check "GitHub CLI" "command_exists gh"
-    check "Docker/Podman" "command_exists docker || command_exists podman"
-    check "OpenShift CLI" "command_exists oc"
-    check "VS Code" "command_exists code"
-    check "GPG" "command_exists gpg"
-    check "SSH directory" "[[ -d ~/.ssh ]]"
-    check "SSH key exists" "[[ -f ~/.ssh/id_ed25519 ]] || [[ -f ~/.ssh/id_rsa ]]"
-    check "Dotfiles linked" "[[ -f ~/.zshrc ]] && grep -q 'dotfiles' ~/.zshrc"
-    check "Secrets file" "[[ -f ~/secrets.zsh ]]"
-    check "Go installed" "command_exists go"
-    check "Node installed" "command_exists node"
-    check "Python installed" "command_exists python3"
+    _verify_check "Homebrew" "command_exists brew"
+    _verify_check "Git" "command_exists git"
+    _verify_check "GitHub CLI" "command_exists gh"
+    _verify_check "Docker/Podman" "command_exists docker || command_exists podman"
+    _verify_check "OpenShift CLI" "command_exists oc"
+    _verify_check "VS Code" "command_exists code"
+    _verify_check "GPG" "command_exists gpg"
+    _verify_check "SSH directory" "[[ -d ~/.ssh ]]"
+    _verify_check "SSH key exists" "[[ -f ~/.ssh/id_ed25519 ]] || [[ -f ~/.ssh/id_rsa ]]"
+    _verify_check "Dotfiles linked" "[[ -f ~/.zshrc ]] && grep -q 'dotfiles' ~/.zshrc"
+    _verify_check "Secrets file" "[[ -f ~/secrets.zsh ]]"
+    _verify_check "Go installed" "command_exists go"
+    _verify_check "Node installed" "command_exists node"
+    _verify_check "Python installed" "command_exists python3"
     
     echo ""
-    echo "Checks passed: $checks_passed/$checks_total"
+    echo "Checks passed: $_verify_checks_passed/$_verify_checks_total"
     
-    if [[ $checks_passed -eq $checks_total ]]; then
+    if [[ $_verify_checks_passed -eq $_verify_checks_total ]]; then
         echo "${GREEN}All checks passed! ✨${NC}"
     else
         echo "${YELLOW}Some checks failed. Review the output above.${NC}"
