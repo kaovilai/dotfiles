@@ -12,7 +12,7 @@ cherrypick-pr-to-branch() {
     local NEW_BRANCH=$3
     echo "Cherry-picking PR $PR_NUMBER to branch $BRANCH"
     git checkout -b "$NEW_BRANCH" "$BRANCH" || (git checkout "$NEW_BRANCH" && git reset --hard "$BRANCH")
-    cherrypick-pr $PR_NUMBER
+    cherrypick-pr "$PR_NUMBER"
 }
 
 # Helper function to create a new changelog for velero repos
