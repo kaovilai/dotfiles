@@ -4,11 +4,11 @@
 
 # Function to handle AA inflight WiFi reconnection
 aa-inflight-wifi() {
-    local SSID="aainflight.com"
-    local WIFI_URL="https://www.aainflight.com/wifi/free"
-    local WAIT_TIME=$((20 * 60))  # 20 minutes in seconds
-    local CHECK_INTERVAL=5
-    local MAX_ATTEMPTS=60  # Max attempts to reconnect (5 min timeout)
+    local ssid="aainflight.com"
+    local wifi_url="https://www.aainflight.com/wifi/free"
+    local wait_time=$((20 * 60))  # 20 minutes in seconds
+    local check_interval=5
+    local max_attempts=60  # Max attempts to reconnect (5 min timeout)
 
     # Detect WiFi interface dynamically
     local wifi_interface=$(networksetup -listallhardwareports | grep -A 1 "Wi-Fi" | grep "Device:" | awk '{print $2}')
@@ -52,7 +52,7 @@ aa-inflight-wifi() {
 
         # Use the new MAC randomization function with network forgetting
         # This will forget the network and randomize the MAC in one operation
-        randomize-mac-ifconfig --network "$SSID" --interface "$wifi_interface"
+        randomize-mac-ifconfig --network "$ssid" --interface "$wifi_interface"
 
         # Small delay to let the interface stabilize
         sleep 2
@@ -65,14 +65,14 @@ aa-inflight-wifi() {
         sleep 3
 
         # Try to connect to the network
-        echo "Attempting to connect to $SSID..."
-        sudo networksetup -setairportnetwork "$wifi_interface" "$SSID" 2>/dev/null || true
+        echo "Attempting to connect to $ssid..."
+        sudo networksetup -setairportnetwork "$wifi_interface" "$ssid" 2>/dev/null || true
 
         sleep 2
 
         # Open the WiFi login page
         echo "Opening WiFi login page..."
-        open "$WIFI_URL"
+        open "$wifi_url"
 
         # # Wait for connection
         # echo "Waiting for connection to $SSID..."
@@ -102,8 +102,8 @@ aa-inflight-wifi() {
         # Wait for internet to become available
         echo "Waiting for internet connection (complete the login in your browser)..."
         local attempts=0
-        while ! check_internet && [[ $attempts -lt $MAX_ATTEMPTS ]]; do
-            sleep $CHECK_INTERVAL
+        while ! check_internet && [[ $attempts -lt $max_attempts ]]; do
+            sleep $check_interval
             ((attempts++))
             echo -n "."
         done
@@ -133,8 +133,8 @@ aa-inflight-wifi() {
         if reconnect_wifi; then
             # Success - wait 20 minutes before next cycle
             echo "$(date '+%Y-%m-%d %H:%M:%S') - Waiting 20 minutes before next reconnection..."
-            echo "Next reconnection at: $(date -v +${WAIT_TIME}S '+%Y-%m-%d %H:%M:%S')"
-            sleep $WAIT_TIME
+            echo "Next reconnection at: $(date -v +${wait_time}S '+%Y-%m-%d %H:%M:%S')"
+            sleep $wait_time
         else
             # Failed - wait a bit before retrying
             echo "Reconnection failed. Retrying in 30 seconds..."
