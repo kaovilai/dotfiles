@@ -1,5 +1,7 @@
 ---
 on:
+  push:
+    branches: [main, master]
   schedule: weekly
   workflow_dispatch:
 engine: copilot
