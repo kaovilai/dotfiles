@@ -41,7 +41,13 @@ aa-inflight-wifi() {
 
         # Source the MAC randomization function if not already loaded
         if ! command -v randomize-mac-ifconfig &>/dev/null; then
-            source ~/git/dotfiles/zsh/functions/randomize-mac.zsh
+            local mac_script="${0:A:h}/randomize-mac.zsh"
+            [[ -f "$mac_script" ]] || mac_script="$HOME/git/dotfiles/zsh/functions/randomize-mac.zsh"
+            if [[ ! -f "$mac_script" ]]; then
+                echo "Error: randomize-mac.zsh not found"
+                return 1
+            fi
+            source "$mac_script"
         fi
 
         # Use the new MAC randomization function with network forgetting
