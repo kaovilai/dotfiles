@@ -95,6 +95,10 @@ alias glclone='glcc'
 
 # Fork, clone and open repo in VS Code
 ghfc() {
+  if ! command -v gh &>/dev/null; then
+    echo "❌ gh not found. Install it with: brew install gh"
+    return 1
+  fi
   if [[ -z "$1" ]]; then
     echo "Usage: ghfc <repo>"
     echo "Example: ghfc owner/repo or ghfc https://github.com/owner/repo"
@@ -203,6 +207,10 @@ alias changelog-not-required='((gh pr view --json labels | jq .labels | grep -q 
 
 # Set GitHub default repository to upstream
 gh-set-default-upstream() {
+  if ! command -v gh &>/dev/null; then
+    echo "❌ gh not found. Install it with: brew install gh"
+    return 1
+  fi
   local upstream_url=$(git remote get-url upstream 2>/dev/null)
   if [[ -z "$upstream_url" ]]; then
     echo "Error: No upstream remote found"
@@ -228,6 +236,10 @@ alias gh-set-upstream-default='gh-set-default-upstream'
 
 # Delete a single tag from a GitHub Container Registry package
 gh-delete-package-tag() {
+  if ! command -v gh &>/dev/null; then
+    echo "❌ gh not found. Install it with: brew install gh"
+    return 1
+  fi
   local org package tag
 
   # Parse arguments - support both "org package tag" and "ghcr.io/org/package:tag" formats
@@ -306,6 +318,10 @@ alias ghpkgdel='gh-delete-package-tag'
 review-prs() {
   local raw_input=""
 
+  if ! command -v gh &>/dev/null; then
+    echo "❌ gh not found. Install it with: brew install gh"
+    return 1
+  fi
   if ! command -v fzf &>/dev/null; then
     echo "❌ fzf not found. Install it with: brew install fzf"
     return 1
