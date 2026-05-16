@@ -19,6 +19,10 @@ cg() {
     echo "❌ fzf not found. Install it with: brew install fzf"
     return 1
   fi
+  if ! command -v code &>/dev/null; then
+    echo "❌ code not found. Install VS Code and run: Shell Command: Install 'code' command in PATH"
+    return 1
+  fi
   local dirs
   dirs=$(ls -d ~/git/*/ 2>/dev/null | sed "s|$HOME/git/||;s|/$||" | fzf --multi --prompt="~/git/ > " --preview 'git -C ~/git/{} status -sb 2>/dev/null || echo "Not a git repo"') || return
   echo "$dirs" | while IFS= read -r d; do
