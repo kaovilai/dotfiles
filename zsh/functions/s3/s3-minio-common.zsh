@@ -5,11 +5,11 @@
 export MINIO_DEPLOYMENTS_DIR="$HOME/.minio-deployments"
 
 # Colors for output (matching your existing patterns)
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-NC='\033[0m' # No Color
+: ${RED:='\033[0;31m'}
+: ${GREEN:='\033[0;32m'}
+: ${YELLOW:='\033[1;33m'}
+: ${BLUE:='\033[0;34m'}
+: ${NC:='\033[0m'}
 
 create-minio-config-dir() {
     if [[ ! -d "$MINIO_DEPLOYMENTS_DIR" ]]; then
@@ -44,6 +44,10 @@ load-minio-config() {
 }
 
 list-minio-deployments() {
+    if ! command -v jq &>/dev/null; then
+        echo "❌ jq not found. Install it with: brew install jq"
+        return 1
+    fi
     echo -e "${BLUE}INFO${NC}: MinIO deployments:"
     
     if [[ ! -d "$MINIO_DEPLOYMENTS_DIR" ]] || [[ -z "$(ls -A "$MINIO_DEPLOYMENTS_DIR" 2>/dev/null)" ]]; then
@@ -87,6 +91,7 @@ get-minio-connection-info() {
         return 1
     fi
     
+    local config
     if ! config=$(load-minio-config "$name"); then
         return 1
     fi
@@ -269,6 +274,7 @@ test-minio-connection() {
         return 1
     fi
     
+    local config
     if ! config=$(load-minio-config "$name"); then
         return 1
     fi
@@ -277,8 +283,6 @@ test-minio-connection() {
     local access_key=$(echo "$config" | jq -r '.access_key')
     local secret_key=$(echo "$config" | jq -r '.secret_key')
     local cert_file=$(echo "$config" | jq -r '.cert_file // ""')
-    
-    echo -e "${BLUE}INFO${NC}: Testing connection to MinIO deployment '$name' at $endpoint"
     
     # Set AWS credentials for this test
     export AWS_ACCESS_KEY_ID="$access_key"
@@ -362,6 +366,7 @@ download-minio-certificate() {
         return 1
     fi
 
+    local config
     if ! config=$(load-minio-config "$name"); then
         return 1
     fi
@@ -467,6 +472,7 @@ check-minio-docker-status() {
         return 1
     fi
 
+    local config
     if ! config=$(load-minio-config "$name"); then
         return 1
     fi

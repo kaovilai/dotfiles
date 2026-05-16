@@ -3,7 +3,7 @@
 # Merge local Claude settings into global config with interactive prompts
 merge-claude-settings() {
     if ! command -v jq &>/dev/null; then
-        echo "❌ jq not found. Install it with: brew install jq"
+        echo "Error: jq is required but not found. Install with: brew install jq"
         return 1
     fi
 
