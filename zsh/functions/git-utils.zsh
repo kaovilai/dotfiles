@@ -189,6 +189,10 @@ code-dirs() {
         echo "❌ parallel not found. Install it with: brew install parallel"
         return 1
     fi
+    if ! command -v code &>/dev/null; then
+        echo "❌ code not found. Install VS Code and run: Shell Command: Install 'code' command in PATH"
+        return 1
+    fi
 
     find . -type d -maxdepth 1 -name "$1" | parallel code {}
 }

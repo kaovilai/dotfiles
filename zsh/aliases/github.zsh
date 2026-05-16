@@ -12,6 +12,10 @@ ghcc() {
     echo "Example: ghcc owner/repo or ghcc https://github.com/owner/repo"
     return 1
   fi
+  if ! command -v code &>/dev/null; then
+    echo "❌ code not found. Install VS Code and run: Shell Command: Install 'code' command in PATH"
+    return 1
+  fi
 
   local repo_spec="$1"
   local repo_name
