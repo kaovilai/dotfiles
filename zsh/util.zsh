@@ -1,12 +1,12 @@
 # Description: General-purpose small utilities
 
 code-git() {
-    if ! command -v code &>/dev/null; then
-        echo "❌ code not found. Install VS Code and enable the 'code' CLI command."
-        return 1
-    fi
     if [[ -z "$1" ]]; then
         echo "Usage: code-git <repo-name>"
+        return 1
+    fi
+    if ! command -v code &>/dev/null; then
+        echo "❌ code not found. Install VS Code and run: Shell Command: Install 'code' command in PATH"
         return 1
     fi
     code ~/git/"$1"
@@ -17,7 +17,7 @@ if [[ "$TERM_PROGRAM" != "vscode" ]]; then
     # view current prs in dirs matched by find . -type d -maxdepth 1 -name "<$1>"
     # view-pr-dirs "velero*"
     function view-pr-dirs() {
-        find . -type d -maxdepth 1 -name "$1" -exec sh -c "cd {} && pwd && gh pr view --web" \;
+        find . -type d -maxdepth 1 -name "$1" -exec sh -c 'cd "$1" && pwd && gh pr view --web' _ {} \;
     }
 fi
 
