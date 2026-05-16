@@ -170,7 +170,7 @@ function unsymlink-from-sd() {
     echo "The symbolic link has been replaced with a regular directory."
 
     # Change back to the original directory
-    cd "$current_path"
+    cd "$current_path" || { echo "Warning: Could not cd back to $current_path"; return 1; }
 }
 
 # Recreate symlinks for directories previously created with symlink-to-sd
