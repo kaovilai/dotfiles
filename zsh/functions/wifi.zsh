@@ -15,10 +15,10 @@ function wifi-standard() {
 
     # Extract PHY mode which contains the standard information
     # Look for PHY Mode under Current Network Information section
-    local phy_mode=$(echo "$wifi_info" | grep -A 20 "Current Network Information:" | grep -i "PHY Mode:" | head -1 | awk -F': ' '{print $2}')
+    local phy_mode=$(grep -A 20 "Current Network Information:" <<< "$wifi_info" | grep -i "PHY Mode:" | head -1 | awk -F': ' '{print $2}')
 
     # Extract channel information to check for 6 GHz band
-    local channel_info=$(echo "$wifi_info" | grep -A 20 "Current Network Information:" | grep -i "Channel:" | head -1)
+    local channel_info=$(grep -A 20 "Current Network Information:" <<< "$wifi_info" | grep -i "Channel:" | head -1)
 
     # Map PHY mode to user-friendly WiFi standard names
     case "$phy_mode" in

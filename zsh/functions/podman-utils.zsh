@@ -28,26 +28,26 @@ check-qemu-stuck() {
     fi
 
     echo "📊 QEMU Processes:"
-    echo "$qemu_procs" | while IFS= read -r line; do
+    while IFS= read -r line; do
         echo "  $line"
-    done
+    done <<< "$qemu_procs"
     echo
 
     # Check for futex_wait (deadlock indicator)
-    local stuck_procs=$(echo "$qemu_procs" | grep "futex_wait_queue")
+    local stuck_procs=$(grep "futex_wait_queue" <<< "$qemu_procs")
 
     if [[ -n "$stuck_procs" ]]; then
         echo "⚠️  STUCK PROCESSES DETECTED (futex_wait_queue):"
-        echo "$stuck_procs" | while IFS= read -r line; do
-            local pid=$(echo "$line" | awk '{print $1}')
-            local etime=$(echo "$line" | awk '{print $3}')
-            local cmd=$(echo "$line" | awk '{for(i=6;i<=NF;i++) printf $i" "; print ""}')
+        while IFS= read -r line; do
+            local pid=$(awk '{print $1}' <<< "$line")
+            local etime=$(awk '{print $3}' <<< "$line")
+            local cmd=$(awk '{for(i=6;i<=NF;i++) printf $i" "; print ""}' <<< "$line")
             echo "  PID: $pid | Runtime: $etime | Cmd: $cmd"
 
             # Get process state details
             local state=$(podman machine ssh -- "cat /proc/$pid/status 2>/dev/null | grep -E '(State|Threads)'" 2>/dev/null)
-            echo "    State: $(echo "$state" | tr '\n' ' ')"
-        done
+            echo "    State: $(tr '\n' ' ' <<< "$state")"
+        done <<< "$stuck_procs"
         echo
         echo "💡 Known issue: QEMU user-mode emulation futex deadlock with Go builds"
         echo "   This is an intermittent race condition (happens ~1 in 10 builds)"
@@ -94,25 +94,25 @@ kill-stuck-qemu() {
     fi
 
     # Format processes for selection
-    local formatted_procs=$(echo "$stuck_procs" | while IFS= read -r line; do
-        local pid=$(echo "$line" | awk '{print $1}')
-        local ppid=$(echo "$line" | awk '{print $2}')
-        local etime=$(echo "$line" | awk '{print $3}')
-        local cmd=$(echo "$line" | awk '{for(i=5;i<=NF;i++) printf $i" "; print ""}')
+    local formatted_procs=$(while IFS= read -r line; do
+        local pid=$(awk '{print $1}' <<< "$line")
+        local ppid=$(awk '{print $2}' <<< "$line")
+        local etime=$(awk '{print $3}' <<< "$line")
+        local cmd=$(awk '{for(i=5;i<=NF;i++) printf $i" "; print ""}' <<< "$line")
 
         # Extract architecture from qemu binary name
-        local arch=$(echo "$cmd" | grep -o 'qemu-[a-z0-9_]*-static' | sed 's/qemu-//;s/-static//')
+        local arch=$(grep -o 'qemu-[a-z0-9_]*-static' <<< "$cmd" | sed 's/qemu-//;s/-static//')
 
         # Format: arch | PID | runtime | command snippet
-        printf "%-10s | PID: %-6s | %-10s | %s\n" "$arch" "$pid" "$etime" "$(echo "$cmd" | cut -c1-80)"
-    done)
+        printf "%-10s | PID: %-6s | %-10s | %s\n" "$arch" "$pid" "$etime" "$(cut -c1-80 <<< "$cmd")"
+    done <<< "$stuck_procs")
 
     echo
     echo "📋 Select processes to kill (↑/↓ to navigate, TAB to select, ENTER to confirm):"
     echo
 
     # Use fzf for multi-select
-    local selected=$(echo "$formatted_procs" | fzf --multi \
+    local selected=$(fzf --multi \
         --header="Select processes to kill (TAB to select multiple, ENTER to confirm, ESC to cancel)" \
         --header-first \
         --reverse \
@@ -121,7 +121,7 @@ kill-stuck-qemu() {
         --prompt="Select> " \
         --pointer="▶" \
         --marker="✓" \
-        --color="header:italic:underline")
+        --color="header:italic:underline" <<< "$formatted_procs")
 
     if [[ -z "$selected" ]]; then
         echo "❌ No processes selected"
@@ -129,7 +129,7 @@ kill-stuck-qemu() {
     fi
 
     # Extract PIDs from selection
-    local selected_pids=$(echo "$selected" | awk -F'PID: ' '{print $2}' | awk '{print $1}')
+    local selected_pids=$(awk -F'PID: ' '{print $2}' <<< "$selected" | awk '{print $1}')
 
     echo
     echo "⚠️  Selected processes to kill:"
@@ -139,10 +139,10 @@ kill-stuck-qemu() {
     read -r confirm
 
     if [[ "$confirm" =~ ^[Yy]$ ]]; then
-        echo "$selected_pids" | while read -r pid; do
+        while read -r pid; do
             echo "  💀 Killing PID $pid..."
             podman machine ssh -- "kill -9 $pid" 2>/dev/null
-        done
+        done <<< "$selected_pids"
         echo "✅ Selected processes killed"
 
         # Ask about parent buildah processes
@@ -153,10 +153,10 @@ kill-stuck-qemu() {
             echo -n "Kill these too? [y/N] "
             read -r confirm_buildah
             if [[ "$confirm_buildah" =~ ^[Yy]$ ]]; then
-                echo "$buildah_pids" | while read -r pid; do
+                while read -r pid; do
                     echo "  💀 Killing buildah PID $pid..."
                     podman machine ssh -- "kill -9 $pid" 2>/dev/null
-                done
+                done <<< "$buildah_pids"
                 echo "✅ Buildah processes killed"
             fi
         fi
