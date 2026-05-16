@@ -841,10 +841,8 @@ configure-minio-cluster-access() {
     fi
 
     # Load MinIO config
-    local config=$(load-minio-config "$minio_name")
-    if [[ $? -ne 0 ]]; then
-        return 1
-    fi
+    local config
+    config=$(load-minio-config "$minio_name") || return 1
     
     local endpoint=$(echo "$config" | jq -r '.endpoint')
     local access_key=$(echo "$config" | jq -r '.access_key')
