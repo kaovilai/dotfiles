@@ -107,9 +107,14 @@ create-minio-aws() {
     
     echo -e "${BLUE}INFO${NC}: Creating MinIO deployment '$name' in AWS region $region"
     
-    # Check AWS CLI availability
+    # Check required tools
     if ! command -v aws &> /dev/null; then
         echo -e "${RED}ERROR${NC}: AWS CLI is not installed or not in PATH"
+        return 1
+    fi
+
+    if ! command -v jq &>/dev/null; then
+        echo -e "${RED}ERROR${NC}: jq not found. Install it with: brew install jq"
         return 1
     fi
 
@@ -679,7 +684,17 @@ delete-minio-aws() {
         echo "Usage: delete-minio-aws --name <deployment-name>"
         return 1
     fi
-    
+
+    if ! command -v aws &> /dev/null; then
+        echo -e "${RED}ERROR${NC}: AWS CLI is not installed or not in PATH"
+        return 1
+    fi
+
+    if ! command -v jq &>/dev/null; then
+        echo -e "${RED}ERROR${NC}: jq not found. Install it with: brew install jq"
+        return 1
+    fi
+
     local config
     config=$(load-minio-config "$name")
     if [[ $? -ne 0 ]]; then
@@ -819,7 +834,12 @@ configure-minio-cluster-access() {
         echo "Usage: configure-minio-cluster-access --minio <minio-name> --cluster <cluster-name>"
         return 1
     fi
-    
+
+    if ! command -v jq &>/dev/null; then
+        echo -e "${RED}ERROR${NC}: jq not found. Install it with: brew install jq"
+        return 1
+    fi
+
     # Load MinIO config
     local config=$(load-minio-config "$minio_name")
     if [[ $? -ne 0 ]]; then
