@@ -35,6 +35,10 @@ logs-oadp() {
 
 # Set PR_REVIEW_USERS to current Velero maintainers (excluding emeritus)
 set-velero-pr-review-users() {
+  if ! command -v curl &>/dev/null; then
+    echo "❌ curl not found. Install it with: brew install curl"
+    return 1
+  fi
   # Fetch current maintainers from GitHub
   local maintainers_url="https://raw.githubusercontent.com/vmware-tanzu/velero/main/MAINTAINERS.md"
   local maintainers=$(curl -s "$maintainers_url" | grep -E '@[a-zA-Z0-9_-]+' | grep -v -i 'emeritus' | sed -E 's/.*@([a-zA-Z0-9_-]+).*/\1/' | sort -u | tr '\n' ' ')
@@ -55,6 +59,10 @@ alias velero-set-reviewers='set-velero-pr-review-users'
 
 # Set PR_REVIEW_USERS to current OADP operator owners
 set-oadp-pr-review-users() {
+  if ! command -v curl &>/dev/null; then
+    echo "❌ curl not found. Install it with: brew install curl"
+    return 1
+  fi
   # Fetch current owners from GitHub OWNERS file
   local owners_url="https://raw.githubusercontent.com/openshift/oadp-operator/master/OWNERS"
   local owners=$(curl -s "$owners_url" | grep -E '^\s*-\s+[a-zA-Z0-9_-]+\s*$' | sed -E 's/^\s*-\s+([a-zA-Z0-9_-]+)\s*$/\1/' | sort -u | tr '\n' ' ')
@@ -101,6 +109,10 @@ pr-review-all-users() {
 
 # Review all Velero maintainer PRs without setting environment variable
 review-velero-maintainer-prs() {
+  if ! command -v curl &>/dev/null; then
+    echo "❌ curl not found. Install it with: brew install curl"
+    return 1
+  fi
   echo "Fetching Velero maintainers..."
   local maintainers_url="https://raw.githubusercontent.com/vmware-tanzu/velero/main/MAINTAINERS.md"
   local maintainers=$(curl -s "$maintainers_url" | grep -E '@[a-zA-Z0-9_-]+' | grep -v -i 'emeritus' | sed -E 's/.*@([a-zA-Z0-9_-]+).*/\1/' | sort -u)
@@ -122,6 +134,10 @@ review-velero-maintainer-prs() {
 
 # Review all OADP owner PRs without setting environment variable
 review-oadp-owner-prs() {
+  if ! command -v curl &>/dev/null; then
+    echo "❌ curl not found. Install it with: brew install curl"
+    return 1
+  fi
   echo "Fetching OADP owners..."
   local owners_url="https://raw.githubusercontent.com/openshift/oadp-operator/master/OWNERS"
   local owners=$(curl -s "$owners_url" | grep -E '^\s*-\s+[a-zA-Z0-9_-]+\s*$' | sed -E 's/^\s*-\s+([a-zA-Z0-9_-]+)\s*$/\1/' | sort -u)
