@@ -12,7 +12,7 @@ function symlink-to-sd() {
     local sd_backup="/Volumes/SD$current_dir.backup.$(date +%Y%m%d%H%M%S)"
 
     # Check if SD volume is mounted
-    if [ ! -d "/Volumes/SD" ]; then
+    if [[ ! -d "/Volumes/SD" ]]; then
         echo "Error: SD volume is not mounted at /Volumes/SD"
         return 1
     fi
@@ -115,7 +115,7 @@ function unsymlink-from-sd() {
     fi
 
     # Check if SD volume is mounted
-    if [ ! -d "/Volumes/SD" ]; then
+    if [[ ! -d "/Volumes/SD" ]]; then
         echo "Error: SD volume is not mounted at /Volumes/SD"
         return 1
     fi
@@ -182,18 +182,18 @@ function relink-from-sd() {
     local local_path="$2"
 
     # Check if arguments are provided
-    if [ -z "$sd_path" ]; then
+    if [[ -z "$sd_path" ]]; then
         return 0  # Silently exit if no arguments provided
     fi
 
     # Check if SD volume is mounted
-    if [ ! -d "/Volumes/SD" ]; then
+    if [[ ! -d "/Volumes/SD" ]]; then
         echo "Error: SD volume is not mounted at /Volumes/SD"
         return 1
     fi
 
     # Validate SD path exists
-    if [ ! -d "$sd_path" ]; then
+    if [[ ! -d "$sd_path" ]]; then
         echo "Error: The specified SD path does not exist: $sd_path"
         return 1
     fi
@@ -205,14 +205,14 @@ function relink-from-sd() {
     fi
 
     # If local path is not provided, derive it from the SD path
-    if [ -z "$local_path" ]; then
+    if [[ -z "$local_path" ]]; then
         # Remove "/Volumes/SD" prefix to get the original path
         local_path="${sd_path#/Volumes/SD}"
         echo "No local path specified, derived path: $local_path"
     fi
 
     # Check if local path already exists
-    if [ -e "$local_path" ]; then
+    if [[ -e "$local_path" ]]; then
         echo "Error: Local path already exists: $local_path"
         echo "Please remove it first or specify a different path."
         return 1
