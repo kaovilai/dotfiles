@@ -112,7 +112,13 @@ create-minio-aws() {
         echo -e "${RED}ERROR${NC}: AWS CLI is not installed or not in PATH"
         return 1
     fi
-    
+
+    # Check openssl availability
+    if ! command -v openssl &>/dev/null; then
+        echo -e "${RED}ERROR${NC}: openssl not found. Install it with: brew install openssl"
+        return 1
+    fi
+
     # Check AWS credentials
     if ! aws sts get-caller-identity &> /dev/null; then
         echo -e "${RED}ERROR${NC}: AWS credentials not configured or invalid"
