@@ -29,21 +29,21 @@ new-changelog() {
         echo "❌ gh not found. Install it with: brew install gh"
         return 1
     fi
-    local GH_LOGIN GH_PR_NUMBER CHANGELOG_BODY
-    GH_LOGIN=$(gh pr view --json author --jq .author.login 2> /dev/null)
-    GH_PR_NUMBER=$(gh pr view --json number --jq .number 2> /dev/null)
-    CHANGELOG_BODY=$(gh pr view --json title --jq .title 2> /dev/null)
-    if [[ -z "$GH_LOGIN" ]]; then
+    local gh_login gh_pr_number changelog_body
+    gh_login=$(gh pr view --json author --jq .author.login 2> /dev/null)
+    gh_pr_number=$(gh pr view --json number --jq .number 2> /dev/null)
+    changelog_body=$(gh pr view --json title --jq .title 2> /dev/null)
+    if [[ -z "$gh_login" ]]; then
         echo "branch does not have PR or cli not logged in, try 'gh auth login' or 'gh pr create'"
         return 1
     fi
-    if [[ -z "$GH_PR_NUMBER" ]]; then
+    if [[ -z "$gh_pr_number" ]]; then
         echo "Could not determine PR number. Make sure the branch has an open PR."
         return 1
     fi
     mkdir -p ./changelogs/unreleased/ && \
-    echo "$CHANGELOG_BODY" > "./changelogs/unreleased/$GH_PR_NUMBER-$GH_LOGIN" && \
-    echo "\"$CHANGELOG_BODY\" added to ./changelogs/unreleased/$GH_PR_NUMBER-$GH_LOGIN"
+    echo "$changelog_body" > "./changelogs/unreleased/$gh_pr_number-$gh_login" && \
+    echo "\"$changelog_body\" added to ./changelogs/unreleased/$gh_pr_number-$gh_login"
 }
 
 go-mod-upgrade() {
