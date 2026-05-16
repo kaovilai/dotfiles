@@ -37,6 +37,10 @@ go-mod-upgrade() {
     echo "Example: go-mod-upgrade github.com/openshift/oadp-operator@v1.2.0"
     return 1
     fi
+    if ! command -v go &>/dev/null; then
+        echo "❌ go not found. Install it with: brew install go"
+        return 1
+    fi
     go get "$1" && go mod tidy && git add go.mod go.sum && git commit -sm "go-mod-upgrade: $1"
 }
 
