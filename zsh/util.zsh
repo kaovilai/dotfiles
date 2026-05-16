@@ -17,7 +17,7 @@ if [[ "$TERM_PROGRAM" != "vscode" ]]; then
     # view current prs in dirs matched by find . -type d -maxdepth 1 -name "<$1>"
     # view-pr-dirs "velero*"
     function view-pr-dirs() {
-        find . -type d -maxdepth 1 -name "$1" -exec sh -c "cd {} && pwd && gh pr view --web" \;
+        find . -type d -maxdepth 1 -name "$1" -exec sh -c 'cd "$1" && pwd && gh pr view --web' _ {} \;
     }
 fi
 
