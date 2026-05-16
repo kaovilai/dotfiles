@@ -3,6 +3,10 @@ alias gh-pr-view='gh pr view --web'
 
 # Clone repo to ~/git/<repo-name> and open in VS Code
 ghcc() {
+  if ! command -v gh &>/dev/null; then
+    echo "❌ gh not found. Install it with: brew install gh"
+    return 1
+  fi
   if [ -z "$1" ]; then
     echo "Usage: ghcc <repo>"
     echo "Example: ghcc owner/repo or ghcc https://github.com/owner/repo"
