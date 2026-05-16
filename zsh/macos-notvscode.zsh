@@ -23,10 +23,10 @@ set-ttl-for-hotspot(){
 set-tf-proxy(){
     export TF_ROUTER_IP=$(networksetup -getinfo Wi-Fi | grep -e "^Router" | cut -d " " -f 2)
     export TF_ROUTER_PROXY_PORT=8228
-    export http_proxy=$TF_ROUTER_IP:$TF_ROUTER_PROXY_PORT
-    export https_proxy=$TF_ROUTER_IP:$TF_ROUTER_PROXY_PORT
-    networksetup -setwebproxy Wi-Fi $TF_ROUTER_IP $TF_ROUTER_PROXY_PORT
-    networksetup -setsecurewebproxy Wi-Fi $TF_ROUTER_IP $TF_ROUTER_PROXY_PORT
+    export http_proxy="$TF_ROUTER_IP:$TF_ROUTER_PROXY_PORT"
+    export https_proxy="$TF_ROUTER_IP:$TF_ROUTER_PROXY_PORT"
+    networksetup -setwebproxy Wi-Fi "$TF_ROUTER_IP" "$TF_ROUTER_PROXY_PORT"
+    networksetup -setsecurewebproxy Wi-Fi "$TF_ROUTER_IP" "$TF_ROUTER_PROXY_PORT"
     networksetup -setwebproxystate Wi-Fi on
     networksetup -setsecurewebproxystate Wi-Fi on
 }
@@ -46,7 +46,7 @@ set-socks-proxy(){
         export SOCKS_ROUTER_IP=$(networksetup -getinfo Wi-Fi | grep -e "^Router" | cut -d " " -f 2)
     fi
     export SOCKS_ROUTER_PROXY_PORT=1888
-    networksetup -setsocksfirewallproxy Wi-Fi $SOCKS_ROUTER_IP $SOCKS_ROUTER_PROXY_PORT off
+    networksetup -setsocksfirewallproxy Wi-Fi "$SOCKS_ROUTER_IP" "$SOCKS_ROUTER_PROXY_PORT" off
     networksetup -setsocksfirewallproxystate Wi-Fi on
 }
 
@@ -77,7 +77,7 @@ if [[ "$TERM_PROGRAM" != "vscode" ]]; then
   
   # Handle proxy setup based on network
   if [[ "$WIFI_NAME" = "PASSAWIT's Z Fold7" ]]; then
-        (curl --silent --socks5 $SOCKS_ROUTER_IP:$SOCKS_ROUTER_PROXY_PORT http://www.google.com && set-socks-proxy) &!
+        (curl --silent --socks5 "$SOCKS_ROUTER_IP:$SOCKS_ROUTER_PROXY_PORT" http://www.google.com && set-socks-proxy) &!
     else
         unset-socks-proxy &!
     fi
