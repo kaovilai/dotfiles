@@ -91,6 +91,7 @@ get-minio-connection-info() {
         return 1
     fi
     
+    local config
     if ! config=$(load-minio-config "$name"); then
         return 1
     fi
@@ -273,6 +274,7 @@ test-minio-connection() {
         return 1
     fi
     
+    local config
     if ! config=$(load-minio-config "$name"); then
         return 1
     fi
@@ -281,8 +283,6 @@ test-minio-connection() {
     local access_key=$(echo "$config" | jq -r '.access_key')
     local secret_key=$(echo "$config" | jq -r '.secret_key')
     local cert_file=$(echo "$config" | jq -r '.cert_file // ""')
-    
-    echo -e "${BLUE}INFO${NC}: Testing connection to MinIO deployment '$name' at $endpoint"
     
     # Set AWS credentials for this test
     export AWS_ACCESS_KEY_ID="$access_key"
@@ -366,6 +366,7 @@ download-minio-certificate() {
         return 1
     fi
 
+    local config
     if ! config=$(load-minio-config "$name"); then
         return 1
     fi
@@ -471,6 +472,7 @@ check-minio-docker-status() {
         return 1
     fi
 
+    local config
     if ! config=$(load-minio-config "$name"); then
         return 1
     fi
