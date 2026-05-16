@@ -100,7 +100,7 @@ exec-dirs-ds() {
                 git reset --hard $ds_name/$base_branch
             ) || { echo "\033[1;31mFailed to setup branch $branch_full\033[0m"; return 1; }
 
-            if [ "$echo_only" = true ]; then
+            if [[ "$echo_only" == true ]]; then
                 echo "Would execute: $cmd"
             else
                 echo "Executing command..."
