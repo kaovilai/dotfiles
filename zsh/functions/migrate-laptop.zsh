@@ -491,11 +491,11 @@ list-wifi-networks() {
 
 _verify_check() {
     local name="$1"
-    local cmd="$2"
+    local command="$2"
 
     (( _verify_checks_total++ ))
 
-    if eval "$cmd" >/dev/null 2>&1; then
+    if eval "$command" >/dev/null 2>&1; then
         success "$name"
         (( _verify_checks_passed++ ))
     else
