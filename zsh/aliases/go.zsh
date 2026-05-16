@@ -6,7 +6,7 @@ alias grf='golangci-lint run --fix'
 alias grfw='golangci-lint-with-retry() {
   local max_attempts=30
   local attempt=1
-  while [ $attempt -le $max_attempts ]; do
+  while [[ $attempt -le $max_attempts ]]; do
     if output=$(golangci-lint run --fix 2>&1); then
       echo "$output"
       return 0

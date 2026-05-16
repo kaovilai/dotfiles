@@ -33,7 +33,7 @@ alias activepieces-restart='
     podman compose -f ~/OneDrive/activepieces/docker-compose.activepiecestailscale.yml down
     
     # Clean up Tailscale machines if API key and tailnet are configured
-    if [ -n "$TAILSCALE_API_KEY" ] && [ -n "$TAILSCALE_TAILNET" ]; then
+    if [[ -n "$TAILSCALE_API_KEY" && -n "$TAILSCALE_TAILNET" ]]; then
         echo "Looking for activepieces machines in Tailscale..."
         
         # List all machines and find ones with activepieces in the name
@@ -44,7 +44,7 @@ alias activepieces-restart='
         MACHINE_IDS=$(echo "$DEVICES_JSON" | jq -r \
                                  ".devices[] | select(.hostname | contains(\"activepieces\")) | .id")
         
-        if [ -n "$MACHINE_IDS" ]; then
+        if [[ -n "$MACHINE_IDS" ]]; then
             echo "Found activepieces machines to clean up"
             for ID in $MACHINE_IDS; do
                 echo "Deleting Tailscale machine: $ID"
