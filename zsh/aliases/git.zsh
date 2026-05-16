@@ -169,7 +169,12 @@ pr-me() {
   # List PRs by the current user and allow interactive selection for checkout
   # Usage: pr-me [worktree|wt]
   # If "worktree" or "wt" is passed as an argument, checkout to a worktree using gwc
-  
+
+  if ! command -v gh &>/dev/null; then
+    echo "❌ gh not found. Install it with: brew install gh"
+    return 1
+  fi
+
   # Get the list of PRs
   local pr_list=$(gh pr list --author @me)
   
