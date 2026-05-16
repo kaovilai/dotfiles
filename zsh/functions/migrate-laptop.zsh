@@ -122,6 +122,7 @@ migrate-to-new-laptop() {
                 warning "No packages selected"
             fi
         else
+            local use_brewfile
             read "use_brewfile?Install all packages from Brewfile? (y/n): "
             if [[ "$use_brewfile" == "y" ]]; then
                 cd ~/git/dotfiles || { warning "Failed to cd to ~/git/dotfiles"; return 1; }
@@ -180,6 +181,7 @@ migrate-to-new-laptop() {
     
     # Step 9: Setup Git
     progress "Configuring Git..."
+    local git_email git_name
     read "git_email?Enter your Git email: "
     read "git_name?Enter your Git name: "
     
@@ -224,6 +226,7 @@ EOF
     # Step 11: Generate SSH key if needed
     progress "Checking SSH keys..."
     if [[ ! -f ~/.ssh/id_ed25519 ]]; then
+        local generate_ssh
         read "generate_ssh?Generate new SSH key? (y/n): "
         if [[ "$generate_ssh" == "y" ]]; then
             ssh-keygen -t ed25519 -C "$git_email"
@@ -442,6 +445,7 @@ EOF
     
     # Offer to create a compressed archive
     echo ""
+    local create_archive
     read "create_archive?Create compressed archive? (y/n): "
     if [[ "$create_archive" == "y" ]]; then
         local archive_name="wifi-export-$(date +%Y%m%d-%H%M%S).tar.gz"
@@ -646,6 +650,7 @@ brewfile-cleanup() {
     brew bundle cleanup --file=~/git/dotfiles/Brewfile
     
     echo ""
+    local do_cleanup
     read "do_cleanup?Remove these packages? (y/n): "
     
     if [[ "$do_cleanup" == "y" ]]; then
