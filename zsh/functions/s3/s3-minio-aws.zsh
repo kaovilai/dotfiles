@@ -152,7 +152,8 @@ create-minio-aws() {
     # Create security group
     local sg_name="minio-${name}-sg"
     echo -e "${BLUE}INFO${NC}: Creating security group: $sg_name"
-    local sg_id=$(aws ec2 create-security-group \
+    local sg_id
+    sg_id=$(aws ec2 create-security-group \
         --region "$region" \
         --group-name "$sg_name" \
         --description "Security group for MinIO deployment $name" \
@@ -408,7 +409,8 @@ EOF
         launch_cmd="$launch_cmd --key-name '$key_name'"
     fi
     
-    local instance_info=$(eval "$launch_cmd" 2>/dev/null)
+    local instance_info
+    instance_info=$(eval "$launch_cmd" 2>/dev/null)
     
     if [[ $? -ne 0 ]]; then
         echo -e "${RED}ERROR${NC}: Failed to launch EC2 instance"
@@ -678,7 +680,8 @@ delete-minio-aws() {
         return 1
     fi
     
-    local config=$(load-minio-config "$name")
+    local config
+    config=$(load-minio-config "$name")
     if [[ $? -ne 0 ]]; then
         return 1
     fi
