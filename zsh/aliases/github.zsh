@@ -333,6 +333,7 @@ review-prs() {
   trap "rm -rf \"$tmpdir\"" EXIT INT TERM
   local pids=()
 
+  local ref
   for ref in "${pr_refs[@]}"; do
     local repo="${ref%#*}"
     local pr_num="${ref#*#}"
@@ -345,6 +346,7 @@ review-prs() {
   done
 
   echo "Opened ${#pr_refs[@]} diffs in VS Code. Waiting for all tabs to close..."
+  local pid
   for pid in "${pids[@]}"; do
     wait "$pid"
   done

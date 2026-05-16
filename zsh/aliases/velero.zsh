@@ -101,6 +101,7 @@ pr-review-all-users() {
   fi
   
   # Loop through each user
+  local user
   for user in ${=PR_REVIEW_USERS}; do
     echo "Reviewing PRs from $user in $repo..."
     pr-review-user "$user" "$repo"
@@ -126,6 +127,7 @@ review-velero-maintainer-prs() {
   echo ""
   
   # Loop through each maintainer
+  local user
   for user in ${=maintainers}; do
     echo "Reviewing PRs from $user..."
     pr-review-user "$user" "vmware-tanzu/velero"
@@ -151,6 +153,7 @@ review-oadp-owner-prs() {
   echo ""
   
   # Loop through each owner
+  local user
   for user in ${=owners}; do
     echo "Reviewing PRs from $user..."
     pr-review-user "$user" "openshift/oadp-operator"
