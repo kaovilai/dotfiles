@@ -90,7 +90,11 @@ get-minio-connection-info() {
         echo "Usage: get-minio-connection-info --name <deployment-name>"
         return 1
     fi
-    
+    if ! command -v jq &>/dev/null; then
+        echo "❌ jq not found. Install it with: brew install jq"
+        return 1
+    fi
+
     local config
     if ! config=$(load-minio-config "$name"); then
         return 1
@@ -287,6 +291,10 @@ test-minio-connection() {
         echo -e "${RED}ERROR${NC}: aws not found. Install it with: brew install awscli"
         return 1
     fi
+    if ! command -v jq &>/dev/null; then
+        echo "❌ jq not found. Install it with: brew install jq"
+        return 1
+    fi
     
     local config
     if ! config=$(load-minio-config "$name"); then
@@ -388,6 +396,10 @@ download-minio-certificate() {
     fi
     if ! command -v curl &>/dev/null; then
         echo -e "${RED}ERROR${NC}: curl not found. Install it with: brew install curl"
+        return 1
+    fi
+    if ! command -v jq &>/dev/null; then
+        echo "❌ jq not found. Install it with: brew install jq"
         return 1
     fi
 
@@ -500,6 +512,10 @@ check-minio-docker-status() {
         echo -e "${RED}ERROR${NC}: curl not found. Install it with: brew install curl"
         return 1
     fi
+    if ! command -v jq &>/dev/null; then
+        echo "❌ jq not found. Install it with: brew install jq"
+        return 1
+    fi
 
     local config
     if ! config=$(load-minio-config "$name"); then
@@ -570,6 +586,10 @@ ensure-default-bucket() {
     fi
     if ! command -v aws &>/dev/null; then
         echo -e "${RED}ERROR${NC}: aws not found. Install it with: brew install awscli"
+        return 1
+    fi
+    if ! command -v jq &>/dev/null; then
+        echo "❌ jq not found. Install it with: brew install jq"
         return 1
     fi
     
