@@ -22,7 +22,7 @@ check-qemu-stuck() {
     # Get QEMU processes
     local qemu_procs=$(podman machine ssh -- 'ps -eo pid,ppid,etime,stat,wchan:30,cmd | grep "qemu-.*-static" | grep -v grep')
 
-    if [ -z "$qemu_procs" ]; then
+    if [[ -z "$qemu_procs" ]]; then
         echo "✅ No QEMU emulation processes found"
         return 0
     fi
@@ -36,7 +36,7 @@ check-qemu-stuck() {
     # Check for futex_wait (deadlock indicator)
     local stuck_procs=$(echo "$qemu_procs" | grep "futex_wait_queue")
 
-    if [ -n "$stuck_procs" ]; then
+    if [[ -n "$stuck_procs" ]]; then
         echo "⚠️  STUCK PROCESSES DETECTED (futex_wait_queue):"
         echo "$stuck_procs" | while IFS= read -r line; do
             local pid=$(echo "$line" | awk '{print $1}')
@@ -82,7 +82,7 @@ kill-stuck-qemu() {
     # Get detailed process info
     local stuck_procs=$(podman machine ssh -- 'ps -eo pid,ppid,etime,wchan:30,cmd | grep "futex_wait_queue" | grep "qemu-.*-static" | grep -v grep')
 
-    if [ -z "$stuck_procs" ]; then
+    if [[ -z "$stuck_procs" ]]; then
         echo "✅ No stuck QEMU processes found"
         return 0
     fi
@@ -123,7 +123,7 @@ kill-stuck-qemu() {
         --marker="✓" \
         --color="header:italic:underline")
 
-    if [ -z "$selected" ]; then
+    if [[ -z "$selected" ]]; then
         echo "❌ No processes selected"
         return 1
     fi
@@ -147,7 +147,7 @@ kill-stuck-qemu() {
 
         # Ask about parent buildah processes
         local buildah_pids=$(podman machine ssh -- 'ps -eo pid,wchan:30,cmd | grep "futex_wait_queue" | grep "buildah" | awk "{print \$1}"')
-        if [ -n "$buildah_pids" ]; then
+        if [[ -n "$buildah_pids" ]]; then
             echo
             echo "⚠️  Found stuck buildah parent processes: $buildah_pids"
             echo -n "Kill these too? [y/N] "
@@ -181,7 +181,8 @@ podman-build-multiarch() {
 
     # Check for existing stuck processes before starting
     check-qemu-stuck
-    if [ $? -eq 2 ]; then
+    local _stuck_exit=$?
+    if [[ $_stuck_exit -eq 2 ]]; then
         echo "⚠️  Found stuck processes. Clean up first with kill-stuck-qemu"
         return 1
     fi
@@ -190,7 +191,7 @@ podman-build-multiarch() {
     podman build -f "$dockerfile" . --platform "$platforms" -t "$tag"
     local exit_code=$?
 
-    if [ $exit_code -ne 0 ]; then
+    if [[ $exit_code -ne 0 ]]; then
         echo
         echo "❌ Build failed. Checking for stuck QEMU processes..."
         check-qemu-stuck
