@@ -123,7 +123,7 @@ function unsymlink-from-sd() {
     echo "Preparing to restore files from $symlink_target to $current_path..."
 
     # Navigate to parent directory to replace the symlink
-    cd "$parent_dir"
+    cd "$parent_dir" || { echo "Error: Failed to cd to parent directory $parent_dir"; return 1; }
 
     # Create a temporary directory to hold files during transfer
     local temp_dir="$parent_dir/.temp_restore_$dir_name"
