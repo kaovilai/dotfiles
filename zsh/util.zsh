@@ -1,6 +1,10 @@
 # Description: General-purpose small utilities
 
 code-git() {
+    if ! command -v code &>/dev/null; then
+        echo "❌ code not found. Install VS Code and enable the 'code' CLI command."
+        return 1
+    fi
     if [[ -z "$1" ]]; then
         echo "Usage: code-git <repo-name>"
         return 1
