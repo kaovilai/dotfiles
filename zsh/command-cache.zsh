@@ -23,7 +23,9 @@ cache_file_expired() {
   fi
 
   # Get file modification time (cache stat result to avoid duplicate calls)
-  local file_stat=$(stat -f "%m %Sm" -t "%Y-%m-%d %H:%M:%S" "$file" 2>/dev/null) || return 0
+  # NOTE: declare local separately so the subshell exit code is captured by ||
+  local file_stat
+  file_stat=$(stat -f "%m %Sm" -t "%Y-%m-%d %H:%M:%S" "$file" 2>/dev/null) || return 0
   local file_time=${file_stat%% *}
   local current_time=$(date +%s)
   local file_age=$((current_time - file_time))
