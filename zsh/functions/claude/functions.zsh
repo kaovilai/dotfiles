@@ -2,6 +2,11 @@
 
 # Merge local Claude settings into global config with interactive prompts
 merge-claude-settings() {
+    if ! command -v jq &>/dev/null; then
+        echo "Error: jq is required but not found. Install with: brew install jq"
+        return 1
+    fi
+
     local local_settings=".claude/settings.local.json"
     local global_settings="${XDG_CONFIG_HOME:-$HOME/.config}/claude/settings.json"
     
