@@ -28,28 +28,37 @@ alias computer-use-claude='docker run \
     -it ghcr.io/anthropics/anthropic-quickstarts:computer-use-demo-latest'
 alias activepieces-start='podman compose -f ~/OneDrive/activepieces/docker-compose.activepiecestailscale.yml up -d'
 alias activepieces-stop='podman compose -f ~/OneDrive/activepieces/docker-compose.activepiecestailscale.yml down'
-alias activepieces-restart='
+activepieces-restart() {
     # First bring down the containers
     podman compose -f ~/OneDrive/activepieces/docker-compose.activepiecestailscale.yml down
-    
+
     # Clean up Tailscale machines if API key and tailnet are configured
     if [[ -n "$TAILSCALE_API_KEY" ]] && [[ -n "$TAILSCALE_TAILNET" ]]; then
+        if ! command -v curl &>/dev/null; then
+            echo "❌ curl not found. Install it with: brew install curl"
+            return 1
+        fi
+        if ! command -v jq &>/dev/null; then
+            echo "❌ jq not found. Install it with: brew install jq"
+            return 1
+        fi
         echo "Looking for activepieces machines in Tailscale..."
-        
-        # List all machines and find ones with activepieces in the name
-        DEVICES_JSON=$(curl -s -H "Authorization: Bearer $TAILSCALE_API_KEY" \
-                                 "https://api.tailscale.com/api/v2/tailnet/$TAILSCALE_TAILNET/devices")
-        
-        # Extract machine IDs with activepieces in the name
-        MACHINE_IDS=$(echo "$DEVICES_JSON" | jq -r \
-                                 ".devices[] | select(.hostname | contains(\"activepieces\")) | .id")
-        
-        if [[ -n "$MACHINE_IDS" ]]; then
+
+        local devices_json
+        devices_json=$(curl -s -H "Authorization: Bearer $TAILSCALE_API_KEY" \
+            "https://api.tailscale.com/api/v2/tailnet/$TAILSCALE_TAILNET/devices")
+
+        local machine_ids
+        machine_ids=$(echo "$devices_json" | jq -r \
+            ".devices[] | select(.hostname | contains(\"activepieces\")) | .id")
+
+        if [[ -n "$machine_ids" ]]; then
             echo "Found activepieces machines to clean up"
-            for ID in ${(f)MACHINE_IDS}; do
-                echo "Deleting Tailscale machine: $ID"
+            local id
+            for id in ${(f)machine_ids}; do
+                echo "Deleting Tailscale machine: $id"
                 curl -s -X DELETE -H "Authorization: Bearer $TAILSCALE_API_KEY" \
-                         "https://api.tailscale.com/api/v2/device/$ID"
+                    "https://api.tailscale.com/api/v2/device/$id"
             done
         else
             echo "No activepieces machines found in Tailscale"
@@ -57,10 +66,10 @@ alias activepieces-restart='
     else
         echo "Tailscale API credentials not configured, skipping machine cleanup"
     fi
-    
+
     # Finally, bring up the containers again
     podman compose -f ~/OneDrive/activepieces/docker-compose.activepiecestailscale.yml up -d
-'
+}
 alias makelintv2oadp='git checkout linterv2 Makefile .golangci.yaml && make lint-fix && git restore --staged Makefile .golangci.yaml && git restore Makefile .golangci.yaml'
 alias term='open -Fna Terminal .'
 alias termc='osascript -e "tell app \"Terminal\" to do script \"cd $(pwd) && happy --enable-auto-mode --permission-mode auto\""'
