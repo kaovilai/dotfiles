@@ -4,11 +4,11 @@
 # Automates the process of setting up a new macOS laptop with your dotfiles
 
 # Color codes for output
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-NC='\033[0m' # No Color
+typeset -r RED='\033[0;31m'
+typeset -r GREEN='\033[0;32m'
+typeset -r YELLOW='\033[1;33m'
+typeset -r BLUE='\033[0;34m'
+typeset -r NC='\033[0m'
 
 # Progress indicator
 progress() {
