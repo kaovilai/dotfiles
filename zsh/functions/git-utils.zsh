@@ -25,6 +25,10 @@ cherrypick-pr-to-branch() {
 
 # Helper function to create a new changelog for velero repos
 new-changelog() {
+    if ! command -v gh &>/dev/null; then
+        echo "❌ gh not found. Install it with: brew install gh"
+        return 1
+    fi
     local GH_LOGIN GH_PR_NUMBER CHANGELOG_BODY
     GH_LOGIN=$(gh pr view --json author --jq .author.login 2> /dev/null)
     GH_PR_NUMBER=$(gh pr view --json number --jq .number 2> /dev/null)
@@ -69,6 +73,10 @@ go-mod-upgrade-dirs() {
         echo "❌ go not found. Install it with: brew install go"
         return 1
     fi
+    if ! command -v gh &>/dev/null; then
+        echo "❌ gh not found. Install it with: brew install gh"
+        return 1
+    fi
     find . -type d -maxdepth 1 -name "$1" -exec sh -c '
         dir="$1" pkg="$2" extra_cmd="$3" prefix="$4"
         cd "$dir" && pwd &&
@@ -104,6 +112,10 @@ exec-dirs() {
 # $4: branch checkout name
 # $5: command
 exec-dirs-ds() {
+    if ! command -v gh &>/dev/null; then
+        echo "❌ gh not found. Install it with: brew install gh"
+        return 1
+    fi
     local pattern="$1"
     local ds_name="$2"
     local base_branch="$3"
