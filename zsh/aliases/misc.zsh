@@ -80,7 +80,7 @@ alias termc='osascript -e "tell app \"Terminal\" to do script \"cd $(pwd) && hap
 alias audio-desk='SwitchAudioSource -t all -s "FiiO USB DAC K1" && SwitchAudioSource -t input -s "HD Pro Webcam C920"'
 alias audio-poly='SwitchAudioSource -t all -s "Poly V4320 Series"'
 alias restart-dock='killall Dock'
-alias c='f() { osascript -e "tell app \"Terminal\" to do script \"cd $HOME/experiments/ && happy --enable-auto-mode --permission-mode auto \\\"$1\\\"\""}; f'
+c() { osascript -e "tell app \"Terminal\" to do script \"cd $HOME/experiments/ && happy --enable-auto-mode --permission-mode auto \\\"$1\\\"\""; }
 alias ce='cd ~/experiments/ && happy --enable-auto-mode --permission-mode auto'
 alias cec='podman run --rm -it -v ~/experiments:/workspace:Z -v "$HOME/.config/claude-container:/claude" -v "$HOME/.config/gcloud:/home/node/.config/gcloud:ro" -e CLAUDE_CONFIG_DIR=/claude -e CLAUDE_CODE_USE_VERTEX -e ANTHROPIC_VERTEX_PROJECT_ID -e CLOUD_ML_REGION -e ANTHROPIC_VERTEX_BASE_URL ghcr.io/kaovilai/claude-container:latest claude --enable-auto-mode --permission-mode auto'
 alias ced='cd ~/experiments/ && happy --enable-auto-mode --permission-mode auto --dangerously-skip-permissions'
@@ -97,9 +97,9 @@ alias claude-sonnet='claude --model sonnet'
 alias claude-opus='claude --model opus'
 alias claude-worktree='claude --worktree'
 alias cwt='claude-worktree'
-alias claude-review='f() { osascript -e "tell app \"Terminal\" to do script \"cd $HOME/experiments/ && happy --enable-auto-mode --permission-mode auto \\\"/review $1\\\"\""}; f'
+claude-review() { osascript -e "tell app \"Terminal\" to do script \"cd $HOME/experiments/ && happy --enable-auto-mode --permission-mode auto \\\"/review $1\\\"\""; }
 alias cr='claude-review'
-alias gemini-review='f() { osascript -e "tell app \"Terminal\" to do script \"cd $HOME/experiments/ && gemini -p \\\"/review $1\\\"\""}; f'
+gemini-review() { osascript -e "tell app \"Terminal\" to do script \"cd $HOME/experiments/ && gemini -p \\\"/review $1\\\"\""; }
 alias gr='gemini-review'
 alias tailscale="/Applications/Tailscale.app/Contents/MacOS/Tailscale"
 # Find and kill orphaned zsh processes that are busy-spinning CPU.
