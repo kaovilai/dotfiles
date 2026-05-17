@@ -281,8 +281,9 @@ gh-delete-package-tag() {
   echo "Looking for tag '$tag' in package '$org/$package'..."
 
   # Find the version ID for the specified tag
-  local version_id=$(gh api "/orgs/$org/packages/container/$package/versions" \
-    --jq ".[] | select(.metadata.container.tags[]? == \"$tag\") | .id")
+  local version_id
+  version_id=$(gh api "/orgs/$org/packages/container/$package/versions" \
+    --jq ".[] | select(.metadata.container.tags[]? == \"$tag\") | .id") || { echo "❌ Failed to query package versions"; return 1; }
 
   if [[ -z "$version_id" ]]; then
     echo "Error: Tag '$tag' not found in package '$org/$package'"
