@@ -111,7 +111,8 @@ function unsymlink-from-sd() {
     fi
 
     # Get the target of the symlink
-    local symlink_target="$(readlink "$current_path")"
+    local symlink_target
+    symlink_target="$(readlink "$current_path")" || { echo "Error: Could not read symlink target for $current_path" >&2; return 1; }
 
     # Verify that this is a symlink to the SD volume
     if [[ ! "$symlink_target" == "/Volumes/SD"* ]]; then
