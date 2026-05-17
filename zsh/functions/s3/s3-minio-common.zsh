@@ -204,7 +204,7 @@ EOF
     
     # If hostname looks like an EC2 public DNS, extract the IP
     if [[ "$hostname" =~ ^ec2-[0-9-]+\..*\.compute\.amazonaws\.com$ ]]; then
-        local ip=$(echo "$hostname" | sed 's/ec2-\([0-9]\+\)-\([0-9]\+\)-\([0-9]\+\)-\([0-9]\+\)\..*/\1.\2.\3.\4/')
+        local ip=$(sed 's/ec2-\([0-9]\+\)-\([0-9]\+\)-\([0-9]\+\)-\([0-9]\+\)\..*/\1.\2.\3.\4/' <<< "$hostname")
         echo "IP.2 = $ip" >> "$config_file"
     fi
     

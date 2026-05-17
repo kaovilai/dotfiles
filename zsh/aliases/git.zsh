@@ -126,7 +126,7 @@ git-worktree-remove() {
 
   # Skip the first line (main worktree)
   local removable
-  removable=$(echo "$worktrees" | tail -n +2)
+  removable=$(tail -n +2 <<< "$worktrees")
 
   echo "Current worktrees:"
   echo "$worktrees"
@@ -235,7 +235,7 @@ pr-me() {
     # Parse each line to extract PR number and title
     for line in "${pr_lines[@]}"; do
       pr_num="${${line%% *}#\#}"
-      pr_title=$(echo "$line" | awk '{$1=""; $2=""; $3=""; $4=""; print $0}' | sed 's/^[ \t]*//')
+      pr_title=$(awk '{$1=""; $2=""; $3=""; $4=""; print $0}' <<< "$line" | sed 's/^[ \t]*//')
       pr_numbers+=("$pr_num")
       pr_display+=("PR #$pr_num: $pr_title")
     done
