@@ -464,7 +464,7 @@ EOF
 
     local cert_dir="$MINIO_DEPLOYMENTS_DIR/$name"
     local cert_file="$cert_dir/minio-cert.pem"
-    mkdir -p "$cert_dir"
+    mkdir -p "$cert_dir" || { echo -e "${RED}ERROR${NC}: Failed to create cert directory $cert_dir"; return 1; }
 
     # Download certificate from the EC2 instance
     echo -e "${BLUE}INFO${NC}: Attempting to download certificate from EC2 instance..."
