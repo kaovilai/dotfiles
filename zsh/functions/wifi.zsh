@@ -10,7 +10,8 @@ function wifi-standard() {
         return 1
     fi
 
-    local wifi_info=$(system_profiler SPAirPortDataType 2>/dev/null)
+    local wifi_info
+    wifi_info=$(system_profiler SPAirPortDataType 2>/dev/null)
 
     # Check if WiFi is connected by looking for "Status: Connected"
     if [[ -z "$wifi_info" || ! "$wifi_info" =~ "Status: Connected" ]]; then
@@ -20,10 +21,12 @@ function wifi-standard() {
 
     # Extract PHY mode which contains the standard information
     # Look for PHY Mode under Current Network Information section
-    local phy_mode=$(grep -A 20 "Current Network Information:" <<< "$wifi_info" | grep -i "PHY Mode:" | head -1 | awk -F': ' '{print $2}')
+    local phy_mode
+    phy_mode=$(grep -A 20 "Current Network Information:" <<< "$wifi_info" | grep -i "PHY Mode:" | head -1 | awk -F': ' '{print $2}')
 
     # Extract channel information to check for 6 GHz band
-    local channel_info=$(grep -A 20 "Current Network Information:" <<< "$wifi_info" | grep -i "Channel:" | head -1)
+    local channel_info
+    channel_info=$(grep -A 20 "Current Network Information:" <<< "$wifi_info" | grep -i "Channel:" | head -1)
 
     # Map PHY mode to user-friendly WiFi standard names
     case "$phy_mode" in
