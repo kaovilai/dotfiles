@@ -436,7 +436,8 @@ EOF
     
     success "WiFi networks exported to $export_dir"
     echo ""
-    echo "Found $(echo "$networks" | wc -l | tr -d ' ') networks"
+    local -a _networks_list=("${(@f)networks}")
+    echo "Found ${#_networks_list} networks"
     echo ""
     echo "${YELLOW}Next steps:${NC}"
     echo "1. Copy $export_dir to your new laptop"

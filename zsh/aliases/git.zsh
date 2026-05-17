@@ -116,9 +116,9 @@ alias gwc='git-worktree-code'
 # Interactively select and remove a git worktree
 git-worktree-remove() {
   local worktrees=$(git worktree list)
-  local count=$(echo "$worktrees" | wc -l | tr -d ' ')
+  local -a _wt_all=("${(@f)worktrees}")
 
-  if [[ "$count" -le 1 ]]; then
+  if [[ ${#_wt_all} -le 1 ]]; then
     echo "No removable worktrees found (only the main worktree exists)"
     return 1
   fi
@@ -150,7 +150,7 @@ git-worktree-remove() {
 
   local wt_paths=("${(@f)selected}")
   for entry in "${wt_paths[@]}"; do
-    local wt_path=$(echo "$entry" | awk '{print $1}')
+    local wt_path="${entry%% *}"
     echo "Removing worktree: $wt_path"
 
     if ! git worktree remove "$wt_path"; then
@@ -197,7 +197,7 @@ pr-me() {
     
     # Extract PR number from selection (first column)
     if [[ -n "$selected" ]]; then
-      local pr_number=$(echo "$selected" | awk '{print $1}' | sed 's/#//')
+      local pr_number="${${selected%% *}#\#}"
       if [[ ! "$pr_number" =~ ^[0-9]+$ ]]; then
         echo "Error: Could not extract valid PR number from selection"
         return 1
@@ -228,7 +228,7 @@ pr-me() {
     
     # Parse each line to extract PR number and title
     for line in "${pr_lines[@]}"; do
-      local pr_num=$(echo "$line" | awk '{print $1}' | sed 's/#//')
+      local pr_num="${${line%% *}#\#}"
       local pr_title=$(echo "$line" | awk '{$1=""; $2=""; $3=""; $4=""; print $0}' | sed 's/^[ \t]*//')
       pr_numbers+=("$pr_num")
       pr_display+=("PR #$pr_num: $pr_title")
