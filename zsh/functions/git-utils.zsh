@@ -146,39 +146,39 @@ exec-dirs-ds() {
     # Use find to locate matching directories
     find . -type d -maxdepth 1 -name "$pattern" | while read -r dir; do
         (
-            echo "\033[1;34mProcessing $dir...\033[0m"
-            cd "$dir" || { echo "\033[1;31mFailed to cd into $dir\033[0m"; return 1; }
+            echo -e "\033[1;34mProcessing $dir...\033[0m"
+            cd "$dir" || { echo -e "\033[1;31mFailed to cd into $dir\033[0m"; return 1; }
 
             echo "Fetching from $ds_name..."
-            git fetch "$ds_name" || { echo "\033[1;31mFailed to fetch $ds_name\033[0m"; return 1; }
+            git fetch "$ds_name" || { echo -e "\033[1;31mFailed to fetch $ds_name\033[0m"; return 1; }
 
             echo "Checking out $ds_name/$base_branch..."
-            git checkout "$ds_name/$base_branch" || { echo "\033[1;31mFailed to checkout $ds_name/$base_branch\033[0m"; return 1; }
+            git checkout "$ds_name/$base_branch" || { echo -e "\033[1;31mFailed to checkout $ds_name/$base_branch\033[0m"; return 1; }
 
             branch_full="$ds_name-$base_branch-$branch_name"
             echo "Creating/checking out branch $branch_full..."
             git checkout -b "$branch_full" 2>/dev/null || (
                 git checkout "$branch_full" &&
                 git reset --hard "$ds_name/$base_branch"
-            ) || { echo "\033[1;31mFailed to setup branch $branch_full\033[0m"; return 1; }
+            ) || { echo -e "\033[1;31mFailed to setup branch $branch_full\033[0m"; return 1; }
 
             if [[ "$echo_only" == true ]]; then
                 echo "Would execute: $cmd"
             else
                 echo "Executing command..."
-                sh -c "$cmd" || { echo "\033[1;31mCommand execution failed\033[0m"; return 1; }
+                sh -c "$cmd" || { echo -e "\033[1;31mCommand execution failed\033[0m"; return 1; }
 
                 echo "Pushing branch..."
-                git push --force -u origin "$branch_full" || { echo "\033[1;31mFailed to push branch\033[0m"; return 1; }
+                git push --force -u origin "$branch_full" || { echo -e "\033[1;31mFailed to push branch\033[0m"; return 1; }
 
                 echo "Creating PR..."
                 repo_name=${dir:t}
                 gh pr create --repo "$ds_name/$repo_name" --base "$base_branch" --title "$base_branch-$branch_name" || {
-                    echo "\033[1;31mFailed to create PR, but branch was pushed. Create PR manually for $ds_name/$repo_name\033[0m";
+                    echo -e "\033[1;31mFailed to create PR, but branch was pushed. Create PR manually for $ds_name/$repo_name\033[0m";
                 }
             fi
 
-            echo "\033[1;32mCompleted processing $dir\033[0m"
+            echo -e "\033[1;32mCompleted processing $dir\033[0m"
         )
     done
 }
@@ -198,7 +198,7 @@ exec-dirs-ds-echo() {
 
     # Pass the same arguments but set a flag to only echo commands
     find . -type d -maxdepth 1 -name "$pattern" | while read -r dir; do
-        echo "\033[1;34mWould process $dir\033[0m"
+        echo -e "\033[1;34mWould process $dir\033[0m"
         echo "  Would fetch $ds_name"
         echo "  Would checkout $ds_name/$base_branch"
         echo "  Would create/reset branch $ds_name-$base_branch-$branch_name"
