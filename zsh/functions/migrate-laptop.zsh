@@ -613,7 +613,7 @@ update-brewfile() {
         warning "Creating new Brewfile..."
     else
         # Backup existing Brewfile
-        cp ~/git/dotfiles/Brewfile ~/git/dotfiles/Brewfile.backup
+        cp ~/git/dotfiles/Brewfile ~/git/dotfiles/Brewfile.backup || { error "Failed to backup Brewfile"; return 1; }
         success "Backed up existing Brewfile"
     fi
     
