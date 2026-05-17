@@ -33,7 +33,10 @@ alias pbubi_manifest='podman build --platform "$(dockerplatforms-amdarm)" -f Doc
 # https://github.com/socktainer/socktainer#quick-start
 
 function socktainer-symlink-docker() {
-  sudo ln -sf "$HOME/.socktainer/container.sock" /var/run/docker.sock
+  sudo ln -sf "$HOME/.socktainer/container.sock" /var/run/docker.sock || {
+    echo "❌ Failed to create symlink /var/run/docker.sock"
+    return 1
+  }
   echo "Symlinked socktainer socket -> /var/run/docker.sock"
 }
 
@@ -45,7 +48,10 @@ function socktainer-symlink-docker-undo() {
 function socktainer-symlink-podman() {
   local podman_sock_dir="${TMPDIR%/}/storage-run-$(id -u)/podman"
   mkdir -p "$podman_sock_dir" || { echo "Error: Failed to create podman socket directory $podman_sock_dir"; return 1; }
-  ln -sf "$HOME/.socktainer/container.sock" "$podman_sock_dir/podman.sock"
+  ln -sf "$HOME/.socktainer/container.sock" "$podman_sock_dir/podman.sock" || {
+    echo "❌ Failed to create symlink $podman_sock_dir/podman.sock"
+    return 1
+  }
   echo "Symlinked socktainer socket -> $podman_sock_dir/podman.sock"
 }
 
