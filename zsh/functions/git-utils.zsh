@@ -79,6 +79,11 @@ go-mod-upgrade() {
 # Examples: GOTOOLCHAIN=go1.23.6 go-mod-upgrade-dirs "velero*" golang.org/x/oauth2@v0.27.0
 # Examples: GOTOOLCHAIN=go1.23.6 go-mod-upgrade-dirs "velero*" golang.org/x/crypto@v0.35.0 "gsed -i \"s/golang:1.22-bookworm/golang:1.23-bookworm/g\" Dockerfile && git add Dockerfile" CVE-2025-22869
 go-mod-upgrade-dirs() {
+    if [[ -z "$1" || -z "$2" ]]; then
+        echo "Usage: go-mod-upgrade-dirs <dir-pattern> <package> [extra-cmd] [commit-prefix]"
+        echo "Example: go-mod-upgrade-dirs \"velero*\" golang.org/x/oauth2@v0.27.0"
+        return 1
+    fi
     if ! command -v go &>/dev/null; then
         echo "❌ go not found. Install it with: brew install go"
         return 1
