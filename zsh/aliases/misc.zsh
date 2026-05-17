@@ -139,6 +139,10 @@ kill-orphan-zsh(){
 }
 function ocr(){
     local input="$1"
+    if [[ -z "$input" ]]; then
+        echo "Usage: ocr <input-pdf>"
+        return 1
+    fi
     if [[ ! -f "$input" ]]; then
         echo "Error: Input file '$input' not found"
         return 1
@@ -154,6 +158,10 @@ function ocr(){
 }
 function vid2gif(){
     local input="$1"
+    if [[ -z "$input" ]]; then
+        echo "Usage: vid2gif <input-video>"
+        return 1
+    fi
     local output="$HOME/Downloads/$(basename "${input%.*}").gif"
     
     if [[ ! -f "$input" ]]; then
