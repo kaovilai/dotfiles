@@ -274,8 +274,8 @@ ec2-linux() {
         "sudo dnf install -y git golang make gcc jq rsync tar 2>&1 | tail -1" 2>/dev/null
 
     # --- Rsync repo ---
-    local remote_dir="/home/ec2-user/$(basename "$sync_dir")"
-    echo -e "${BLUE}INFO${NC}: Syncing $(basename "$sync_dir") to instance..."
+    local remote_dir="/home/ec2-user/${sync_dir:t}"
+    echo -e "${BLUE}INFO${NC}: Syncing ${sync_dir:t} to instance..."
     rsync -az --delete \
         --exclude '.git/objects' \
         --exclude 'vendor/' \
@@ -477,8 +477,8 @@ az-linux() {
         "sudo apt-get update -qq && sudo apt-get install -y -qq git golang-go make gcc jq rsync 2>&1 | tail -1" 2>/dev/null
 
     # --- Rsync repo ---
-    local remote_dir="/home/azureuser/$(basename "$sync_dir")"
-    echo -e "${BLUE}INFO${NC}: Syncing $(basename "$sync_dir") to VM..."
+    local remote_dir="/home/azureuser/${sync_dir:t}"
+    echo -e "${BLUE}INFO${NC}: Syncing ${sync_dir:t} to VM..."
     rsync -az --delete \
         --exclude '.git/objects' \
         --exclude 'vendor/' \
@@ -715,8 +715,8 @@ gcp-linux() {
         "sudo apt-get update -qq && sudo apt-get install -y -qq git golang-go make gcc jq rsync 2>&1 | tail -1" 2>/dev/null
 
     # --- Rsync repo ---
-    local remote_dir="/home/${ssh_user}/$(basename "$sync_dir")"
-    echo -e "${BLUE}INFO${NC}: Syncing $(basename "$sync_dir") to instance..."
+    local remote_dir="/home/${ssh_user}/${sync_dir:t}"
+    echo -e "${BLUE}INFO${NC}: Syncing ${sync_dir:t} to instance..."
     rsync -az --delete \
         --exclude '.git/objects' \
         --exclude 'vendor/' \

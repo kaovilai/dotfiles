@@ -5,9 +5,9 @@ if [[ "$TERM_PROGRAM" != "vscode" ]]; then
 # Move files to SD volume and create a symlink in their place to save disk space
 # Usage: symlink-to-sd
 function symlink-to-sd() {
-    local current_dir="$(pwd)"
-    local current_name="$(basename "$current_dir")"
-    local parent_dir="$(dirname "$current_dir")"
+    local current_dir="${PWD}"
+    local current_name="${current_dir:t}"
+    local parent_dir="${current_dir:h}"
     local sd_target="/Volumes/SD$current_dir"
     local sd_backup="/Volumes/SD$current_dir.backup.$(date +%Y%m%d%H%M%S)"
 
@@ -81,9 +81,9 @@ function symlink-to-sd() {
 # Undo the symlink-to-sd operation by moving files back from SD volume
 # Usage: unsymlink-from-sd [--keep-sd-files]
 function unsymlink-from-sd() {
-    local current_path="$(pwd)"
-    local parent_dir="$(dirname "$current_path")"
-    local dir_name="$(basename "$current_path")"
+    local current_path="${PWD}"
+    local parent_dir="${current_path:h}"
+    local dir_name="${current_path:t}"
     local keep_sd_files=false
 
     # Check for option to keep SD files
@@ -95,10 +95,10 @@ function unsymlink-from-sd() {
     if [[ ! -L "$current_path" ]]; then
         # Try parent directory if we're inside a symlinked directory
         cd .. || { echo "Error: Failed to cd to parent directory"; return 1; }
-        if [[ -L "$(pwd)" ]]; then
-            current_path="$(pwd)"
-            parent_dir="$(dirname "$current_path")"
-            dir_name="$(basename "$current_path")"
+        if [[ -L "$PWD" ]]; then
+            current_path="$PWD"
+            parent_dir="${current_path:h}"
+            dir_name="${current_path:t}"
         else
             echo "Error: Current directory is not a symlink created by symlink-to-sd"
             return 1
@@ -219,7 +219,7 @@ function relink-from-sd() {
     fi
 
     # Create parent directory structure
-    local parent_dir="$(dirname "$local_path")"
+    local parent_dir="${local_path:h}"
     echo "Creating parent directory structure: $parent_dir"
     if ! mkdir -p "$parent_dir"; then
         echo "Error: Failed to create parent directory structure"
