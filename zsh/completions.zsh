@@ -213,6 +213,7 @@ EOF
 zsh_completion_cache_status() {
   echo "ZSH completion cache directory: $ZSH_COMPLETION_CACHE_DIR"
   echo "Cache files:"
+  local file
   for file in $ZSH_COMPLETION_CACHE_DIR/_*; do
     if [[ -f "$file" ]]; then
       local modified size

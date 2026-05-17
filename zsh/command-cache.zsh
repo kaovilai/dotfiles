@@ -107,6 +107,7 @@ command_cache_status() {
   echo "Cache files:"
   
   if [[ -d "$ZSH_COMMAND_CACHE_DIR" ]]; then
+    local file
     for file in $ZSH_COMMAND_CACHE_DIR/*; do
       if [[ -f "$file" ]]; then
         local modified size
