@@ -235,7 +235,7 @@ ec2-linux() {
         return 1
     fi
 
-    instance_id=$(echo "$instance_info" | jq -r '.Instances[0].InstanceId')
+    instance_id=$(jq -r '.Instances[0].InstanceId' <<< "$instance_info")
     echo -e "${BLUE}INFO${NC}: Launched instance: $instance_id"
 
     echo -e "${BLUE}INFO${NC}: Waiting for instance to be running..."
@@ -447,7 +447,7 @@ az-linux() {
         return 1
     fi
 
-    local public_ip=$(echo "$vm_info" | jq -r '.publicIpAddress')
+    local public_ip=$(jq -r '.publicIpAddress' <<< "$vm_info")
     if [[ -z "$public_ip" || "$public_ip" == "null" ]]; then
         echo -e "${RED}ERROR${NC}: VM has no public IP"
         _az_linux_cleanup
@@ -611,7 +611,7 @@ gcp-linux() {
 
     # Format SSH key for GCP metadata
     local ssh_user="dev"
-    local pub_key_content=$(cat "${key_path}.pub")
+    local pub_key_content=$(< "${key_path}.pub")
     local gcp_ssh_key="${ssh_user}:${pub_key_content}"
 
     # --- Determine image ---
