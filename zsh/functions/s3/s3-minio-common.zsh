@@ -306,14 +306,14 @@ test-minio-connection() {
     export AWS_ACCESS_KEY_ID="$access_key"
     export AWS_SECRET_ACCESS_KEY="$secret_key"
     
-    local aws_cmd="aws s3 ls --endpoint-url $endpoint"
+    local aws_cmd=(aws s3 ls --endpoint-url "$endpoint")
     if [[ -n "$cert_file" && "$cert_file" != "null" && -f "$cert_file" ]]; then
-        aws_cmd="$aws_cmd --ca-bundle $cert_file"
+        aws_cmd+=(--ca-bundle "$cert_file")
     fi
     
-    echo -e "${BLUE}INFO${NC}: Running: $aws_cmd"
+    echo -e "${BLUE}INFO${NC}: Running: ${aws_cmd[*]}"
     local result=0
-    if eval "$aws_cmd"; then
+    if "${aws_cmd[@]}"; then
         echo -e "${GREEN}SUCCESS${NC}: Connection to MinIO deployment '$name' successful!"
     else
         echo -e "${RED}ERROR${NC}: Failed to connect to MinIO deployment '$name'"
@@ -598,19 +598,19 @@ ensure-default-bucket() {
     # Get deployment details
     local endpoint=$(jq -r '.endpoint' "$deployment_file")
     local ca_bundle_file="$MINIO_DEPLOYMENTS_DIR/${deployment_name}/minio-cert.pem"
-    local ca_bundle_arg=""
-    [[ -f "$ca_bundle_file" ]] && ca_bundle_arg="--ca-bundle $ca_bundle_file"
+    local ca_bundle_args=()
+    [[ -f "$ca_bundle_file" ]] && ca_bundle_args=(--ca-bundle "$ca_bundle_file")
     
     echo -e "${BLUE}INFO${NC}: Checking if bucket '$bucket_name' exists in deployment '$deployment_name'"
     
     # Check if bucket exists
-    if aws s3 ls --endpoint-url "$endpoint" ${=ca_bundle_arg} 2>/dev/null | grep -q "$bucket_name"; then
+    if aws s3 ls --endpoint-url "$endpoint" "${ca_bundle_args[@]}" 2>/dev/null | grep -q "$bucket_name"; then
         echo -e "${GREEN}SUCCESS${NC}: Bucket '$bucket_name' already exists"
         return 0
     fi
     
     echo -e "${YELLOW}INFO${NC}: Creating bucket '$bucket_name'..."
-    if aws s3api create-bucket --bucket "$bucket_name" --endpoint-url "$endpoint" ${=ca_bundle_arg} >/dev/null 2>&1; then
+    if aws s3api create-bucket --bucket "$bucket_name" --endpoint-url "$endpoint" "${ca_bundle_args[@]}" >/dev/null 2>&1; then
         echo -e "${GREEN}SUCCESS${NC}: Created bucket '$bucket_name'"
         return 0
     else
