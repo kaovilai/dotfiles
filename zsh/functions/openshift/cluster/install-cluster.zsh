@@ -9,6 +9,7 @@ install-cluster-openshift-install(){
         return 1
     }
 
+    local OC_INSTALLER
     [ $(command -v openshift-install-official) ] && OC_INSTALLER=openshift-install-official || OC_INSTALLER=openshift-install
     echo "Using $OC_INSTALLER"
     [ -f ~/install-config.yaml ] || {
@@ -23,6 +24,7 @@ install-cluster-openshift-install(){
     }
     # current date/time ie. apr7-1158
     # update metadata.name to tkaovila-$DATE
+    local DATE
     DATE=$(date +%b%d-%H%M)
     # lowercase the date
     DATE=$(echo $DATE | tr '[:upper:]' '[:lower:]')
