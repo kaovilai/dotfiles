@@ -28,7 +28,7 @@ ghcc() {
   fi
 
   # Extract just the repo name for the directory
-  repo_name=$(basename "$repo_spec")
+  repo_name="${repo_spec:t}"
   local target_dir="$HOME/git/$repo_name"
 
   if [[ -d "$target_dir" ]]; then
@@ -75,7 +75,7 @@ glcc() {
     repo_spec="${repo_spec%.git}"
   fi
 
-  repo_name=$(basename "$repo_spec")
+  repo_name="${repo_spec:t}"
   local target_dir="$HOME/git/$repo_name"
 
   if [[ -d "$target_dir" ]]; then
@@ -123,7 +123,7 @@ ghfc() {
   fi
   
   # Extract just the repo name for the directory
-  repo_name=$(basename "$repo_spec")
+  repo_name="${repo_spec:t}"
   
   # Fork the repo first (without cloning)
   echo "Forking $repo_spec..."

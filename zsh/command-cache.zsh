@@ -77,7 +77,7 @@ cached_exec() {
   fi
 
   # Run command and cache output
-  mkdir -p "$(dirname "$cache_file")"
+  mkdir -p "${cache_file:h}"
   "$@" | tee "${cache_file}.tmp"
   local exit_code=${pipestatus[1]}
   
@@ -109,7 +109,7 @@ command_cache_status() {
       if [[ -f "$file" ]]; then
         local modified=$(stat -f "%Sm" -t "%Y-%m-%d %H:%M:%S" "$file")
         local size=$(du -h "$file" | cut -f1)
-        local name=$(basename "$file")
+        local name="${file:t}"
         echo "  $name ($size) - Last updated: $modified"
       fi
     done
