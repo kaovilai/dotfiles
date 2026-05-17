@@ -366,12 +366,13 @@ review-prs() {
   tmpdir=$(mktemp -d) || { echo "❌ Failed to create temp directory"; return 1; }
   trap "rm -rf \"$tmpdir\"" EXIT INT TERM
   local pids=()
+  local repo pr_num diff_file
 
   for ref in "${pr_refs[@]}"; do
-    local repo="${ref%#*}"
-    local pr_num="${ref#*#}"
+    repo="${ref%#*}"
+    pr_num="${ref#*#}"
 
-    local diff_file="$tmpdir/${repo//\//_}_${pr_num}.diff"
+    diff_file="$tmpdir/${repo//\//_}_${pr_num}.diff"
     echo "Fetching diff for $ref..."
     gh pr diff "$pr_num" --repo "$repo" > "$diff_file" 2>/dev/null
     code --wait "$diff_file" &
@@ -399,8 +400,8 @@ review-prs() {
   }
 
   echo "$selected" | while IFS= read -r label; do
-    local repo="${label%#*}"
-    local pr_num="${label#*#}"
+    repo="${label%#*}"
+    pr_num="${label#*#}"
     echo "Approving $label..."
     gh pr review "$pr_num" --repo "$repo" --approve --body "$comment"
   done
