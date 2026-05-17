@@ -150,8 +150,9 @@ git-worktree-remove() {
   fi
 
   local wt_paths=("${(@f)selected}")
+  local wt_path
   for entry in "${wt_paths[@]}"; do
-    local wt_path="${entry%% *}"
+    wt_path="${entry%% *}"
     echo "Removing worktree: $wt_path"
 
     if ! git worktree remove "$wt_path"; then
@@ -227,11 +228,12 @@ pr-me() {
     # Create arrays for display and PR numbers
     local pr_display=()
     local pr_numbers=()
+    local pr_num pr_title
     
     # Parse each line to extract PR number and title
     for line in "${pr_lines[@]}"; do
-      local pr_num="${${line%% *}#\#}"
-      local pr_title=$(echo "$line" | awk '{$1=""; $2=""; $3=""; $4=""; print $0}' | sed 's/^[ \t]*//')
+      pr_num="${${line%% *}#\#}"
+      pr_title=$(echo "$line" | awk '{$1=""; $2=""; $3=""; $4=""; print $0}' | sed 's/^[ \t]*//')
       pr_numbers+=("$pr_num")
       pr_display+=("PR #$pr_num: $pr_title")
     done
