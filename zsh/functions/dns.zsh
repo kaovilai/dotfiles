@@ -69,6 +69,7 @@ set-dns-servers() {
 
     # Validate IPv4 address format
     if [[ -n "$ipv4_servers" ]]; then
+        local ip
         for ip in ${=ipv4_servers}; do
             if [[ ! "$ip" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
                 echo "Error: Invalid IPv4 address format: $ip"
@@ -79,6 +80,7 @@ set-dns-servers() {
 
     # Validate IPv6 address format
     if [[ -n "$ipv6_servers" ]]; then
+        local ip
         for ip in ${=ipv6_servers}; do
             if [[ ! "$ip" =~ ^[0-9a-fA-F:]+$ ]]; then
                 echo "Error: Invalid IPv6 address format: $ip"
