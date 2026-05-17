@@ -15,6 +15,11 @@ cherrypick-pr() {
 
 # Usage: cherrypick-pr-to-branch <#PR-number> <remote/branch> <new-branch-name>
 cherrypick-pr-to-branch() {
+    if [[ -z "$1" || -z "$2" || -z "$3" ]]; then
+        echo "Usage: cherrypick-pr-to-branch <PR-number> <remote/branch> <new-branch-name>"
+        echo "Example: cherrypick-pr-to-branch 42 upstream/main my-backport"
+        return 1
+    fi
     local PR_NUMBER=$1
     local BRANCH=$2
     local NEW_BRANCH=$3
@@ -99,6 +104,11 @@ go-mod-upgrade-dirs() {
 # Examples: exec-dirs "velero*" golang.org/x/oauth2@v0.27.0 "pwd && pwd"
 # Examples: exec-dirs "velero*" golang.org/x/oauth2@v0.27.0 "snyk test"
 exec-dirs() {
+    if [[ -z "$1" || -z "$2" || -z "$3" ]]; then
+        echo "Usage: exec-dirs <pattern> <branch> <command>"
+        echo "Example: exec-dirs \"velero*\" my-branch \"go mod tidy\""
+        return 1
+    fi
     find . -type d -maxdepth 1 -name "$1" -exec sh -c '
         dir="$1" branch="$2" cmd="$3"
         cd "$dir" && pwd &&
@@ -119,6 +129,11 @@ exec-dirs() {
 exec-dirs-ds() {
     if ! command -v gh &>/dev/null; then
         echo "❌ gh not found. Install it with: brew install gh"
+        return 1
+    fi
+    if [[ -z "$1" || -z "$2" || -z "$3" || -z "$4" || -z "$5" ]]; then
+        echo "Usage: exec-dirs-ds <pattern> <ds-name> <base-branch> <branch-name> <command>"
+        echo "Example: exec-dirs-ds \"velero*\" upstream main fix-123 \"go mod tidy\""
         return 1
     fi
     local pattern="$1"
@@ -170,6 +185,11 @@ exec-dirs-ds() {
 
 # Echo-only version of exec-dirs-ds (for testing what would happen)
 exec-dirs-ds-echo() {
+    if [[ -z "$1" || -z "$2" || -z "$3" || -z "$4" || -z "$5" ]]; then
+        echo "Usage: exec-dirs-ds-echo <pattern> <ds-name> <base-branch> <branch-name> <command>"
+        echo "Example: exec-dirs-ds-echo \"velero*\" upstream main fix-123 \"go mod tidy\""
+        return 1
+    fi
     local pattern="$1"
     local ds_name="$2"
     local base_branch="$3"

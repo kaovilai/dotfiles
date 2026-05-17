@@ -17,6 +17,15 @@ if [[ "$TERM_PROGRAM" != "vscode" ]]; then
     # view current prs in dirs matched by find . -type d -maxdepth 1 -name "<$1>"
     # view-pr-dirs "velero*"
     function view-pr-dirs() {
+        if ! command -v gh &>/dev/null; then
+            echo "❌ gh not found. Install it with: brew install gh"
+            return 1
+        fi
+        if [[ -z "$1" ]]; then
+            echo "Usage: view-pr-dirs <pattern>"
+            echo "Example: view-pr-dirs \"velero*\""
+            return 1
+        fi
         find . -type d -maxdepth 1 -name "$1" -exec sh -c 'cd "$1" && pwd && gh pr view --web' _ {} \;
     }
 fi
