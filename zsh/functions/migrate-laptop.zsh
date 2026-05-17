@@ -380,7 +380,8 @@ echo "$networks" | while IFS= read -r network; do
         if [[ "$add_network" == "y" ]]; then
             # Prompt for password
             echo "Enter the password for '$network' (or press Enter to skip):"
-            read -s password
+            local password
+            read -rs password
             echo ""
             
             if [[ -n "$password" ]]; then
