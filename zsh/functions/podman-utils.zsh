@@ -136,6 +136,7 @@ kill-stuck-qemu() {
     echo "$selected"
     echo
     echo -n "Confirm kill? [y/N] "
+    local confirm
     read -r confirm
 
     if [[ "$confirm" =~ ^[Yy]$ ]]; then
@@ -151,6 +152,7 @@ kill-stuck-qemu() {
             echo
             echo "⚠️  Found stuck buildah parent processes: $buildah_pids"
             echo -n "Kill these too? [y/N] "
+            local confirm_buildah
             read -r confirm_buildah
             if [[ "$confirm_buildah" =~ ^[Yy]$ ]]; then
                 while read -r pid; do

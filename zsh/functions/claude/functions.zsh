@@ -55,6 +55,7 @@ merge-claude-settings() {
     for perm in "${new_permissions[@]}"; do
         # Permission is already a raw string, no need to decode
         echo -n "Add permission '$perm'? (y/n): "
+        local response
         read -r response
         if [[ "$response" =~ ^[Yy]$ ]]; then
             # Add this permission immediately (use --arg for proper string escaping)
