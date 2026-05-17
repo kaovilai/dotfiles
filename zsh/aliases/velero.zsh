@@ -142,7 +142,7 @@ review-velero-maintainer-prs() {
     return 1
   fi
   
-  echo "Found maintainers: $(echo $maintainers | tr '\n' ' ')"
+  echo "Found maintainers: ${maintainers//$'\n'/ }"
   echo ""
   
   # Loop through each maintainer
@@ -171,7 +171,7 @@ review-oadp-owner-prs() {
     return 1
   fi
   
-  echo "Found owners: $(echo $owners | tr '\n' ' ')"
+  echo "Found owners: ${owners//$'\n'/ }"
   echo ""
   
   # Loop through each owner
