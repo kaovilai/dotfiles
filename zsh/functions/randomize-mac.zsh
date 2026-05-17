@@ -41,6 +41,10 @@ randomize-mac-ifconfig() {
 
     # Detect WiFi interface if not specified
     if [[ -z "$wifi_interface" ]]; then
+        if [[ "$OSTYPE" != darwin* ]]; then
+            echo "Error: randomize-mac-ifconfig is only supported on macOS"
+            return 1
+        fi
         wifi_interface=$(networksetup -listallhardwareports | grep -A 1 "Wi-Fi" | grep "Device:" | awk '{print $2}')
         if [[ -z "$wifi_interface" ]]; then
             echo "Error: Could not detect WiFi interface"
