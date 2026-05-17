@@ -210,6 +210,11 @@ exec-dirs-ds-echo() {
 # open all dirs matching pattern in code
 # ex: code-dirs "velero*"
 code-dirs() {
+    if [[ -z "$1" ]]; then
+        echo "Usage: code-dirs <pattern>"
+        echo "Example: code-dirs \"velero*\""
+        return 1
+    fi
     if ! command -v parallel &> /dev/null; then
         echo "❌ parallel not found. Install it with: brew install parallel"
         return 1
@@ -225,6 +230,11 @@ code-dirs() {
 # open all dirs matching pattern in finder
 # ex: finder-dirs "velero*"
 finder-dirs() {
+    if [[ -z "$1" ]]; then
+        echo "Usage: finder-dirs <pattern>"
+        echo "Example: finder-dirs \"velero*\""
+        return 1
+    fi
     if ! command -v parallel &> /dev/null; then
         echo "❌ parallel not found. Install it with: brew install parallel"
         return 1
