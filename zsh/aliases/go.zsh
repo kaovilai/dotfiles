@@ -3,7 +3,7 @@ alias gofmtgitdiffmain='git diff upstream/main --name-only | grep "\.go$" | xarg
 alias gofmtgitdiffmaster='git diff upstream/master --name-only | grep "\.go$" | xargs -L 1 go fmt'
 alias gofmtgitdiffoadp='git diff upstream/oadp-dev --name-only | grep "\.go$" | xargs -L 1 go fmt'
 alias grf='golangci-lint run --fix'
-alias grfw='golangci-lint-with-retry() {
+golangci-lint-with-retry() {
   local max_attempts=30
   local attempt=1
   local output
@@ -22,7 +22,8 @@ alias grfw='golangci-lint-with-retry() {
   done
   echo "Timeout: golangci-lint still busy after $max_attempts attempts"
   return 1
-}; golangci-lint-with-retry'
+}
+alias grfw='golangci-lint-with-retry'
 
 # Vulnerability scanning
 alias govulncheck='govulncheck ./...'
