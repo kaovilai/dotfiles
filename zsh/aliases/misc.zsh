@@ -29,6 +29,10 @@ alias computer-use-claude='docker run \
 alias activepieces-start='podman compose -f ~/OneDrive/activepieces/docker-compose.activepiecestailscale.yml up -d'
 alias activepieces-stop='podman compose -f ~/OneDrive/activepieces/docker-compose.activepiecestailscale.yml down'
 activepieces-restart() {
+    if ! command -v podman &>/dev/null; then
+        echo "❌ podman not found. Install it with: brew install podman"
+        return 1
+    fi
     # First bring down the containers
     podman compose -f ~/OneDrive/activepieces/docker-compose.activepiecestailscale.yml down
 
