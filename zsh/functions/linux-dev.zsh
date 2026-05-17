@@ -150,7 +150,8 @@ ec2-linux() {
 
     # --- VPC / Subnet ---
     echo -e "${BLUE}INFO${NC}: Finding default VPC..."
-    local vpc_id=$(aws ec2 describe-vpcs --region "$region" \
+    local vpc_id
+    vpc_id=$(aws ec2 describe-vpcs --region "$region" \
         --filters "Name=is-default,Values=true" \
         --query "Vpcs[0].VpcId" --output text 2>/dev/null)
     if [[ "$vpc_id" == "None" || -z "$vpc_id" ]]; then
@@ -159,7 +160,8 @@ ec2-linux() {
         return 1
     fi
 
-    local subnet_id=$(aws ec2 describe-subnets --region "$region" \
+    local subnet_id
+    subnet_id=$(aws ec2 describe-subnets --region "$region" \
         --filters "Name=vpc-id,Values=$vpc_id" "Name=map-public-ip-on-launch,Values=true" \
         --query "Subnets[0].SubnetId" --output text 2>/dev/null)
     if [[ "$subnet_id" == "None" || -z "$subnet_id" ]]; then
@@ -170,7 +172,8 @@ ec2-linux() {
 
     # --- Security group (SSH only from my IP) ---
     local sg_name="ec2-linux-dev-$(date +%s)-${RANDOM}"
-    local sg_id=$(aws ec2 create-security-group \
+    local sg_id
+    sg_id=$(aws ec2 create-security-group \
         --region "$region" \
         --group-name "$sg_name" \
         --description "Temporary SG for ec2-linux dev session" \
@@ -182,7 +185,8 @@ ec2-linux() {
         return 1
     fi
 
-    local my_ip=$(curl -s --connect-timeout 5 ifconfig.me)
+    local my_ip
+    my_ip=$(curl -s --connect-timeout 5 ifconfig.me)
     local cidr="0.0.0.0/0"
     if [[ -n "$my_ip" ]]; then
         cidr="${my_ip}/32"
@@ -195,7 +199,8 @@ ec2-linux() {
 
     # --- AMI ---
     echo -e "${BLUE}INFO${NC}: Finding latest Amazon Linux 2023 AMI ($ami_arch)..."
-    local ami_id=$(aws ec2 describe-images --region "$region" --owners amazon \
+    local ami_id
+    ami_id=$(aws ec2 describe-images --region "$region" --owners amazon \
         --filters "Name=name,Values=al2023-ami-2023*-${ami_arch}" "Name=state,Values=available" \
         --query "sort_by(Images, &CreationDate)[-1].ImageId" --output text 2>/dev/null)
     if [[ -z "$ami_id" || "$ami_id" == "None" ]]; then
@@ -231,7 +236,8 @@ ec2-linux() {
     echo -e "${BLUE}INFO${NC}: Waiting for instance to be running..."
     aws ec2 wait instance-running --region "$region" --instance-ids "$instance_id"
 
-    local public_ip=$(aws ec2 describe-instances --region "$region" \
+    local public_ip
+    public_ip=$(aws ec2 describe-instances --region "$region" \
         --instance-ids "$instance_id" \
         --query "Reservations[0].Instances[0].PublicIpAddress" --output text)
 
@@ -423,7 +429,8 @@ az-linux() {
         return 1
     fi
 
-    local public_ip=$(jq -r '.publicIpAddress' <<< "$vm_info")
+    local public_ip
+    public_ip=$(jq -r '.publicIpAddress' <<< "$vm_info")
     if [[ -z "$public_ip" || "$public_ip" == "null" ]]; then
         echo -e "${RED}ERROR${NC}: VM has no public IP"
         _az_linux_cleanup
@@ -579,7 +586,8 @@ gcp-linux() {
 
     # Format SSH key for GCP metadata
     local ssh_user="dev"
-    local pub_key_content=$(< "${key_path}.pub")
+    local pub_key_content
+    pub_key_content=$(< "${key_path}.pub")
     local gcp_ssh_key="${ssh_user}:${pub_key_content}"
 
     # --- Determine image ---
@@ -614,7 +622,8 @@ gcp-linux() {
     trap '_gcp_linux_cleanup; return 1' INT TERM
 
     # --- Create firewall rule for SSH from my IP ---
-    local my_ip=$(curl -s --connect-timeout 5 ifconfig.me)
+    local my_ip
+    my_ip=$(curl -s --connect-timeout 5 ifconfig.me)
     local cidr="0.0.0.0/0"
     if [[ -n "$my_ip" ]]; then
         cidr="${my_ip}/32"
@@ -648,7 +657,8 @@ gcp-linux() {
     fi
 
     # Get public IP
-    local public_ip=$(gcloud compute instances describe "$instance_name" \
+    local public_ip
+    public_ip=$(gcloud compute instances describe "$instance_name" \
         --zone "$zone" --project "$project" \
         --format="value(networkInterfaces[0].accessConfigs[0].natIP)" 2>/dev/null)
 
