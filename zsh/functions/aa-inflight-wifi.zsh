@@ -4,6 +4,11 @@
 
 # Function to handle AA inflight WiFi reconnection
 aa-inflight-wifi() {
+    if [[ "$OSTYPE" != darwin* ]]; then
+        echo "Error: aa-inflight-wifi is only supported on macOS"
+        return 1
+    fi
+
     local SSID="aainflight.com"
     local WIFI_URL="https://www.aainflight.com/wifi/free"
     local WAIT_TIME=$((20 * 60))  # 20 minutes in seconds
