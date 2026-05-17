@@ -35,7 +35,7 @@ prompt-release-stream() {
         echo "$options" >&2
         echo "" >&2
         echo -n "Enter your choice (1 or 2): " >&2
-        read stream_choice
+        read -r stream_choice
     fi
 
     if [[ "$stream_choice" == "2" ]]; then
@@ -326,7 +326,8 @@ handle-registry-login() {
             echo "Opening browser for registry.ci.openshift.org login..."
             open "https://oauth-openshift.apps.ci.l2s4.p1.openshiftapps.com/oauth/authorize?client_id=openshift-browser-client&redirect_uri=https%3A%2F%2Foauth-openshift.apps.ci.l2s4.p1.openshiftapps.com%2Foauth%2Ftoken%2Fdisplay&response_type=code"
             echo "Login URL opened in browser. Please copy the login command from the browser and paste it below:"
-            read login_command
+            local login_command
+            read -r login_command
             if [[ "$login_command" != podman\ login* && "$login_command" != oc\ login* && "$login_command" != docker\ login* ]]; then
                 echo "ERROR: Only 'podman login', 'oc login', or 'docker login' commands are accepted"
                 return 1

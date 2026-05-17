@@ -312,7 +312,7 @@ check-for-existing-clusters() {
         echo "Options:"
         echo "$options"
         echo ""
-        read "choice?Enter choice (1-3): "
+        read -r "choice?Enter choice (1-3): "
     fi
 
     case "$choice" in
