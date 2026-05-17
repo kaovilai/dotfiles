@@ -16,7 +16,17 @@ alias open-webui-update='podman rm -f open-webui && podman pull ghcr.io/open-web
 alias dsstore-rmall='find . -name ".DS_Store" -exec rm {} \;'
 # workaround https://github.com/anthropics/claude-code/issues/2299#issuecomment-2993762516
 function ln-claude-home() {
-    ln -s "${XDG_CONFIG_HOME:-$HOME/.config}/claude/" "$HOME/.claude"
+    local src="${XDG_CONFIG_HOME:-$HOME/.config}/claude/"
+    local dst="$HOME/.claude"
+    if [[ -L "$dst" ]]; then
+        echo "Symlink $dst already exists (→ $(readlink "$dst"))"
+        return 0
+    fi
+    if [[ -e "$dst" ]]; then
+        echo "❌ $dst already exists and is not a symlink. Remove it first."
+        return 1
+    fi
+    ln -s "$src" "$dst" && echo "Created symlink: $dst → $src"
 }
 alias computer-use-claude='docker run \
     -e ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY \
