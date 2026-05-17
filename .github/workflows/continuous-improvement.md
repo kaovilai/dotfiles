@@ -25,6 +25,7 @@ safe-outputs:
     title-prefix: "[dotfiles-improvement] "
     labels: [automation, improvement]
     reviewers: [tkaovila]
+    protected-files: fallback-to-issue
   add-comment:
     max: 10
   add-labels:
