@@ -79,7 +79,7 @@ cached_exec() {
   fi
 
   # Run command and cache output
-  mkdir -p "${cache_file:h}"
+  mkdir -p "${cache_file:h}" || { echo "Warning: Failed to create cache directory ${cache_file:h}" >&2; "$@"; return $?; }
   "$@" | tee "${cache_file}.tmp"
   local exit_code=${pipestatus[1]}
   
