@@ -46,13 +46,14 @@ check-qemu-stuck() {
     if [[ -n "$stuck_procs" ]]; then
         echo "⚠️  STUCK PROCESSES DETECTED (futex_wait_queue):"
         while IFS= read -r line; do
-            local pid=$(awk '{print $1}' <<< "$line")
-            local etime=$(awk '{print $3}' <<< "$line")
-            local cmd=$(awk '{for(i=6;i<=NF;i++) printf $i" "; print ""}' <<< "$line")
+            local pid etime cmd state
+            pid=$(awk '{print $1}' <<< "$line")
+            etime=$(awk '{print $3}' <<< "$line")
+            cmd=$(awk '{for(i=6;i<=NF;i++) printf $i" "; print ""}' <<< "$line")
             echo "  PID: $pid | Runtime: $etime | Cmd: $cmd"
 
             # Get process state details
-            local state=$(podman machine ssh -- "cat /proc/$pid/status 2>/dev/null | grep -E '(State|Threads)'" 2>/dev/null)
+            state=$(podman machine ssh -- "cat /proc/$pid/status 2>/dev/null | grep -E '(State|Threads)'" 2>/dev/null)
             echo "    State: $(tr '\n' ' ' <<< "$state")"
         done <<< "$stuck_procs"
         echo
@@ -107,14 +108,16 @@ kill-stuck-qemu() {
     fi
 
     # Format processes for selection
-    local formatted_procs=$(while IFS= read -r line; do
-        local pid=$(awk '{print $1}' <<< "$line")
-        local ppid=$(awk '{print $2}' <<< "$line")
-        local etime=$(awk '{print $3}' <<< "$line")
-        local cmd=$(awk '{for(i=5;i<=NF;i++) printf $i" "; print ""}' <<< "$line")
+    local formatted_procs
+    formatted_procs=$(while IFS= read -r line; do
+        local pid ppid etime cmd arch
+        pid=$(awk '{print $1}' <<< "$line")
+        ppid=$(awk '{print $2}' <<< "$line")
+        etime=$(awk '{print $3}' <<< "$line")
+        cmd=$(awk '{for(i=5;i<=NF;i++) printf $i" "; print ""}' <<< "$line")
 
         # Extract architecture from qemu binary name
-        local arch=$(grep -o 'qemu-[a-z0-9_]*-static' <<< "$cmd" | sed 's/qemu-//;s/-static//')
+        arch=$(grep -o 'qemu-[a-z0-9_]*-static' <<< "$cmd" | sed 's/qemu-//;s/-static//')
 
         # Format: arch | PID | runtime | command snippet
         printf "%-10s | PID: %-6s | %-10s | %s\n" "$arch" "$pid" "$etime" "$(cut -c1-80 <<< "$cmd")"
@@ -125,7 +128,8 @@ kill-stuck-qemu() {
     echo
 
     # Use fzf for multi-select
-    local selected=$(fzf --multi \
+    local selected
+    selected=$(fzf --multi \
         --header="Select processes to kill (TAB to select multiple, ENTER to confirm, ESC to cancel)" \
         --header-first \
         --reverse \
@@ -134,15 +138,14 @@ kill-stuck-qemu() {
         --prompt="Select> " \
         --pointer="▶" \
         --marker="✓" \
-        --color="header:italic:underline" <<< "$formatted_procs")
-
-    if [[ -z "$selected" ]]; then
+        --color="header:italic:underline" <<< "$formatted_procs") || {
         echo "❌ No processes selected"
         return 1
-    fi
+    }
 
     # Extract PIDs from selection
-    local selected_pids=$(awk -F'PID: ' '{print $2}' <<< "$selected" | awk '{print $1}')
+    local selected_pids
+    selected_pids=$(awk -F'PID: ' '{print $2}' <<< "$selected" | awk '{print $1}')
 
     echo
     echo "⚠️  Selected processes to kill:"
