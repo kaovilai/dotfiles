@@ -67,7 +67,12 @@ function symlink-to-sd() {
 
     # Create symlink at the original location pointing to SD volume
     echo "Creating symlink to replace the original directory..."
-    ln -s "$sd_target" "$current_name"
+    ln -s "$sd_target" "$current_name" || {
+        echo "Error: Failed to create symlink from $current_name to $sd_target"
+        echo "Files have been copied to SD volume but symlink could not be created."
+        echo "Manually run: ln -s \"$sd_target\" \"$current_dir\""
+        return 1
+    }
 
     # Change back to the "same" directory (now a symlink to SD)
     cd "$current_dir" 2>/dev/null || echo "Note: Could not cd back to $current_dir"

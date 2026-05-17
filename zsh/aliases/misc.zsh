@@ -26,7 +26,8 @@ function ln-claude-home() {
         echo "❌ $dst already exists and is not a symlink. Remove it first."
         return 1
     fi
-    ln -s "$src" "$dst" && echo "Created symlink: $dst → $src"
+    ln -s "$src" "$dst" || { echo "❌ Failed to create symlink: $dst → $src"; return 1; }
+    echo "Created symlink: $dst → $src"
 }
 alias computer-use-claude='docker run \
     -e ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY \
