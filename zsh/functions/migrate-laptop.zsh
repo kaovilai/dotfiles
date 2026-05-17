@@ -124,7 +124,7 @@ migrate-to-new-laptop() {
             fi
         else
             local use_brewfile
-            read "use_brewfile?Install all packages from Brewfile? (y/n): "
+            read -r "use_brewfile?Install all packages from Brewfile? (y/n): "
             if [[ "$use_brewfile" == "y" ]]; then
                 cd ~/git/dotfiles || { warning "Failed to cd to ~/git/dotfiles"; return 1; }
                 brew bundle || warning "Some packages failed to install"
@@ -183,8 +183,8 @@ migrate-to-new-laptop() {
     # Step 9: Setup Git
     progress "Configuring Git..."
     local git_email git_name
-    read "git_email?Enter your Git email: "
-    read "git_name?Enter your Git name: "
+    read -r "git_email?Enter your Git email: "
+    read -r "git_name?Enter your Git name: "
     
     git config --global user.email "$git_email"
     git config --global user.name "$git_name"
@@ -228,7 +228,7 @@ EOF
     progress "Checking SSH keys..."
     if [[ ! -f ~/.ssh/id_ed25519 ]]; then
         local generate_ssh
-        read "generate_ssh?Generate new SSH key? (y/n): "
+        read -r "generate_ssh?Generate new SSH key? (y/n): "
         if [[ "$generate_ssh" == "y" ]]; then
             ssh-keygen -t ed25519 -C "$git_email"
             success "SSH key generated"
@@ -375,7 +375,7 @@ echo "$networks" | while IFS= read -r network; do
     if [[ -n "$network" ]]; then
         echo ""
         echo "Network: $network"
-        read "add_network?Add this network? (y/n): "
+        read -r "add_network?Add this network? (y/n): "
         
         if [[ "$add_network" == "y" ]]; then
             # Prompt for password
@@ -447,7 +447,7 @@ EOF
     # Offer to create a compressed archive
     echo ""
     local create_archive
-    read "create_archive?Create compressed archive? (y/n): "
+    read -r "create_archive?Create compressed archive? (y/n): "
     if [[ "$create_archive" == "y" ]]; then
         local archive_name="wifi-export-$(date +%Y%m%d-%H%M%S).tar.gz"
         tar -czf "$HOME/$archive_name" -C "$export_dir" .
@@ -652,7 +652,7 @@ brewfile-cleanup() {
     
     echo ""
     local do_cleanup
-    read "do_cleanup?Remove these packages? (y/n): "
+    read -r "do_cleanup?Remove these packages? (y/n): "
     
     if [[ "$do_cleanup" == "y" ]]; then
         brew bundle cleanup --file=~/git/dotfiles/Brewfile --force
