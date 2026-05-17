@@ -602,17 +602,19 @@ ensure-default-bucket() {
     # Get deployment details
     local endpoint=$(jq -r '.endpoint' "$deployment_file")
     local ca_bundle_file="$MINIO_DEPLOYMENTS_DIR/${deployment_name}/minio-cert.pem"
+    local ca_bundle_arg=""
+    [[ -f "$ca_bundle_file" ]] && ca_bundle_arg="--ca-bundle $ca_bundle_file"
     
     echo -e "${BLUE}INFO${NC}: Checking if bucket '$bucket_name' exists in deployment '$deployment_name'"
     
     # Check if bucket exists
-    if aws s3 ls --endpoint-url "$endpoint" --ca-bundle "$ca_bundle_file" 2>/dev/null | grep -q "$bucket_name"; then
+    if aws s3 ls --endpoint-url "$endpoint" ${=ca_bundle_arg} 2>/dev/null | grep -q "$bucket_name"; then
         echo -e "${GREEN}SUCCESS${NC}: Bucket '$bucket_name' already exists"
         return 0
     fi
     
     echo -e "${YELLOW}INFO${NC}: Creating bucket '$bucket_name'..."
-    if aws s3api create-bucket --bucket "$bucket_name" --endpoint-url "$endpoint" --ca-bundle "$ca_bundle_file" >/dev/null 2>&1; then
+    if aws s3api create-bucket --bucket "$bucket_name" --endpoint-url "$endpoint" ${=ca_bundle_arg} >/dev/null 2>&1; then
         echo -e "${GREEN}SUCCESS${NC}: Created bucket '$bucket_name'"
         return 0
     else
