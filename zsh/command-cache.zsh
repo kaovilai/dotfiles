@@ -137,7 +137,7 @@ typeset -gA _command_cache
 
 # Check if a command exists (cached in-memory)
 has_command() {
-    local cmd=$1
+    local cmd="$1"
     if [[ -z "${_command_cache[$cmd]+x}" ]]; then
         if command -v "$cmd" >/dev/null 2>&1; then
             _command_cache[$cmd]=1

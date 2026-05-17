@@ -192,7 +192,7 @@ use-ocp-cluster() {
         return 0
     fi
 
-    local search_pattern=$1
+    local search_pattern="$1"
     local kubeconfig_files=()
     local cluster_names=()
     

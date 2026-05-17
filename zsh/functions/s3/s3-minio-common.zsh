@@ -19,8 +19,8 @@ create-minio-config-dir() {
 }
 
 save-minio-config() {
-    local name=$1
-    local config_data=$2
+    local name="$1"
+    local config_data="$2"
 
     if [[ -z "$name" ]]; then
         echo -e "${RED}ERROR${NC}: MinIO deployment name is required"
@@ -35,7 +35,7 @@ save-minio-config() {
 }
 
 load-minio-config() {
-    local name=$1
+    local name="$1"
 
     if [[ -z "$name" ]]; then
         echo -e "${RED}ERROR${NC}: MinIO deployment name is required" >&2
@@ -163,8 +163,8 @@ get-minio-connection-info() {
 }
 
 generate-self-signed-cert() {
-    local hostname=$1
-    local cert_dir=$2
+    local hostname="$1"
+    local cert_dir="$2"
     local cert_name=${3:-"minio-cert"}
     
     if [[ -z "$hostname" || -z "$cert_dir" ]]; then
@@ -233,7 +233,7 @@ EOF
 }
 
 trust-certificate-in-system() {
-    local cert_file=$1
+    local cert_file="$1"
     
     if [[ -z "$cert_file" || ! -f "$cert_file" ]]; then
         echo -e "${RED}ERROR${NC}: Certificate file not found: $cert_file"
@@ -263,7 +263,7 @@ trust-certificate-in-system() {
 }
 
 remove-certificate-from-system() {
-    local cert_file=$1
+    local cert_file="$1"
     
     if [[ -z "$cert_file" ]]; then
         echo -e "${RED}ERROR${NC}: Certificate file path is required"
@@ -292,7 +292,7 @@ remove-certificate-from-system() {
 }
 
 test-minio-connection() {
-    local name=$1
+    local name="$1"
     
     if [[ -z "$name" ]]; then
         echo -e "${RED}ERROR${NC}: MinIO deployment name is required"
@@ -344,7 +344,7 @@ test-minio-connection() {
 }
 
 remove-minio-config() {
-    local name=$1
+    local name="$1"
     
     if [[ -z "$name" ]]; then
         echo -e "${RED}ERROR${NC}: MinIO deployment name is required"
