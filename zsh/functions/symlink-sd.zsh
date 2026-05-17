@@ -46,7 +46,7 @@ function symlink-to-sd() {
 
     # Create a backup directory ON THE SD VOLUME
     echo "Creating backup on SD volume at $sd_backup..."
-    mkdir -p "$sd_backup"
+    mkdir -p "$sd_backup" || { echo "Error: Failed to create backup directory $sd_backup"; return 1; }
     cp -R "$sd_target/"* "$sd_backup/" 2>/dev/null || true
 
     # Backup hidden files using find to avoid issues with .* expansion

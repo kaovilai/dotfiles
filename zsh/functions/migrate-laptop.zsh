@@ -161,7 +161,7 @@ migrate-to-new-laptop() {
     
     for dir in "${dirs[@]}"; do
         if [[ ! -d "$dir" ]]; then
-            mkdir -p "$dir"
+            mkdir -p "$dir" || { error "Failed to create directory $dir"; return 1; }
             echo "  Created $dir"
         fi
     done

@@ -14,7 +14,7 @@ export MINIO_DEPLOYMENTS_DIR="$HOME/.minio-deployments"
 create-minio-config-dir() {
     if [[ ! -d "$MINIO_DEPLOYMENTS_DIR" ]]; then
         echo -e "${BLUE}INFO${NC}: Creating MinIO deployments directory: $MINIO_DEPLOYMENTS_DIR"
-        mkdir -p "$MINIO_DEPLOYMENTS_DIR"
+        mkdir -p "$MINIO_DEPLOYMENTS_DIR" || { echo -e "${RED}ERROR${NC}: Failed to create MinIO deployments directory $MINIO_DEPLOYMENTS_DIR"; return 1; }
     fi
 }
 
