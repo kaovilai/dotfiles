@@ -115,7 +115,8 @@ alias gwc='git-worktree-code'
 
 # Interactively select and remove a git worktree
 git-worktree-remove() {
-  local worktrees=$(git worktree list)
+  local worktrees
+  worktrees=$(git worktree list) || { echo "❌ Not in a git repository"; return 1; }
   local -a _wt_all=("${(@f)worktrees}")
 
   if [[ ${#_wt_all} -le 1 ]]; then
@@ -180,7 +181,8 @@ pr-me() {
   fi
 
   # Get the list of PRs
-  local pr_list=$(gh pr list --author @me)
+  local pr_list
+  pr_list=$(gh pr list --author @me) || { echo "❌ gh pr list failed. Run 'gh auth login' if not authenticated."; return 1; }
   
   if [[ -z "$pr_list" ]]; then
     echo "No PRs found for your user"
@@ -267,7 +269,8 @@ pr-me() {
   # Check if we should use worktree (accept both "worktree" and "wt")
   if [[ "$1" == "worktree" || "$1" == "wt" ]]; then
     # Get the branch name for this PR
-    local branch_name=$(gh pr view "$pr_number" --json headRefName -q ".headRefName")
+    local branch_name
+    branch_name=$(gh pr view "$pr_number" --json headRefName -q ".headRefName") || { echo "❌ Failed to get branch name for PR #$pr_number"; return 1; }
     if [[ -z "$branch_name" ]]; then
       echo "Failed to get branch name for PR #$pr_number"
       return 1
