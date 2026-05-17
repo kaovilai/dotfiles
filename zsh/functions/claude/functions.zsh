@@ -3,7 +3,7 @@
 # Merge local Claude settings into global config with interactive prompts
 merge-claude-settings() {
     if ! command -v jq &>/dev/null; then
-        echo "❌ jq not found. Install it with: brew install jq"
+        echo "❌ jq not found. Install it with: brew install jq" >&2
         return 1
     fi
 
@@ -12,16 +12,16 @@ merge-claude-settings() {
     
     # Check if local settings file exists in current directory
     if [[ ! -f "$local_settings" ]]; then
-        echo "Error: Local settings file not found at $local_settings"
-        echo "Make sure you're in a directory with .claude/settings.local.json"
+        echo "Error: Local settings file not found at $local_settings" >&2
+        echo "Make sure you're in a directory with .claude/settings.local.json" >&2
         return 1
     fi
     
     # Check if global settings file exists
     if [[ ! -f "$global_settings" ]]; then
-        echo "Error: Global settings file not found at $global_settings"
-        echo "Creating directory and empty settings file..."
-        mkdir -p "$(dirname "$global_settings")" || { echo "Error: Failed to create settings directory"; return 1; }
+        echo "Error: Global settings file not found at $global_settings" >&2
+        echo "Creating directory and empty settings file..." >&2
+        mkdir -p "$(dirname "$global_settings")" || { echo "Error: Failed to create settings directory" >&2; return 1; }
         echo '{"permissions": {"allow": [], "deny": []}}' > "$global_settings"
     fi
     
@@ -51,7 +51,7 @@ merge-claude-settings() {
     
     # Create backup of global settings before any changes
     local backup_file="${global_settings}.backup.$(date +%Y%m%d_%H%M%S)"
-    cp "$global_settings" "$backup_file" || { echo "Error: Failed to create backup at $backup_file"; return 1; }
+    cp "$global_settings" "$backup_file" || { echo "Error: Failed to create backup at $backup_file" >&2; return 1; }
     
     # Ask about each new permission and add immediately
     local permissions_added=0
@@ -63,7 +63,7 @@ merge-claude-settings() {
         if [[ "$response" =~ ^[Yy]$ ]]; then
             # Add this permission immediately (use --arg for proper string escaping)
             local temp_file
-            temp_file=$(mktemp) || { echo "  ✗ Failed to create temp file"; continue; }
+            temp_file=$(mktemp) || { echo "  ✗ Failed to create temp file" >&2; continue; }
             if jq --arg new_perm "$perm" '
                 .permissions.allow += [$new_perm]
                 | .permissions.allow |= unique
@@ -72,7 +72,7 @@ merge-claude-settings() {
                 ((permissions_added++))
                 echo "  ✓ Added"
             else
-                echo "  ✗ Failed to add permission"
+                echo "  ✗ Failed to add permission" >&2
                 rm -f "$temp_file"
             fi
         fi

@@ -13,19 +13,19 @@ function symlink-to-sd() {
 
     # Check if SD volume is mounted
     if [[ ! -d "/Volumes/SD" ]]; then
-        echo "Error: SD volume is not mounted at /Volumes/SD"
+        echo "Error: SD volume is not mounted at /Volumes/SD" >&2
         return 1
     fi
 
     # Create parent directory structure on SD
     if ! mkdir -p "$(dirname "$sd_target")"; then
-        echo "Error: Failed to create directory structure on SD volume"
+        echo "Error: Failed to create directory structure on SD volume" >&2
         return 1
     fi
 
     # Create target directory
     if ! mkdir -p "$sd_target"; then
-        echo "Error: Failed to create target directory on SD volume"
+        echo "Error: Failed to create target directory on SD volume" >&2
         return 1
     fi
 
@@ -33,31 +33,31 @@ function symlink-to-sd() {
 
     # Copy all files (including hidden files)
     if ! cp -R "$current_dir/"* "$sd_target/" 2>/dev/null; then
-        echo "Warning: Some files may not have been copied (possibly empty dir)"
+        echo "Warning: Some files may not have been copied (possibly empty dir)" >&2
     fi
 
     # Copy hidden files separately (since * doesn't match them)
     # Use find to avoid issues with .* expanding to include . and ..
     find "$current_dir" -maxdepth 1 -name ".*" -type f -o -name ".*" -type d ! -path "$current_dir" | while IFS= read -r file; do
-        cp -R "$file" "$sd_target/" 2>/dev/null || echo "Warning: Could not copy $(basename "$file")"
+        cp -R "$file" "$sd_target/" 2>/dev/null || echo "Warning: Could not copy $(basename "$file")" >&2
     done
 
     echo "Files copied to SD volume successfully."
 
     # Create a backup directory ON THE SD VOLUME
     echo "Creating backup on SD volume at $sd_backup..."
-    mkdir -p "$sd_backup" || { echo "Error: Failed to create backup directory $sd_backup"; return 1; }
+    mkdir -p "$sd_backup" || { echo "Error: Failed to create backup directory $sd_backup" >&2; return 1; }
     cp -R "$sd_target/"* "$sd_backup/" 2>/dev/null || true
 
     # Backup hidden files using find to avoid issues with .* expansion
     find "$sd_target" -maxdepth 1 -name ".*" -type f -o -name ".*" -type d ! -path "$sd_target" | while IFS= read -r file; do
-        cp -R "$file" "$sd_backup/" 2>/dev/null || echo "Warning: Could not backup $(basename "$file")"
+        cp -R "$file" "$sd_backup/" 2>/dev/null || echo "Warning: Could not backup $(basename "$file")" >&2
     done
 
     # Navigate to parent directory so we can replace the current directory
     echo "Changing to parent directory: $parent_dir"
     cd "$parent_dir" || {
-        echo "Error: Failed to change directory to $parent_dir"
+        echo "Error: Failed to change directory to $parent_dir" >&2
         return 1
     }
 
@@ -68,9 +68,9 @@ function symlink-to-sd() {
     # Create symlink at the original location pointing to SD volume
     echo "Creating symlink to replace the original directory..."
     ln -s "$sd_target" "$current_name" || {
-        echo "Error: Failed to create symlink from $current_name to $sd_target"
-        echo "Files have been copied to SD volume but symlink could not be created."
-        echo "Manually run: ln -s \"$sd_target\" \"$current_dir\""
+        echo "Error: Failed to create symlink from $current_name to $sd_target" >&2
+        echo "Files have been copied to SD volume but symlink could not be created." >&2
+        echo "Manually run: ln -s \"$sd_target\" \"$current_dir\"" >&2
         return 1
     }
 
@@ -99,13 +99,13 @@ function unsymlink-from-sd() {
     # Check if current directory is a symlink
     if [[ ! -L "$current_path" ]]; then
         # Try parent directory if we're inside a symlinked directory
-        cd .. || { echo "Error: Failed to cd to parent directory"; return 1; }
+        cd .. || { echo "Error: Failed to cd to parent directory" >&2; return 1; }
         if [[ -L "$PWD" ]]; then
             current_path="$PWD"
             parent_dir="${current_path:h}"
             dir_name="${current_path:t}"
         else
-            echo "Error: Current directory is not a symlink created by symlink-to-sd"
+            echo "Error: Current directory is not a symlink created by symlink-to-sd" >&2
             return 1
         fi
     fi
@@ -115,34 +115,34 @@ function unsymlink-from-sd() {
 
     # Verify that this is a symlink to the SD volume
     if [[ ! "$symlink_target" == "/Volumes/SD"* ]]; then
-        echo "Error: This symlink doesn't point to the SD volume"
+        echo "Error: This symlink doesn't point to the SD volume" >&2
         return 1
     fi
 
     # Check if SD volume is mounted
     if [[ ! -d "/Volumes/SD" ]]; then
-        echo "Error: SD volume is not mounted at /Volumes/SD"
+        echo "Error: SD volume is not mounted at /Volumes/SD" >&2
         return 1
     fi
 
     echo "Preparing to restore files from $symlink_target to $current_path..."
 
     # Navigate to parent directory to replace the symlink
-    cd "$parent_dir" || { echo "Error: Failed to cd to parent directory $parent_dir"; return 1; }
+    cd "$parent_dir" || { echo "Error: Failed to cd to parent directory $parent_dir" >&2; return 1; }
 
     # Create a temporary directory to hold files during transfer
     local temp_dir="$parent_dir/.temp_restore_$dir_name"
-    mkdir -p "$temp_dir" || { echo "Error: Failed to create temp directory $temp_dir"; return 1; }
+    mkdir -p "$temp_dir" || { echo "Error: Failed to create temp directory $temp_dir" >&2; return 1; }
 
     # Copy files from SD volume to temporary directory
     echo "Copying files from SD volume to temporary location..."
     if ! cp -R "$symlink_target/"* "$temp_dir/" 2>/dev/null; then
-        echo "Warning: Some files may not have been copied (possibly empty dir)"
+        echo "Warning: Some files may not have been copied (possibly empty dir)" >&2
     fi
 
     # Copy hidden files separately using find to avoid .* expansion issues
     find "$symlink_target" -maxdepth 1 -name ".*" -type f -o -name ".*" -type d ! -path "$symlink_target" | while IFS= read -r file; do
-        cp -R "$file" "$temp_dir/" 2>/dev/null || echo "Warning: Could not copy $(basename "$file")"
+        cp -R "$file" "$temp_dir/" 2>/dev/null || echo "Warning: Could not copy $(basename "$file")" >&2
     done
 
     # Remove the symlink
@@ -151,12 +151,12 @@ function unsymlink-from-sd() {
 
     # Create the directory and move files
     echo "Restoring files to original location..."
-    mkdir -p "$dir_name" || { echo "Error: Failed to create directory $dir_name"; return 1; }
+    mkdir -p "$dir_name" || { echo "Error: Failed to create directory $dir_name" >&2; return 1; }
     mv "$temp_dir"/* "$dir_name/" 2>/dev/null || true
 
     # Move hidden files using find to avoid expansion issues
     find "$temp_dir" -maxdepth 1 -name ".*" -type f -o -name ".*" -type d ! -path "$temp_dir" | while IFS= read -r file; do
-        mv "$file" "$dir_name/" 2>/dev/null || echo "Warning: Could not move $(basename "$file")"
+        mv "$file" "$dir_name/" 2>/dev/null || echo "Warning: Could not move $(basename "$file")" >&2
     done
 
     # Remove temporary directory
@@ -193,19 +193,19 @@ function relink-from-sd() {
 
     # Check if SD volume is mounted
     if [[ ! -d "/Volumes/SD" ]]; then
-        echo "Error: SD volume is not mounted at /Volumes/SD"
+        echo "Error: SD volume is not mounted at /Volumes/SD" >&2
         return 1
     fi
 
     # Validate SD path exists
     if [[ ! -d "$sd_path" ]]; then
-        echo "Error: The specified SD path does not exist: $sd_path"
+        echo "Error: The specified SD path does not exist: $sd_path" >&2
         return 1
     fi
 
     # Ensure SD path is actually on the SD volume
     if [[ ! "$sd_path" == "/Volumes/SD"* ]]; then
-        echo "Error: The specified path is not on the SD volume: $sd_path"
+        echo "Error: The specified path is not on the SD volume: $sd_path" >&2
         return 1
     fi
 
@@ -218,8 +218,8 @@ function relink-from-sd() {
 
     # Check if local path already exists
     if [[ -e "$local_path" ]]; then
-        echo "Error: Local path already exists: $local_path"
-        echo "Please remove it first or specify a different path."
+        echo "Error: Local path already exists: $local_path" >&2
+        echo "Please remove it first or specify a different path." >&2
         return 1
     fi
 
@@ -227,14 +227,14 @@ function relink-from-sd() {
     local parent_dir="${local_path:h}"
     echo "Creating parent directory structure: $parent_dir"
     if ! mkdir -p "$parent_dir"; then
-        echo "Error: Failed to create parent directory structure"
+        echo "Error: Failed to create parent directory structure" >&2
         return 1
     fi
 
     # Create the symlink
     echo "Creating symlink: $local_path -> $sd_path"
     if ! ln -s "$sd_path" "$local_path"; then
-        echo "Error: Failed to create symlink"
+        echo "Error: Failed to create symlink" >&2
         return 1
     fi
 
