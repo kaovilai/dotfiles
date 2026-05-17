@@ -21,16 +21,27 @@ create-minio-config-dir() {
 save-minio-config() {
     local name=$1
     local config_data=$2
-    
+
+    if [[ -z "$name" ]]; then
+        echo -e "${RED}ERROR${NC}: MinIO deployment name is required"
+        return 1
+    fi
+
     create-minio-config-dir
     local config_file="$MINIO_DEPLOYMENTS_DIR/${name}.json"
-    
-    echo "$config_data" > "$config_file"
+
+    echo "$config_data" > "$config_file" || { echo -e "${RED}ERROR${NC}: Failed to save configuration to $config_file"; return 1; }
     echo -e "${GREEN}INFO${NC}: Configuration saved to $config_file"
 }
 
 load-minio-config() {
     local name=$1
+
+    if [[ -z "$name" ]]; then
+        echo -e "${RED}ERROR${NC}: MinIO deployment name is required" >&2
+        return 1
+    fi
+
     local config_file="$MINIO_DEPLOYMENTS_DIR/${name}.json"
     
     if [[ ! -f "$config_file" ]]; then
