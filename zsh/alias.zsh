@@ -22,7 +22,7 @@ _lazy_load_linux_dev() {
         source ~/git/dotfiles/zsh/functions/linux-dev.zsh && LINUX_DEV_LOADED=1
     fi
 }
-for func in podman-linux az-linux gcp-linux; do
+for func in podman-linux ec2-linux az-linux gcp-linux; do
     eval "${func}() { _lazy_load_linux_dev || return 1; ${func} \"\$@\"; }"
 done
 
