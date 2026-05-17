@@ -65,7 +65,8 @@ randomize-mac-ifconfig() {
     sudo ifconfig "$wifi_interface" up
 
     # Get current MAC address
-    local current_mac=$(ifconfig "$wifi_interface" | grep ether | awk '{print $2}')
+    local current_mac
+    current_mac=$(ifconfig "$wifi_interface" | grep ether | awk '{print $2}')
     if [[ -z "$current_mac" ]]; then
         echo "Error: Could not read current MAC address"
         return 1
@@ -78,7 +79,8 @@ randomize-mac-ifconfig() {
 
     # Generate new MAC by changing the last digit randomly
     # This ensures we're only making a minimal change which is less likely to be rejected
-    local last_digit=$(printf '%x' $((RANDOM % 16)))
+    local last_digit
+    last_digit=$(printf '%x' $((RANDOM % 16)))
     local new_mac="${current_mac%?}$last_digit"
 
     # Ensure we're not setting it to the same MAC
@@ -96,7 +98,8 @@ randomize-mac-ifconfig() {
     sleep 0.5
 
     # Verify the change
-    local actual_mac=$(ifconfig "$wifi_interface" | grep ether | awk '{print $2}')
+    local actual_mac
+    actual_mac=$(ifconfig "$wifi_interface" | grep ether | awk '{print $2}')
 
     if [[ "$actual_mac" == "$new_mac" ]]; then
         [[ "$quiet" == false ]] && echo "✓ MAC randomized successfully"

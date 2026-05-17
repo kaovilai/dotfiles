@@ -125,7 +125,8 @@ git-worktree-remove() {
   fi
 
   # Skip the first line (main worktree)
-  local removable=$(echo "$worktrees" | tail -n +2)
+  local removable
+  removable=$(echo "$worktrees" | tail -n +2)
 
   echo "Current worktrees:"
   echo "$worktrees"
@@ -196,7 +197,8 @@ pr-me() {
   # Check if fzf is available for interactive selection
   if command -v fzf >/dev/null 2>&1; then
     # Use fzf for interactive selection with arrow keys
-    local selected=$(echo "$pr_list" | fzf --height 40% --reverse --header "Select a PR to checkout (or press Ctrl+C to cancel)")
+    local selected
+    selected=$(echo "$pr_list" | fzf --height 40% --reverse --header "Select a PR to checkout (or press Ctrl+C to cancel)")
     
     # Extract PR number from selection (first column)
     if [[ -n "$selected" ]]; then

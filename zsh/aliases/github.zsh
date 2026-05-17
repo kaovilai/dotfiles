@@ -211,7 +211,8 @@ gh-set-default-upstream() {
     echo "❌ gh not found. Install it with: brew install gh"
     return 1
   fi
-  local upstream_url=$(git remote get-url upstream 2>/dev/null)
+  local upstream_url
+  upstream_url=$(git remote get-url upstream 2>/dev/null)
   if [[ -z "$upstream_url" ]]; then
     echo "Error: No upstream remote found"
     return 1

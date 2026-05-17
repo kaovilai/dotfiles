@@ -16,7 +16,8 @@ aa-inflight-wifi() {
     local MAX_ATTEMPTS=60  # Max attempts to reconnect (5 min timeout)
 
     # Detect WiFi interface dynamically
-    local wifi_interface=$(networksetup -listallhardwareports | grep -A 1 "Wi-Fi" | grep "Device:" | awk '{print $2}')
+    local wifi_interface
+    wifi_interface=$(networksetup -listallhardwareports | grep -A 1 "Wi-Fi" | grep "Device:" | awk '{print $2}')
     if [[ -z "$wifi_interface" ]]; then
         echo "Error: Could not detect WiFi interface"
         return 1

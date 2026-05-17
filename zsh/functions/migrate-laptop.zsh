@@ -293,7 +293,8 @@ export-wifi-credentials() {
     
     # Get list of WiFi networks
     progress "Finding saved WiFi networks..."
-    local networks=$(networksetup -listpreferredwirelessnetworks en0 2>/dev/null | tail -n +2 | sed 's/^[[:space:]]*//')
+    local networks
+    networks=$(networksetup -listpreferredwirelessnetworks en0 2>/dev/null | tail -n +2 | sed 's/^[[:space:]]*//')
     
     if [[ -z "$networks" ]]; then
         # Try en1 if en0 didn't work
@@ -482,7 +483,8 @@ list-wifi-networks() {
     progress "Current WiFi networks:"
     
     # Find WiFi interface
-    local wifi_interface=$(networksetup -listallhardwareports | awk '/Wi-Fi|Airport/{getline; print $2}')
+    local wifi_interface
+    wifi_interface=$(networksetup -listallhardwareports | awk '/Wi-Fi|Airport/{getline; print $2}')
     
     if [[ -z "$wifi_interface" ]]; then
         error "Could not find WiFi interface"
