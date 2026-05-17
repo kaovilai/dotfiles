@@ -62,6 +62,10 @@ install-ocp-installer(){
 # Example:
 #   install-ccoctl
 install-ccoctl(){
+    if ! command -v go &>/dev/null; then
+        echo "❌ go not found. Install it with: brew install go"
+        return 1
+    fi
     go install github.com/openshift/cloud-credential-operator/cmd/ccoctl@release-$(latest-openshift-minor-version-arm64)
 }
 
@@ -74,6 +78,10 @@ install-ccoctl(){
 # Example:
 #   install-opm
 install-opm(){
+    if ! command -v go &>/dev/null; then
+        echo "❌ go not found. Install it with: brew install go"
+        return 1
+    fi
     go install github.com/operator-framework/operator-registry/cmd/opm@latest
 }
 
