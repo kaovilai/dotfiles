@@ -202,7 +202,7 @@ cat << EOF > "${fpath[1]}/_code-git" &!
 
 _code-git() {
     local -a files
-    files=(\${(f)"\$(ls ~/git)"})
+    files=(~/git/*(N/:t))
     _describe 'files' files
 }
 
