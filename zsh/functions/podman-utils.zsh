@@ -19,8 +19,14 @@ check-qemu-stuck() {
         return 1
     fi
 
-    # Get QEMU processes
-    local qemu_procs=$(podman machine ssh -- 'ps -eo pid,ppid,etime,stat,wchan:30,cmd | grep "qemu-.*-static" | grep -v grep')
+    # Get QEMU processes — split SSH and grep so SSH failures are explicit
+    local all_procs
+    all_procs=$(podman machine ssh -- 'ps -eo pid,ppid,etime,stat,wchan:30,cmd 2>/dev/null') || {
+        echo "❌ Failed to retrieve process list from podman machine"
+        return 1
+    }
+    local qemu_procs
+    qemu_procs=$(grep 'qemu-.*-static' <<< "$all_procs" | grep -v grep) || true
 
     if [[ -z "$qemu_procs" ]]; then
         echo "✅ No QEMU emulation processes found"
@@ -34,7 +40,8 @@ check-qemu-stuck() {
     echo
 
     # Check for futex_wait (deadlock indicator)
-    local stuck_procs=$(grep "futex_wait_queue" <<< "$qemu_procs")
+    local stuck_procs
+    stuck_procs=$(grep "futex_wait_queue" <<< "$qemu_procs") || true
 
     if [[ -n "$stuck_procs" ]]; then
         echo "⚠️  STUCK PROCESSES DETECTED (futex_wait_queue):"
@@ -79,8 +86,14 @@ kill-stuck-qemu() {
 
     echo "🔍 Finding stuck QEMU processes..."
 
-    # Get detailed process info
-    local stuck_procs=$(podman machine ssh -- 'ps -eo pid,ppid,etime,wchan:30,cmd | grep "futex_wait_queue" | grep "qemu-.*-static" | grep -v grep')
+    # Get detailed process info — split SSH and grep so SSH failures are explicit
+    local ssh_out
+    ssh_out=$(podman machine ssh -- 'ps -eo pid,ppid,etime,wchan:30,cmd 2>/dev/null') || {
+        echo "❌ Failed to retrieve process list from podman machine"
+        return 1
+    }
+    local stuck_procs
+    stuck_procs=$(grep 'futex_wait_queue' <<< "$ssh_out" | grep 'qemu-.*-static' | grep -v grep) || true
 
     if [[ -z "$stuck_procs" ]]; then
         echo "✅ No stuck QEMU processes found"
@@ -147,7 +160,8 @@ kill-stuck-qemu() {
         echo "✅ Selected processes killed"
 
         # Ask about parent buildah processes
-        local buildah_pids=$(podman machine ssh -- 'ps -eo pid,wchan:30,cmd | grep "futex_wait_queue" | grep "buildah" | awk "{print \$1}"')
+        local buildah_pids
+        buildah_pids=$(podman machine ssh -- 'ps -eo pid,wchan:30,cmd | grep "futex_wait_queue" | grep "buildah" | awk "{print \$1}"') || true
         if [[ -n "$buildah_pids" ]]; then
             echo
             echo "⚠️  Found stuck buildah parent processes: $buildah_pids"
