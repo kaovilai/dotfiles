@@ -624,6 +624,11 @@ ensure-default-bucket() {
 
 # Function to create Velero DataProtectionApplication for MinIO
 create-velero-dpa-for-minio() {
+    if ! command -v oc &>/dev/null; then
+        echo -e "${RED}ERROR${NC}: oc not found. Install it with: brew install openshift-cli"
+        return 1
+    fi
+
     local cluster_name="${1:-$(oc config current-context 2>/dev/null | cut -d'/' -f2 | cut -d':' -f1)}"
     local bucket_name="${2:-velero}"
     local namespace="${3:-openshift-adp}"
