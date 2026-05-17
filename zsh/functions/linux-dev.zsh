@@ -57,21 +57,21 @@ ec2-linux() {
                 echo "  --help             Show this help"
                 return 0
                 ;;
-            *) echo -e "${RED}ERROR${NC}: Unknown option: $1"; return 1 ;;
+            *) echo -e "${RED}ERROR${NC}: Unknown option: $1" >&2; return 1 ;;
         esac
     done
 
     # Validate tools
     for cmd in aws jq rsync ssh ssh-keygen; do
         if ! command -v "$cmd" &>/dev/null; then
-            echo -e "${RED}ERROR${NC}: $cmd is required but not found"
+            echo -e "${RED}ERROR${NC}: $cmd is required but not found" >&2
             return 1
         fi
     done
 
     # Check AWS credentials
     if ! aws sts get-caller-identity &>/dev/null; then
-        echo -e "${RED}ERROR${NC}: AWS credentials not configured or invalid"
+        echo -e "${RED}ERROR${NC}: AWS credentials not configured or invalid" >&2
         return 1
     fi
 
@@ -81,7 +81,7 @@ ec2-linux() {
             arm64|aarch64) instance_type="t4g.medium" ;;
             amd64|x86_64)  instance_type="t3.medium" ;;
             *)
-                echo -e "${RED}ERROR${NC}: Unknown architecture: $architecture (use arm64 or amd64)"
+                echo -e "${RED}ERROR${NC}: Unknown architecture: $architecture (use arm64 or amd64)" >&2
                 return 1
                 ;;
         esac
@@ -103,7 +103,7 @@ ec2-linux() {
         if ! aws ec2 create-key-pair --region "$region" \
             --key-name "$key_name" \
             --query 'KeyMaterial' --output text > "$key_path" 2>/dev/null; then
-            echo -e "${RED}ERROR${NC}: Failed to create key pair"
+            echo -e "${RED}ERROR${NC}: Failed to create key pair" >&2
             return 1
         fi
         chmod 600 "$key_path"
@@ -117,7 +117,7 @@ ec2-linux() {
             fi
         done
         if [[ -z "$key_path" ]]; then
-            echo -e "${RED}ERROR${NC}: Cannot find private key for '$key_name'"
+            echo -e "${RED}ERROR${NC}: Cannot find private key for '$key_name'" >&2
             echo "Looked in ~/.ssh/${key_name}.pem, ~/.ssh/${key_name}, ~/${key_name}.pem"
             return 1
         fi
@@ -155,7 +155,7 @@ ec2-linux() {
         --filters "Name=is-default,Values=true" \
         --query "Vpcs[0].VpcId" --output text 2>/dev/null)
     if [[ "$vpc_id" == "None" || -z "$vpc_id" ]]; then
-        echo -e "${RED}ERROR${NC}: No default VPC found in $region"
+        echo -e "${RED}ERROR${NC}: No default VPC found in $region" >&2
         [[ "$tmp_key_created" == true ]] && aws ec2 delete-key-pair --region "$region" --key-name "$key_name" &>/dev/null && rm -f "$key_path"
         return 1
     fi
@@ -165,7 +165,7 @@ ec2-linux() {
         --filters "Name=vpc-id,Values=$vpc_id" "Name=map-public-ip-on-launch,Values=true" \
         --query "Subnets[0].SubnetId" --output text 2>/dev/null)
     if [[ "$subnet_id" == "None" || -z "$subnet_id" ]]; then
-        echo -e "${RED}ERROR${NC}: No public subnet found in VPC $vpc_id"
+        echo -e "${RED}ERROR${NC}: No public subnet found in VPC $vpc_id" >&2
         [[ "$tmp_key_created" == true ]] && aws ec2 delete-key-pair --region "$region" --key-name "$key_name" &>/dev/null && rm -f "$key_path"
         return 1
     fi
@@ -180,7 +180,7 @@ ec2-linux() {
         --vpc-id "$vpc_id" \
         --query "GroupId" --output text 2>/dev/null)
     if [[ -z "$sg_id" ]]; then
-        echo -e "${RED}ERROR${NC}: Failed to create security group"
+        echo -e "${RED}ERROR${NC}: Failed to create security group" >&2
         [[ "$tmp_key_created" == true ]] && aws ec2 delete-key-pair --region "$region" --key-name "$key_name" &>/dev/null && rm -f "$key_path"
         return 1
     fi
@@ -192,7 +192,7 @@ ec2-linux() {
         cidr="${my_ip}/32"
         echo -e "${BLUE}INFO${NC}: SSH restricted to your IP: $my_ip"
     else
-        echo -e "${YELLOW}WARN${NC}: Could not detect IP, SSH open to 0.0.0.0/0"
+        echo -e "${YELLOW}WARN${NC}: Could not detect IP, SSH open to 0.0.0.0/0" >&2
     fi
     aws ec2 authorize-security-group-ingress --region "$region" \
         --group-id "$sg_id" --protocol tcp --port 22 --cidr "$cidr" &>/dev/null
@@ -204,7 +204,7 @@ ec2-linux() {
         --filters "Name=name,Values=al2023-ami-2023*-${ami_arch}" "Name=state,Values=available" \
         --query "sort_by(Images, &CreationDate)[-1].ImageId" --output text 2>/dev/null)
     if [[ -z "$ami_id" || "$ami_id" == "None" ]]; then
-        echo -e "${RED}ERROR${NC}: Could not find AMI"
+        echo -e "${RED}ERROR${NC}: Could not find AMI" >&2
         _ec2_linux_cleanup
         return 1
     fi
@@ -225,7 +225,7 @@ ec2-linux() {
         --tag-specifications "ResourceType=instance,Tags=[{Key=Name,Value=ec2-linux-dev},{Key=Purpose,Value=dev-session}]" \
         --instance-initiated-shutdown-behavior terminate \
         --output json 2>/dev/null); then
-        echo -e "${RED}ERROR${NC}: Failed to launch instance"
+        echo -e "${RED}ERROR${NC}: Failed to launch instance" >&2
         _ec2_linux_cleanup
         return 1
     fi
@@ -242,7 +242,7 @@ ec2-linux() {
         --query "Reservations[0].Instances[0].PublicIpAddress" --output text)
 
     if [[ -z "$public_ip" || "$public_ip" == "None" ]]; then
-        echo -e "${RED}ERROR${NC}: Instance has no public IP"
+        echo -e "${RED}ERROR${NC}: Instance has no public IP" >&2
         _ec2_linux_cleanup
         return 1
     fi
@@ -256,7 +256,7 @@ ec2-linux() {
     while ! ssh $=ssh_opts -i "$key_path" "ec2-user@${public_ip}" "true" 2>/dev/null; do
         waited=$((waited + 3))
         if [[ $waited -ge $max_wait ]]; then
-            echo -e "${RED}ERROR${NC}: SSH did not become ready within ${max_wait}s"
+            echo -e "${RED}ERROR${NC}: SSH did not become ready within ${max_wait}s" >&2
             _ec2_linux_cleanup
             return 1
         fi
@@ -279,7 +279,7 @@ ec2-linux() {
         --exclude '_output/' \
         -e "ssh $ssh_opts -i $key_path" \
         "$sync_dir/" "ec2-user@${public_ip}:${remote_dir}/" 2>/dev/null; then
-        echo -e "${YELLOW}WARN${NC}: rsync failed, continuing with SSH anyway"
+        echo -e "${YELLOW}WARN${NC}: rsync failed, continuing with SSH anyway" >&2
     else
         echo -e "${GREEN}OK${NC}: Repo synced to $remote_dir"
     fi
@@ -305,7 +305,7 @@ ec2-linux() {
         "ec2-user@${public_ip}:${remote_dir}/" "$sync_dir/" 2>/dev/null; then
         echo -e "${GREEN}OK${NC}: Changes synced back to $sync_dir"
     else
-        echo -e "${YELLOW}WARN${NC}: Failed to sync changes back"
+        echo -e "${YELLOW}WARN${NC}: Failed to sync changes back" >&2
     fi
 
     # --- Cleanup on exit ---
@@ -342,21 +342,21 @@ az-linux() {
                 echo "  --help             Show this help"
                 return 0
                 ;;
-            *) echo -e "${RED}ERROR${NC}: Unknown option: $1"; return 1 ;;
+            *) echo -e "${RED}ERROR${NC}: Unknown option: $1" >&2; return 1 ;;
         esac
     done
 
     # Validate tools
     for cmd in az jq rsync ssh ssh-keygen; do
         if ! command -v "$cmd" &>/dev/null; then
-            echo -e "${RED}ERROR${NC}: $cmd is required but not found"
+            echo -e "${RED}ERROR${NC}: $cmd is required but not found" >&2
             return 1
         fi
     done
 
     # Check Azure login
     if ! az account show &>/dev/null 2>&1; then
-        echo -e "${RED}ERROR${NC}: Not logged into Azure. Run: az login"
+        echo -e "${RED}ERROR${NC}: Not logged into Azure. Run: az login" >&2
         return 1
     fi
 
@@ -366,7 +366,7 @@ az-linux() {
             arm64|aarch64) vm_size="Standard_D2pds_v5" ;;
             amd64|x86_64)  vm_size="Standard_D2ds_v5" ;;
             *)
-                echo -e "${RED}ERROR${NC}: Unknown architecture: $architecture (use arm64 or amd64)"
+                echo -e "${RED}ERROR${NC}: Unknown architecture: $architecture (use arm64 or amd64)" >&2
                 return 1
                 ;;
         esac
@@ -380,7 +380,7 @@ az-linux() {
     local key_path="/tmp/${rg_name}"
     echo -e "${BLUE}INFO${NC}: Generating temporary SSH key..."
     if ! ssh-keygen -t ed25519 -f "$key_path" -N "" -q; then
-        echo -e "${RED}ERROR${NC}: Failed to generate SSH key"
+        echo -e "${RED}ERROR${NC}: Failed to generate SSH key" >&2
         return 1
     fi
 
@@ -400,7 +400,7 @@ az-linux() {
     # --- Create resource group ---
     echo -e "${BLUE}INFO${NC}: Creating resource group $rg_name in $location..."
     if ! az group create --name "$rg_name" --location "$location" --output none 2>/dev/null; then
-        echo -e "${RED}ERROR${NC}: Failed to create resource group"
+        echo -e "${RED}ERROR${NC}: Failed to create resource group" >&2
         rm -f "$key_path" "${key_path}.pub"
         return 1
     fi
@@ -424,7 +424,7 @@ az-linux() {
         --ssh-key-values "${key_path}.pub" \
         --public-ip-sku Standard \
         --output json 2>/dev/null); then
-        echo -e "${RED}ERROR${NC}: Failed to create VM"
+        echo -e "${RED}ERROR${NC}: Failed to create VM" >&2
         _az_linux_cleanup
         return 1
     fi
@@ -432,7 +432,7 @@ az-linux() {
     local public_ip
     public_ip=$(jq -r '.publicIpAddress' <<< "$vm_info")
     if [[ -z "$public_ip" || "$public_ip" == "null" ]]; then
-        echo -e "${RED}ERROR${NC}: VM has no public IP"
+        echo -e "${RED}ERROR${NC}: VM has no public IP" >&2
         _az_linux_cleanup
         return 1
     fi
@@ -446,7 +446,7 @@ az-linux() {
     while ! ssh $=ssh_opts -i "$key_path" "azureuser@${public_ip}" "true" 2>/dev/null; do
         waited=$((waited + 3))
         if [[ $waited -ge $max_wait ]]; then
-            echo -e "${RED}ERROR${NC}: SSH did not become ready within ${max_wait}s"
+            echo -e "${RED}ERROR${NC}: SSH did not become ready within ${max_wait}s" >&2
             _az_linux_cleanup
             return 1
         fi
@@ -469,7 +469,7 @@ az-linux() {
         --exclude '_output/' \
         -e "ssh $ssh_opts -i $key_path" \
         "$sync_dir/" "azureuser@${public_ip}:${remote_dir}/" 2>/dev/null; then
-        echo -e "${YELLOW}WARN${NC}: rsync failed, continuing with SSH anyway"
+        echo -e "${YELLOW}WARN${NC}: rsync failed, continuing with SSH anyway" >&2
     else
         echo -e "${GREEN}OK${NC}: Repo synced to $remote_dir"
     fi
@@ -496,7 +496,7 @@ az-linux() {
         "azureuser@${public_ip}:${remote_dir}/" "$sync_dir/" 2>/dev/null; then
         echo -e "${GREEN}OK${NC}: Changes synced back to $sync_dir"
     else
-        echo -e "${YELLOW}WARN${NC}: Failed to sync changes back"
+        echo -e "${YELLOW}WARN${NC}: Failed to sync changes back" >&2
     fi
 
     # --- Cleanup on exit ---
@@ -536,14 +536,14 @@ gcp-linux() {
                 echo "  --help             Show this help"
                 return 0
                 ;;
-            *) echo -e "${RED}ERROR${NC}: Unknown option: $1"; return 1 ;;
+            *) echo -e "${RED}ERROR${NC}: Unknown option: $1" >&2; return 1 ;;
         esac
     done
 
     # Validate tools
     for cmd in gcloud jq rsync ssh ssh-keygen; do
         if ! command -v "$cmd" &>/dev/null; then
-            echo -e "${RED}ERROR${NC}: $cmd is required but not found"
+            echo -e "${RED}ERROR${NC}: $cmd is required but not found" >&2
             return 1
         fi
     done
@@ -552,13 +552,13 @@ gcp-linux() {
     [[ -z "$project" ]] && project="$(gcloud config get-value project 2>/dev/null)"
 
     if [[ -z "$project" ]]; then
-        echo -e "${RED}ERROR${NC}: No GCP project set. Use --project or set GOOGLE_CLOUD_PROJECT"
+        echo -e "${RED}ERROR${NC}: No GCP project set. Use --project or set GOOGLE_CLOUD_PROJECT" >&2
         return 1
     fi
 
     # Check gcloud auth
     if ! gcloud auth list --filter=status:ACTIVE --format="value(account)" 2>/dev/null | head -1 | grep -q .; then
-        echo -e "${RED}ERROR${NC}: Not authenticated with gcloud. Run: gcloud auth login"
+        echo -e "${RED}ERROR${NC}: Not authenticated with gcloud. Run: gcloud auth login" >&2
         return 1
     fi
 
@@ -568,7 +568,7 @@ gcp-linux() {
             arm64|aarch64) machine_type="t2a-standard-2" ;;
             amd64|x86_64)  machine_type="e2-medium" ;;
             *)
-                echo -e "${RED}ERROR${NC}: Unknown architecture: $architecture (use arm64 or amd64)"
+                echo -e "${RED}ERROR${NC}: Unknown architecture: $architecture (use arm64 or amd64)" >&2
                 return 1
                 ;;
         esac
@@ -580,7 +580,7 @@ gcp-linux() {
     local key_path="/tmp/${instance_name}"
     echo -e "${BLUE}INFO${NC}: Generating temporary SSH key..."
     if ! ssh-keygen -t ed25519 -f "$key_path" -N "" -q -C "gcp-linux-dev"; then
-        echo -e "${RED}ERROR${NC}: Failed to generate SSH key"
+        echo -e "${RED}ERROR${NC}: Failed to generate SSH key" >&2
         return 1
     fi
 
@@ -629,7 +629,7 @@ gcp-linux() {
         cidr="${my_ip}/32"
         echo -e "${BLUE}INFO${NC}: SSH restricted to your IP: $my_ip"
     else
-        echo -e "${YELLOW}WARN${NC}: Could not detect IP, SSH open to 0.0.0.0/0"
+        echo -e "${YELLOW}WARN${NC}: Could not detect IP, SSH open to 0.0.0.0/0" >&2
     fi
 
     echo -e "${BLUE}INFO${NC}: Creating firewall rule..."
@@ -651,7 +651,7 @@ gcp-linux() {
         --metadata "ssh-keys=${gcp_ssh_key}" \
         --tags "${instance_name}" \
         --quiet &>/dev/null; then
-        echo -e "${RED}ERROR${NC}: Failed to create instance"
+        echo -e "${RED}ERROR${NC}: Failed to create instance" >&2
         _gcp_linux_cleanup
         return 1
     fi
@@ -663,7 +663,7 @@ gcp-linux() {
         --format="value(networkInterfaces[0].accessConfigs[0].natIP)" 2>/dev/null)
 
     if [[ -z "$public_ip" ]]; then
-        echo -e "${RED}ERROR${NC}: Instance has no public IP"
+        echo -e "${RED}ERROR${NC}: Instance has no public IP" >&2
         _gcp_linux_cleanup
         return 1
     fi
@@ -677,7 +677,7 @@ gcp-linux() {
     while ! ssh $=ssh_opts -i "$key_path" "${ssh_user}@${public_ip}" "true" 2>/dev/null; do
         waited=$((waited + 3))
         if [[ $waited -ge $max_wait ]]; then
-            echo -e "${RED}ERROR${NC}: SSH did not become ready within ${max_wait}s"
+            echo -e "${RED}ERROR${NC}: SSH did not become ready within ${max_wait}s" >&2
             _gcp_linux_cleanup
             return 1
         fi
@@ -700,7 +700,7 @@ gcp-linux() {
         --exclude '_output/' \
         -e "ssh $ssh_opts -i $key_path" \
         "$sync_dir/" "${ssh_user}@${public_ip}:${remote_dir}/" 2>/dev/null; then
-        echo -e "${YELLOW}WARN${NC}: rsync failed, continuing with SSH anyway"
+        echo -e "${YELLOW}WARN${NC}: rsync failed, continuing with SSH anyway" >&2
     else
         echo -e "${GREEN}OK${NC}: Repo synced to $remote_dir"
     fi
@@ -727,7 +727,7 @@ gcp-linux() {
         "${ssh_user}@${public_ip}:${remote_dir}/" "$sync_dir/" 2>/dev/null; then
         echo -e "${GREEN}OK${NC}: Changes synced back to $sync_dir"
     else
-        echo -e "${YELLOW}WARN${NC}: Failed to sync changes back"
+        echo -e "${YELLOW}WARN${NC}: Failed to sync changes back" >&2
     fi
 
     # --- Cleanup on exit ---
