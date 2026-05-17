@@ -424,7 +424,7 @@ EOF
         return 1
     fi
     
-    local instance_id=$(echo "$instance_info" | jq -r '.Instances[0].InstanceId')
+    local instance_id=$(jq -r '.Instances[0].InstanceId' <<< "$instance_info")
     echo -e "${BLUE}INFO${NC}: Launched instance: $instance_id"
     
     # Wait for instance to be running
@@ -438,8 +438,8 @@ EOF
         --query "Reservations[0].Instances[0]" \
         --output json)
     
-    local public_dns=$(echo "$instance_details" | jq -r '.PublicDnsName // ""')
-    local public_ip=$(echo "$instance_details" | jq -r '.PublicIpAddress // ""')
+    local public_dns=$(jq -r '.PublicDnsName // ""' <<< "$instance_details")
+    local public_ip=$(jq -r '.PublicIpAddress // ""' <<< "$instance_details")
     
     if [[ -z "$public_dns" || "$public_dns" == "null" ]]; then
         echo -e "${RED}ERROR${NC}: Instance does not have a public DNS name"
@@ -701,17 +701,17 @@ delete-minio-aws() {
         return 1
     fi
     
-    local provider=$(echo "$config" | jq -r '.provider')
+    local provider=$(jq -r '.provider' <<< "$config")
     if [[ "$provider" != "aws" ]]; then
         echo -e "${RED}ERROR${NC}: Deployment '$name' is not an AWS deployment (provider: $provider)"
         return 1
     fi
     
-    local instance_id=$(echo "$config" | jq -r '.instance_id')
-    local security_group_id=$(echo "$config" | jq -r '.security_group_id')
-    local region=$(echo "$config" | jq -r '.region')
-    local cert_file=$(echo "$config" | jq -r '.cert_file // ""')
-    local endpoint=$(echo "$config" | jq -r '.endpoint')
+    local instance_id=$(jq -r '.instance_id' <<< "$config")
+    local security_group_id=$(jq -r '.security_group_id' <<< "$config")
+    local region=$(jq -r '.region' <<< "$config")
+    local cert_file=$(jq -r '.cert_file // ""' <<< "$config")
+    local endpoint=$(jq -r '.endpoint' <<< "$config")
     
     if [[ "$force" == false ]]; then
         echo -e "${YELLOW}WARNING${NC}: This will delete the MinIO deployment '$name' and all its data!"
@@ -850,10 +850,10 @@ configure-minio-cluster-access() {
     local config
     config=$(load-minio-config "$minio_name") || return 1
     
-    local endpoint=$(echo "$config" | jq -r '.endpoint')
-    local access_key=$(echo "$config" | jq -r '.access_key')
-    local secret_key=$(echo "$config" | jq -r '.secret_key')
-    local cert_file=$(echo "$config" | jq -r '.cert_file // ""')
+    local endpoint=$(jq -r '.endpoint' <<< "$config")
+    local access_key=$(jq -r '.access_key' <<< "$config")
+    local secret_key=$(jq -r '.secret_key' <<< "$config")
+    local cert_file=$(jq -r '.cert_file // ""' <<< "$config")
     
     # Switch to cluster
     echo -e "${BLUE}INFO${NC}: Switching to cluster: $cluster_name"
