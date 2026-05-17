@@ -158,14 +158,12 @@ create-minio-aws() {
     local sg_name="minio-${name}-sg"
     echo -e "${BLUE}INFO${NC}: Creating security group: $sg_name"
     local sg_id
-    sg_id=$(aws ec2 create-security-group \
+    if ! sg_id=$(aws ec2 create-security-group \
         --region "$region" \
         --group-name "$sg_name" \
         --description "Security group for MinIO deployment $name" \
         --vpc-id "$vpc_id" \
-        --query "GroupId" --output text 2>/dev/null)
-    
-    if [[ $? -ne 0 || -z "$sg_id" ]]; then
+        --query "GroupId" --output text 2>/dev/null) || [[ -z "$sg_id" ]]; then
         echo -e "${RED}ERROR${NC}: Failed to create security group"
         return 1
     fi
@@ -415,9 +413,7 @@ EOF
     fi
     
     local instance_info
-    instance_info=$(eval "$launch_cmd" 2>/dev/null)
-    
-    if [[ $? -ne 0 ]]; then
+    if ! instance_info=$(eval "$launch_cmd" 2>/dev/null); then
         echo -e "${RED}ERROR${NC}: Failed to launch EC2 instance"
         # Cleanup security group
         aws ec2 delete-security-group --region "$region" --group-id "$sg_id" &>/dev/null
@@ -494,8 +490,7 @@ EOF
                 if [[ -n "$key_path" ]]; then
                     # Use SCP to download the certificate
                     echo -e "${BLUE}INFO${NC}: Using SSH key at $key_path to download certificate..."
-                    scp -o StrictHostKeyChecking=no -o ConnectTimeout=15 -i "$key_path" "ec2-user@${public_dns}:/home/ec2-user/minio-cert.pem" "$cert_file" 2>/dev/null
-                    if [[ $? -eq 0 && -s "$cert_file" ]]; then
+                    if scp -o StrictHostKeyChecking=no -o ConnectTimeout=15 -i "$key_path" "ec2-user@${public_dns}:/home/ec2-user/minio-cert.pem" "$cert_file" 2>/dev/null && [[ -s "$cert_file" ]]; then
                         cert_downloaded=true
                         echo -e "${GREEN}SUCCESS${NC}: Certificate downloaded via SCP"
                     else
@@ -510,9 +505,8 @@ EOF
             if [[ "$cert_downloaded" == false ]]; then
                 echo -e "${BLUE}INFO${NC}: Extracting certificate from HTTPS connection..."
                 # Use openssl with built-in timeout instead of external timeout command
-                echo | openssl s_client -servername "$public_dns" -connect "${public_dns}:9000" -showcerts 2>/dev/null | \
-                    openssl x509 -outform PEM > "$cert_file" 2>/dev/null
-                if [[ $? -eq 0 && -s "$cert_file" ]]; then
+                if { echo | openssl s_client -servername "$public_dns" -connect "${public_dns}:9000" -showcerts 2>/dev/null | \
+                    openssl x509 -outform PEM > "$cert_file" 2>/dev/null } && [[ -s "$cert_file" ]]; then
                     # Verify the certificate is valid
                     if openssl x509 -in "$cert_file" -text -noout &>/dev/null; then
                         cert_downloaded=true
@@ -696,8 +690,7 @@ delete-minio-aws() {
     fi
 
     local config
-    config=$(load-minio-config "$name")
-    if [[ $? -ne 0 ]]; then
+    if ! config=$(load-minio-config "$name"); then
         return 1
     fi
     
@@ -733,16 +726,12 @@ delete-minio-aws() {
     
     # Terminate EC2 instance
     echo -e "${BLUE}INFO${NC}: Terminating EC2 instance: $instance_id"
-    aws ec2 terminate-instances --region "$region" --instance-ids "$instance_id" &>/dev/null
-    
-    if [[ $? -eq 0 ]]; then
+    if aws ec2 terminate-instances --region "$region" --instance-ids "$instance_id" &>/dev/null; then
         echo -e "${GREEN}SUCCESS${NC}: Instance termination initiated"
         
         # Wait for instance to terminate (optional, can be slow)
         echo -e "${BLUE}INFO${NC}: Waiting for instance to terminate (this may take a few minutes)..."
-        aws ec2 wait instance-terminated --region "$region" --instance-ids "$instance_id"
-        
-        if [[ $? -eq 0 ]]; then
+        if aws ec2 wait instance-terminated --region "$region" --instance-ids "$instance_id"; then
             echo -e "${GREEN}SUCCESS${NC}: Instance terminated successfully"
         else
             echo -e "${YELLOW}WARN${NC}: Instance termination may still be in progress"
@@ -756,9 +745,7 @@ delete-minio-aws() {
     # Wait a bit for the instance to fully terminate before deleting security group
     sleep 10
     
-    aws ec2 delete-security-group --region "$region" --group-id "$security_group_id" &>/dev/null
-    
-    if [[ $? -eq 0 ]]; then
+    if aws ec2 delete-security-group --region "$region" --group-id "$security_group_id" &>/dev/null; then
         echo -e "${GREEN}SUCCESS${NC}: Security group deleted"
     else
         echo -e "${YELLOW}WARN${NC}: Failed to delete security group (it may still be in use)"
@@ -882,14 +869,12 @@ configure-minio-cluster-access() {
         local ca_config_map_name="minio-ca-${minio_name}"
         
         # Create ConfigMap with the certificate
-        oc create configmap "$ca_config_map_name" \
+        if { oc create configmap "$ca_config_map_name" \
             --from-file="ca-bundle.crt=$cert_file" \
             -n openshift-config &>/dev/null || \
         oc set data configmap/"$ca_config_map_name" \
             --from-file="ca-bundle.crt=$cert_file" \
-            -n openshift-config
-        
-        if [[ $? -eq 0 ]]; then
+            -n openshift-config }; then
             echo -e "${GREEN}SUCCESS${NC}: Certificate added to cluster as ConfigMap: $ca_config_map_name"
             
             # Patch the cluster proxy configuration to trust the certificate
@@ -908,7 +893,7 @@ configure-minio-cluster-access() {
     
     # Create secret with MinIO credentials
     echo -e "${BLUE}INFO${NC}: Creating secret '$secret_name' with MinIO credentials"
-    oc create secret generic "$secret_name" \
+    if { oc create secret generic "$secret_name" \
         --from-literal="MINIO_ENDPOINT=$endpoint" \
         --from-literal="MINIO_ACCESS_KEY=$access_key" \
         --from-literal="MINIO_SECRET_KEY=$secret_key" \
@@ -917,9 +902,7 @@ configure-minio-cluster-access() {
         --from-literal="MINIO_ENDPOINT=$endpoint" \
         --from-literal="MINIO_ACCESS_KEY=$access_key" \
         --from-literal="MINIO_SECRET_KEY=$secret_key" \
-        -n "$namespace"
-    
-    if [[ $? -eq 0 ]]; then
+        -n "$namespace" }; then
         echo -e "${GREEN}SUCCESS${NC}: Secret '$secret_name' created/updated in namespace '$namespace'"
     else
         echo -e "${RED}ERROR${NC}: Failed to create secret"
@@ -962,9 +945,7 @@ spec:
 EOF
 )
     
-    echo "$test_manifest" | oc apply -f -
-    
-    if [[ $? -eq 0 ]]; then
+    if echo "$test_manifest" | oc apply -f -; then
         echo -e "${BLUE}INFO${NC}: Test pod created. Waiting for completion..."
         
         # Wait for pod to complete (max 60 seconds)
