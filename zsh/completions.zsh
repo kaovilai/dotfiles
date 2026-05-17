@@ -215,8 +215,9 @@ zsh_completion_cache_status() {
   echo "Cache files:"
   for file in $ZSH_COMPLETION_CACHE_DIR/_*; do
     if [[ -f "$file" ]]; then
-      local modified=$(stat -f "%Sm" -t "%Y-%m-%d %H:%M:%S" "$file")
-      local size=$(du -h "$file" | cut -f1)
+      local modified size
+      modified=$(stat -f "%Sm" -t "%Y-%m-%d %H:%M:%S" "$file")
+      size=$(du -h "$file" | cut -f1)
       local name="${file:t}"
       echo "  $name ($size) - Last updated: $modified"
     fi

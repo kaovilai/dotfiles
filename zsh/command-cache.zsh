@@ -28,7 +28,8 @@ cache_file_expired() {
   local file_stat
   file_stat=$(stat -f "%m %Sm" -t "%Y-%m-%d %H:%M:%S" "$file" 2>/dev/null) || return 0
   local file_time=${file_stat%% *}
-  local current_time=$(date +%s)
+  local current_time
+  current_time=$(date +%s)
   local file_age=$((current_time - file_time))
 
   if [[ $file_age -gt $max_age ]]; then
@@ -59,7 +60,8 @@ cached_exec() {
     shift
   else
     # Generate cache key from command
-    local cache_key=$(echo "$*" | md5)
+    local cache_key
+    cache_key=$(echo "$*" | md5)
   fi
 
   local cache_file="$ZSH_COMMAND_CACHE_DIR/${cache_key}"
@@ -107,8 +109,9 @@ command_cache_status() {
   if [[ -d "$ZSH_COMMAND_CACHE_DIR" ]]; then
     for file in $ZSH_COMMAND_CACHE_DIR/*; do
       if [[ -f "$file" ]]; then
-        local modified=$(stat -f "%Sm" -t "%Y-%m-%d %H:%M:%S" "$file")
-        local size=$(du -h "$file" | cut -f1)
+        local modified size
+        modified=$(stat -f "%Sm" -t "%Y-%m-%d %H:%M:%S" "$file")
+        size=$(du -h "$file" | cut -f1)
         local name="${file:t}"
         echo "  $name ($size) - Last updated: $modified"
       fi
