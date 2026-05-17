@@ -18,11 +18,11 @@
 #   watch-all-pod-logs-in-namespace openshift-adp
 #   watch-all-pod-logs-in-namespace my-app
 watch-all-pod-logs-in-namespace(){
-    if [ -z "$1" ]; then
+    if [[ -z "$1" ]]; then
         echo "No namespace supplied"
         return 1
     fi
-    oc get pods -n $1 -o name | xargs -n 1 -P 100 oc logs -f -n $1
+    oc get pods -n "$1" -o name | xargs -n 1 -P 100 oc logs -f -n "$1"
 }
 
 # Stream and filter errors from all pods in a namespace
@@ -34,12 +34,12 @@ watch-all-pod-logs-in-namespace(){
 # Example:
 #   watch-all-pod-errors-in-namespace openshift-adp
 watch-all-pod-errors-in-namespace(){
-    if [ -z "$1" ]; then
+    if [[ -z "$1" ]]; then
         echo "No namespace supplied"
         return 1
     fi
     # get all pod logs in namespace, grep for error, and prefix with pod name
-    oc get pods -n $1 -o name | xargs -n 1 -P 100 -I {} sh -c "oc logs -n $1 -f {} | grep --line-buffered error | sed \"s#^#{}: #\""
+    oc get pods -n "$1" -o name | xargs -n 1 -P 100 -I {} sh -c "oc logs -n $1 -f {} | grep --line-buffered error | sed \"s#^#{}: #\""
 }
 
 # Patch ClusterServiceVersion replica count
@@ -53,15 +53,15 @@ watch-all-pod-errors-in-namespace(){
 #   patch-csv-replicas oadp-operator.v1.2.0 2
 #   patch-csv-replicas my-operator.v1.0.0 0  # Scale down to 0
 patch-csv-replicas(){
-    if [ -z "$1" ]; then
+    if [[ -z "$1" ]]; then
         echo "No CSV name supplied"
         return 1
     fi
-    if [ -z "$2" ]; then
+    if [[ -z "$2" ]]; then
         echo "No replicas supplied"
         return 1
     fi
-    oc patch csv $1 --type='json' -p '[
+    oc patch csv "$1" --type='json' -p '[
   {
     "op": "replace",
     "path": "/spec/install/spec/deployments/0/spec/replicas",
