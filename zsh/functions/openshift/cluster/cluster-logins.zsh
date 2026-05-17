@@ -12,7 +12,7 @@ save-cluster-login() {
 
     local name="$1"
     shift
-    local kubeconfig_dir="/Users/tkaovila/OCP/kubeconfigs"
+    local kubeconfig_dir="$HOME/OCP/kubeconfigs"
     local kubeconfig_path="${kubeconfig_dir}/${name}"
 
     # Create directory if it doesn't exist
