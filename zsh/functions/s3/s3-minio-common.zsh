@@ -66,13 +66,14 @@ list-minio-deployments() {
         return 0
     fi
     
+    local name config provider endpoint deployment_status
     for config_file in "$MINIO_DEPLOYMENTS_DIR"/*.json; do
         if [[ -f "$config_file" ]]; then
-            local name=$(basename "$config_file" .json)
-            local config=$(< "$config_file")
-            local provider=$(jq -r '.provider // "unknown"' <<< "$config")
-            local endpoint=$(jq -r '.endpoint // "unknown"' <<< "$config")
-            local deployment_status=$(jq -r '.status // "unknown"' <<< "$config")
+            name=$(basename "$config_file" .json)
+            config=$(< "$config_file")
+            provider=$(jq -r '.provider // "unknown"' <<< "$config")
+            endpoint=$(jq -r '.endpoint // "unknown"' <<< "$config")
+            deployment_status=$(jq -r '.status // "unknown"' <<< "$config")
             
             echo -e "  ${GREEN}$name${NC} [$provider] - $endpoint (${deployment_status})"
         fi
@@ -111,12 +112,13 @@ get-minio-connection-info() {
         return 1
     fi
     
-    local endpoint=$(jq -r '.endpoint' <<< "$config")
-    local access_key=$(jq -r '.access_key' <<< "$config")
-    local secret_key=$(jq -r '.secret_key' <<< "$config")
-    local cert_file=$(jq -r '.cert_file // ""' <<< "$config")
-    local provider=$(jq -r '.provider' <<< "$config")
-    local bucket_name=$(jq -r '.bucket_name // "N/A"' <<< "$config")
+    local endpoint access_key secret_key cert_file provider bucket_name
+    endpoint=$(jq -r '.endpoint' <<< "$config")
+    access_key=$(jq -r '.access_key' <<< "$config")
+    secret_key=$(jq -r '.secret_key' <<< "$config")
+    cert_file=$(jq -r '.cert_file // ""' <<< "$config")
+    provider=$(jq -r '.provider' <<< "$config")
+    bucket_name=$(jq -r '.bucket_name // "N/A"' <<< "$config")
     
     echo -e "${BLUE}Connection Information for MinIO deployment '${name}'${NC}:"
     echo -e "  Provider:    ${provider}"
@@ -204,7 +206,8 @@ EOF
     
     # If hostname looks like an EC2 public DNS, extract the IP
     if [[ "$hostname" =~ ^ec2-[0-9-]+\..*\.compute\.amazonaws\.com$ ]]; then
-        local ip=$(sed 's/ec2-\([0-9]\+\)-\([0-9]\+\)-\([0-9]\+\)-\([0-9]\+\)\..*/\1.\2.\3.\4/' <<< "$hostname")
+        local ip
+        ip=$(sed 's/ec2-\([0-9]\+\)-\([0-9]\+\)-\([0-9]\+\)-\([0-9]\+\)\..*/\1.\2.\3.\4/' <<< "$hostname")
         echo "IP.2 = $ip" >> "$config_file"
     fi
     
@@ -247,7 +250,8 @@ trust-certificate-in-system() {
         fi
     else
         echo -e "${BLUE}INFO${NC}: Adding certificate to Linux system trust store"
-        local cert_name=$(basename "$cert_file" .pem)
+        local cert_name
+        cert_name=$(basename "$cert_file" .pem)
         sudo cp "$cert_file" "/usr/local/share/ca-certificates/${cert_name}.crt" || { echo -e "${RED}ERROR${NC}: Failed to copy certificate to system trust store"; return 1; }
         if sudo update-ca-certificates; then
             echo -e "${GREEN}SUCCESS${NC}: Certificate added to Linux trust store"
@@ -279,7 +283,8 @@ remove-certificate-from-system() {
         echo -e "${GREEN}SUCCESS${NC}: Certificate removal attempted from macOS trust store"
     else
         echo -e "${BLUE}INFO${NC}: Removing certificate from Linux system trust store"
-        local cert_name=$(basename "$cert_file" .pem)
+        local cert_name
+        cert_name=$(basename "$cert_file" .pem)
         sudo rm -f "/usr/local/share/ca-certificates/${cert_name}.crt"
         sudo update-ca-certificates
         echo -e "${GREEN}SUCCESS${NC}: Certificate removed from Linux trust store"
@@ -308,10 +313,11 @@ test-minio-connection() {
         return 1
     fi
     
-    local endpoint=$(jq -r '.endpoint' <<< "$config")
-    local access_key=$(jq -r '.access_key' <<< "$config")
-    local secret_key=$(jq -r '.secret_key' <<< "$config")
-    local cert_file=$(jq -r '.cert_file // ""' <<< "$config")
+    local endpoint access_key secret_key cert_file
+    endpoint=$(jq -r '.endpoint' <<< "$config")
+    access_key=$(jq -r '.access_key' <<< "$config")
+    secret_key=$(jq -r '.secret_key' <<< "$config")
+    cert_file=$(jq -r '.cert_file // ""' <<< "$config")
     
     # Set AWS credentials for this test
     export AWS_ACCESS_KEY_ID="$access_key"
@@ -415,9 +421,10 @@ download-minio-certificate() {
         return 1
     fi
 
-    local provider=$(jq -r '.provider' <<< "$config")
-    local public_dns=$(jq -r '.public_dns' <<< "$config")
-    local endpoint=$(jq -r '.endpoint' <<< "$config")
+    local provider public_dns endpoint
+    provider=$(jq -r '.provider' <<< "$config")
+    public_dns=$(jq -r '.public_dns' <<< "$config")
+    endpoint=$(jq -r '.endpoint' <<< "$config")
     local cert_dir="$MINIO_DEPLOYMENTS_DIR/$name"
     local cert_file="$cert_dir/minio-cert.pem"
 
@@ -470,7 +477,8 @@ download-minio-certificate() {
             mv "$temp_cert" "$cert_file"
 
             # Update the config file with the certificate path
-            local updated_config=$(jq --arg cert_file "$cert_file" '.cert_file = $cert_file' <<< "$config")
+            local updated_config
+            updated_config=$(jq --arg cert_file "$cert_file" '.cert_file = $cert_file' <<< "$config")
             save-minio-config "$name" "$updated_config"
 
             echo -e "${GREEN}SUCCESS${NC}: Certificate downloaded successfully"
@@ -529,9 +537,10 @@ check-minio-docker-status() {
         return 1
     fi
 
-    local provider=$(jq -r '.provider' <<< "$config")
-    local public_dns=$(jq -r '.public_dns' <<< "$config")
-    local endpoint=$(jq -r '.endpoint' <<< "$config")
+    local provider public_dns endpoint
+    provider=$(jq -r '.provider' <<< "$config")
+    public_dns=$(jq -r '.public_dns' <<< "$config")
+    endpoint=$(jq -r '.endpoint' <<< "$config")
 
     if [[ "$provider" != "aws" ]]; then
         echo -e "${RED}ERROR${NC}: Docker status check is only supported for AWS deployments"
@@ -607,7 +616,8 @@ ensure-default-bucket() {
     fi
     
     # Get deployment details
-    local endpoint=$(jq -r '.endpoint' "$deployment_file")
+    local endpoint
+    endpoint=$(jq -r '.endpoint' "$deployment_file")
     local ca_bundle_file="$MINIO_DEPLOYMENTS_DIR/${deployment_name}/minio-cert.pem"
     local ca_bundle_args=()
     [[ -f "$ca_bundle_file" ]] && ca_bundle_args=(--ca-bundle "$ca_bundle_file")

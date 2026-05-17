@@ -190,7 +190,8 @@ create-minio-aws() {
         --cidr 0.0.0.0/0 &>/dev/null
     
     # SSH port (22) - restrict to your IP if possible
-    local my_ip=$(curl -s ifconfig.me)
+    local my_ip
+    my_ip=$(curl -s ifconfig.me)
     if [[ -n "$my_ip" ]]; then
         aws ec2 authorize-security-group-ingress \
             --region "$region" \
@@ -221,7 +222,8 @@ create-minio-aws() {
     esac
     
     echo -e "${BLUE}INFO${NC}: Finding latest Amazon Linux 2 AMI for $ami_arch..."
-    local ami_id=$(aws ec2 describe-images \
+    local ami_id
+    ami_id=$(aws ec2 describe-images \
         --region "$region" \
         --owners amazon \
         --filters "Name=name,Values=amzn2-ami-hvm-*-${ami_arch}-gp2" \
@@ -239,7 +241,8 @@ create-minio-aws() {
     
     # Generate MinIO root credentials
     local minio_root_user="minioadmin"
-    local minio_root_password=$(openssl rand -base64 32 | tr -d "=+/" | cut -c1-25)
+    local minio_root_password
+    minio_root_password=$(openssl rand -base64 32 | tr -d "=+/" | cut -c1-25)
     
     # Create user data script for MinIO installation using Docker
     local user_data=$(cat << 'EOF'
@@ -393,7 +396,8 @@ EOF
     user_data=${user_data//REPLACE_BUCKET_NAME/$bucket_name}
     
     # Encode user data for EC2
-    local encoded_user_data=$(echo "$user_data" | base64 -w 0)
+    local encoded_user_data
+    encoded_user_data=$(echo "$user_data" | base64 -w 0)
     
     # Launch EC2 instance
     echo -e "${BLUE}INFO${NC}: Launching EC2 instance..."
@@ -420,7 +424,8 @@ EOF
         return 1
     fi
     
-    local instance_id=$(jq -r '.Instances[0].InstanceId' <<< "$instance_info")
+    local instance_id
+    instance_id=$(jq -r '.Instances[0].InstanceId' <<< "$instance_info")
     echo -e "${BLUE}INFO${NC}: Launched instance: $instance_id"
     
     # Wait for instance to be running
@@ -428,14 +433,16 @@ EOF
     aws ec2 wait instance-running --region "$region" --instance-ids "$instance_id"
     
     # Get public DNS and IP
-    local instance_details=$(aws ec2 describe-instances \
+    local instance_details
+    instance_details=$(aws ec2 describe-instances \
         --region "$region" \
         --instance-ids "$instance_id" \
         --query "Reservations[0].Instances[0]" \
         --output json)
-    
-    local public_dns=$(jq -r '.PublicDnsName // ""' <<< "$instance_details")
-    local public_ip=$(jq -r '.PublicIpAddress // ""' <<< "$instance_details")
+
+    local public_dns public_ip
+    public_dns=$(jq -r '.PublicDnsName // ""' <<< "$instance_details")
+    public_ip=$(jq -r '.PublicIpAddress // ""' <<< "$instance_details")
     
     if [[ -z "$public_dns" || "$public_dns" == "null" ]]; then
         echo -e "${RED}ERROR${NC}: Instance does not have a public DNS name"
@@ -544,7 +551,8 @@ EOF
     fi
     
     # Save deployment configuration
-    local config_data=$(jq -n \
+    local config_data
+    config_data=$(jq -n \
         --arg name "$name" \
         --arg provider "aws" \
         --arg region "$region" \
@@ -694,17 +702,19 @@ delete-minio-aws() {
         return 1
     fi
     
-    local provider=$(jq -r '.provider' <<< "$config")
+    local provider
+    provider=$(jq -r '.provider' <<< "$config")
     if [[ "$provider" != "aws" ]]; then
         echo -e "${RED}ERROR${NC}: Deployment '$name' is not an AWS deployment (provider: $provider)"
         return 1
     fi
     
-    local instance_id=$(jq -r '.instance_id' <<< "$config")
-    local security_group_id=$(jq -r '.security_group_id' <<< "$config")
-    local region=$(jq -r '.region' <<< "$config")
-    local cert_file=$(jq -r '.cert_file // ""' <<< "$config")
-    local endpoint=$(jq -r '.endpoint' <<< "$config")
+    local instance_id security_group_id region cert_file endpoint
+    instance_id=$(jq -r '.instance_id' <<< "$config")
+    security_group_id=$(jq -r '.security_group_id' <<< "$config")
+    region=$(jq -r '.region' <<< "$config")
+    cert_file=$(jq -r '.cert_file // ""' <<< "$config")
+    endpoint=$(jq -r '.endpoint' <<< "$config")
     
     if [[ "$force" == false ]]; then
         echo -e "${YELLOW}WARNING${NC}: This will delete the MinIO deployment '$name' and all its data!"
@@ -757,7 +767,8 @@ delete-minio-aws() {
         remove-certificate-from-system "$cert_file"
         
         # Remove certificate files
-        local cert_dir=$(dirname "$cert_file")
+        local cert_dir
+        cert_dir=$(dirname "$cert_file")
         if [[ -d "$cert_dir" ]]; then
             rm -rf "$cert_dir"
             echo -e "${GREEN}SUCCESS${NC}: Certificate files removed"
@@ -837,10 +848,11 @@ configure-minio-cluster-access() {
     local config
     config=$(load-minio-config "$minio_name") || return 1
     
-    local endpoint=$(jq -r '.endpoint' <<< "$config")
-    local access_key=$(jq -r '.access_key' <<< "$config")
-    local secret_key=$(jq -r '.secret_key' <<< "$config")
-    local cert_file=$(jq -r '.cert_file // ""' <<< "$config")
+    local endpoint access_key secret_key cert_file
+    endpoint=$(jq -r '.endpoint' <<< "$config")
+    access_key=$(jq -r '.access_key' <<< "$config")
+    secret_key=$(jq -r '.secret_key' <<< "$config")
+    cert_file=$(jq -r '.cert_file // ""' <<< "$config")
     
     # Switch to cluster
     echo -e "${BLUE}INFO${NC}: Switching to cluster: $cluster_name"
@@ -879,7 +891,8 @@ configure-minio-cluster-access() {
             
             # Patch the cluster proxy configuration to trust the certificate
             # Note: This requires cluster-admin privileges
-            local current_trusted_ca=$(oc get proxy/cluster -o jsonpath='{.spec.trustedCA.name}' 2>/dev/null)
+            local current_trusted_ca
+            current_trusted_ca=$(oc get proxy/cluster -o jsonpath='{.spec.trustedCA.name}' 2>/dev/null)
             if [[ -z "$current_trusted_ca" ]]; then
                 oc patch proxy/cluster --type merge -p "{\"spec\":{\"trustedCA\":{\"name\":\"$ca_config_map_name\"}}}" &>/dev/null
             else
@@ -913,7 +926,8 @@ configure-minio-cluster-access() {
     echo -e "${BLUE}INFO${NC}: Testing connectivity from cluster to MinIO..."
     
     local test_pod_name="minio-test-$(date +%s)"
-    local test_manifest=$(cat << EOF
+    local test_manifest
+    test_manifest=$(cat << EOF
 apiVersion: v1
 kind: Pod
 metadata:
@@ -952,7 +966,8 @@ EOF
         local timeout=60
         local elapsed=0
         while [[ $elapsed -lt $timeout ]]; do
-            local status=$(oc get pod "$test_pod_name" -n "$namespace" -o jsonpath='{.status.phase}' 2>/dev/null)
+            local status
+            status=$(oc get pod "$test_pod_name" -n "$namespace" -o jsonpath='{.status.phase}' 2>/dev/null)
             if [[ "$status" == "Succeeded" || "$status" == "Failed" ]]; then
                 break
             fi
@@ -961,7 +976,8 @@ EOF
         done
         
         # Get pod logs
-        local logs=$(oc logs "$test_pod_name" -n "$namespace" 2>/dev/null)
+        local logs
+        logs=$(oc logs "$test_pod_name" -n "$namespace" 2>/dev/null)
         if [[ "$logs" =~ "SUCCESS: MinIO connection test passed" ]]; then
             echo -e "${GREEN}SUCCESS${NC}: MinIO connectivity test passed!"
         else
