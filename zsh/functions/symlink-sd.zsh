@@ -127,7 +127,7 @@ function unsymlink-from-sd() {
 
     # Create a temporary directory to hold files during transfer
     local temp_dir="$parent_dir/.temp_restore_$dir_name"
-    mkdir -p "$temp_dir"
+    mkdir -p "$temp_dir" || { echo "Error: Failed to create temp directory $temp_dir"; return 1; }
 
     # Copy files from SD volume to temporary directory
     echo "Copying files from SD volume to temporary location..."
@@ -146,7 +146,7 @@ function unsymlink-from-sd() {
 
     # Create the directory and move files
     echo "Restoring files to original location..."
-    mkdir -p "$dir_name"
+    mkdir -p "$dir_name" || { echo "Error: Failed to create directory $dir_name"; return 1; }
     mv "$temp_dir"/* "$dir_name/" 2>/dev/null || true
 
     # Move hidden files using find to avoid expansion issues
