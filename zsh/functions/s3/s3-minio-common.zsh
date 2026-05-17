@@ -164,7 +164,7 @@ generate-self-signed-cert() {
         return 1
     fi
     
-    mkdir -p "$cert_dir"
+    mkdir -p "$cert_dir" || { echo -e "${RED}ERROR${NC}: Failed to create cert directory $cert_dir"; return 1; }
     
     local key_file="$cert_dir/${cert_name}.key"
     local cert_file="$cert_dir/${cert_name}.pem"
@@ -420,7 +420,7 @@ download-minio-certificate() {
     fi
 
     # Ensure directory exists
-    mkdir -p "$cert_dir"
+    mkdir -p "$cert_dir" || { echo -e "${RED}ERROR${NC}: Failed to create cert directory $cert_dir"; return 1; }
 
     # Check if certificate already exists
     if [[ -f "$cert_file" && -s "$cert_file" && "$force" == false ]]; then

@@ -285,7 +285,7 @@ export-wifi-credentials() {
     progress "Exporting WiFi credentials..."
     
     # Create export directory
-    mkdir -p "$export_dir"
+    mkdir -p "$export_dir" || { error "Failed to create export directory $export_dir"; return 1; }
     chmod 700 "$export_dir"
     
     # Export WiFi profiles
@@ -562,7 +562,7 @@ backup-before-migration() {
     local backup_dir="$HOME/laptop-migration-backup-$(date +%Y%m%d-%H%M%S)"
     
     progress "Creating backup at $backup_dir..."
-    mkdir -p "$backup_dir"
+    mkdir -p "$backup_dir" || { error "Failed to create backup directory $backup_dir"; return 1; }
     
     # Backup important files
     local backup_items=(
