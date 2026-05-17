@@ -385,8 +385,7 @@ echo "$networks" | while IFS= read -r network; do
             
             if [[ -n "$password" ]]; then
                 # Add the network
-                networksetup -addpreferredwirelessnetworkatindex "$wifi_interface" "$network" 0 WPA2 "$password"
-                if [[ $? -eq 0 ]]; then
+                if networksetup -addpreferredwirelessnetworkatindex "$wifi_interface" "$network" 0 WPA2 "$password"; then
                     echo "✓ Added $network"
                 else
                     echo "✗ Failed to add $network"

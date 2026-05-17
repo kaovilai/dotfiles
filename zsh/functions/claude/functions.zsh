@@ -61,12 +61,10 @@ merge-claude-settings() {
             # Add this permission immediately (use --arg for proper string escaping)
             local temp_file
             temp_file=$(mktemp) || { echo "  ✗ Failed to create temp file"; continue; }
-            jq --arg new_perm "$perm" '
+            if jq --arg new_perm "$perm" '
                 .permissions.allow += [$new_perm]
                 | .permissions.allow |= unique
-            ' "$global_settings" > "$temp_file"
-            
-            if [[ $? -eq 0 ]]; then
+            ' "$global_settings" > "$temp_file"; then
                 mv "$temp_file" "$global_settings"
                 ((permissions_added++))
                 echo "  ✓ Added"
