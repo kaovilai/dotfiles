@@ -72,7 +72,7 @@ select-rosa-cluster() {
         done <<< "$clusters"
 
         echo ""
-        read "?Select cluster number (1-$cluster_count): " choice
+        read -r "?Select cluster number (1-$cluster_count): " choice
 
         if [[ ! "$choice" =~ ^[0-9]+$ ]] || [[ $choice -lt 1 ]] || [[ $choice -gt $cluster_count ]]; then
             echo "Invalid selection"

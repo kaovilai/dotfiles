@@ -23,7 +23,8 @@ delete-rosa-sts() {
     echo "  - Local directory: $ROSA_DIR"
     echo ""
     echo -n "Are you sure you want to proceed? (yes/no): "
-    read confirmation
+    local confirmation
+    read -r confirmation
     
     if [[ "$confirmation" != "yes" ]]; then
         echo "Deletion cancelled"
