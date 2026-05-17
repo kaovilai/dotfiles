@@ -216,7 +216,7 @@ ec2-linux() {
     local instance_id
     echo -e "${BLUE}INFO${NC}: Launching $instance_type ($ami_arch)..."
     local instance_info
-    instance_info=$(aws ec2 run-instances \
+    if ! instance_info=$(aws ec2 run-instances \
         --region "$region" \
         --image-id "$ami_id" \
         --count 1 \
@@ -226,9 +226,7 @@ ec2-linux() {
         --subnet-id "$subnet_id" \
         --tag-specifications "ResourceType=instance,Tags=[{Key=Name,Value=ec2-linux-dev},{Key=Purpose,Value=dev-session}]" \
         --instance-initiated-shutdown-behavior terminate \
-        --output json 2>/dev/null)
-
-    if [[ $? -ne 0 ]]; then
+        --output json 2>/dev/null); then
         echo -e "${RED}ERROR${NC}: Failed to launch instance"
         _ec2_linux_cleanup
         return 1
@@ -425,7 +423,7 @@ az-linux() {
     # --- Create VM ---
     echo -e "${BLUE}INFO${NC}: Creating VM $vm_name ($vm_size, $architecture)..."
     local vm_info
-    vm_info=$(az vm create \
+    if ! vm_info=$(az vm create \
         --resource-group "$rg_name" \
         --name "$vm_name" \
         --image "$image_urn" \
@@ -433,9 +431,7 @@ az-linux() {
         --admin-username azureuser \
         --ssh-key-values "${key_path}.pub" \
         --public-ip-sku Standard \
-        --output json 2>/dev/null)
-
-    if [[ $? -ne 0 ]]; then
+        --output json 2>/dev/null); then
         echo -e "${RED}ERROR${NC}: Failed to create VM"
         _az_linux_cleanup
         return 1
