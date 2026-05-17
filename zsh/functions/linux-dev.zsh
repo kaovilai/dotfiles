@@ -35,13 +35,6 @@ ec2-linux() {
     local key_name=""
     local sync_dir="$PWD"
 
-    # Color codes
-    local RED='\033[0;31m'
-    local BLUE='\033[0;34m'
-    local GREEN='\033[0;32m'
-    local YELLOW='\033[1;33m'
-    local NC='\033[0m'
-
     while [[ $# -gt 0 ]]; do
         case $1 in
             --region)       region="$2"; shift 2 ;;
@@ -323,13 +316,6 @@ az-linux() {
     local architecture="arm64"
     local sync_dir="$PWD"
 
-    # Color codes
-    local RED='\033[0;31m'
-    local BLUE='\033[0;34m'
-    local GREEN='\033[0;32m'
-    local YELLOW='\033[1;33m'
-    local NC='\033[0m'
-
     while [[ $# -gt 0 ]]; do
         case $1 in
             --location)     location="$2"; shift 2 ;;
@@ -520,13 +506,6 @@ gcp-linux() {
     local machine_type=""
     local architecture="arm64"
     local sync_dir="$PWD"
-
-    # Color codes
-    local RED='\033[0;31m'
-    local BLUE='\033[0;34m'
-    local GREEN='\033[0;32m'
-    local YELLOW='\033[1;33m'
-    local NC='\033[0m'
 
     while [[ $# -gt 0 ]]; do
         case $1 in
