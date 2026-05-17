@@ -22,6 +22,10 @@ set-ttl-for-hotspot(){
 
 set-tf-proxy(){
     export TF_ROUTER_IP=$(networksetup -getinfo Wi-Fi | grep -e "^Router" | cut -d " " -f 2)
+    if [[ -z "$TF_ROUTER_IP" ]]; then
+        echo "Error: Could not determine Wi-Fi router IP"
+        return 1
+    fi
     export TF_ROUTER_PROXY_PORT=8228
     export http_proxy="$TF_ROUTER_IP:$TF_ROUTER_PROXY_PORT"
     export https_proxy="$TF_ROUTER_IP:$TF_ROUTER_PROXY_PORT"
@@ -44,6 +48,10 @@ set-socks-proxy(){
         export SOCKS_ROUTER_IP="$1"
     else
         export SOCKS_ROUTER_IP=$(networksetup -getinfo Wi-Fi | grep -e "^Router" | cut -d " " -f 2)
+        if [[ -z "$SOCKS_ROUTER_IP" ]]; then
+            echo "Error: Could not determine Wi-Fi router IP"
+            return 1
+        fi
     fi
     export SOCKS_ROUTER_PROXY_PORT=1888
     networksetup -setsocksfirewallproxy Wi-Fi "$SOCKS_ROUTER_IP" "$SOCKS_ROUTER_PROXY_PORT" off
