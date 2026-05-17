@@ -57,7 +57,7 @@ update-zshrc-from-dotfiles() {
     local reply
     read "reply?Apply these changes? [y/N] "
     if [[ "$reply" =~ ^[Yy]$ ]]; then
-        cp "$HOME/git/dotfiles/.zshrc" "$HOME/.zshrc"
+        cp "$HOME/git/dotfiles/.zshrc" "$HOME/.zshrc" || { echo "Error: Failed to copy .zshrc"; return 1; }
         echo "Updated. Reload your shell or run 'source ~/.zshrc' to apply changes."
     else
         echo "Aborted."
