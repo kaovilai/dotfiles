@@ -102,6 +102,10 @@ pr-review-user() {
 
 # Review PRs from multiple users defined in environment variable
 pr-review-all-users() {
+  if ! command -v gh &>/dev/null; then
+    echo "❌ gh not found. Install it with: brew install gh"
+    return 1
+  fi
   local repo="${1:-vmware-tanzu/velero}"
   
   # Check if PR_REVIEW_USERS is set
@@ -121,6 +125,10 @@ pr-review-all-users() {
 
 # Review all Velero maintainer PRs without setting environment variable
 review-velero-maintainer-prs() {
+  if ! command -v gh &>/dev/null; then
+    echo "❌ gh not found. Install it with: brew install gh"
+    return 1
+  fi
   if ! command -v curl &>/dev/null; then
     echo "❌ curl not found. Install it with: brew install curl"
     return 1
@@ -146,6 +154,10 @@ review-velero-maintainer-prs() {
 
 # Review all OADP owner PRs without setting environment variable
 review-oadp-owner-prs() {
+  if ! command -v gh &>/dev/null; then
+    echo "❌ gh not found. Install it with: brew install gh"
+    return 1
+  fi
   if ! command -v curl &>/dev/null; then
     echo "❌ curl not found. Install it with: brew install curl"
     return 1
