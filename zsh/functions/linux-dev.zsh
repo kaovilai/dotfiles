@@ -390,6 +390,11 @@ az-linux() {
     local key_path="/tmp/${rg_name}"
     echo -e "${BLUE}INFO${NC}: Generating temporary SSH key..."
     if ! ssh-keygen -t ed25519 -f "$key_path" -N "" -q; then
+        echo -e "${RED}ERROR${NC}: Failed to generate SSH key"
+        return 1
+    fi
+
+    # --- Cleanup function (deletes entire resource group) ---
     _az_linux_cleanup() {
         trap - INT TERM EXIT
         echo ""
