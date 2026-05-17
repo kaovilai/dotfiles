@@ -107,10 +107,9 @@ ec2-linux() {
         key_name="ec2-linux-tmp-$(date +%s)-${RANDOM}"
         key_path="/tmp/${key_name}.pem"
         echo -e "${BLUE}INFO${NC}: Creating temporary key pair: $key_name"
-        aws ec2 create-key-pair --region "$region" \
+        if ! aws ec2 create-key-pair --region "$region" \
             --key-name "$key_name" \
-            --query 'KeyMaterial' --output text > "$key_path" 2>/dev/null
-        if [[ $? -ne 0 ]]; then
+            --query 'KeyMaterial' --output text > "$key_path" 2>/dev/null; then
             echo -e "${RED}ERROR${NC}: Failed to create key pair"
             return 1
         fi
@@ -276,15 +275,13 @@ ec2-linux() {
     # --- Rsync repo ---
     local remote_dir="/home/ec2-user/${sync_dir:t}"
     echo -e "${BLUE}INFO${NC}: Syncing ${sync_dir:t} to instance..."
-    rsync -az --delete \
+    if ! rsync -az --delete \
         --exclude '.git/objects' \
         --exclude 'vendor/' \
         --exclude 'node_modules/' \
         --exclude '_output/' \
         -e "ssh $ssh_opts -i $key_path" \
-        "$sync_dir/" "ec2-user@${public_ip}:${remote_dir}/" 2>/dev/null
-
-    if [[ $? -ne 0 ]]; then
+        "$sync_dir/" "ec2-user@${public_ip}:${remote_dir}/" 2>/dev/null; then
         echo -e "${YELLOW}WARN${NC}: rsync failed, continuing with SSH anyway"
     else
         echo -e "${GREEN}OK${NC}: Repo synced to $remote_dir"
@@ -302,14 +299,13 @@ ec2-linux() {
 
     # --- Sync back changes ---
     echo -e "${BLUE}INFO${NC}: Syncing changes back from instance..."
-    rsync -az \
+    if rsync -az \
         --exclude '.git/objects' \
         --exclude 'vendor/' \
         --exclude 'node_modules/' \
         --exclude '_output/' \
         -e "ssh $ssh_opts -i $key_path" \
-        "ec2-user@${public_ip}:${remote_dir}/" "$sync_dir/" 2>/dev/null
-    if [[ $? -eq 0 ]]; then
+        "ec2-user@${public_ip}:${remote_dir}/" "$sync_dir/" 2>/dev/null; then
         echo -e "${GREEN}OK${NC}: Changes synced back to $sync_dir"
     else
         echo -e "${YELLOW}WARN${NC}: Failed to sync changes back"
@@ -393,8 +389,7 @@ az-linux() {
     # --- Temporary SSH key ---
     local key_path="/tmp/${rg_name}"
     echo -e "${BLUE}INFO${NC}: Generating temporary SSH key..."
-    ssh-keygen -t ed25519 -f "$key_path" -N "" -q
-    if [[ $? -ne 0 ]]; then
+    if ! ssh-keygen -t ed25519 -f "$key_path" -N "" -q; then
         echo -e "${RED}ERROR${NC}: Failed to generate SSH key"
         return 1
     fi
@@ -414,8 +409,7 @@ az-linux() {
 
     # --- Create resource group ---
     echo -e "${BLUE}INFO${NC}: Creating resource group $rg_name in $location..."
-    az group create --name "$rg_name" --location "$location" --output none 2>/dev/null
-    if [[ $? -ne 0 ]]; then
+    if ! az group create --name "$rg_name" --location "$location" --output none 2>/dev/null; then
         echo -e "${RED}ERROR${NC}: Failed to create resource group"
         rm -f "$key_path" "${key_path}.pub"
         return 1
@@ -479,15 +473,13 @@ az-linux() {
     # --- Rsync repo ---
     local remote_dir="/home/azureuser/${sync_dir:t}"
     echo -e "${BLUE}INFO${NC}: Syncing ${sync_dir:t} to VM..."
-    rsync -az --delete \
+    if ! rsync -az --delete \
         --exclude '.git/objects' \
         --exclude 'vendor/' \
         --exclude 'node_modules/' \
         --exclude '_output/' \
         -e "ssh $ssh_opts -i $key_path" \
-        "$sync_dir/" "azureuser@${public_ip}:${remote_dir}/" 2>/dev/null
-
-    if [[ $? -ne 0 ]]; then
+        "$sync_dir/" "azureuser@${public_ip}:${remote_dir}/" 2>/dev/null; then
         echo -e "${YELLOW}WARN${NC}: rsync failed, continuing with SSH anyway"
     else
         echo -e "${GREEN}OK${NC}: Repo synced to $remote_dir"
@@ -506,14 +498,13 @@ az-linux() {
 
     # --- Sync back changes ---
     echo -e "${BLUE}INFO${NC}: Syncing changes back from VM..."
-    rsync -az \
+    if rsync -az \
         --exclude '.git/objects' \
         --exclude 'vendor/' \
         --exclude 'node_modules/' \
         --exclude '_output/' \
         -e "ssh $ssh_opts -i $key_path" \
-        "azureuser@${public_ip}:${remote_dir}/" "$sync_dir/" 2>/dev/null
-    if [[ $? -eq 0 ]]; then
+        "azureuser@${public_ip}:${remote_dir}/" "$sync_dir/" 2>/dev/null; then
         echo -e "${GREEN}OK${NC}: Changes synced back to $sync_dir"
     else
         echo -e "${YELLOW}WARN${NC}: Failed to sync changes back"
@@ -603,8 +594,7 @@ gcp-linux() {
     # --- Temporary SSH key ---
     local key_path="/tmp/${instance_name}"
     echo -e "${BLUE}INFO${NC}: Generating temporary SSH key..."
-    ssh-keygen -t ed25519 -f "$key_path" -N "" -q -C "gcp-linux-dev"
-    if [[ $? -ne 0 ]]; then
+    if ! ssh-keygen -t ed25519 -f "$key_path" -N "" -q -C "gcp-linux-dev"; then
         echo -e "${RED}ERROR${NC}: Failed to generate SSH key"
         return 1
     fi
@@ -665,7 +655,7 @@ gcp-linux() {
 
     # --- Create instance ---
     echo -e "${BLUE}INFO${NC}: Creating instance $instance_name ($machine_type, $architecture)..."
-    gcloud compute instances create "$instance_name" \
+    if ! gcloud compute instances create "$instance_name" \
         --project "$project" \
         --zone "$zone" \
         --machine-type "$machine_type" \
@@ -673,9 +663,7 @@ gcp-linux() {
         --image-project "$image_project" \
         --metadata "ssh-keys=${gcp_ssh_key}" \
         --tags "${instance_name}" \
-        --quiet &>/dev/null
-
-    if [[ $? -ne 0 ]]; then
+        --quiet &>/dev/null; then
         echo -e "${RED}ERROR${NC}: Failed to create instance"
         _gcp_linux_cleanup
         return 1
@@ -717,15 +705,13 @@ gcp-linux() {
     # --- Rsync repo ---
     local remote_dir="/home/${ssh_user}/${sync_dir:t}"
     echo -e "${BLUE}INFO${NC}: Syncing ${sync_dir:t} to instance..."
-    rsync -az --delete \
+    if ! rsync -az --delete \
         --exclude '.git/objects' \
         --exclude 'vendor/' \
         --exclude 'node_modules/' \
         --exclude '_output/' \
         -e "ssh $ssh_opts -i $key_path" \
-        "$sync_dir/" "${ssh_user}@${public_ip}:${remote_dir}/" 2>/dev/null
-
-    if [[ $? -ne 0 ]]; then
+        "$sync_dir/" "${ssh_user}@${public_ip}:${remote_dir}/" 2>/dev/null; then
         echo -e "${YELLOW}WARN${NC}: rsync failed, continuing with SSH anyway"
     else
         echo -e "${GREEN}OK${NC}: Repo synced to $remote_dir"
@@ -744,14 +730,13 @@ gcp-linux() {
 
     # --- Sync back changes ---
     echo -e "${BLUE}INFO${NC}: Syncing changes back from instance..."
-    rsync -az \
+    if rsync -az \
         --exclude '.git/objects' \
         --exclude 'vendor/' \
         --exclude 'node_modules/' \
         --exclude '_output/' \
         -e "ssh $ssh_opts -i $key_path" \
-        "${ssh_user}@${public_ip}:${remote_dir}/" "$sync_dir/" 2>/dev/null
-    if [[ $? -eq 0 ]]; then
+        "${ssh_user}@${public_ip}:${remote_dir}/" "$sync_dir/" 2>/dev/null; then
         echo -e "${GREEN}OK${NC}: Changes synced back to $sync_dir"
     else
         echo -e "${YELLOW}WARN${NC}: Failed to sync changes back"
