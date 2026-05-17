@@ -59,6 +59,9 @@ Before doing anything, gather the current state:
 
 Review the ZSH files in the `zsh/` directory looking for improvements. Pick ONE category below and find ALL instances of that problem type across the codebase:
 
+- Keep the scan bounded: inspect only the files needed for one improvement category, prefer targeted `grep/find` queries, and avoid full-file dumps unless required for a specific fix.
+- Treat token budget as limited: once you have enough evidence to implement one complete category, stop scanning and move to implementation.
+
 ### High Value Improvements
 - Missing `command -v` guards before using external tools
 - Functions that could benefit from local variable declarations (`local var`)
@@ -84,6 +87,7 @@ Bundle all fixes of the same category into a single branch and PR:
 4. Use `git merge-tree` and `git merge-base` to verify the branch merges cleanly against `main` and against each open PR branch
 5. **If the branch merges cleanly**: Create ONE PR containing all fixes
 6. **If it would NOT merge cleanly**: Note which open PR(s) conflict and why
+7. After calling `create_pull_request`, stop immediately and do not run additional analysis/tool calls.
 
 ## Step 4: Create Issue Only When No PR Was Created
 
