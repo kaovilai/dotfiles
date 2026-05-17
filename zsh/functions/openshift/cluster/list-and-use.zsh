@@ -285,8 +285,8 @@ use-ocp-cluster() {
     
     # If only one cluster found, use it directly
     if [[ ${#kubeconfig_files[@]} -eq 1 ]]; then
-        export KUBECONFIG="${kubeconfig_files[0]}"
-        echo "Using cluster: ${cluster_names[0]}"
+        export KUBECONFIG="${kubeconfig_files[1]}"
+        echo "Using cluster: ${cluster_names[1]}"
         echo "KUBECONFIG set to: $KUBECONFIG"
         return 0
     fi
@@ -294,7 +294,7 @@ use-ocp-cluster() {
     # Build selection list with indices
     local selection_list=""
     for i in $(seq 1 ${#kubeconfig_files[@]}); do
-        selection_list+="$i. ${cluster_names[$i-1]}"$'\n'
+        selection_list+="$i. ${cluster_names[$i]}"$'\n'
     done
     selection_list=${selection_list%$'\n'}
 
@@ -311,7 +311,7 @@ use-ocp-cluster() {
             echo "Invalid selection"
             return 1
         fi
-        selected="$choice. ${cluster_names[$choice-1]}"
+        selected="$choice. ${cluster_names[$choice]}"
     fi
 
     if [[ -z "$selected" ]]; then
@@ -321,7 +321,7 @@ use-ocp-cluster() {
     choice=$(echo "$selected" | awk -F'.' '{print $1}')
 
     # Handle special ROSA clusters
-    local selected_path="${kubeconfig_files[$choice-1]}"
+    local selected_path="${kubeconfig_files[$choice]}"
     if [[ "$selected_path" == ROSA:* ]]; then
         echo ""
         echo "This is a ROSA cluster without a kubeconfig file."
@@ -343,7 +343,7 @@ use-ocp-cluster() {
     
     # Set KUBECONFIG
     export KUBECONFIG="$selected_path"
-    echo "Using cluster: ${cluster_names[$choice-1]}"
+    echo "Using cluster: ${cluster_names[$choice]}"
     echo "KUBECONFIG set to: $KUBECONFIG"
 
     # Check if this is CRC and warn if it's stopped
