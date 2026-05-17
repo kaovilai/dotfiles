@@ -516,7 +516,7 @@ az-linux() {
 #    Instance auto-deleted when you exit the shell.
 gcp-linux() {
     local zone="${CLOUDSDK_COMPUTE_ZONE:-us-central1-a}"
-    local project="${GOOGLE_CLOUD_PROJECT:-$(gcloud config get-value project 2>/dev/null)}"
+    local project="${GOOGLE_CLOUD_PROJECT:-}"
     local machine_type=""
     local architecture="arm64"
     local sync_dir="$PWD"
@@ -561,6 +561,9 @@ gcp-linux() {
             return 1
         fi
     done
+
+    # Defer gcloud config lookup until after tool validation
+    [[ -z "$project" ]] && project="$(gcloud config get-value project 2>/dev/null)"
 
     if [[ -z "$project" ]]; then
         echo -e "${RED}ERROR${NC}: No GCP project set. Use --project or set GOOGLE_CLOUD_PROJECT"
