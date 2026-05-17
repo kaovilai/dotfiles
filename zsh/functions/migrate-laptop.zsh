@@ -113,7 +113,8 @@ migrate-to-new-laptop() {
                 --bind 'ctrl-a:select-all')
 
             if [[ -n "$selected" ]]; then
-                local tmpfile=$(mktemp)
+                local tmpfile
+                tmpfile=$(mktemp) || { warning "Failed to create temporary file"; return 1; }
                 echo "$selected" > "$tmpfile"
                 brew bundle --file="$tmpfile" || warning "Some packages failed to install"
                 rm "$tmpfile"
