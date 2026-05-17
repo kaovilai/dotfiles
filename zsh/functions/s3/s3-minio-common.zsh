@@ -198,13 +198,11 @@ EOF
     fi
     
     echo -e "${BLUE}INFO${NC}: Generating self-signed certificate for $hostname" >&2
-    openssl req -new -x509 -days 365 -nodes \
+    if openssl req -new -x509 -days 365 -nodes \
         -keyout "$key_file" \
         -out "$cert_file" \
         -config "$config_file" \
-        -extensions v3_req
-    
-    if [[ $? -eq 0 ]]; then
+        -extensions v3_req; then
         echo -e "${GREEN}SUCCESS${NC}: Certificate generated:" >&2
         echo "  Key:  $key_file" >&2
         echo "  Cert: $cert_file" >&2
@@ -230,8 +228,7 @@ trust-certificate-in-system() {
     
     if [[ "$OSTYPE" == darwin* ]]; then
         echo -e "${BLUE}INFO${NC}: Adding certificate to macOS system trust store"
-        sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain "$cert_file"
-        if [[ $? -eq 0 ]]; then
+        if sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain "$cert_file"; then
             echo -e "${GREEN}SUCCESS${NC}: Certificate added to macOS trust store"
         else
             echo -e "${RED}ERROR${NC}: Failed to add certificate to macOS trust store"
@@ -241,8 +238,7 @@ trust-certificate-in-system() {
         echo -e "${BLUE}INFO${NC}: Adding certificate to Linux system trust store"
         local cert_name=$(basename "$cert_file" .pem)
         sudo cp "$cert_file" "/usr/local/share/ca-certificates/${cert_name}.crt"
-        sudo update-ca-certificates
-        if [[ $? -eq 0 ]]; then
+        if sudo update-ca-certificates; then
             echo -e "${GREEN}SUCCESS${NC}: Certificate added to Linux trust store"
         else
             echo -e "${RED}ERROR${NC}: Failed to add certificate to Linux trust store"
