@@ -24,7 +24,7 @@ cg() {
     return 1
   fi
   local dirs
-  dirs=$(ls -d ~/git/*/ 2>/dev/null | sed "s|$HOME/git/||;s|/$||" | fzf --multi --prompt="~/git/ > " --preview 'git -C ~/git/{} status -sb 2>/dev/null || echo "Not a git repo"') || return
+  dirs=$(print -l ~/git/*(N/:t) | fzf --multi --prompt="~/git/ > " --preview 'git -C ~/git/{} status -sb 2>/dev/null || echo "Not a git repo"') || return
   echo "$dirs" | while IFS= read -r d; do
     code ~/git/"$d" </dev/null
   done
