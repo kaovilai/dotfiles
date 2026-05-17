@@ -18,6 +18,10 @@
 #   watch-all-pod-logs-in-namespace openshift-adp
 #   watch-all-pod-logs-in-namespace my-app
 watch-all-pod-logs-in-namespace(){
+    if ! command -v oc &>/dev/null; then
+        echo "❌ oc not found. Install it with: brew install openshift-cli"
+        return 1
+    fi
     if [[ -z "$1" ]]; then
         echo "No namespace supplied"
         return 1
@@ -34,6 +38,10 @@ watch-all-pod-logs-in-namespace(){
 # Example:
 #   watch-all-pod-errors-in-namespace openshift-adp
 watch-all-pod-errors-in-namespace(){
+    if ! command -v oc &>/dev/null; then
+        echo "❌ oc not found. Install it with: brew install openshift-cli"
+        return 1
+    fi
     if [[ -z "$1" ]]; then
         echo "No namespace supplied"
         return 1
@@ -53,6 +61,10 @@ watch-all-pod-errors-in-namespace(){
 #   patch-csv-replicas oadp-operator.v1.2.0 2
 #   patch-csv-replicas my-operator.v1.0.0 0  # Scale down to 0
 patch-csv-replicas(){
+    if ! command -v oc &>/dev/null; then
+        echo "❌ oc not found. Install it with: brew install openshift-cli"
+        return 1
+    fi
     if [[ -z "$1" ]]; then
         echo "No CSV name supplied"
         return 1
