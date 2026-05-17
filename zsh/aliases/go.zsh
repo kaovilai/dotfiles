@@ -4,6 +4,10 @@ alias gofmtgitdiffmaster='git diff upstream/master --name-only | grep "\.go$" | 
 alias gofmtgitdiffoadp='git diff upstream/oadp-dev --name-only | grep "\.go$" | xargs -L 1 go fmt'
 alias grf='golangci-lint run --fix'
 golangci-lint-with-retry() {
+  if ! command -v golangci-lint &>/dev/null; then
+    echo "❌ golangci-lint not found. Install it with: brew install golangci-lint"
+    return 1
+  fi
   local max_attempts=30
   local attempt=1
   local output
