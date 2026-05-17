@@ -26,8 +26,11 @@ merge-claude-settings() {
     fi
     
     # Read existing permissions from both files as raw strings (not JSON-encoded)
-    local local_allow=$(jq -r '.permissions.allow[]' "$local_settings" 2>/dev/null)
-    local global_allow=$(jq -r '.permissions.allow[]' "$global_settings" 2>/dev/null)
+    # Declare local first, then assign so the command's exit status is preserved
+    # (local var=$(cmd) swallows the exit code — local always returns 0)
+    local local_allow global_allow
+    local_allow=$(jq -r '.permissions.allow[]' "$local_settings" 2>/dev/null)
+    global_allow=$(jq -r '.permissions.allow[]' "$global_settings" 2>/dev/null)
     
     # Find new permissions not in global settings
     local new_permissions=()
