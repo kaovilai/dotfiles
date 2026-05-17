@@ -237,7 +237,7 @@ trust-certificate-in-system() {
     else
         echo -e "${BLUE}INFO${NC}: Adding certificate to Linux system trust store"
         local cert_name=$(basename "$cert_file" .pem)
-        sudo cp "$cert_file" "/usr/local/share/ca-certificates/${cert_name}.crt"
+        sudo cp "$cert_file" "/usr/local/share/ca-certificates/${cert_name}.crt" || { echo -e "${RED}ERROR${NC}: Failed to copy certificate to system trust store"; return 1; }
         if sudo update-ca-certificates; then
             echo -e "${GREEN}SUCCESS${NC}: Certificate added to Linux trust store"
         else
