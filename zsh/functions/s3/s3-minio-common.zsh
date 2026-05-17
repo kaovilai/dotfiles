@@ -58,10 +58,10 @@ list-minio-deployments() {
     for config_file in "$MINIO_DEPLOYMENTS_DIR"/*.json; do
         if [[ -f "$config_file" ]]; then
             local name=$(basename "$config_file" .json)
-            local config=$(cat "$config_file")
-            local provider=$(echo "$config" | jq -r '.provider // "unknown"')
-            local endpoint=$(echo "$config" | jq -r '.endpoint // "unknown"')
-            local deployment_status=$(echo "$config" | jq -r '.status // "unknown"')
+            local config=$(< "$config_file")
+            local provider=$(jq -r '.provider // "unknown"' <<< "$config")
+            local endpoint=$(jq -r '.endpoint // "unknown"' <<< "$config")
+            local deployment_status=$(jq -r '.status // "unknown"' <<< "$config")
             
             echo -e "  ${GREEN}$name${NC} [$provider] - $endpoint (${deployment_status})"
         fi
@@ -100,12 +100,12 @@ get-minio-connection-info() {
         return 1
     fi
     
-    local endpoint=$(echo "$config" | jq -r '.endpoint')
-    local access_key=$(echo "$config" | jq -r '.access_key')
-    local secret_key=$(echo "$config" | jq -r '.secret_key')
-    local cert_file=$(echo "$config" | jq -r '.cert_file // ""')
-    local provider=$(echo "$config" | jq -r '.provider')
-    local bucket_name=$(echo "$config" | jq -r '.bucket_name // "N/A"')
+    local endpoint=$(jq -r '.endpoint' <<< "$config")
+    local access_key=$(jq -r '.access_key' <<< "$config")
+    local secret_key=$(jq -r '.secret_key' <<< "$config")
+    local cert_file=$(jq -r '.cert_file // ""' <<< "$config")
+    local provider=$(jq -r '.provider' <<< "$config")
+    local bucket_name=$(jq -r '.bucket_name // "N/A"' <<< "$config")
     
     echo -e "${BLUE}Connection Information for MinIO deployment '${name}'${NC}:"
     echo -e "  Provider:    ${provider}"
@@ -301,10 +301,10 @@ test-minio-connection() {
         return 1
     fi
     
-    local endpoint=$(echo "$config" | jq -r '.endpoint')
-    local access_key=$(echo "$config" | jq -r '.access_key')
-    local secret_key=$(echo "$config" | jq -r '.secret_key')
-    local cert_file=$(echo "$config" | jq -r '.cert_file // ""')
+    local endpoint=$(jq -r '.endpoint' <<< "$config")
+    local access_key=$(jq -r '.access_key' <<< "$config")
+    local secret_key=$(jq -r '.secret_key' <<< "$config")
+    local cert_file=$(jq -r '.cert_file // ""' <<< "$config")
     
     # Set AWS credentials for this test
     export AWS_ACCESS_KEY_ID="$access_key"
@@ -408,9 +408,9 @@ download-minio-certificate() {
         return 1
     fi
 
-    local provider=$(echo "$config" | jq -r '.provider')
-    local public_dns=$(echo "$config" | jq -r '.public_dns')
-    local endpoint=$(echo "$config" | jq -r '.endpoint')
+    local provider=$(jq -r '.provider' <<< "$config")
+    local public_dns=$(jq -r '.public_dns' <<< "$config")
+    local endpoint=$(jq -r '.endpoint' <<< "$config")
     local cert_dir="$MINIO_DEPLOYMENTS_DIR/$name"
     local cert_file="$cert_dir/minio-cert.pem"
 
@@ -463,7 +463,7 @@ download-minio-certificate() {
             mv "$temp_cert" "$cert_file"
 
             # Update the config file with the certificate path
-            local updated_config=$(echo "$config" | jq --arg cert_file "$cert_file" '.cert_file = $cert_file')
+            local updated_config=$(jq --arg cert_file "$cert_file" '.cert_file = $cert_file' <<< "$config")
             save-minio-config "$name" "$updated_config"
 
             echo -e "${GREEN}SUCCESS${NC}: Certificate downloaded successfully"
@@ -522,9 +522,9 @@ check-minio-docker-status() {
         return 1
     fi
 
-    local provider=$(echo "$config" | jq -r '.provider')
-    local public_dns=$(echo "$config" | jq -r '.public_dns')
-    local endpoint=$(echo "$config" | jq -r '.endpoint')
+    local provider=$(jq -r '.provider' <<< "$config")
+    local public_dns=$(jq -r '.public_dns' <<< "$config")
+    local endpoint=$(jq -r '.endpoint' <<< "$config")
 
     if [[ "$provider" != "aws" ]]; then
         echo -e "${RED}ERROR${NC}: Docker status check is only supported for AWS deployments"

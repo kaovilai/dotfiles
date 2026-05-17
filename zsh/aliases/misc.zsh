@@ -63,8 +63,8 @@ activepieces-restart() {
             "https://api.tailscale.com/api/v2/tailnet/$TAILSCALE_TAILNET/devices")
 
         local machine_ids
-        machine_ids=$(echo "$devices_json" | jq -r \
-            ".devices[] | select(.hostname | contains(\"activepieces\")) | .id")
+        machine_ids=$(jq -r \
+            ".devices[] | select(.hostname | contains(\"activepieces\")) | .id" <<< "$devices_json")
 
         if [[ -n "$machine_ids" ]]; then
             echo "Found activepieces machines to clean up"
