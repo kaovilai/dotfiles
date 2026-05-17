@@ -40,9 +40,9 @@ new-changelog() {
     fi
     local GH_PR_JSON GH_LOGIN GH_PR_NUMBER CHANGELOG_BODY
     GH_PR_JSON=$(gh pr view --json author,number,title 2>/dev/null)
-    GH_LOGIN=$(echo "$GH_PR_JSON" | jq -r '.author.login' 2>/dev/null)
-    GH_PR_NUMBER=$(echo "$GH_PR_JSON" | jq -r '.number' 2>/dev/null)
-    CHANGELOG_BODY=$(echo "$GH_PR_JSON" | jq -r '.title' 2>/dev/null)
+    GH_LOGIN=$(jq -r '.author.login' 2>/dev/null <<< "$GH_PR_JSON")
+    GH_PR_NUMBER=$(jq -r '.number' 2>/dev/null <<< "$GH_PR_JSON")
+    CHANGELOG_BODY=$(jq -r '.title' 2>/dev/null <<< "$GH_PR_JSON")
     if [[ -z "$GH_LOGIN" ]]; then
         echo "branch does not have PR or cli not logged in, try 'gh auth login' or 'gh pr create'"
         return 1
