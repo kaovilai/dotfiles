@@ -5,6 +5,11 @@ if [[ "$TERM_PROGRAM" != "vscode" ]]; then
 # Get the current WiFi standard (Wi-Fi 5, 6, 6E, 7)
 # Usage: wifi-standard
 function wifi-standard() {
+    if [[ "$OSTYPE" != darwin* ]]; then
+        echo "Error: wifi-standard is only supported on macOS"
+        return 1
+    fi
+
     local wifi_info=$(system_profiler SPAirPortDataType 2>/dev/null)
 
     # Check if WiFi is connected by looking for "Status: Connected"
