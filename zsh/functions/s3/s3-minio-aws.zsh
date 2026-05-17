@@ -841,6 +841,11 @@ configure-minio-cluster-access() {
         return 1
     fi
 
+    if ! command -v oc &>/dev/null; then
+        echo -e "${RED}ERROR${NC}: oc not found. Install it with: brew install openshift-cli"
+        return 1
+    fi
+
     # Load MinIO config
     local config
     config=$(load-minio-config "$minio_name") || return 1
