@@ -1,7 +1,21 @@
-alias gofmtgitdiff='git diff --name-only | grep "\.go$" | xargs -L 1 go fmt'
-alias gofmtgitdiffmain='git diff upstream/main --name-only | grep "\.go$" | xargs -L 1 go fmt'
-alias gofmtgitdiffmaster='git diff upstream/master --name-only | grep "\.go$" | xargs -L 1 go fmt'
-alias gofmtgitdiffoadp='git diff upstream/oadp-dev --name-only | grep "\.go$" | xargs -L 1 go fmt'
+_gofmt_files() {
+    local diff_args=("$@")
+    if ! command -v go &>/dev/null; then
+        echo "❌ go not found. Install it with: brew install go"
+        return 1
+    fi
+    local files
+    files=$(git diff "${diff_args[@]}" --name-only | grep "\.go$")
+    if [[ -z "$files" ]]; then
+        echo "No modified .go files to format"
+        return 0
+    fi
+    echo "$files" | xargs -L 1 go fmt
+}
+gofmtgitdiff()       { _gofmt_files; }
+gofmtgitdiffmain()   { _gofmt_files upstream/main; }
+gofmtgitdiffmaster() { _gofmt_files upstream/master; }
+gofmtgitdiffoadp()   { _gofmt_files upstream/oadp-dev; }
 alias grf='golangci-lint run --fix'
 golangci-lint-with-retry() {
   if ! command -v golangci-lint &>/dev/null; then
