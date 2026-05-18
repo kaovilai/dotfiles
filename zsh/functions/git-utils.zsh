@@ -235,6 +235,10 @@ code-dirs() {
 # open all dirs matching pattern in finder
 # ex: finder-dirs "velero*"
 finder-dirs() {
+    if [[ "$OSTYPE" != darwin* ]]; then
+        echo "Error: finder-dirs is only supported on macOS"
+        return 1
+    fi
     if [[ -z "$1" ]]; then
         echo "Usage: finder-dirs <pattern>"
         echo "Example: finder-dirs \"velero*\""
