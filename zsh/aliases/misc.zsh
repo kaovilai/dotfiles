@@ -60,7 +60,7 @@ activepieces-restart() {
         echo "Looking for activepieces machines in Tailscale..."
 
         local devices_json
-        devices_json=$(curl -s -H "Authorization: Bearer $TAILSCALE_API_KEY" \
+        devices_json=$(curl -s --connect-timeout 10 -H "Authorization: Bearer $TAILSCALE_API_KEY" \
             "https://api.tailscale.com/api/v2/tailnet/$TAILSCALE_TAILNET/devices")
 
         local machine_ids
@@ -72,7 +72,7 @@ activepieces-restart() {
             local id
             for id in ${(f)machine_ids}; do
                 echo "Deleting Tailscale machine: $id"
-                curl -s -X DELETE -H "Authorization: Bearer $TAILSCALE_API_KEY" \
+                curl -s --connect-timeout 10 -X DELETE -H "Authorization: Bearer $TAILSCALE_API_KEY" \
                     "https://api.tailscale.com/api/v2/device/$id"
             done
         else

@@ -89,7 +89,7 @@ if [[ "$TERM_PROGRAM" != "vscode" ]]; then
   
   # Handle proxy setup based on network
   if [[ "$WIFI_NAME" = "PASSAWIT's Z Fold7" ]]; then
-        (curl --silent --socks5 "$SOCKS_ROUTER_IP:$SOCKS_ROUTER_PROXY_PORT" http://www.google.com && set-socks-proxy) &!
+        (curl --silent --connect-timeout 5 --socks5 "$SOCKS_ROUTER_IP:$SOCKS_ROUTER_PROXY_PORT" http://www.google.com && set-socks-proxy) &!
     else
         unset-socks-proxy &!
     fi
