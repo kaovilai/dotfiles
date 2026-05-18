@@ -155,6 +155,7 @@ ghfc() {
 }
 alias ghfork='ghfc'
 alias pr-view='gh pr view --web'
+alias pr-number='gh pr view --json number --jq .number'
 alias pr-comment='gh pr comment --body'
 alias pr-label='gh pr label --add'
 alias pr-unlabel='gh pr label --remove'
