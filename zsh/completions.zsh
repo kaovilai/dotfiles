@@ -214,7 +214,7 @@ zsh_completion_cache_status() {
   echo "ZSH completion cache directory: $ZSH_COMPLETION_CACHE_DIR"
   echo "Cache files:"
   local file
-  for file in $ZSH_COMPLETION_CACHE_DIR/_*; do
+  for file in "$ZSH_COMPLETION_CACHE_DIR"/_*; do
     if [[ -f "$file" ]]; then
       local modified size
       modified=$(stat -f "%Sm" -t "%Y-%m-%d %H:%M:%S" "$file")
@@ -228,6 +228,6 @@ zsh_completion_cache_status() {
 # Command to clear the completion cache
 zsh_completion_cache_clear() {
   echo "Clearing ZSH completion cache..."
-  rm -f $ZSH_COMPLETION_CACHE_DIR/_*
+  rm -f "$ZSH_COMPLETION_CACHE_DIR"/_*
   echo "Cache cleared. Restart your shell to regenerate completions."
 }
