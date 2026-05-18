@@ -26,7 +26,7 @@ cache_file_expired() {
   # Note: `local var=$(cmd) || return` is broken — `local` always returns 0.
   # Declare local first, then assign so the command's exit status is preserved.
   local file_stat
-  file_stat=$(stat -f "%m %Sm" -t "%Y-%m-%d %H:%M:%S" "$file" 2>/dev/null) || return 0
+  file_stat=$(stat -f "%m" "$file" 2>/dev/null || stat -c "%Y" "$file" 2>/dev/null) || return 0
   local file_time=${file_stat%% *}
   local current_time
   current_time=$(date +%s)
@@ -61,7 +61,7 @@ cached_exec() {
   else
     # Generate cache key from command
     local cache_key
-    cache_key=$(echo "$*" | md5)
+    cache_key=$(printf '%s' "$*" | md5 2>/dev/null || printf '%s' "$*" | md5sum 2>/dev/null | awk '{print $1}')
   fi
 
   local cache_file="$ZSH_COMMAND_CACHE_DIR/${cache_key}"
@@ -111,7 +111,7 @@ command_cache_status() {
     for file in "$ZSH_COMMAND_CACHE_DIR"/*; do
       if [[ -f "$file" ]]; then
         local modified size
-        modified=$(stat -f "%Sm" -t "%Y-%m-%d %H:%M:%S" "$file")
+        modified=$(stat -f "%Sm" -t "%Y-%m-%d %H:%M:%S" "$file" 2>/dev/null || stat -c "%y" "$file" 2>/dev/null | cut -d'.' -f1)
         size=$(du -h "$file" | cut -f1)
         local name="${file:t}"
         echo "  $name ($size) - Last updated: $modified"
