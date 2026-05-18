@@ -61,22 +61,21 @@ list-minio-deployments() {
     fi
     echo -e "${BLUE}INFO${NC}: MinIO deployments:"
     
-    if [[ ! -d "$MINIO_DEPLOYMENTS_DIR" ]] || [[ -z "$(ls -A "$MINIO_DEPLOYMENTS_DIR" 2>/dev/null)" ]]; then
+    local -a _config_files=( "$MINIO_DEPLOYMENTS_DIR"/*.json(N) )
+    if [[ ! -d "$MINIO_DEPLOYMENTS_DIR" ]] || [[ ${#_config_files} -eq 0 ]]; then
         echo "  No deployments found"
         return 0
     fi
     
     local name config provider endpoint deployment_status config_file
-    for config_file in "$MINIO_DEPLOYMENTS_DIR"/*.json; do
-        if [[ -f "$config_file" ]]; then
-            name=$(basename "$config_file" .json)
-            config=$(< "$config_file")
-            provider=$(jq -r '.provider // "unknown"' <<< "$config")
-            endpoint=$(jq -r '.endpoint // "unknown"' <<< "$config")
-            deployment_status=$(jq -r '.status // "unknown"' <<< "$config")
-            
-            echo -e "  ${GREEN}$name${NC} [$provider] - $endpoint (${deployment_status})"
-        fi
+    for config_file in "${_config_files[@]}"; do
+        name=$(basename "$config_file" .json)
+        config=$(< "$config_file")
+        provider=$(jq -r '.provider // "unknown"' <<< "$config")
+        endpoint=$(jq -r '.endpoint // "unknown"' <<< "$config")
+        deployment_status=$(jq -r '.status // "unknown"' <<< "$config")
+        
+        echo -e "  ${GREEN}$name${NC} [$provider] - $endpoint (${deployment_status})"
     done
 }
 
