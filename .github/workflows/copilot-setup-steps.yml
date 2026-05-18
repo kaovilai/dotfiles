@@ -1,0 +1,28 @@
+name: "Copilot Setup Steps"
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - .github/workflows/copilot-setup-steps.yml
+
+jobs:
+  copilot-setup-steps:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+      - name: Install zsh
+        run: |
+          if ! command -v zsh >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y zsh
+          fi
+      - name: Install gh-aw extension
+        uses: github/gh-aw-actions/setup-cli@8a9a52673cb8f97ebb43b344618af2d6f2c9ac7f # v0.74.3
+        with:
+          version: v0.74.3
