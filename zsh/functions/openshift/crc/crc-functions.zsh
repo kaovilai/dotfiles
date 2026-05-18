@@ -1,4 +1,12 @@
 crc-start-version(){
+    if ! command -v crc &>/dev/null; then
+        echo "❌ crc not found. Install it from: https://github.com/crc-org/crc/releases"
+        return 1
+    fi
+    if ! command -v jq &>/dev/null; then
+        echo "❌ jq not found. Install it with: brew install jq"
+        return 1
+    fi
     # check X.Y.Z version is specified
     if [ -z "$1" ]; then
         echo "No version supplied, try 2.43.0 or check https://github.com/crc-org/crc/releases"
