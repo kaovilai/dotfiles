@@ -4,6 +4,10 @@ alias ibmcloud-vpcid='ibmcloud ks vpcs | grep -e "^tiger-vpc " | sed "s/  */ /g"
 alias ibmcloud-vpc-gen2zone='echo us-east-1'
 alias ibmcloud-subnetid='ibmcloud ks subnets --provider vpc-gen2 --vpc-id $(ibmcloud-vpcid) --zone $(ibmcloud-vpc-gen2zone) --output json | jq --raw-output ".[0].id"'
 ibmcloud-oc-latestversion() {
+    if ! command -v jq &>/dev/null; then
+        echo "❌ jq not found. Install it with: brew install jq"
+        return 1
+    fi
     local versions_json
     versions_json=$(ibmcloud oc versions --show-version openshift --output json) || return 1
     jq -r '.openshift[-1] | "\(.major).\(.minor).\(.patch)_openshift"' <<< "$versions_json"
