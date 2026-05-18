@@ -10,13 +10,6 @@ permissions:
   issues: read
   pull-requests: read
   actions: read
-pre-agent-steps:
-  - name: Ensure zsh is available
-    run: |
-      if ! command -v zsh >/dev/null 2>&1; then
-        sudo apt-get update
-        sudo apt-get install -y zsh
-      fi
 tools:
   edit:
   bash: ["zsh -n", "zsh -c", "git diff", "git log", "git status", "git merge-tree", "git merge-base", "git branch", "git checkout", "git stash", "find", "grep", "cat", "ls", "wc", "head", "tail", "sort", "diff"]
