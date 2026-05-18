@@ -72,7 +72,7 @@ check-for-existing-clusters() {
     fi
 
     # Find AWS and GCP cluster directories
-    if [ -d "$OCP_MANIFESTS_DIR" ]; then
+    if [[ -d "$OCP_MANIFESTS_DIR" ]]; then
         for dir in $(find $OCP_MANIFESTS_DIR -type d -name "auth" 2>/dev/null | sort); do
             if [[ -f "$dir/kubeconfig" ]]; then
                 local cluster_dir=$(dirname "$dir")
@@ -192,7 +192,7 @@ check-for-existing-clusters() {
     fi
     
     # Check local clusters
-    if [ -d "$HOME/clusters" ]; then
+    if [[ -d "$HOME/clusters" ]]; then
         for dir in $(find $HOME/clusters -type d -name "auth" 2>/dev/null | sort); do
             if [[ -f "$dir/kubeconfig" ]]; then
                 local cluster_dir=$(dirname "$dir")
@@ -328,28 +328,28 @@ check-for-existing-clusters() {
                 local dir_name=$(basename "$dir")
                 if [[ "$dir" == "$OCP_MANIFESTS_DIR/-aws-arm64" ]]; then
                     echo "Destroying legacy AWS ARM64 cluster: $dir_name"
-                    if [ -d "$dir" ]; then
+                    if [[ -d "$dir" ]]; then
                         delete-ocp-aws-arm64 "cleanup-legacy"
                     else
                         echo "WARNING: Directory $dir does not exist, skipping deletion"
                     fi
                 elif [[ "$dir" == "$OCP_MANIFESTS_DIR/-aws-amd64" ]]; then
                     echo "Destroying legacy AWS AMD64 cluster: $dir_name"
-                    if [ -d "$dir" ]; then
+                    if [[ -d "$dir" ]]; then
                         delete-ocp-aws-amd64 "cleanup-legacy"
                     else
                         echo "WARNING: Directory $dir does not exist, skipping deletion"
                     fi
                 elif [[ "$dir" == "$OCP_MANIFESTS_DIR/-gcp-wif" ]]; then
                     echo "Destroying legacy GCP-WIF cluster: $dir_name"
-                    if [ -d "$dir" ]; then
+                    if [[ -d "$dir" ]]; then
                         delete-ocp-gcp-wif "cleanup-legacy"
                     else
                         echo "WARNING: Directory $dir does not exist, skipping deletion"
                     fi
                 elif [[ "$dir" == "$OCP_MANIFESTS_DIR/-azure-sts" ]]; then
                     echo "Destroying legacy Azure STS cluster: $dir_name"
-                    if [ -d "$dir" ]; then
+                    if [[ -d "$dir" ]]; then
                         delete-ocp-azure-sts "cleanup-legacy"
                     else
                         echo "WARNING: Directory $dir does not exist, skipping deletion"
@@ -357,7 +357,7 @@ check-for-existing-clusters() {
                 elif [[ "$dir" == *"-aws-"* ]]; then
                     echo "Destroying AWS cluster: $dir_name"
                     # Ensure the directory exists before attempting to delete
-                    if [ -d "$dir" ]; then
+                    if [[ -d "$dir" ]]; then
                         delete-ocp-aws-dir "$dir"
                     else
                         echo "WARNING: Directory $dir does not exist, skipping deletion"
@@ -365,7 +365,7 @@ check-for-existing-clusters() {
                 elif [[ "$dir" == *"-gcp-wif"* ]]; then
                     echo "Destroying GCP-WIF cluster: $dir_name"
                     # Ensure the directory exists before attempting to delete
-                    if [ -d "$dir" ]; then
+                    if [[ -d "$dir" ]]; then
                         delete-ocp-gcp-wif-dir "$dir"
                     else
                         echo "WARNING: Directory $dir does not exist, skipping deletion"
@@ -373,7 +373,7 @@ check-for-existing-clusters() {
                 elif [[ "$dir" == *"-azure-sts"* ]]; then
                     echo "Destroying Azure STS cluster: $dir_name"
                     # Ensure the directory exists before attempting to delete
-                    if [ -d "$dir" ]; then
+                    if [[ -d "$dir" ]]; then
                         delete-ocp-azure-sts-dir "$dir"
                     else
                         echo "WARNING: Directory $dir does not exist, skipping deletion"

@@ -49,7 +49,7 @@ list-ocp-clusters() {
     echo ""
     
     # Check AWS, GCP, Azure, and ROSA cluster directories
-    if [ -d "$OCP_MANIFESTS_DIR" ]; then
+    if [[ -d "$OCP_MANIFESTS_DIR" ]]; then
         echo "Cloud Provider Clusters:"
         local count=0
         
@@ -75,7 +75,7 @@ list-ocp-clusters() {
                 
                 count=$((count+1))
                 
-                if [ "$show_full" = true ]; then
+                if [[ "$show_full" == true ]]; then
                     echo "$count. $cluster_name ($cluster_type): $dir/kubeconfig"
                 else
                     echo "$count. $cluster_name ($cluster_type)"
@@ -89,7 +89,7 @@ list-ocp-clusters() {
                 local cluster_name=$(basename "$dir")
                 count=$((count+1))
                 
-                if [ "$show_full" = true ]; then
+                if [[ "$show_full" == true ]]; then
                     echo "$count. $cluster_name (ROSA): $dir/cluster-admin.txt [No kubeconfig - use use-rosa-sts to connect]"
                 else
                     echo "$count. $cluster_name (ROSA) [No kubeconfig - use use-rosa-sts to connect]"
@@ -97,14 +97,14 @@ list-ocp-clusters() {
             fi
         done < <(find "$OCP_MANIFESTS_DIR" -type d -name "*-rosa-sts-*" -print0 2>/dev/null | sort -z)
         
-        if [ $count -eq 0 ]; then
+        if [[ $count -eq 0 ]]; then
             echo "   No cloud provider clusters found"
         fi
         echo ""
     fi
     
     # Check local clusters directory
-    if [ -d "$HOME/clusters" ]; then
+    if [[ -d "$HOME/clusters" ]]; then
         echo "Local Clusters:"
         local count=0
         
@@ -115,7 +115,7 @@ list-ocp-clusters() {
                 local cluster_name=$(basename "$cluster_dir")
                 count=$((count+1))
                 
-                if [ "$show_full" = true ]; then
+                if [[ "$show_full" == true ]]; then
                     echo "$count. $cluster_name: $dir/kubeconfig"
                 else
                     echo "$count. $cluster_name"
@@ -123,14 +123,14 @@ list-ocp-clusters() {
             fi
         done < <(find "$HOME/clusters" -type d -name "auth" -print0 2>/dev/null | sort -z)
         
-        if [ $count -eq 0 ]; then
+        if [[ $count -eq 0 ]]; then
             echo "   No local clusters found"
         fi
         echo ""
     fi
     
     # Check CRC
-    if [ -f "$HOME/.crc/machines/crc/kubeconfig" ]; then
+    if [[ -f "$HOME/.crc/machines/crc/kubeconfig" ]]; then
         echo "CodeReady Containers:"
 
         # Check CRC status if crc command is available
@@ -139,14 +139,14 @@ list-ocp-clusters() {
             crc_status=$(crc status 2>&1 | grep "CRC VM:" | awk '{print $3}')
         fi
 
-        if [ "$show_full" = true ]; then
-            if [ -n "$crc_status" ]; then
+        if [[ "$show_full" == true ]]; then
+            if [[ -n "$crc_status" ]]; then
                 echo "1. crc [$crc_status]: $HOME/.crc/machines/crc/kubeconfig"
             else
                 echo "1. crc: $HOME/.crc/machines/crc/kubeconfig"
             fi
         else
-            if [ -n "$crc_status" ]; then
+            if [[ -n "$crc_status" ]]; then
                 echo "1. crc [$crc_status]"
             else
                 echo "1. crc"
@@ -197,7 +197,7 @@ use-ocp-cluster() {
     local cluster_names=()
     
     # Find all cloud provider clusters
-    if [ -d "$OCP_MANIFESTS_DIR" ]; then
+    if [[ -d "$OCP_MANIFESTS_DIR" ]]; then
         while IFS= read -r -d '' dir; do
             if [[ -f "$dir/kubeconfig" ]]; then
                 local cluster_dir=$(dirname "$dir")
@@ -241,7 +241,7 @@ use-ocp-cluster() {
     fi
     
     # Find all local clusters
-    if [ -d "$HOME/clusters" ]; then
+    if [[ -d "$HOME/clusters" ]]; then
         while IFS= read -r -d '' dir; do
             if [[ -f "$dir/kubeconfig" ]]; then
                 local cluster_dir=$(dirname "$dir")
