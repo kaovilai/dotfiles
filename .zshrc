@@ -19,7 +19,8 @@ source ~/git/dotfiles/zsh/znap.zsh
 [[ -f ~/git/dotfiles/zsh/znap.zsh ]] || sh -c "mkdir -p ~/git && git clone --depth 1 -- \
     git@github.com:kaovilai/dotfiles.git ~/git/dotfiles"
 function timezsh() {
-  shell=${1-$SHELL}
+  local shell=${1-$SHELL}
+  local i
   for i in $(seq 1 10); do /usr/bin/time $shell -i -c exit; done;
 }
 
