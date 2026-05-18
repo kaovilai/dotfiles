@@ -159,6 +159,7 @@ git-worktree-remove() {
     if ! git worktree remove "$wt_path"; then
       echo ""
       echo -n "Force remove $wt_path? (y/N) "
+      local confirm
       read -r confirm
       if [[ "$confirm" =~ ^[Yy]$ ]]; then
         git worktree remove --force "$wt_path"
