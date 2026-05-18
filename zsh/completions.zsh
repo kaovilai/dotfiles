@@ -7,7 +7,7 @@ fi
 # -- PHASE 1: Essential completions (foreground) --
 
 # VS Code shell integration (if we're running in VS Code)
-[[ "$TERM_PROGRAM" == "vscode" ]] && . "$(code --locate-shell-integration-path zsh)"
+[[ "$TERM_PROGRAM" == "vscode" ]] && command -v code &>/dev/null && . "$(code --locate-shell-integration-path zsh)"
 
 # AWS uses its own completer mechanism (critical for AWS workflows)
 if has_command aws_completer; then
