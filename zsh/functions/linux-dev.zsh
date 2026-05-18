@@ -294,7 +294,7 @@ ec2-linux() {
     echo ""
 
     ssh $=ssh_opts -i "$key_path" "ec2-user@${public_ip}" \
-        -t "cd $remote_dir && exec bash --login"
+        -t "cd \"$remote_dir\" && exec bash --login"
 
     # --- Sync back changes ---
     echo -e "${BLUE}INFO${NC}: Syncing changes back from instance..."
@@ -486,7 +486,7 @@ az-linux() {
     echo ""
 
     ssh $=ssh_opts -i "$key_path" "azureuser@${public_ip}" \
-        -t "cd $remote_dir && exec bash --login"
+        -t "cd \"$remote_dir\" && exec bash --login"
 
     # --- Sync back changes ---
     echo -e "${BLUE}INFO${NC}: Syncing changes back from VM..."
@@ -718,7 +718,7 @@ gcp-linux() {
     echo ""
 
     ssh $=ssh_opts -i "$key_path" "${ssh_user}@${public_ip}" \
-        -t "cd $remote_dir && exec bash --login"
+        -t "cd \"$remote_dir\" && exec bash --login"
 
     # --- Sync back changes ---
     echo -e "${BLUE}INFO${NC}: Syncing changes back from instance..."
