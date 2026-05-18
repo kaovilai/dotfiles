@@ -30,6 +30,10 @@ function ln-claude-home() {
     echo "Created symlink: $dst → $src"
 }
 computer-use-claude() {
+    if ! command -v docker &>/dev/null; then
+        echo "❌ docker not found. Install Docker Desktop from https://www.docker.com/products/docker-desktop/"
+        return 1
+    fi
     docker run \
         -e "ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}" \
         -v "${HOME}/.anthropic:/home/computeruse/.anthropic" \
