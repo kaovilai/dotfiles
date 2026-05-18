@@ -66,7 +66,7 @@ list-minio-deployments() {
         return 0
     fi
     
-    local name config provider endpoint deployment_status
+    local name config provider endpoint deployment_status config_file
     for config_file in "$MINIO_DEPLOYMENTS_DIR"/*.json; do
         if [[ -f "$config_file" ]]; then
             name=$(basename "$config_file" .json)
