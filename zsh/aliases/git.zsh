@@ -53,13 +53,13 @@ alias oco-confirm-signoff-push-force='(oco -y || (open -a Ollama && oco -y)) && 
 # Branch rename function for master to oadp-dev
 git-rename-master-to-oadp-dev() {
   echo "Renaming master branch to oadp-dev..."
-  git branch -m master oadp-dev
+  git branch -m master oadp-dev || { echo "Error: Failed to rename branch master to oadp-dev" >&2; return 1; }
   echo "Fetching origin..."
-  git fetch origin
+  git fetch origin || { echo "Error: Failed to fetch from origin" >&2; return 1; }
   echo "Setting upstream branch..."
-  git branch -u origin/oadp-dev oadp-dev
+  git branch -u origin/oadp-dev oadp-dev || { echo "Error: Failed to set upstream branch" >&2; return 1; }
   echo "Setting remote HEAD..."
-  git remote set-head origin -a
+  git remote set-head origin -a || { echo "Error: Failed to set remote HEAD" >&2; return 1; }
   echo "Done! Your master branch has been renamed to oadp-dev"
 }
 alias grm2oadp='git-rename-master-to-oadp-dev'
