@@ -15,7 +15,7 @@ golangci-lint-with-retry() {
     if output=$(golangci-lint run --fix 2>&1); then
       echo "$output"
       return 0
-    elif echo "$output" | grep -q "parallel golangci-lint is running"; then
+    elif grep -q "parallel golangci-lint is running" <<< "$output"; then
       echo "Attempt $attempt/$max_attempts: Waiting for parallel golangci-lint to finish..."
       sleep 1
       ((attempt++))
