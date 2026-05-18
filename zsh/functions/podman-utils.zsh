@@ -20,7 +20,7 @@ check-qemu-stuck() {
     fi
 
     # Get QEMU processes — split SSH and grep so SSH failures are explicit
-    local all_procs
+    local all_procs line
     all_procs=$(podman machine ssh -- 'ps -eo pid,ppid,etime,stat,wchan:30,cmd 2>/dev/null') || {
         echo "❌ Failed to retrieve process list from podman machine"
         return 1
@@ -144,7 +144,7 @@ kill-stuck-qemu() {
     }
 
     # Extract PIDs from selection
-    local selected_pids
+    local selected_pids pid
     selected_pids=$(awk -F'PID: ' '{print $2}' <<< "$selected" | awk '{print $1}')
 
     echo
