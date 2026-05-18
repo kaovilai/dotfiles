@@ -191,7 +191,7 @@ create-minio-aws() {
     
     # SSH port (22) - restrict to your IP if possible
     local my_ip
-    my_ip=$(curl -s ifconfig.me)
+    my_ip=$(curl -s --connect-timeout 5 ifconfig.me)
     if [[ -n "$my_ip" ]]; then
         aws ec2 authorize-security-group-ingress \
             --region "$region" \
