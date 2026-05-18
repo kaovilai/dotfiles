@@ -62,6 +62,7 @@ ec2-linux() {
     done
 
     # Validate tools
+    local cmd
     for cmd in aws jq rsync ssh ssh-keygen; do
         if ! command -v "$cmd" &>/dev/null; then
             echo -e "${RED}ERROR${NC}: $cmd is required but not found" >&2
@@ -110,6 +111,7 @@ ec2-linux() {
         tmp_key_created=true
     else
         # Look for key in common locations
+        local candidate
         for candidate in "$HOME/.ssh/${key_name}.pem" "$HOME/.ssh/${key_name}" "$HOME/${key_name}.pem"; do
             if [[ -f "$candidate" ]]; then
                 key_path="$candidate"
@@ -347,6 +349,7 @@ az-linux() {
     done
 
     # Validate tools
+    local cmd
     for cmd in az jq rsync ssh ssh-keygen; do
         if ! command -v "$cmd" &>/dev/null; then
             echo -e "${RED}ERROR${NC}: $cmd is required but not found" >&2
@@ -541,6 +544,7 @@ gcp-linux() {
     done
 
     # Validate tools
+    local cmd
     for cmd in gcloud jq rsync ssh ssh-keygen; do
         if ! command -v "$cmd" &>/dev/null; then
             echo -e "${RED}ERROR${NC}: $cmd is required but not found" >&2
