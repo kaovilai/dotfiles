@@ -21,7 +21,7 @@ source ~/git/dotfiles/zsh/znap.zsh
 function timezsh() {
   local shell=${1-$SHELL}
   local i
-  for i in $(seq 1 10); do /usr/bin/time $shell -i -c exit; done;
+  for i in {1..10}; do /usr/bin/time "$shell" -i -c exit; done;
 }
 
 # Don't put secrets here, put them in ~/secrets.zsh
