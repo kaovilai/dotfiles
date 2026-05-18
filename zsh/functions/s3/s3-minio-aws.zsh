@@ -124,6 +124,12 @@ create-minio-aws() {
         return 1
     fi
 
+    # Check curl availability
+    if ! command -v curl &>/dev/null; then
+        echo -e "${RED}ERROR${NC}: curl not found. Install it with: brew install curl"
+        return 1
+    fi
+
     # Check AWS credentials
     if ! aws sts get-caller-identity &> /dev/null; then
         echo -e "${RED}ERROR${NC}: AWS credentials not configured or invalid"

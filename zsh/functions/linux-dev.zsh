@@ -63,7 +63,7 @@ ec2-linux() {
 
     # Validate tools
     local cmd
-    for cmd in aws jq rsync ssh ssh-keygen; do
+    for cmd in aws curl jq rsync ssh ssh-keygen; do
         if ! command -v "$cmd" &>/dev/null; then
             echo -e "${RED}ERROR${NC}: $cmd is required but not found" >&2
             return 1
@@ -350,7 +350,7 @@ az-linux() {
 
     # Validate tools
     local cmd
-    for cmd in az jq rsync ssh ssh-keygen; do
+    for cmd in az curl jq rsync ssh ssh-keygen; do
         if ! command -v "$cmd" &>/dev/null; then
             echo -e "${RED}ERROR${NC}: $cmd is required but not found" >&2
             return 1
@@ -545,7 +545,7 @@ gcp-linux() {
 
     # Validate tools
     local cmd
-    for cmd in gcloud jq rsync ssh ssh-keygen; do
+    for cmd in gcloud curl jq rsync ssh ssh-keygen; do
         if ! command -v "$cmd" &>/dev/null; then
             echo -e "${RED}ERROR${NC}: $cmd is required but not found" >&2
             return 1
