@@ -12,7 +12,7 @@ permissions:
   actions: read
 tools:
   edit:
-  bash: ["zsh -n", "zsh -c", "git diff", "git log", "git status", "git merge-tree", "git merge-base", "git branch", "git checkout", "git stash", "find", "grep", "cat", "ls", "wc", "head", "tail", "sort", "diff"]
+  bash: ["zsh -n", "zsh -c", "cd", "echo", "git diff", "git log", "git status", "git merge-tree", "git merge-base", "git branch", "git checkout", "git stash", "find", "grep", "cat", "ls", "wc", "head", "tail", "sort", "diff"]
   github:
     toolsets: [repos, issues, pull_requests]
 safe-outputs:
@@ -83,7 +83,7 @@ Bundle all fixes of the same category into a single branch and PR:
 
 1. Create one branch (e.g., `fix/dotfiles-<category-slug>`)
 2. Apply all fixes of the chosen category across all affected files
-3. Run `zsh -n` on each modified file to verify syntax when `zsh` is available on the runner
+3. Run `zsh -n <file>` on each modified file to verify syntax
 4. Use `git merge-tree` and `git merge-base` to verify the branch merges cleanly against `main` and against each open PR branch
 5. **If the branch merges cleanly**: Create ONE PR containing all fixes
 6. **If it would NOT merge cleanly**: Note which open PR(s) conflict and why
@@ -102,8 +102,7 @@ Only create an issue when a PR could NOT be created (conflict case):
 
 - **One category per PR** — bundle all fixes of the same type (e.g., all missing `command -v` guards) into a single PR
 - **Never modify existing behavior** — only add guards, safety checks, or new helpers
-- **Always validate ZSH syntax** with `zsh -n` before proposing
-- **Do not attempt package installation** in the agent sandbox; if `zsh` is unavailable, call `noop` explaining that syntax validation could not be performed on that runner
+- **Always validate ZSH syntax** with `zsh -n <file>` on each modified file before proposing
 - **Check for duplicates first** — search issues AND PRs before creating anything
 - **Prefer the smallest possible change** — a 1-3 line fix is ideal
 - **Do NOT create an issue when a PR already exists for the same improvement**
