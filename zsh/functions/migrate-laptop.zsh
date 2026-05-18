@@ -523,20 +523,6 @@ verify-migration() {
     local _verify_checks_passed=0
     local _verify_checks_total=0
     
-    # Check function
-    check() {
-        local name="$1"
-        local command="$2"
-        ((_verify_checks_total++))
-        
-        if eval "$command" >/dev/null 2>&1; then
-            success "$name"
-            ((_verify_checks_passed++))
-        else
-            error "$name"
-        fi
-    }
-    
     # Run checks
     _verify_check "Homebrew" "command_exists brew"
     _verify_check "Git" "command_exists git"
