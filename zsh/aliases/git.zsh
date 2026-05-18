@@ -134,7 +134,7 @@ git-worktree-remove() {
 
   local selected
   if command -v fzf >/dev/null 2>&1; then
-    selected=$(echo "$removable" | fzf --multi --height 40% --reverse --header "Select worktrees to remove (Tab to multi-select, Enter to confirm)")
+    selected=$(fzf --multi --height 40% --reverse --header "Select worktrees to remove (Tab to multi-select, Enter to confirm)" <<< "$removable")
   else
     echo "Select a worktree to remove (or Ctrl+C to cancel):"
     local wt_lines=("${(@f)removable}")
@@ -199,7 +199,7 @@ pr-me() {
   if command -v fzf >/dev/null 2>&1; then
     # Use fzf for interactive selection with arrow keys
     local selected
-    selected=$(echo "$pr_list" | fzf --height 40% --reverse --header "Select a PR to checkout (or press Ctrl+C to cancel)")
+    selected=$(fzf --height 40% --reverse --header "Select a PR to checkout (or press Ctrl+C to cancel)" <<< "$pr_list")
     
     # Extract PR number from selection (first column)
     if [[ -n "$selected" ]]; then
