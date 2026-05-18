@@ -50,6 +50,7 @@ install_packages_manually() {
         "curl"
     )
     
+    local tool
     for tool in "${essential_tools[@]}"; do
         if brew list "$tool" &>/dev/null; then
             echo "  ${GREEN}✓${NC} $tool already installed"
@@ -160,7 +161,7 @@ migrate-to-new-laptop() {
         ~/.ssh
         ~/.config
     )
-    
+    local dir
     for dir in "${dirs[@]}"; do
         if [[ ! -d "$dir" ]]; then
             mkdir -p "$dir" || { error "Failed to create directory $dir"; return 1; }
@@ -256,7 +257,7 @@ EOF
             "redhat.vscode-yaml"
             "ms-kubernetes-tools.vscode-kubernetes-tools"
         )
-        
+        local ext
         for ext in "${vscode_extensions[@]}"; do
             code --install-extension "$ext" || warning "Failed to install $ext"
         done
@@ -580,7 +581,7 @@ backup-before-migration() {
         ~/Documents
         ~/Desktop
     )
-    
+    local item
     for item in "${backup_items[@]}"; do
         if [[ -e "$item" ]]; then
             progress "Backing up $item..."
