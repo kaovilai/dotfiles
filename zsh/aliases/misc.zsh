@@ -29,14 +29,16 @@ function ln-claude-home() {
     ln -s "$src" "$dst" || { echo "❌ Failed to create symlink: $dst → $src"; return 1; }
     echo "Created symlink: $dst → $src"
 }
-alias computer-use-claude='docker run \
-    -e ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY \
-    -v $HOME/.anthropic:/home/computeruse/.anthropic \
-    -p 5900:5900 \
-    -p 8501:8501 \
-    -p 6080:6080 \
-    -p 8080:8080 \
-    -it ghcr.io/anthropics/anthropic-quickstarts:computer-use-demo-latest'
+computer-use-claude() {
+    docker run \
+        -e "ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}" \
+        -v "${HOME}/.anthropic:/home/computeruse/.anthropic" \
+        -p 5900:5900 \
+        -p 8501:8501 \
+        -p 6080:6080 \
+        -p 8080:8080 \
+        -it ghcr.io/anthropics/anthropic-quickstarts:computer-use-demo-latest
+}
 alias activepieces-start='podman compose -f ~/OneDrive/activepieces/docker-compose.activepiecestailscale.yml up -d'
 alias activepieces-stop='podman compose -f ~/OneDrive/activepieces/docker-compose.activepiecestailscale.yml down'
 activepieces-restart() {
