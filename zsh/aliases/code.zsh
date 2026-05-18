@@ -25,7 +25,7 @@ cg() {
   fi
   local dirs
   dirs=$(print -l ~/git/*(N/:t) | fzf --multi --prompt="~/git/ > " --preview 'git -C ~/git/{} status -sb 2>/dev/null || echo "Not a git repo"') || return
-  echo "$dirs" | while IFS= read -r d; do
+  while IFS= read -r d; do
     code ~/git/"$d" </dev/null
-  done
+  done <<< "$dirs"
 }

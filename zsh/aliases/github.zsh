@@ -399,11 +399,11 @@ review-prs() {
     return 0
   }
 
-  echo "$selected" | while IFS= read -r label; do
+  while IFS= read -r label; do
     repo="${label%#*}"
     pr_num="${label#*#}"
     echo "Approving $label..."
     gh pr review "$pr_num" --repo "$repo" --approve --body "$comment"
-  done
+  done <<< "$selected"
   echo "Done."
 }
