@@ -106,7 +106,7 @@ set-dns-servers() {
     # Set IPv4 DNS servers
     if [[ -n "$ipv4_servers" ]]; then
         echo "Setting IPv4 DNS servers for $service: $ipv4_servers"
-        if sudo networksetup -setdnsservers "$service" $ipv4_servers; then
+        if sudo networksetup -setdnsservers "$service" ${=ipv4_servers}; then
             echo "✓ IPv4 DNS servers set successfully"
         else
             echo "✗ Failed to set IPv4 DNS servers"
