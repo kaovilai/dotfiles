@@ -208,6 +208,10 @@ migrate-to-new-laptop() {
 export GITHUB_TOKEN=""
 export ANTHROPIC_API_KEY=""
 
+# Google Vertex AI (alternative to ANTHROPIC_API_KEY; preferred when set)
+export CLOUD_ML_REGION=""
+export ANTHROPIC_VERTEX_PROJECT_ID=""
+
 # Network Configuration
 export TF_NETWORK_NAME=""
 
