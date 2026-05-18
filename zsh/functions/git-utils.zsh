@@ -24,7 +24,7 @@ cherrypick-pr-to-branch() {
     local BRANCH=$2
     local NEW_BRANCH=$3
     echo "Cherry-picking PR $PR_NUMBER to branch $BRANCH"
-    git checkout -b "$NEW_BRANCH" "$BRANCH" || (git checkout "$NEW_BRANCH" && git reset --hard "$BRANCH")
+    git checkout -b "$NEW_BRANCH" "$BRANCH" || (git checkout "$NEW_BRANCH" && git reset --hard "$BRANCH") || return 1
     cherrypick-pr "$PR_NUMBER"
 }
 
