@@ -306,6 +306,9 @@ Create `~/secrets.zsh` with your environment-specific variables:
 # Example structure (DO NOT commit actual values)
 export GITHUB_TOKEN="your-token"
 export ANTHROPIC_API_KEY="your-key"
+# Or use Google Vertex AI instead (preferred when set):
+# export CLOUD_ML_REGION="us-east5"
+# export ANTHROPIC_VERTEX_PROJECT_ID="your-project-id"
 export TF_NETWORK_NAME="your-network"
 export TAILSCALE_API_KEY="your-key"
 export TAILSCALE_TAILNET="your-tailnet"

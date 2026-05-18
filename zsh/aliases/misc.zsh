@@ -34,14 +34,34 @@ computer-use-claude() {
         echo "❌ docker not found. Install Docker Desktop from https://www.docker.com/products/docker-desktop/"
         return 1
     fi
-    docker run \
-        -e "ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}" \
-        -v "${HOME}/.anthropic:/home/computeruse/.anthropic" \
-        -p 5900:5900 \
-        -p 8501:8501 \
-        -p 6080:6080 \
-        -p 8080:8080 \
-        -it ghcr.io/anthropics/anthropic-quickstarts:computer-use-demo-latest
+    if [[ -n "${CLOUD_ML_REGION}" ]] && [[ -n "${ANTHROPIC_VERTEX_PROJECT_ID}" ]]; then
+        echo "Using Google Vertex AI (project: ${ANTHROPIC_VERTEX_PROJECT_ID}, region: ${CLOUD_ML_REGION})"
+        docker run \
+            -e API_PROVIDER=vertex \
+            -e CLOUD_ML_REGION="${CLOUD_ML_REGION}" \
+            -e ANTHROPIC_VERTEX_PROJECT_ID="${ANTHROPIC_VERTEX_PROJECT_ID}" \
+            -v "${HOME}/.config/gcloud/application_default_credentials.json:/home/computeruse/.config/gcloud/application_default_credentials.json:ro" \
+            -v "${HOME}/.anthropic:/home/computeruse/.anthropic" \
+            -p 5900:5900 \
+            -p 8501:8501 \
+            -p 6080:6080 \
+            -p 8080:8080 \
+            -it ghcr.io/anthropics/anthropic-quickstarts:computer-use-demo-latest
+    else
+        if [[ -z "${ANTHROPIC_API_KEY}" ]]; then
+            echo "❌ ANTHROPIC_API_KEY is not set. Set it or configure CLOUD_ML_REGION and ANTHROPIC_VERTEX_PROJECT_ID to use Vertex AI."
+            return 1
+        fi
+        echo "Using Anthropic API (set CLOUD_ML_REGION and ANTHROPIC_VERTEX_PROJECT_ID to use Vertex AI)"
+        docker run \
+            -e "ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}" \
+            -v "${HOME}/.anthropic:/home/computeruse/.anthropic" \
+            -p 5900:5900 \
+            -p 8501:8501 \
+            -p 6080:6080 \
+            -p 8080:8080 \
+            -it ghcr.io/anthropics/anthropic-quickstarts:computer-use-demo-latest
+    fi
 }
 alias activepieces-start='podman compose -f ~/OneDrive/activepieces/docker-compose.activepiecestailscale.yml up -d'
 alias activepieces-stop='podman compose -f ~/OneDrive/activepieces/docker-compose.activepiecestailscale.yml down'
