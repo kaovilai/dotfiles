@@ -39,8 +39,8 @@ export HISTSIZE=100000 # number of commands stored in history
 export HISTFILESIZE=200000 # bytes in history file
 source ~/git/dotfiles/zsh/colors.zsh
 # https://docs.anthropic.com/en/docs/claude-code/settings#environment-variables:~:text=running%20bash%20commands-,BASH_MAX_TIMEOUT_MS,-Maximum%20timeout%20the
-BASH_MAX_TIMEOUT_MS=600000
-BASH_DEFAULT_TIMEOUT_MS=480000
+export BASH_MAX_TIMEOUT_MS=600000
+export BASH_DEFAULT_TIMEOUT_MS=480000
 
 # Essential exports and aliases for immediate shell usage
 alias edit-dotfiles='code ~/git/dotfiles/'
