@@ -20,9 +20,7 @@ save-cluster-login() {
 
     # Execute the oc login command with the specified kubeconfig
     echo "Logging in and saving kubeconfig to: ${kubeconfig_path}"
-    KUBECONFIG="$kubeconfig_path" "$@"
-
-    if [[ $? -eq 0 ]]; then
+    if KUBECONFIG="$kubeconfig_path" "$@"; then
         echo "✓ Successfully saved kubeconfig to: ${kubeconfig_path}"
         echo "To use this cluster, run: export KUBECONFIG='${kubeconfig_path}'"
     else
