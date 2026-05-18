@@ -298,6 +298,7 @@ gh-delete-package-tag() {
   echo ""
   echo "This will delete tag '$tag' from package '$org/$package'"
   echo -n "Are you sure? (y/N) "
+  local confirm
   read -r confirm
 
   if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
