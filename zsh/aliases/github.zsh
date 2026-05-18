@@ -39,9 +39,8 @@ ghcc() {
 
   if ! gh repo clone "$repo_spec" "$target_dir" 2>/dev/null; then
     echo "Repository '$repo_spec' not found."
-    echo -n "Create private repo '$repo_name'? (y/N) "
     local confirm
-    read -r confirm
+    read -r "confirm?Create private repo '$repo_name'? (y/N) "
     if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
       echo "Aborted."
       return 1
@@ -297,9 +296,8 @@ gh-delete-package-tag() {
   echo "Found version ID: $version_id"
   echo ""
   echo "This will delete tag '$tag' from package '$org/$package'"
-  echo -n "Are you sure? (y/N) "
   local confirm
-  read -r confirm
+  read -r "confirm?Are you sure? (y/N) "
 
   if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
     echo "Deletion cancelled"

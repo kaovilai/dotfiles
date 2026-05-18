@@ -722,9 +722,8 @@ delete-minio-aws() {
         echo -e "  Region: $region"
         echo -e "  Endpoint: $endpoint"
         echo -e ""
-        echo -n "Are you sure you want to continue? (yes/no): "
         local confirmation
-        read -r confirmation
+        read -r "confirmation?Are you sure you want to continue? (yes/no): "
         
         if [[ "$confirmation" != "yes" && "$confirmation" != "y" ]]; then
             echo -e "${BLUE}INFO${NC}: Deletion cancelled"
