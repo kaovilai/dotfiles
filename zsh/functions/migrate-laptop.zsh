@@ -287,6 +287,10 @@ EOF
 
 # WiFi credential export/import functions
 export-wifi-credentials() {
+    if [[ "$OSTYPE" != darwin* ]]; then
+        error "export-wifi-credentials is only supported on macOS"
+        return 1
+    fi
     local export_dir="${1:-$HOME/wifi-credentials-export}"
     
     progress "Exporting WiFi credentials..."
@@ -467,6 +471,10 @@ EOF
 
 # Function to import WiFi credentials
 import-wifi-credentials() {
+    if [[ "$OSTYPE" != darwin* ]]; then
+        error "import-wifi-credentials is only supported on macOS"
+        return 1
+    fi
     local import_dir="${1:-$HOME/wifi-credentials-export}"
     
     if [[ ! -d "$import_dir" ]]; then
@@ -488,6 +496,10 @@ import-wifi-credentials() {
 
 # Function to list current WiFi networks
 list-wifi-networks() {
+    if [[ "$OSTYPE" != darwin* ]]; then
+        error "list-wifi-networks is only supported on macOS"
+        return 1
+    fi
     progress "Current WiFi networks:"
     
     # Find WiFi interface
