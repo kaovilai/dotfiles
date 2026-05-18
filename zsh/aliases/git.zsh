@@ -177,6 +177,7 @@ pr-me() {
   # List PRs by the current user and allow interactive selection for checkout
   # Usage: pr-me [worktree|wt]
   # If "worktree" or "wt" is passed as an argument, checkout to a worktree using gwc
+  local pr_list selected pr_number pr_lines pr_display pr_numbers pr_num pr_title line pr_input index branch_name
 
   if ! command -v gh &>/dev/null; then
     echo "❌ gh not found. Install it with: brew install gh"
@@ -184,7 +185,6 @@ pr-me() {
   fi
 
   # Get the list of PRs
-  local pr_list
   pr_list=$(gh pr list --author @me) || { echo "❌ gh pr list failed. Run 'gh auth login' if not authenticated."; return 1; }
   
   if [[ -z "$pr_list" ]]; then
@@ -198,12 +198,11 @@ pr-me() {
   # Check if fzf is available for interactive selection
   if command -v fzf >/dev/null 2>&1; then
     # Use fzf for interactive selection with arrow keys
-    local selected
     selected=$(fzf --height 40% --reverse --header "Select a PR to checkout (or press Ctrl+C to cancel)" <<< "$pr_list")
     
     # Extract PR number from selection (first column)
     if [[ -n "$selected" ]]; then
-      local pr_number="${${selected%% *}#\#}"
+      pr_number="${${selected%% *}#\#}"
       if [[ ! "$pr_number" =~ ^[0-9]+$ ]]; then
         echo "Error: Could not extract valid PR number from selection"
         return 1
@@ -218,7 +217,7 @@ pr-me() {
     echo "Select a PR to checkout (or Ctrl+C to cancel):"
     
     # Parse PR list into an array
-    local pr_lines=("${(@f)pr_list}")
+    pr_lines=("${(@f)pr_list}")
     # Skip the header line
     shift pr_lines
     
@@ -229,9 +228,8 @@ pr-me() {
     fi
     
     # Create arrays for display and PR numbers
-    local pr_display=()
-    local pr_numbers=()
-    local pr_num pr_title line
+    pr_display=()
+    pr_numbers=()
     
     # Parse each line to extract PR number and title
     for line in "${pr_lines[@]}"; do
@@ -243,20 +241,19 @@ pr-me() {
     
     # Allow direct PR number input or menu selection
     echo "Enter PR number directly or select from menu:"
-    local pr_input
     read -r pr_input
     
     # If input is a number, use it directly
     if [[ -n "$pr_input" ]] && [[ "$pr_input" =~ ^[0-9]+$ ]]; then
-      local pr_number=${pr_input/#\#/}
+      pr_number=${pr_input/#\#/}
     else
       # Otherwise show selection menu
       echo "Select a PR:"
       select choice in "${pr_display[@]}"; do
         if [[ -n "$choice" ]]; then
           # Extract PR number from the selection
-          local index=$REPLY
-          local pr_number=${pr_numbers[$index]}
+          index=$REPLY
+          pr_number=${pr_numbers[$index]}
           break
         else
           echo "Invalid selection"
@@ -274,7 +271,6 @@ pr-me() {
   # Check if we should use worktree (accept both "worktree" and "wt")
   if [[ "$1" == "worktree" || "$1" == "wt" ]]; then
     # Get the branch name for this PR
-    local branch_name
     branch_name=$(gh pr view "$pr_number" --json headRefName -q ".headRefName") || { echo "❌ Failed to get branch name for PR #$pr_number"; return 1; }
     if [[ -z "$branch_name" ]]; then
       echo "Failed to get branch name for PR #$pr_number"
