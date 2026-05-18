@@ -252,6 +252,7 @@ get-openshift-install() {
             # Wrong architecture and won't work
             echo "WARN: Found $binary but it's not built for $host_arch architecture" >&2
             echo "WARN: Would you like to re-download the correct $host_arch version? (y/n)" >&2
+            local redownload_choice
             read -r redownload_choice
             if [[ "$redownload_choice" == "y" || "$redownload_choice" == "Y" ]]; then
                 # Remove the incorrect binary and download correct version
@@ -296,6 +297,7 @@ get-openshift-install() {
         echo "ERROR: No openshift-install binary found" >&2
         echo "" >&2
         echo "Would you like to install openshift-install version ${ec_version}? (y/n)" >&2
+        local install_choice
         read -r install_choice
         
         if [[ "$install_choice" == "y" || "$install_choice" == "Y" ]]; then
