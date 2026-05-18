@@ -2,13 +2,17 @@
 # This file is sourced only when not in VS Code to keep terminal startup fast
 
 is-at-home() {
-    ioreg -p IOUSB | grep -q "Plugable USBC-6950U" &&
-    ioreg -p IOUSB | grep -q "TS4" &&
+    local usb_info
+    usb_info=$(ioreg -p IOUSB) &&
+    grep -q "Plugable USBC-6950U" <<< "$usb_info" &&
+    grep -q "TS4" <<< "$usb_info" &&
     networksetup -getnetworkserviceenabled "Thunderbolt Ethernet Slot 2" | grep -q Enabled
 }
 is-displaylink-connected() {
-    system_profiler SPDisplaysDataType | grep -q ARZOPA ||
-    system_profiler SPDisplaysDataType | grep -q TYPE-C
+    local display_info
+    display_info=$(system_profiler SPDisplaysDataType)
+    grep -q "ARZOPA" <<< "$display_info" ||
+    grep -q "TYPE-C" <<< "$display_info"
 }
 restart-displaylink() {
     osascript -e 'quit app "DisplayLink Manager"'
