@@ -127,9 +127,10 @@ migrate-to-new-laptop() {
             local use_brewfile
             read -r "use_brewfile?Install all packages from Brewfile? (y/n): "
             if [[ "$use_brewfile" == "y" ]]; then
-                cd ~/git/dotfiles || { warning "Failed to cd to ~/git/dotfiles"; return 1; }
+                pushd ~/git/dotfiles || { warning "Failed to cd to ~/git/dotfiles"; return 1; }
                 brew bundle || warning "Some packages failed to install"
                 success "Packages installed from Brewfile"
+                popd
             else
                 install_packages_manually
             fi
@@ -475,8 +476,9 @@ import-wifi-credentials() {
     fi
     
     progress "Starting WiFi import..."
-    cd "$import_dir" || { error "Failed to cd into $import_dir"; return 1; }
+    pushd "$import_dir" || { error "Failed to cd into $import_dir"; return 1; }
     ./import-wifi.sh
+    popd
 }
 
 # Function to list current WiFi networks
