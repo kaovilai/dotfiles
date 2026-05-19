@@ -56,7 +56,7 @@ load-minio-config() {
 
 list-minio-deployments() {
     if ! command -v jq &>/dev/null; then
-        echo "❌ jq not found. Install it with: brew install jq"
+        echo "❌ jq not found. Install it with: brew install jq" >&2
         return 1
     fi
     echo -e "${BLUE}INFO${NC}: MinIO deployments:"
@@ -102,7 +102,7 @@ get-minio-connection-info() {
         return 1
     fi
     if ! command -v jq &>/dev/null; then
-        echo "❌ jq not found. Install it with: brew install jq"
+        echo "❌ jq not found. Install it with: brew install jq" >&2
         return 1
     fi
 
@@ -303,7 +303,7 @@ test-minio-connection() {
         return 1
     fi
     if ! command -v jq &>/dev/null; then
-        echo "❌ jq not found. Install it with: brew install jq"
+        echo "❌ jq not found. Install it with: brew install jq" >&2
         return 1
     fi
     
@@ -411,7 +411,7 @@ download-minio-certificate() {
         return 1
     fi
     if ! command -v jq &>/dev/null; then
-        echo "❌ jq not found. Install it with: brew install jq"
+        echo "❌ jq not found. Install it with: brew install jq" >&2
         return 1
     fi
 
@@ -527,7 +527,7 @@ check-minio-docker-status() {
         return 1
     fi
     if ! command -v jq &>/dev/null; then
-        echo "❌ jq not found. Install it with: brew install jq"
+        echo "❌ jq not found. Install it with: brew install jq" >&2
         return 1
     fi
 
@@ -604,7 +604,7 @@ ensure-default-bucket() {
         return 1
     fi
     if ! command -v jq &>/dev/null; then
-        echo "❌ jq not found. Install it with: brew install jq"
+        echo "❌ jq not found. Install it with: brew install jq" >&2
         return 1
     fi
     
