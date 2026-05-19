@@ -18,7 +18,12 @@ logs-velero() {
     echo "❌ oc not found. Install it with: brew install openshift-cli" >&2
     return 1
   fi
-  local ns="${1:-$(oc config view --minify -o jsonpath='{.contexts[0].context.namespace}')}"
+  local ns
+  ns="${1:-$(oc config view --minify -o jsonpath='{.contexts[0].context.namespace}' 2>/dev/null)}"
+  if [[ -z "$ns" ]]; then
+    echo "❌ Could not determine namespace. Pass a namespace as argument or ensure oc context is set." >&2
+    return 1
+  fi
   until oc get deployment/velero -n "$ns" &>/dev/null; do 
     echo "Waiting for velero deployment to exist in namespace $ns..."
     sleep 2
@@ -32,7 +37,12 @@ logs-oadp() {
     echo "❌ oc not found. Install it with: brew install openshift-cli" >&2
     return 1
   fi
-  local ns="${1:-$(oc config view --minify -o jsonpath='{.contexts[0].context.namespace}')}"
+  local ns
+  ns="${1:-$(oc config view --minify -o jsonpath='{.contexts[0].context.namespace}' 2>/dev/null)}"
+  if [[ -z "$ns" ]]; then
+    echo "❌ Could not determine namespace. Pass a namespace as argument or ensure oc context is set." >&2
+    return 1
+  fi
   until oc get deployment/openshift-adp-controller-manager -n "$ns" &>/dev/null; do 
     echo "Waiting for openshift-adp-controller-manager deployment to exist in namespace $ns..."
     sleep 2
