@@ -50,7 +50,7 @@ rm-router-ca(){
 #   get-oc-router-ca
 #   trust-oc-router-ca-from-file
 trust-oc-router-ca-from-file(){
-    if uname -s | grep -q Darwin; then
+    if [[ "$OSTYPE" == darwin* ]]; then
         echo "Mac OS detected, trusting oc router ca"
         sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain router-ca.crt
     else
@@ -91,7 +91,7 @@ rm-api-ca(){
 }
 
 trust-api-ca-from-file(){
-    if uname -s | grep -q Darwin; then
+    if [[ "$OSTYPE" == darwin* ]]; then
         echo "Mac OS detected"
         sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain api-ca.crt
     else
