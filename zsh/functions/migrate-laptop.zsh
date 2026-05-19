@@ -304,13 +304,9 @@ export-wifi-credentials() {
     
     # Get list of WiFi networks
     progress "Finding saved WiFi networks..."
-    local networks
-    networks=$(networksetup -listpreferredwirelessnetworks en0 2>/dev/null | tail -n +2 | sed 's/^[[:space:]]*//')
-    
-    if [[ -z "$networks" ]]; then
-        # Try en1 if en0 didn't work
-        networks=$(networksetup -listpreferredwirelessnetworks en1 2>/dev/null | tail -n +2 | sed 's/^[[:space:]]*//')
-    fi
+    local networks _wifi_iface
+    _wifi_iface=$(networksetup -listallhardwareports 2>/dev/null | awk '/Wi-Fi/{found=1} found && /Device:/{print $2; exit}')
+    networks=$(networksetup -listpreferredwirelessnetworks "${_wifi_iface:-en0}" 2>/dev/null | tail -n +2 | sed 's/^[[:space:]]*//')
     
     if [[ -z "$networks" ]]; then
         error "No WiFi networks found"
