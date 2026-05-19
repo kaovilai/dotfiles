@@ -773,7 +773,7 @@ delete-minio-aws() {
         
         # Remove certificate files
         local cert_dir
-        cert_dir=$(dirname "$cert_file")
+        cert_dir=${cert_file:h}
         if [[ -d "$cert_dir" ]]; then
             rm -rf "$cert_dir"
             echo -e "${GREEN}SUCCESS${NC}: Certificate files removed"
