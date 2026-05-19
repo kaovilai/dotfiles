@@ -15,6 +15,14 @@ cherrypick-pr() {
 
 # Usage: cherrypick-pr-to-branch <#PR-number> <remote/branch> <new-branch-name>
 cherrypick-pr-to-branch() {
+    if ! command -v gh &>/dev/null; then
+        echo "❌ gh not found. Install it with: brew install gh" >&2
+        return 1
+    fi
+    if ! command -v jq &>/dev/null; then
+        echo "❌ jq not found. Install it with: brew install jq" >&2
+        return 1
+    fi
     if [[ -z "$1" || -z "$2" || -z "$3" ]]; then
         echo "Usage: cherrypick-pr-to-branch <PR-number> <remote/branch> <new-branch-name>"
         echo "Example: cherrypick-pr-to-branch 42 upstream/main my-backport"
