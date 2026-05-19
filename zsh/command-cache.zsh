@@ -108,7 +108,7 @@ command_cache_status() {
   
   if [[ -d "$ZSH_COMMAND_CACHE_DIR" ]]; then
     local file
-    for file in "$ZSH_COMMAND_CACHE_DIR"/*; do
+    for file in "$ZSH_COMMAND_CACHE_DIR"/*(N); do
       if [[ -f "$file" ]]; then
         local modified size
         modified=$(stat -f "%Sm" -t "%Y-%m-%d %H:%M:%S" "$file" 2>/dev/null || stat -c "%y" "$file" 2>/dev/null | cut -d'.' -f1)

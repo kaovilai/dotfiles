@@ -222,7 +222,7 @@ zsh_completion_cache_status() {
   echo "ZSH completion cache directory: $ZSH_COMPLETION_CACHE_DIR"
   echo "Cache files:"
   local file
-  for file in "$ZSH_COMPLETION_CACHE_DIR"/_*; do
+  for file in "$ZSH_COMPLETION_CACHE_DIR"/_*(N); do
     if [[ -f "$file" ]]; then
       local modified size
       modified=$(stat -f "%Sm" -t "%Y-%m-%d %H:%M:%S" "$file" 2>/dev/null || stat -c "%y" "$file" 2>/dev/null | cut -d'.' -f1)
