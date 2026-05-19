@@ -18,7 +18,7 @@ alias install-pkg='sudo installer -target LocalSystem -pkg'
 
 install-pkg-from-url(){
     if [[ ! "$1" =~ ^https:// ]]; then
-        echo "Error: Only HTTPS URLs are supported"
+        echo "Error: Only HTTPS URLs are supported" >&2
         return 1
     fi
     echo "Warning: Installing unverified package from URL. No checksum verification."

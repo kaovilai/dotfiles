@@ -70,12 +70,12 @@ alias gwl='git worktree list'
 git-worktree-code() {
   # Create a worktree in parent directory with name <current-dir-basename>-<param1> and open in VS Code
   if [[ -z "$1" ]]; then
-    echo "Error: Missing branch name parameter"
+    echo "Error: Missing branch name parameter" >&2
     echo "Usage: git-worktree-code <branch-name>"
     return 1
   fi
   if ! command -v code &>/dev/null; then
-    echo "❌ code not found. Install VS Code and run: Shell Command: Install 'code' command in PATH"
+    echo "❌ code not found. Install VS Code and run: Shell Command: Install 'code' command in PATH" >&2
     return 1
   fi
   
@@ -103,7 +103,7 @@ git-worktree-code() {
     elif git show-ref --verify --quiet refs/remotes/upstream/oadp-dev; then
       upstream_branch="upstream/oadp-dev"
     else
-      echo "Error: No upstream/main, upstream/master, or upstream/oadp-dev branch found"
+      echo "Error: No upstream/main, upstream/master, or upstream/oadp-dev branch found" >&2
       return 1
     fi
     
@@ -116,7 +116,7 @@ alias gwc='git-worktree-code'
 # Interactively select and remove a git worktree
 git-worktree-remove() {
   local worktrees
-  worktrees=$(git worktree list) || { echo "❌ Not in a git repository"; return 1; }
+  worktrees=$(git worktree list) || { echo "❌ Not in a git repository" >&2; return 1; }
   local -a _wt_all=("${(@f)worktrees}")
 
   if [[ ${#_wt_all} -le 1 ]]; then
@@ -180,12 +180,12 @@ pr-me() {
   local pr_list selected pr_number pr_lines pr_display pr_numbers pr_num pr_title line pr_input index branch_name
 
   if ! command -v gh &>/dev/null; then
-    echo "❌ gh not found. Install it with: brew install gh"
+    echo "❌ gh not found. Install it with: brew install gh" >&2
     return 1
   fi
 
   # Get the list of PRs
-  pr_list=$(gh pr list --author @me) || { echo "❌ gh pr list failed. Run 'gh auth login' if not authenticated."; return 1; }
+  pr_list=$(gh pr list --author @me) || { echo "❌ gh pr list failed. Run 'gh auth login' if not authenticated." >&2; return 1; }
   
   if [[ -z "$pr_list" ]]; then
     echo "No PRs found for your user"
@@ -204,7 +204,7 @@ pr-me() {
     if [[ -n "$selected" ]]; then
       pr_number="${${selected%% *}#\#}"
       if [[ ! "$pr_number" =~ ^[0-9]+$ ]]; then
-        echo "Error: Could not extract valid PR number from selection"
+        echo "Error: Could not extract valid PR number from selection" >&2
         return 1
       fi
     else
@@ -271,7 +271,7 @@ pr-me() {
   # Check if we should use worktree (accept both "worktree" and "wt")
   if [[ "$1" == "worktree" || "$1" == "wt" ]]; then
     # Get the branch name for this PR
-    branch_name=$(gh pr view "$pr_number" --json headRefName -q ".headRefName") || { echo "❌ Failed to get branch name for PR #$pr_number"; return 1; }
+    branch_name=$(gh pr view "$pr_number" --json headRefName -q ".headRefName") || { echo "❌ Failed to get branch name for PR #$pr_number" >&2; return 1; }
     if [[ -z "$branch_name" ]]; then
       echo "Failed to get branch name for PR #$pr_number"
       return 1
