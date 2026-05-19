@@ -1,6 +1,6 @@
 # Safe source: reports errors without killing the shell
 _safe_source() {
-  source "$1" 2>&1 || print -P "%F{red}[dotfiles] Failed to source: $1%f" >&2
+  source "$1" || print -P "%F{red}[dotfiles] Failed to source: $1%f" >&2
 }
 
 # Load all alias categories
