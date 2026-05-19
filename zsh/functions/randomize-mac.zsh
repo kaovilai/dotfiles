@@ -3,6 +3,11 @@
 # More reliable than spoof-mac on newer macOS/Apple Silicon (M4)
 
 randomize-mac-ifconfig() {
+    if [[ "$OSTYPE" != darwin* ]]; then
+        echo "Error: randomize-mac-ifconfig is only supported on macOS" >&2
+        return 1
+    fi
+
     local network_ssid=""
     local wifi_interface=""
     local quiet=false
@@ -41,10 +46,6 @@ randomize-mac-ifconfig() {
 
     # Detect WiFi interface if not specified
     if [[ -z "$wifi_interface" ]]; then
-        if [[ "$OSTYPE" != darwin* ]]; then
-            echo "Error: randomize-mac-ifconfig is only supported on macOS" >&2
-            return 1
-        fi
         wifi_interface=$(networksetup -listallhardwareports | grep -A 1 "Wi-Fi" | grep "Device:" | awk '{print $2}')
         if [[ -z "$wifi_interface" ]]; then
             echo "Error: Could not detect WiFi interface" >&2
