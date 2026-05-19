@@ -61,7 +61,7 @@ set-dns-servers() {
 
     # Check if at least one DNS server type is specified
     if [[ -z "$ipv4_servers" && -z "$ipv6_servers" ]]; then
-        echo "Error: No DNS servers specified"
+        echo "Error: No DNS servers specified" >&2
         echo "Use --ipv4 and/or --ipv6 to specify DNS servers"
         echo "Use --help for more information"
         return 1
@@ -72,7 +72,7 @@ set-dns-servers() {
         local ip
         for ip in ${=ipv4_servers}; do
             if [[ ! "$ip" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
-                echo "Error: Invalid IPv4 address format: $ip"
+                echo "Error: Invalid IPv4 address format: $ip" >&2
                 return 1
             fi
         done
@@ -83,7 +83,7 @@ set-dns-servers() {
         local ip
         for ip in ${=ipv6_servers}; do
             if [[ ! "$ip" =~ ^[0-9a-fA-F:]+$ ]]; then
-                echo "Error: Invalid IPv6 address format: $ip"
+                echo "Error: Invalid IPv6 address format: $ip" >&2
                 return 1
             fi
         done
@@ -91,13 +91,13 @@ set-dns-servers() {
 
     # Check if running on macOS
     if [[ "$OSTYPE" != darwin* ]]; then
-        echo "Error: This function is only supported on macOS"
+        echo "Error: This function is only supported on macOS" >&2
         return 1
     fi
 
     # Verify the network service exists
     if ! networksetup -listallnetworkservices | grep -q "^$service$"; then
-        echo "Error: Network service '$service' not found"
+        echo "Error: Network service '$service' not found" >&2
         echo "Available network services:"
         networksetup -listallnetworkservices | grep -v "^An asterisk"
         return 1
@@ -188,13 +188,13 @@ clear-dns-servers() {
 
     # Check if running on macOS
     if [[ "$OSTYPE" != darwin* ]]; then
-        echo "Error: This function is only supported on macOS"
+        echo "Error: This function is only supported on macOS" >&2
         return 1
     fi
 
     # Verify the network service exists
     if ! networksetup -listallnetworkservices | grep -q "^$service$"; then
-        echo "Error: Network service '$service' not found"
+        echo "Error: Network service '$service' not found" >&2
         echo "Available network services:"
         networksetup -listallnetworkservices | grep -v "^An asterisk"
         return 1
