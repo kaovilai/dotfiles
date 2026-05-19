@@ -71,7 +71,10 @@ unset-socks-proxy(){
 }
 
 get-socks-proxy(){
-    local router_ip="${SOCKS_ROUTER_IP:-$(networksetup -getinfo Wi-Fi | grep -e "^Router" | cut -d " " -f 2)}"
+    local router_ip="${SOCKS_ROUTER_IP}"
+    if [[ -z "$router_ip" ]]; then
+        router_ip=$(networksetup -getinfo Wi-Fi | grep -e "^Router" | cut -d " " -f 2)
+    fi
     local proxy_port="${SOCKS_ROUTER_PROXY_PORT:-1888}"
 
     echo "SOCKS Proxy: ${router_ip}:${proxy_port}"
