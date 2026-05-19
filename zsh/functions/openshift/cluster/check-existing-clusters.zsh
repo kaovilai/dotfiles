@@ -73,7 +73,7 @@ check-for-existing-clusters() {
 
     # Find AWS and GCP cluster directories
     if [[ -d "$OCP_MANIFESTS_DIR" ]]; then
-        for dir in $(find $OCP_MANIFESTS_DIR -type d -name "auth" 2>/dev/null | sort); do
+        for dir in $(find "$OCP_MANIFESTS_DIR" -type d -name "auth" 2>/dev/null | sort); do
             if [[ -f "$dir/kubeconfig" ]]; then
                 local cluster_dir=$(dirname "$dir")
                 local cluster_name=$(basename "$cluster_dir")
@@ -109,7 +109,7 @@ check-for-existing-clusters() {
         
         # Check for ROSA clusters without kubeconfig files
         if [[ "$provider" == "all" || "$provider" == "rosa" ]]; then
-            for dir in $(find $OCP_MANIFESTS_DIR -type d -name "*-rosa-sts-*" 2>/dev/null | sort); do
+            for dir in $(find "$OCP_MANIFESTS_DIR" -type d -name "*-rosa-sts-*" 2>/dev/null | sort); do
                 if [[ ! -f "$dir/auth/kubeconfig" && -f "$dir/cluster-admin.txt" ]]; then
                     local cluster_name=$(basename "$dir")
                     
