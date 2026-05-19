@@ -76,7 +76,7 @@ create-minio-aws() {
     done
     
     if [[ -z "$name" ]]; then
-        echo -e "${RED}ERROR${NC}: MinIO deployment name is required" >&2
+        echo "${RED}ERROR${NC}: MinIO deployment name is required" >&2
         echo "Usage: create-minio-aws --name <deployment-name> [OPTIONS]"
         return 1
     fi
@@ -91,7 +91,7 @@ create-minio-aws() {
                 instance_type="t3.medium"
                 ;;
             *)
-                echo -e "${RED}ERROR${NC}: Unknown architecture: $architecture" >&2
+                echo "${RED}ERROR${NC}: Unknown architecture: $architecture" >&2
                 echo "Supported architectures: arm64, amd64"
                 return 1
                 ;;
@@ -100,69 +100,69 @@ create-minio-aws() {
     
     # Check if deployment already exists
     if [[ -f "$MINIO_DEPLOYMENTS_DIR/${name}.json" ]]; then
-        echo -e "${RED}ERROR${NC}: MinIO deployment '$name' already exists" >&2
+        echo "${RED}ERROR${NC}: MinIO deployment '$name' already exists" >&2
         echo "Use: delete-minio-aws --name $name # to delete existing deployment"
         return 1
     fi
     
-    echo -e "${BLUE}INFO${NC}: Creating MinIO deployment '$name' in AWS region $region"
+    echo "${BLUE}INFO${NC}: Creating MinIO deployment '$name' in AWS region $region"
     
     # Check required tools
     if ! command -v aws &> /dev/null; then
-        echo -e "${RED}ERROR${NC}: AWS CLI is not installed or not in PATH" >&2
+        echo "${RED}ERROR${NC}: AWS CLI is not installed or not in PATH" >&2
         return 1
     fi
 
     if ! command -v jq &>/dev/null; then
-        echo -e "${RED}ERROR${NC}: jq not found. Install it with: brew install jq" >&2
+        echo "${RED}ERROR${NC}: jq not found. Install it with: brew install jq" >&2
         return 1
     fi
 
     # Check openssl availability
     if ! command -v openssl &>/dev/null; then
-        echo -e "${RED}ERROR${NC}: openssl not found. Install it with: brew install openssl" >&2
+        echo "${RED}ERROR${NC}: openssl not found. Install it with: brew install openssl" >&2
         return 1
     fi
 
     # Check curl availability
     if ! command -v curl &>/dev/null; then
-        echo -e "${RED}ERROR${NC}: curl not found. Install it with: brew install curl" >&2
+        echo "${RED}ERROR${NC}: curl not found. Install it with: brew install curl" >&2
         return 1
     fi
 
     # Check AWS credentials
     if ! aws sts get-caller-identity &> /dev/null; then
-        echo -e "${RED}ERROR${NC}: AWS credentials not configured or invalid" >&2
+        echo "${RED}ERROR${NC}: AWS credentials not configured or invalid" >&2
         echo "Please run: aws configure"
         return 1
     fi
     
     # Auto-detect VPC and subnet if not provided
     if [[ -z "$vpc_id" ]]; then
-        echo -e "${BLUE}INFO${NC}: Auto-detecting default VPC..."
+        echo "${BLUE}INFO${NC}: Auto-detecting default VPC..."
         vpc_id=$(aws ec2 describe-vpcs --region "$region" --filters "Name=is-default,Values=true" --query "Vpcs[0].VpcId" --output text 2>/dev/null)
         if [[ "$vpc_id" == "None" || -z "$vpc_id" ]]; then
-            echo -e "${RED}ERROR${NC}: No default VPC found in region $region" >&2
+            echo "${RED}ERROR${NC}: No default VPC found in region $region" >&2
             echo "Please specify --vpc-id"
             return 1
         fi
-        echo -e "${BLUE}INFO${NC}: Using default VPC: $vpc_id"
+        echo "${BLUE}INFO${NC}: Using default VPC: $vpc_id"
     fi
     
     if [[ -z "$subnet_id" ]]; then
-        echo -e "${BLUE}INFO${NC}: Auto-detecting public subnet..."
+        echo "${BLUE}INFO${NC}: Auto-detecting public subnet..."
         subnet_id=$(aws ec2 describe-subnets --region "$region" --filters "Name=vpc-id,Values=$vpc_id" "Name=map-public-ip-on-launch,Values=true" --query "Subnets[0].SubnetId" --output text 2>/dev/null)
         if [[ "$subnet_id" == "None" || -z "$subnet_id" ]]; then
-            echo -e "${RED}ERROR${NC}: No public subnet found in VPC $vpc_id" >&2
+            echo "${RED}ERROR${NC}: No public subnet found in VPC $vpc_id" >&2
             echo "Please specify --subnet-id"
             return 1
         fi
-        echo -e "${BLUE}INFO${NC}: Using subnet: $subnet_id"
+        echo "${BLUE}INFO${NC}: Using subnet: $subnet_id"
     fi
     
     # Create security group
     local sg_name="minio-${name}-sg"
-    echo -e "${BLUE}INFO${NC}: Creating security group: $sg_name"
+    echo "${BLUE}INFO${NC}: Creating security group: $sg_name"
     local sg_id
     if ! sg_id=$(aws ec2 create-security-group \
         --region "$region" \
@@ -170,14 +170,14 @@ create-minio-aws() {
         --description "Security group for MinIO deployment $name" \
         --vpc-id "$vpc_id" \
         --query "GroupId" --output text 2>/dev/null) || [[ -z "$sg_id" ]]; then
-        echo -e "${RED}ERROR${NC}: Failed to create security group" >&2
+        echo "${RED}ERROR${NC}: Failed to create security group" >&2
         return 1
     fi
     
-    echo -e "${BLUE}INFO${NC}: Created security group: $sg_id"
+    echo "${BLUE}INFO${NC}: Created security group: $sg_id"
     
     # Add security group rules
-    echo -e "${BLUE}INFO${NC}: Configuring security group rules..."
+    echo "${BLUE}INFO${NC}: Configuring security group rules..."
     
     # MinIO API port (9000)
     aws ec2 authorize-security-group-ingress \
@@ -205,7 +205,7 @@ create-minio-aws() {
             --protocol tcp \
             --port 22 \
             --cidr "${my_ip}/32" &>/dev/null
-        echo -e "${BLUE}INFO${NC}: SSH access restricted to your IP: $my_ip"
+        echo "${BLUE}INFO${NC}: SSH access restricted to your IP: $my_ip"
     else
         aws ec2 authorize-security-group-ingress \
             --region "$region" \
@@ -213,7 +213,7 @@ create-minio-aws() {
             --protocol tcp \
             --port 22 \
             --cidr 0.0.0.0/0 &>/dev/null
-        echo -e "${YELLOW}WARN${NC}: Could not detect your IP, SSH open to all (0.0.0.0/0)" >&2
+        echo "${YELLOW}WARN${NC}: Could not detect your IP, SSH open to all (0.0.0.0/0)" >&2
     fi
     
     # Get the latest Amazon Linux 2 AMI for the specified architecture
@@ -227,7 +227,7 @@ create-minio-aws() {
             ;;
     esac
     
-    echo -e "${BLUE}INFO${NC}: Finding latest Amazon Linux 2 AMI for $ami_arch..."
+    echo "${BLUE}INFO${NC}: Finding latest Amazon Linux 2 AMI for $ami_arch..."
     local ami_id
     ami_id=$(aws ec2 describe-images \
         --region "$region" \
@@ -237,13 +237,13 @@ create-minio-aws() {
         --output text 2>/dev/null)
     
     if [[ -z "$ami_id" || "$ami_id" == "None" ]]; then
-        echo -e "${RED}ERROR${NC}: Failed to find Amazon Linux 2 AMI" >&2
+        echo "${RED}ERROR${NC}: Failed to find Amazon Linux 2 AMI" >&2
         # Cleanup security group
         aws ec2 delete-security-group --region "$region" --group-id "$sg_id" &>/dev/null
         return 1
     fi
     
-    echo -e "${BLUE}INFO${NC}: Using AMI: $ami_id"
+    echo "${BLUE}INFO${NC}: Using AMI: $ami_id"
     
     # Generate MinIO root credentials
     local minio_root_user="minioadmin"
@@ -406,7 +406,7 @@ EOF
     encoded_user_data=$(echo "$user_data" | base64 | tr -d '\n')
     
     # Launch EC2 instance
-    echo -e "${BLUE}INFO${NC}: Launching EC2 instance..."
+    echo "${BLUE}INFO${NC}: Launching EC2 instance..."
     
     local launch_cmd="aws ec2 run-instances \
         --region '$region' \
@@ -424,7 +424,7 @@ EOF
     
     local instance_info
     if ! instance_info=$(eval "$launch_cmd" 2>/dev/null); then
-        echo -e "${RED}ERROR${NC}: Failed to launch EC2 instance" >&2
+        echo "${RED}ERROR${NC}: Failed to launch EC2 instance" >&2
         # Cleanup security group
         aws ec2 delete-security-group --region "$region" --group-id "$sg_id" &>/dev/null
         return 1
@@ -432,10 +432,10 @@ EOF
     
     local instance_id
     instance_id=$(jq -r '.Instances[0].InstanceId' <<< "$instance_info")
-    echo -e "${BLUE}INFO${NC}: Launched instance: $instance_id"
+    echo "${BLUE}INFO${NC}: Launched instance: $instance_id"
     
     # Wait for instance to be running
-    echo -e "${BLUE}INFO${NC}: Waiting for instance to be running..."
+    echo "${BLUE}INFO${NC}: Waiting for instance to be running..."
     aws ec2 wait instance-running --region "$region" --instance-ids "$instance_id"
     
     # Get public DNS and IP
@@ -451,7 +451,7 @@ EOF
     public_ip=$(jq -r '.PublicIpAddress // ""' <<< "$instance_details")
     
     if [[ -z "$public_dns" || "$public_dns" == "null" ]]; then
-        echo -e "${RED}ERROR${NC}: Instance does not have a public DNS name" >&2
+        echo "${RED}ERROR${NC}: Instance does not have a public DNS name" >&2
         echo "This usually means the subnet is not configured for public IPs"
         # Cleanup
         aws ec2 terminate-instances --region "$region" --instance-ids "$instance_id" &>/dev/null
@@ -461,32 +461,32 @@ EOF
     
     local endpoint="https://${public_dns}:9000"
     
-    echo -e "${BLUE}INFO${NC}: Instance is running"
-    echo -e "  Public DNS: $public_dns"
-    echo -e "  Public IP:  $public_ip"
-    echo -e "  Endpoint:   $endpoint"
+    echo "${BLUE}INFO${NC}: Instance is running"
+    echo "  Public DNS: $public_dns"
+    echo "  Public IP:  $public_ip"
+    echo "  Endpoint:   $endpoint"
     
     # Download certificate from EC2 instance
-    echo -e "${BLUE}INFO${NC}: Waiting for MinIO setup to complete..."
-    echo -e "${YELLOW}NOTE${NC}: Initial setup takes 2-3 minutes for certificate generation and service startup"
+    echo "${BLUE}INFO${NC}: Waiting for MinIO setup to complete..."
+    echo "${YELLOW}NOTE${NC}: Initial setup takes 2-3 minutes for certificate generation and service startup"
     sleep 120  # Give more time for user-data to complete and generate certificates
 
     local cert_dir="$MINIO_DEPLOYMENTS_DIR/$name"
     local cert_file="$cert_dir/minio-cert.pem"
-    mkdir -p "$cert_dir" || { echo -e "${RED}ERROR${NC}: Failed to create cert directory $cert_dir" >&2; return 1; }
+    mkdir -p "$cert_dir" || { echo "${RED}ERROR${NC}: Failed to create cert directory $cert_dir" >&2; return 1; }
 
     # Download certificate from the EC2 instance
-    echo -e "${BLUE}INFO${NC}: Attempting to download certificate from EC2 instance..."
+    echo "${BLUE}INFO${NC}: Attempting to download certificate from EC2 instance..."
     local max_attempts=15  # Increased from 10 to 15
     local attempt=1
     local cert_downloaded=false
 
     while [[ $attempt -le $max_attempts && "$cert_downloaded" == false ]]; do
-        echo -e "${BLUE}INFO${NC}: Attempt $attempt/$max_attempts to download certificate..."
+        echo "${BLUE}INFO${NC}: Attempt $attempt/$max_attempts to download certificate..."
 
         # First check if HTTPS is responding (indicates certificates are ready)
         if curl -k -s --connect-timeout 10 --max-time 15 "https://${public_dns}:9000/minio/health/ready" &>/dev/null; then
-            echo -e "${BLUE}INFO${NC}: HTTPS is responding, attempting to download certificate..."
+            echo "${BLUE}INFO${NC}: HTTPS is responding, attempting to download certificate..."
 
             # Try to get the certificate file via SCP if key is available
             if [[ -n "$key_name" ]]; then
@@ -502,30 +502,30 @@ EOF
 
                 if [[ -n "$key_path" ]]; then
                     # Use SCP to download the certificate
-                    echo -e "${BLUE}INFO${NC}: Using SSH key at $key_path to download certificate..."
+                    echo "${BLUE}INFO${NC}: Using SSH key at $key_path to download certificate..."
                     if scp -o StrictHostKeyChecking=no -o ConnectTimeout=15 -i "$key_path" "ec2-user@${public_dns}:/home/ec2-user/minio-cert.pem" "$cert_file" 2>/dev/null && [[ -s "$cert_file" ]]; then
                         cert_downloaded=true
-                        echo -e "${GREEN}SUCCESS${NC}: Certificate downloaded via SCP"
+                        echo "${GREEN}SUCCESS${NC}: Certificate downloaded via SCP"
                     else
-                        echo -e "${YELLOW}WARN${NC}: SCP failed, trying alternative method..." >&2
+                        echo "${YELLOW}WARN${NC}: SCP failed, trying alternative method..." >&2
                     fi
                 else
-                    echo -e "${YELLOW}WARN${NC}: SSH key not found at expected locations" >&2
+                    echo "${YELLOW}WARN${NC}: SSH key not found at expected locations" >&2
                 fi
             fi
 
             # If SCP failed or no key, extract certificate from HTTPS connection
             if [[ "$cert_downloaded" == false ]]; then
-                echo -e "${BLUE}INFO${NC}: Extracting certificate from HTTPS connection..."
+                echo "${BLUE}INFO${NC}: Extracting certificate from HTTPS connection..."
                 # Use openssl with built-in timeout instead of external timeout command
                 if { echo | openssl s_client -servername "$public_dns" -connect "${public_dns}:9000" -showcerts 2>/dev/null | \
                     openssl x509 -outform PEM > "$cert_file" 2>/dev/null } && [[ -s "$cert_file" ]]; then
                     # Verify the certificate is valid
                     if openssl x509 -in "$cert_file" -text -noout &>/dev/null; then
                         cert_downloaded=true
-                        echo -e "${GREEN}SUCCESS${NC}: Certificate extracted from HTTPS connection"
+                        echo "${GREEN}SUCCESS${NC}: Certificate extracted from HTTPS connection"
                     else
-                        echo -e "${YELLOW}WARN${NC}: Extracted file is not a valid certificate" >&2
+                        echo "${YELLOW}WARN${NC}: Extracted file is not a valid certificate" >&2
                         rm -f "$cert_file"
                     fi
                 fi
@@ -533,15 +533,15 @@ EOF
         else
             # HTTPS not ready yet, check if HTTP is responding (service is starting)
             if curl -s --connect-timeout 5 --max-time 10 "http://${public_dns}:9000/minio/health/ready" &>/dev/null; then
-                echo -e "${BLUE}INFO${NC}: MinIO is starting (HTTP responding), waiting for HTTPS..."
+                echo "${BLUE}INFO${NC}: MinIO is starting (HTTP responding), waiting for HTTPS..."
             else
-                echo -e "${BLUE}INFO${NC}: MinIO service is still initializing..."
+                echo "${BLUE}INFO${NC}: MinIO service is still initializing..."
             fi
         fi
 
         if [[ "$cert_downloaded" == false ]]; then
             if [[ $attempt -lt $max_attempts ]]; then
-                echo -e "${YELLOW}WARN${NC}: Certificate download attempt $attempt failed, retrying in 30 seconds..." >&2
+                echo "${YELLOW}WARN${NC}: Certificate download attempt $attempt failed, retrying in 30 seconds..." >&2
                 sleep 30
             fi
         fi
@@ -550,8 +550,8 @@ EOF
     done
     
     if [[ "$cert_downloaded" == false ]]; then
-        echo -e "${YELLOW}WARN${NC}: Could not download certificate automatically" >&2
-        echo -e "${YELLOW}WARN${NC}: You may need to download it manually later" >&2
+        echo "${YELLOW}WARN${NC}: Could not download certificate automatically" >&2
+        echo "${YELLOW}WARN${NC}: You may need to download it manually later" >&2
         # Create a placeholder file
         touch "$cert_file"
     fi
@@ -594,42 +594,42 @@ EOF
     
     save-minio-config "$name" "$config_data"
     
-    echo -e "${GREEN}SUCCESS${NC}: MinIO deployment '$name' created successfully!"
-    echo -e ""
-    echo -e "${BLUE}Connection Details:${NC}"
-    echo -e "  Endpoint:    $endpoint"
-    echo -e "  Access Key:  $minio_root_user"
-    echo -e "  Secret Key:  $minio_root_password"
-    echo -e "  Certificate: $cert_file"
-    echo -e "  Initial Bucket: $bucket_name"
-    echo -e ""
-    echo -e "${BLUE}AWS CLI Configuration:${NC}"
-    echo -e "  export AWS_ACCESS_KEY_ID=\"$minio_root_user\""
-    echo -e "  export AWS_SECRET_ACCESS_KEY=\"$minio_root_password\""
-    echo -e ""
-    echo -e "${YELLOW}NOTE${NC}: MinIO is configured with HTTPS using self-signed certificates."
-    echo -e "${YELLOW}NOTE${NC}: It may take 3-5 minutes for MinIO to be fully ready with HTTPS."
-    echo -e "${YELLOW}NOTE${NC}: The certificate is self-signed and needs to be trusted for SSL verification."
-    echo -e ""
-    echo -e "${BLUE}Next steps:${NC}"
+    echo "${GREEN}SUCCESS${NC}: MinIO deployment '$name' created successfully!"
+    echo ""
+    echo "${BLUE}Connection Details:${NC}"
+    echo "  Endpoint:    $endpoint"
+    echo "  Access Key:  $minio_root_user"
+    echo "  Secret Key:  $minio_root_password"
+    echo "  Certificate: $cert_file"
+    echo "  Initial Bucket: $bucket_name"
+    echo ""
+    echo "${BLUE}AWS CLI Configuration:${NC}"
+    echo "  export AWS_ACCESS_KEY_ID=\"$minio_root_user\""
+    echo "  export AWS_SECRET_ACCESS_KEY=\"$minio_root_password\""
+    echo ""
+    echo "${YELLOW}NOTE${NC}: MinIO is configured with HTTPS using self-signed certificates."
+    echo "${YELLOW}NOTE${NC}: It may take 3-5 minutes for MinIO to be fully ready with HTTPS."
+    echo "${YELLOW}NOTE${NC}: The certificate is self-signed and needs to be trusted for SSL verification."
+    echo ""
+    echo "${BLUE}Next steps:${NC}"
     if [[ "$cert_downloaded" == true ]]; then
-        echo -e "  1. Trust the certificate: trust-certificate-in-system $cert_file"
-        echo -e "  2. Test connection: test-minio-connection $name"
+        echo "  1. Trust the certificate: trust-certificate-in-system $cert_file"
+        echo "  2. Test connection: test-minio-connection $name"
     else
-        echo -e "  1. Wait a few minutes for setup to complete"
-        echo -e "  2. Download certificate: download-minio-certificate $name"
-        echo -e "  3. Test connection: aws s3 ls --endpoint-url $endpoint --no-verify-ssl"
+        echo "  1. Wait a few minutes for setup to complete"
+        echo "  2. Download certificate: download-minio-certificate $name"
+        echo "  3. Test connection: aws s3 ls --endpoint-url $endpoint --no-verify-ssl"
     fi
     if [[ "$cert_downloaded" == true ]]; then
-        echo -e "  3. Get connection info: get-minio-connection-info --name $name"
+        echo "  3. Get connection info: get-minio-connection-info --name $name"
     else
-        echo -e "  4. Get connection info: get-minio-connection-info --name $name"
+        echo "  4. Get connection info: get-minio-connection-info --name $name"
     fi
     
     # Verify bucket creation if certificate was downloaded successfully
     if [[ "$cert_downloaded" == true ]]; then
-        echo -e ""
-        echo -e "${BLUE}INFO${NC}: Verifying bucket creation..."
+        echo ""
+        echo "${BLUE}INFO${NC}: Verifying bucket creation..."
         
         # Set credentials for AWS CLI
         export AWS_ACCESS_KEY_ID="$minio_root_user"
@@ -640,10 +640,10 @@ EOF
         
         # Try to verify/create bucket
         if ensure-default-bucket "$name" "$bucket_name"; then
-            echo -e "${GREEN}SUCCESS${NC}: Default bucket '$bucket_name' is ready!"
+            echo "${GREEN}SUCCESS${NC}: Default bucket '$bucket_name' is ready!"
         else
-            echo -e "${YELLOW}WARN${NC}: Default bucket verification failed, but you can create it manually later" >&2
-            echo -e "${YELLOW}HINT${NC}: Run 'ensure-default-bucket $name' once MinIO is fully started"
+            echo "${YELLOW}WARN${NC}: Default bucket verification failed, but you can create it manually later" >&2
+            echo "${YELLOW}HINT${NC}: Run 'ensure-default-bucket $name' once MinIO is fully started"
         fi
         
         # Clean up credentials from environment
@@ -688,18 +688,18 @@ delete-minio-aws() {
     done
     
     if [[ -z "$name" ]]; then
-        echo -e "${RED}ERROR${NC}: MinIO deployment name is required" >&2
+        echo "${RED}ERROR${NC}: MinIO deployment name is required" >&2
         echo "Usage: delete-minio-aws --name <deployment-name>"
         return 1
     fi
 
     if ! command -v aws &> /dev/null; then
-        echo -e "${RED}ERROR${NC}: AWS CLI is not installed or not in PATH" >&2
+        echo "${RED}ERROR${NC}: AWS CLI is not installed or not in PATH" >&2
         return 1
     fi
 
     if ! command -v jq &>/dev/null; then
-        echo -e "${RED}ERROR${NC}: jq not found. Install it with: brew install jq" >&2
+        echo "${RED}ERROR${NC}: jq not found. Install it with: brew install jq" >&2
         return 1
     fi
 
@@ -711,7 +711,7 @@ delete-minio-aws() {
     local provider
     provider=$(jq -r '.provider' <<< "$config")
     if [[ "$provider" != "aws" ]]; then
-        echo -e "${RED}ERROR${NC}: Deployment '$name' is not an AWS deployment (provider: $provider)" >&2
+        echo "${RED}ERROR${NC}: Deployment '$name' is not an AWS deployment (provider: $provider)" >&2
         return 1
     fi
     
@@ -723,52 +723,52 @@ delete-minio-aws() {
     endpoint=$(jq -r '.endpoint' <<< "$config")
     
     if [[ "$force" == false ]]; then
-        echo -e "${YELLOW}WARNING${NC}: This will delete the MinIO deployment '$name' and all its data!" >&2
-        echo -e "  Instance ID: $instance_id"
-        echo -e "  Region: $region"
-        echo -e "  Endpoint: $endpoint"
-        echo -e ""
+        echo "${YELLOW}WARNING${NC}: This will delete the MinIO deployment '$name' and all its data!" >&2
+        echo "  Instance ID: $instance_id"
+        echo "  Region: $region"
+        echo "  Endpoint: $endpoint"
+        echo ""
         local confirmation
         read -r "confirmation?Are you sure you want to continue? (yes/no): "
         
         if [[ "$confirmation" != "yes" && "$confirmation" != "y" ]]; then
-            echo -e "${BLUE}INFO${NC}: Deletion cancelled"
+            echo "${BLUE}INFO${NC}: Deletion cancelled"
             return 0
         fi
     fi
     
-    echo -e "${BLUE}INFO${NC}: Deleting MinIO deployment '$name'..."
+    echo "${BLUE}INFO${NC}: Deleting MinIO deployment '$name'..."
     
     # Terminate EC2 instance
-    echo -e "${BLUE}INFO${NC}: Terminating EC2 instance: $instance_id"
+    echo "${BLUE}INFO${NC}: Terminating EC2 instance: $instance_id"
     if aws ec2 terminate-instances --region "$region" --instance-ids "$instance_id" &>/dev/null; then
-        echo -e "${GREEN}SUCCESS${NC}: Instance termination initiated"
+        echo "${GREEN}SUCCESS${NC}: Instance termination initiated"
         
         # Wait for instance to terminate (optional, can be slow)
-        echo -e "${BLUE}INFO${NC}: Waiting for instance to terminate (this may take a few minutes)..."
+        echo "${BLUE}INFO${NC}: Waiting for instance to terminate (this may take a few minutes)..."
         if aws ec2 wait instance-terminated --region "$region" --instance-ids "$instance_id"; then
-            echo -e "${GREEN}SUCCESS${NC}: Instance terminated successfully"
+            echo "${GREEN}SUCCESS${NC}: Instance terminated successfully"
         else
-            echo -e "${YELLOW}WARN${NC}: Instance termination may still be in progress" >&2
+            echo "${YELLOW}WARN${NC}: Instance termination may still be in progress" >&2
         fi
     else
-        echo -e "${YELLOW}WARN${NC}: Failed to terminate instance (it may already be terminated)" >&2
+        echo "${YELLOW}WARN${NC}: Failed to terminate instance (it may already be terminated)" >&2
     fi
     
     # Delete security group
-    echo -e "${BLUE}INFO${NC}: Deleting security group: $security_group_id"
+    echo "${BLUE}INFO${NC}: Deleting security group: $security_group_id"
     # Wait a bit for the instance to fully terminate before deleting security group
     sleep 10
     
     if aws ec2 delete-security-group --region "$region" --group-id "$security_group_id" &>/dev/null; then
-        echo -e "${GREEN}SUCCESS${NC}: Security group deleted"
+        echo "${GREEN}SUCCESS${NC}: Security group deleted"
     else
-        echo -e "${YELLOW}WARN${NC}: Failed to delete security group (it may still be in use)" >&2
+        echo "${YELLOW}WARN${NC}: Failed to delete security group (it may still be in use)" >&2
     fi
     
     # Remove certificate from system trust store
     if [[ -n "$cert_file" && "$cert_file" != "null" && -f "$cert_file" ]]; then
-        echo -e "${BLUE}INFO${NC}: Removing certificate from system trust store"
+        echo "${BLUE}INFO${NC}: Removing certificate from system trust store"
         remove-certificate-from-system "$cert_file"
         
         # Remove certificate files
@@ -776,14 +776,14 @@ delete-minio-aws() {
         cert_dir=${cert_file:h}
         if [[ -d "$cert_dir" ]]; then
             rm -rf "$cert_dir"
-            echo -e "${GREEN}SUCCESS${NC}: Certificate files removed"
+            echo "${GREEN}SUCCESS${NC}: Certificate files removed"
         fi
     fi
     
     # Remove configuration
     remove-minio-config "$name"
     
-    echo -e "${GREEN}SUCCESS${NC}: MinIO deployment '$name' deleted successfully!"
+    echo "${GREEN}SUCCESS${NC}: MinIO deployment '$name' deleted successfully!"
 }
 
 configure-minio-cluster-access() {
@@ -834,18 +834,18 @@ configure-minio-cluster-access() {
     done
     
     if [[ -z "$minio_name" || -z "$cluster_name" ]]; then
-        echo -e "${RED}ERROR${NC}: Both MinIO deployment name and cluster name are required" >&2
+        echo "${RED}ERROR${NC}: Both MinIO deployment name and cluster name are required" >&2
         echo "Usage: configure-minio-cluster-access --minio <minio-name> --cluster <cluster-name>"
         return 1
     fi
 
     if ! command -v jq &>/dev/null; then
-        echo -e "${RED}ERROR${NC}: jq not found. Install it with: brew install jq" >&2
+        echo "${RED}ERROR${NC}: jq not found. Install it with: brew install jq" >&2
         return 1
     fi
 
     if ! command -v oc &>/dev/null; then
-        echo -e "${RED}ERROR${NC}: oc not found. Install it with: brew install openshift-cli" >&2
+        echo "${RED}ERROR${NC}: oc not found. Install it with: brew install openshift-cli" >&2
         return 1
     fi
 
@@ -860,19 +860,19 @@ configure-minio-cluster-access() {
     cert_file=$(jq -r '.cert_file // ""' <<< "$config")
     
     # Switch to cluster
-    echo -e "${BLUE}INFO${NC}: Switching to cluster: $cluster_name"
+    echo "${BLUE}INFO${NC}: Switching to cluster: $cluster_name"
     if ! use-ocp-cluster "$cluster_name" &>/dev/null; then
-        echo -e "${RED}ERROR${NC}: Failed to switch to cluster '$cluster_name'" >&2
+        echo "${RED}ERROR${NC}: Failed to switch to cluster '$cluster_name'" >&2
         return 1
     fi
     
     # Verify cluster connection
     if ! oc whoami &>/dev/null; then
-        echo -e "${RED}ERROR${NC}: Not connected to OpenShift cluster" >&2
+        echo "${RED}ERROR${NC}: Not connected to OpenShift cluster" >&2
         return 1
     fi
     
-    echo -e "${BLUE}INFO${NC}: Connected to cluster: $(oc whoami --show-server)"
+    echo "${BLUE}INFO${NC}: Connected to cluster: $(oc whoami --show-server)"
     
     # Create namespace if it doesn't exist
     if [[ "$namespace" != "default" ]]; then
@@ -881,7 +881,7 @@ configure-minio-cluster-access() {
     
     # Add certificate to cluster's trusted CAs if certificate exists
     if [[ -n "$cert_file" && "$cert_file" != "null" && -f "$cert_file" ]]; then
-        echo -e "${BLUE}INFO${NC}: Adding MinIO certificate to cluster's trusted CAs"
+        echo "${BLUE}INFO${NC}: Adding MinIO certificate to cluster's trusted CAs"
         
         local ca_config_map_name="minio-ca-${minio_name}"
         
@@ -892,7 +892,7 @@ configure-minio-cluster-access() {
         oc set data configmap/"$ca_config_map_name" \
             --from-file="ca-bundle.crt=$cert_file" \
             -n openshift-config }; then
-            echo -e "${GREEN}SUCCESS${NC}: Certificate added to cluster as ConfigMap: $ca_config_map_name"
+            echo "${GREEN}SUCCESS${NC}: Certificate added to cluster as ConfigMap: $ca_config_map_name"
             
             # Patch the cluster proxy configuration to trust the certificate
             # Note: This requires cluster-admin privileges
@@ -901,16 +901,16 @@ configure-minio-cluster-access() {
             if [[ -z "$current_trusted_ca" ]]; then
                 oc patch proxy/cluster --type merge -p "{\"spec\":{\"trustedCA\":{\"name\":\"$ca_config_map_name\"}}}" &>/dev/null
             else
-                echo -e "${YELLOW}WARN${NC}: Cluster already has a trusted CA configured: $current_trusted_ca" >&2
-                echo -e "${YELLOW}WARN${NC}: You may need to manually merge the certificates" >&2
+                echo "${YELLOW}WARN${NC}: Cluster already has a trusted CA configured: $current_trusted_ca" >&2
+                echo "${YELLOW}WARN${NC}: You may need to manually merge the certificates" >&2
             fi
         else
-            echo -e "${YELLOW}WARN${NC}: Could not add certificate to cluster (may need cluster-admin privileges)" >&2
+            echo "${YELLOW}WARN${NC}: Could not add certificate to cluster (may need cluster-admin privileges)" >&2
         fi
     fi
     
     # Create secret with MinIO credentials
-    echo -e "${BLUE}INFO${NC}: Creating secret '$secret_name' with MinIO credentials"
+    echo "${BLUE}INFO${NC}: Creating secret '$secret_name' with MinIO credentials"
     if { oc create secret generic "$secret_name" \
         --from-literal="MINIO_ENDPOINT=$endpoint" \
         --from-literal="MINIO_ACCESS_KEY=$access_key" \
@@ -921,14 +921,14 @@ configure-minio-cluster-access() {
         --from-literal="MINIO_ACCESS_KEY=$access_key" \
         --from-literal="MINIO_SECRET_KEY=$secret_key" \
         -n "$namespace" }; then
-        echo -e "${GREEN}SUCCESS${NC}: Secret '$secret_name' created/updated in namespace '$namespace'"
+        echo "${GREEN}SUCCESS${NC}: Secret '$secret_name' created/updated in namespace '$namespace'"
     else
-        echo -e "${RED}ERROR${NC}: Failed to create secret" >&2
+        echo "${RED}ERROR${NC}: Failed to create secret" >&2
         return 1
     fi
     
     # Test connectivity from cluster
-    echo -e "${BLUE}INFO${NC}: Testing connectivity from cluster to MinIO..."
+    echo "${BLUE}INFO${NC}: Testing connectivity from cluster to MinIO..."
     
     local test_pod_name="minio-test-$(date +%s)"
     local test_manifest
@@ -965,7 +965,7 @@ EOF
 )
     
     if echo "$test_manifest" | oc apply -f -; then
-        echo -e "${BLUE}INFO${NC}: Test pod created. Waiting for completion..."
+        echo "${BLUE}INFO${NC}: Test pod created. Waiting for completion..."
         
         # Wait for pod to complete (max 60 seconds)
         local timeout=60
@@ -984,9 +984,9 @@ EOF
         local logs
         logs=$(oc logs "$test_pod_name" -n "$namespace" 2>/dev/null)
         if [[ "$logs" =~ "SUCCESS: MinIO connection test passed" ]]; then
-            echo -e "${GREEN}SUCCESS${NC}: MinIO connectivity test passed!"
+            echo "${GREEN}SUCCESS${NC}: MinIO connectivity test passed!"
         else
-            echo -e "${YELLOW}WARN${NC}: MinIO connectivity test may have failed" >&2
+            echo "${YELLOW}WARN${NC}: MinIO connectivity test may have failed" >&2
             echo "Test pod logs:"
             echo "$logs"
         fi
@@ -994,20 +994,20 @@ EOF
         # Cleanup test pod
         oc delete pod "$test_pod_name" -n "$namespace" &>/dev/null
     else
-        echo -e "${YELLOW}WARN${NC}: Could not create test pod" >&2
+        echo "${YELLOW}WARN${NC}: Could not create test pod" >&2
     fi
     
-    echo -e "${GREEN}SUCCESS${NC}: MinIO cluster access configured!"
-    echo -e ""
-    echo -e "${BLUE}Usage in pods:${NC}"
-    echo -e "  Use secret '$secret_name' in namespace '$namespace'"
-    echo -e "  Environment variables: MINIO_ENDPOINT, MINIO_ACCESS_KEY, MINIO_SECRET_KEY"
-    echo -e ""
-    echo -e "${BLUE}Example pod configuration:${NC}"
-    echo -e "  env:"
-    echo -e "  - name: AWS_ENDPOINT_URL"
-    echo -e "    valueFrom:"
-    echo -e "      secretKeyRef:"
-    echo -e "        name: $secret_name"
-    echo -e "        key: MINIO_ENDPOINT"
+    echo "${GREEN}SUCCESS${NC}: MinIO cluster access configured!"
+    echo ""
+    echo "${BLUE}Usage in pods:${NC}"
+    echo "  Use secret '$secret_name' in namespace '$namespace'"
+    echo "  Environment variables: MINIO_ENDPOINT, MINIO_ACCESS_KEY, MINIO_SECRET_KEY"
+    echo ""
+    echo "${BLUE}Example pod configuration:${NC}"
+    echo "  env:"
+    echo "  - name: AWS_ENDPOINT_URL"
+    echo "    valueFrom:"
+    echo "      secretKeyRef:"
+    echo "        name: $secret_name"
+    echo "        key: MINIO_ENDPOINT"
 }
