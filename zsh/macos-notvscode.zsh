@@ -105,7 +105,7 @@ if [[ "$TERM_PROGRAM" != "vscode" ]]; then
     fi
     # MAC address randomization - uses ifconfig method (reliable on M4/Apple Silicon)
     # Source the function first
-    source ~/git/dotfiles/zsh/functions/randomize-mac.zsh
+    _safe_source ~/git/dotfiles/zsh/functions/randomize-mac.zsh
     # Create alias for backward compatibility
     alias randomize-mac='randomize-mac-ifconfig'
 
@@ -123,7 +123,7 @@ give-me-ram(){
 }
 
 # AA Inflight WiFi automation - randomize MAC every 20 minutes for free WiFi
-source ~/git/dotfiles/zsh/functions/aa-inflight-wifi.zsh
+_safe_source ~/git/dotfiles/zsh/functions/aa-inflight-wifi.zsh
 
 # Backwards compatibility aliases for renamed functions
 alias setTTLforHotspot='set-ttl-for-hotspot'
