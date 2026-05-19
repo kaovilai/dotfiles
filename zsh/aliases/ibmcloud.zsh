@@ -5,11 +5,11 @@ alias ibmcloud-vpc-gen2zone='echo us-east-1'
 alias ibmcloud-subnetid='ibmcloud ks subnets --provider vpc-gen2 --vpc-id $(ibmcloud-vpcid) --zone $(ibmcloud-vpc-gen2zone) --output json | jq --raw-output ".[0].id"'
 ibmcloud-oc-latestversion() {
     if ! command -v ibmcloud &>/dev/null; then
-        echo "❌ ibmcloud not found. Install it with: brew install ibm-cloud-cli"
+        echo "❌ ibmcloud not found. Install it with: brew install ibm-cloud-cli" >&2
         return 1
     fi
     if ! command -v jq &>/dev/null; then
-        echo "❌ jq not found. Install it with: brew install jq"
+        echo "❌ jq not found. Install it with: brew install jq" >&2
         return 1
     fi
     local versions_json

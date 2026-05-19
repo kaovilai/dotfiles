@@ -16,11 +16,11 @@ alias crelease='code ~/git/release'
 # Open directories from ~/git/ selected via fzf
 cg() {
   if ! command -v fzf &>/dev/null; then
-    echo "❌ fzf not found. Install it with: brew install fzf"
+    echo "❌ fzf not found. Install it with: brew install fzf" >&2
     return 1
   fi
   if ! command -v code &>/dev/null; then
-    echo "❌ code not found. Install VS Code and run: Shell Command: Install 'code' command in PATH"
+    echo "❌ code not found. Install VS Code and run: Shell Command: Install 'code' command in PATH" >&2
     return 1
   fi
   local dirs

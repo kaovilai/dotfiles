@@ -23,15 +23,15 @@ function ln-claude-home() {
         return 0
     fi
     if [[ -e "$dst" ]]; then
-        echo "❌ $dst already exists and is not a symlink. Remove it first."
+        echo "❌ $dst already exists and is not a symlink. Remove it first." >&2
         return 1
     fi
-    ln -s "$src" "$dst" || { echo "❌ Failed to create symlink: $dst → $src"; return 1; }
+    ln -s "$src" "$dst" || { echo "❌ Failed to create symlink: $dst → $src" >&2; return 1; }
     echo "Created symlink: $dst → $src"
 }
 computer-use-claude() {
     if ! command -v docker &>/dev/null; then
-        echo "❌ docker not found. Install Docker Desktop from https://www.docker.com/products/docker-desktop/"
+        echo "❌ docker not found. Install Docker Desktop from https://www.docker.com/products/docker-desktop/" >&2
         return 1
     fi
     if [[ -n "${CLOUD_ML_REGION}" ]] && [[ -n "${ANTHROPIC_VERTEX_PROJECT_ID}" ]]; then
@@ -49,7 +49,7 @@ computer-use-claude() {
             -it ghcr.io/anthropics/anthropic-quickstarts:computer-use-demo-latest
     else
         if [[ -z "${ANTHROPIC_API_KEY}" ]]; then
-            echo "❌ ANTHROPIC_API_KEY is not set. Set it or configure CLOUD_ML_REGION and ANTHROPIC_VERTEX_PROJECT_ID to use Vertex AI."
+            echo "❌ ANTHROPIC_API_KEY is not set. Set it or configure CLOUD_ML_REGION and ANTHROPIC_VERTEX_PROJECT_ID to use Vertex AI." >&2
             return 1
         fi
         echo "Using Anthropic API (set CLOUD_ML_REGION and ANTHROPIC_VERTEX_PROJECT_ID to use Vertex AI)"
@@ -67,7 +67,7 @@ alias activepieces-start='podman compose -f ~/OneDrive/activepieces/docker-compo
 alias activepieces-stop='podman compose -f ~/OneDrive/activepieces/docker-compose.activepiecestailscale.yml down'
 activepieces-restart() {
     if ! command -v podman &>/dev/null; then
-        echo "❌ podman not found. Install it with: brew install podman"
+        echo "❌ podman not found. Install it with: brew install podman" >&2
         return 1
     fi
     # First bring down the containers
@@ -76,11 +76,11 @@ activepieces-restart() {
     # Clean up Tailscale machines if API key and tailnet are configured
     if [[ -n "$TAILSCALE_API_KEY" ]] && [[ -n "$TAILSCALE_TAILNET" ]]; then
         if ! command -v curl &>/dev/null; then
-            echo "❌ curl not found. Install it with: brew install curl"
+            echo "❌ curl not found. Install it with: brew install curl" >&2
             return 1
         fi
         if ! command -v jq &>/dev/null; then
-            echo "❌ jq not found. Install it with: brew install jq"
+            echo "❌ jq not found. Install it with: brew install jq" >&2
             return 1
         fi
         echo "Looking for activepieces machines in Tailscale..."
@@ -119,7 +119,7 @@ alias audio-poly='SwitchAudioSource -t all -s "Poly V4320 Series"'
 alias restart-dock='killall Dock'
 c() {
     if [[ "$OSTYPE" != darwin* ]]; then
-        echo "Error: c is only supported on macOS"
+        echo "Error: c is only supported on macOS" >&2
         return 1
     fi
     osascript -e "tell app \"Terminal\" to do script \"cd $HOME/experiments/ && happy --enable-auto-mode --permission-mode auto \\\"$1\\\"\""
@@ -142,7 +142,7 @@ alias claude-worktree='claude --worktree'
 alias cwt='claude-worktree'
 claude-review() {
     if [[ "$OSTYPE" != darwin* ]]; then
-        echo "Error: claude-review is only supported on macOS"
+        echo "Error: claude-review is only supported on macOS" >&2
         return 1
     fi
     osascript -e "tell app \"Terminal\" to do script \"cd $HOME/experiments/ && happy --enable-auto-mode --permission-mode auto \\\"/review $1\\\"\""
@@ -150,7 +150,7 @@ claude-review() {
 alias cr='claude-review'
 gemini-review() {
     if [[ "$OSTYPE" != darwin* ]]; then
-        echo "Error: gemini-review is only supported on macOS"
+        echo "Error: gemini-review is only supported on macOS" >&2
         return 1
     fi
     osascript -e "tell app \"Terminal\" to do script \"cd $HOME/experiments/ && gemini -p \\\"/review $1\\\"\""
@@ -188,11 +188,11 @@ function ocr(){
         return 1
     fi
     if [[ ! -f "$input" ]]; then
-        echo "Error: Input file '$input' not found"
+        echo "Error: Input file '$input' not found" >&2
         return 1
     fi
     if ! command -v ocrmypdf &> /dev/null; then
-        echo "Error: ocrmypdf is not installed. Install with: brew install ocrmypdf"
+        echo "Error: ocrmypdf is not installed. Install with: brew install ocrmypdf" >&2
         return 1
     fi
     local ext="${input##*.}"
@@ -209,12 +209,12 @@ function vid2gif(){
     local output="$HOME/Downloads/$(basename "${input%.*}").gif"
     
     if [[ ! -f "$input" ]]; then
-        echo "Error: Input file '$input' not found"
+        echo "Error: Input file '$input' not found" >&2
         return 1
     fi
     
     if ! command -v ffmpeg &> /dev/null; then
-        echo "Error: ffmpeg is not installed"
+        echo "Error: ffmpeg is not installed" >&2
         return 1
     fi
     
