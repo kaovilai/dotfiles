@@ -41,7 +41,7 @@ list-ocp-clusters() {
     fi
 
     local show_full=false
-    local dir
+    local dir cluster_dir cluster_name cluster_type
     if [[ "$1" == "--full" ]]; then
         show_full=true
     fi
@@ -57,11 +57,11 @@ list-ocp-clusters() {
         # Find all directories with auth/kubeconfig files
         while IFS= read -r -d '' dir; do
             if [[ -f "$dir/kubeconfig" ]]; then
-                local cluster_dir=$(dirname "$dir")
-                local cluster_name=$(basename "$cluster_dir")
+                cluster_dir=$(dirname "$dir")
+                cluster_name=$(basename "$cluster_dir")
                 
                 # Determine cluster type
-                local cluster_type=""
+                cluster_type=""
                 if [[ "$cluster_name" == *"-aws-"* ]]; then
                     cluster_type="AWS"
                 elif [[ "$cluster_name" == *"-gcp-"* ]]; then
@@ -87,7 +87,7 @@ list-ocp-clusters() {
         # Check for ROSA clusters that might not have kubeconfig files yet
         while IFS= read -r -d '' dir; do
             if [[ ! -f "$dir/auth/kubeconfig" && -f "$dir/cluster-admin.txt" ]]; then
-                local cluster_name=$(basename "$dir")
+                cluster_name=$(basename "$dir")
                 count=$((count+1))
                 
                 if [[ "$show_full" == true ]]; then
@@ -112,8 +112,8 @@ list-ocp-clusters() {
         # Find all directories with auth/kubeconfig files
         while IFS= read -r -d '' dir; do
             if [[ -f "$dir/kubeconfig" ]]; then
-                local cluster_dir=$(dirname "$dir")
-                local cluster_name=$(basename "$cluster_dir")
+                cluster_dir=$(dirname "$dir")
+                cluster_name=$(basename "$cluster_dir")
                 count=$((count+1))
                 
                 if [[ "$show_full" == true ]]; then
@@ -196,15 +196,15 @@ use-ocp-cluster() {
     local search_pattern="$1"
     local kubeconfig_files=()
     local cluster_names=()
-    local dir
+    local dir cluster_dir cluster_name cluster_type rosa_cluster_name crc_vm_status
     if [[ -d "$OCP_MANIFESTS_DIR" ]]; then
         while IFS= read -r -d '' dir; do
             if [[ -f "$dir/kubeconfig" ]]; then
-                local cluster_dir=$(dirname "$dir")
-                local cluster_name=$(basename "$cluster_dir")
+                cluster_dir=$(dirname "$dir")
+                cluster_name=$(basename "$cluster_dir")
                 
                 # Determine cluster type
-                local cluster_type=""
+                cluster_type=""
                 if [[ "$cluster_name" == *"-aws-"* ]]; then
                     cluster_type="AWS"
                 elif [[ "$cluster_name" == *"-gcp-"* ]]; then
@@ -228,7 +228,7 @@ use-ocp-cluster() {
         # Check for ROSA clusters that might not have kubeconfig files yet
         while IFS= read -r -d '' dir; do
             if [[ ! -f "$dir/auth/kubeconfig" && -f "$dir/cluster-admin.txt" ]]; then
-                local cluster_name=$(basename "$dir")
+                cluster_name=$(basename "$dir")
                 
                 # Apply pattern filter if provided
                 if [[ -z $search_pattern || $cluster_name == *$search_pattern* ]]; then
@@ -244,8 +244,8 @@ use-ocp-cluster() {
     if [[ -d "$HOME/clusters" ]]; then
         while IFS= read -r -d '' dir; do
             if [[ -f "$dir/kubeconfig" ]]; then
-                local cluster_dir=$(dirname "$dir")
-                local cluster_name=$(basename "$cluster_dir")
+                cluster_dir=$(dirname "$dir")
+                cluster_name=$(basename "$cluster_dir")
                 
                 # Apply pattern filter if provided
                 if [[ -z $search_pattern || $cluster_name == *$search_pattern* ]]; then
@@ -328,7 +328,7 @@ use-ocp-cluster() {
         echo "You need to use the use-rosa-sts function to connect."
         echo ""
         local rosa_dir="${selected_path#ROSA:}"
-        local rosa_cluster_name=$(basename "$rosa_dir")
+        rosa_cluster_name=$(basename "$rosa_dir")
         
         # Extract architecture from directory name
         if [[ "$rosa_cluster_name" == *"-arm64" ]]; then
@@ -349,7 +349,7 @@ use-ocp-cluster() {
     # Check if this is CRC and warn if it's stopped
     if [[ "$selected_path" == *".crc/machines/crc/kubeconfig"* ]]; then
         if command -v crc &> /dev/null; then
-            local crc_vm_status=$(crc status 2>&1 | grep "CRC VM:" | awk '{print $3}')
+            crc_vm_status=$(crc status 2>&1 | grep "CRC VM:" | awk '{print $3}')
             if [[ "$crc_vm_status" == "Stopped" ]]; then
                 echo ""
                 echo "WARNING: CRC is stopped. You need to start it first:"
