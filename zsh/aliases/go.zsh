@@ -1,7 +1,7 @@
 _gofmt_files() {
     local diff_args=("$@")
     if ! command -v go &>/dev/null; then
-        echo "❌ go not found. Install it with: brew install go"
+        echo "❌ go not found. Install it with: brew install go" >&2
         return 1
     fi
     local files
@@ -19,7 +19,7 @@ gofmtgitdiffoadp()   { _gofmt_files upstream/oadp-dev; }
 alias grf='golangci-lint run --fix'
 golangci-lint-with-retry() {
   if ! command -v golangci-lint &>/dev/null; then
-    echo "❌ golangci-lint not found. Install it with: brew install golangci-lint"
+    echo "❌ golangci-lint not found. Install it with: brew install golangci-lint" >&2
     return 1
   fi
   local max_attempts=30
