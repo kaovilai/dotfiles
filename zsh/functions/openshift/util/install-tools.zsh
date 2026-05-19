@@ -96,7 +96,7 @@ install-opm(){
 #   openshift-patch-versions-arm64
 #   latest=$(openshift-patch-versions-arm64 | tail -n 1)
 function openshift-patch-versions-arm64(){
-    curl --silent https://openshift-release-artifacts-arm64.apps.ci.l2s4.p1.openshiftapps.com/ | grep -vE $OPENSHIFT_REJECT_VERSIONS_EXPRESSION | cut -d '"' -f 2 | sed "s/\///g" | grep -vE "<|>|en|utf|^$" | grep -ve "\.\." | sort -V | awk -F. '{if(!a[$1"."$2]++)print $1"."$2"."$NF}'
+    curl --silent https://openshift-release-artifacts-arm64.apps.ci.l2s4.p1.openshiftapps.com/ | grep -vE "${OPENSHIFT_REJECT_VERSIONS_EXPRESSION:-^$}" | cut -d '"' -f 2 | sed "s/\///g" | grep -vE "<|>|en|utf|^$" | grep -ve "\.\." | sort -V | awk -F. '{if(!a[$1"."$2]++)print $1"."$2"."$NF}'
 }
 
 # List available AMD64 OpenShift patch versions
@@ -110,7 +110,7 @@ function openshift-patch-versions-arm64(){
 #   openshift-patch-versions-amd64
 #   latest=$(openshift-patch-versions-amd64 | tail -n 1)
 function openshift-patch-versions-amd64(){
-    curl --silent https://openshift-release-artifacts.apps.ci.l2s4.p1.openshiftapps.com/ | grep -vE $OPENSHIFT_REJECT_VERSIONS_EXPRESSION | cut -d '"' -f 2 | sed "s/\///g" | grep -vE "<|>|en|utf|^$" | grep -ve "\.\." | sort -V | awk -F. '{if(!a[$1"."$2]++)print $1"."$2"."$NF}'
+    curl --silent https://openshift-release-artifacts.apps.ci.l2s4.p1.openshiftapps.com/ | grep -vE "${OPENSHIFT_REJECT_VERSIONS_EXPRESSION:-^$}" | cut -d '"' -f 2 | sed "s/\///g" | grep -vE "<|>|en|utf|^$" | grep -ve "\.\." | sort -V | awk -F. '{if(!a[$1"."$2]++)print $1"."$2"."$NF}'
 }
 
 alias latest-openshift-patch-version-arm64="openshift-patch-versions-arm64 | tail -n 1"
