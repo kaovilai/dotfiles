@@ -144,9 +144,15 @@ exec-dirs-ds() {
         echo "❌ gh not found. Install it with: brew install gh" >&2
         return 1
     fi
+    local echo_only=false
+    if [[ "$1" == "--echo-only" ]]; then
+        echo_only=true
+        shift
+    fi
     if [[ -z "$1" || -z "$2" || -z "$3" || -z "$4" || -z "$5" ]]; then
-        echo "Usage: exec-dirs-ds <pattern> <ds-name> <base-branch> <branch-name> <command>"
+        echo "Usage: exec-dirs-ds [--echo-only] <pattern> <ds-name> <base-branch> <branch-name> <command>"
         echo "Example: exec-dirs-ds \"velero*\" upstream main fix-123 \"go mod tidy\""
+        echo "         exec-dirs-ds --echo-only \"velero*\" upstream main fix-123 \"go mod tidy\""
         return 1
     fi
     local pattern="$1"
@@ -154,7 +160,6 @@ exec-dirs-ds() {
     local base_branch="$3"
     local branch_name="$4"
     local cmd="$5"
-    local echo_only=false
 
     # Use find to locate matching directories
     find . -type d -maxdepth 1 -name "$pattern" | while read -r dir; do
