@@ -3,11 +3,11 @@
 # All functions can run concurrently in separate shell sessions.
 
 # Color codes for output — conditional so we don't overwrite user-defined values
-: ${RED:='\033[0;31m'}
-: ${GREEN:='\033[0;32m'}
-: ${YELLOW:='\033[1;33m'}
-: ${BLUE:='\033[0;34m'}
-: ${NC:='\033[0m'}
+: ${RED:=$'\033[0;31m'}
+: ${GREEN:=$'\033[0;32m'}
+: ${YELLOW:=$'\033[1;33m'}
+: ${BLUE:=$'\033[0;34m'}
+: ${NC:=$'\033[0m'}
 
 # 1) Quick local container - runs current directory in a Fedora container via podman
 podman-linux() {
