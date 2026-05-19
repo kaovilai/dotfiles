@@ -39,3 +39,4 @@ for func in \
     trust-certificate-in-system; do
     eval "${func}() { _lazy_load_s3 || return 1; ${func} \"\$@\"; }"
 done
+unset func
