@@ -4,6 +4,12 @@ if [[ -z "$ZSH_COMPLETION_CACHE_DIR" ]]; then
   source ~/git/dotfiles/zsh/command-cache.zsh
 fi
 
+# Run completion setup in an anonymous function to properly scope local variables.
+# Without this, 'local' at the top level of a sourced file is a no-op in ZSH,
+# leaving variables like docker_completion_file, gh_completion_cache, etc. in
+# the global namespace. Functions defined here are still globally accessible.
+() {
+
 # -- PHASE 1: Essential completions (foreground) --
 
 # VS Code shell integration (if we're running in VS Code)
@@ -208,6 +214,8 @@ _code-git() {
 
 _code-git
 EOF
+
+} # end anonymous function
 
 # Help command to view cache status
 zsh_completion_cache_status() {
