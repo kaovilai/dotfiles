@@ -14,7 +14,7 @@ export MINIO_DEPLOYMENTS_DIR="$HOME/.minio-deployments"
 create-minio-config-dir() {
     if [[ ! -d "$MINIO_DEPLOYMENTS_DIR" ]]; then
         echo -e "${BLUE}INFO${NC}: Creating MinIO deployments directory: $MINIO_DEPLOYMENTS_DIR"
-        mkdir -p "$MINIO_DEPLOYMENTS_DIR" || { echo -e "${RED}ERROR${NC}: Failed to create MinIO deployments directory $MINIO_DEPLOYMENTS_DIR"; return 1; }
+        mkdir -p "$MINIO_DEPLOYMENTS_DIR" || { echo -e "${RED}ERROR${NC}: Failed to create MinIO deployments directory $MINIO_DEPLOYMENTS_DIR" >&2; return 1; }
     fi
 }
 
@@ -23,14 +23,14 @@ save-minio-config() {
     local config_data="$2"
 
     if [[ -z "$name" ]]; then
-        echo -e "${RED}ERROR${NC}: MinIO deployment name is required"
+        echo -e "${RED}ERROR${NC}: MinIO deployment name is required" >&2
         return 1
     fi
 
     create-minio-config-dir
     local config_file="$MINIO_DEPLOYMENTS_DIR/${name}.json"
 
-    echo "$config_data" > "$config_file" || { echo -e "${RED}ERROR${NC}: Failed to save configuration to $config_file"; return 1; }
+    echo "$config_data" > "$config_file" || { echo -e "${RED}ERROR${NC}: Failed to save configuration to $config_file" >&2; return 1; }
     echo -e "${GREEN}INFO${NC}: Configuration saved to $config_file"
 }
 
@@ -97,7 +97,7 @@ get-minio-connection-info() {
     done
     
     if [[ -z "$name" ]]; then
-        echo -e "${RED}ERROR${NC}: MinIO deployment name is required"
+        echo -e "${RED}ERROR${NC}: MinIO deployment name is required" >&2
         echo "Usage: get-minio-connection-info --name <deployment-name>"
         return 1
     fi
@@ -167,16 +167,16 @@ generate-self-signed-cert() {
     local cert_name=${3:-"minio-cert"}
     
     if [[ -z "$hostname" || -z "$cert_dir" ]]; then
-        echo -e "${RED}ERROR${NC}: hostname and cert_dir are required"
+        echo -e "${RED}ERROR${NC}: hostname and cert_dir are required" >&2
         return 1
     fi
 
     if ! command -v openssl &>/dev/null; then
-        echo -e "${RED}ERROR${NC}: openssl not found. Install it with: brew install openssl"
+        echo -e "${RED}ERROR${NC}: openssl not found. Install it with: brew install openssl" >&2
         return 1
     fi
     
-    mkdir -p "$cert_dir" || { echo -e "${RED}ERROR${NC}: Failed to create cert directory $cert_dir"; return 1; }
+    mkdir -p "$cert_dir" || { echo -e "${RED}ERROR${NC}: Failed to create cert directory $cert_dir" >&2; return 1; }
     
     local key_file="$cert_dir/${cert_name}.key"
     local cert_file="$cert_dir/${cert_name}.pem"
@@ -235,7 +235,7 @@ trust-certificate-in-system() {
     local cert_file="$1"
     
     if [[ -z "$cert_file" || ! -f "$cert_file" ]]; then
-        echo -e "${RED}ERROR${NC}: Certificate file not found: $cert_file"
+        echo -e "${RED}ERROR${NC}: Certificate file not found: $cert_file" >&2
         return 1
     fi
     
@@ -244,18 +244,18 @@ trust-certificate-in-system() {
         if sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain "$cert_file"; then
             echo -e "${GREEN}SUCCESS${NC}: Certificate added to macOS trust store"
         else
-            echo -e "${RED}ERROR${NC}: Failed to add certificate to macOS trust store"
+            echo -e "${RED}ERROR${NC}: Failed to add certificate to macOS trust store" >&2
             return 1
         fi
     else
         echo -e "${BLUE}INFO${NC}: Adding certificate to Linux system trust store"
         local cert_name
         cert_name=$(basename "$cert_file" .pem)
-        sudo cp "$cert_file" "/usr/local/share/ca-certificates/${cert_name}.crt" || { echo -e "${RED}ERROR${NC}: Failed to copy certificate to system trust store"; return 1; }
+        sudo cp "$cert_file" "/usr/local/share/ca-certificates/${cert_name}.crt" || { echo -e "${RED}ERROR${NC}: Failed to copy certificate to system trust store" >&2; return 1; }
         if sudo update-ca-certificates; then
             echo -e "${GREEN}SUCCESS${NC}: Certificate added to Linux trust store"
         else
-            echo -e "${RED}ERROR${NC}: Failed to add certificate to Linux trust store"
+            echo -e "${RED}ERROR${NC}: Failed to add certificate to Linux trust store" >&2
             return 1
         fi
     fi
@@ -265,12 +265,12 @@ remove-certificate-from-system() {
     local cert_file="$1"
     
     if [[ -z "$cert_file" ]]; then
-        echo -e "${RED}ERROR${NC}: Certificate file path is required"
+        echo -e "${RED}ERROR${NC}: Certificate file path is required" >&2
         return 1
     fi
 
     if ! command -v openssl &>/dev/null; then
-        echo -e "${RED}ERROR${NC}: openssl not found. Install it with: brew install openssl"
+        echo -e "${RED}ERROR${NC}: openssl not found. Install it with: brew install openssl" >&2
         return 1
     fi
 
@@ -294,12 +294,12 @@ test-minio-connection() {
     local name="$1"
     
     if [[ -z "$name" ]]; then
-        echo -e "${RED}ERROR${NC}: MinIO deployment name is required"
+        echo -e "${RED}ERROR${NC}: MinIO deployment name is required" >&2
         echo "Usage: test-minio-connection <deployment-name>"
         return 1
     fi
     if ! command -v aws &>/dev/null; then
-        echo -e "${RED}ERROR${NC}: aws not found. Install it with: brew install awscli"
+        echo -e "${RED}ERROR${NC}: aws not found. Install it with: brew install awscli" >&2
         return 1
     fi
     if ! command -v jq &>/dev/null; then
@@ -332,7 +332,7 @@ test-minio-connection() {
     if "${aws_cmd[@]}"; then
         echo -e "${GREEN}SUCCESS${NC}: Connection to MinIO deployment '$name' successful!"
     else
-        echo -e "${RED}ERROR${NC}: Failed to connect to MinIO deployment '$name'"
+        echo -e "${RED}ERROR${NC}: Failed to connect to MinIO deployment '$name'" >&2
         echo -e "${YELLOW}HINT${NC}: Try running: get-minio-connection-info --name $name"
         result=1
     fi
@@ -346,7 +346,7 @@ remove-minio-config() {
     local name="$1"
     
     if [[ -z "$name" ]]; then
-        echo -e "${RED}ERROR${NC}: MinIO deployment name is required"
+        echo -e "${RED}ERROR${NC}: MinIO deployment name is required" >&2
         return 1
     fi
     
@@ -356,7 +356,7 @@ remove-minio-config() {
         rm "$config_file"
         echo -e "${GREEN}INFO${NC}: Configuration removed for MinIO deployment '$name'"
     else
-        echo -e "${YELLOW}WARN${NC}: No configuration found for MinIO deployment '$name'"
+        echo -e "${YELLOW}WARN${NC}: No configuration found for MinIO deployment '$name'" >&2
     fi
 }
 
@@ -397,17 +397,17 @@ download-minio-certificate() {
     done
 
     if [[ -z "$name" ]]; then
-        echo -e "${RED}ERROR${NC}: MinIO deployment name is required"
+        echo -e "${RED}ERROR${NC}: MinIO deployment name is required" >&2
         echo "Usage: download-minio-certificate --name <deployment-name> [--force]"
         return 1
     fi
 
     if ! command -v openssl &>/dev/null; then
-        echo -e "${RED}ERROR${NC}: openssl not found. Install it with: brew install openssl"
+        echo -e "${RED}ERROR${NC}: openssl not found. Install it with: brew install openssl" >&2
         return 1
     fi
     if ! command -v curl &>/dev/null; then
-        echo -e "${RED}ERROR${NC}: curl not found. Install it with: brew install curl"
+        echo -e "${RED}ERROR${NC}: curl not found. Install it with: brew install curl" >&2
         return 1
     fi
     if ! command -v jq &>/dev/null; then
@@ -428,12 +428,12 @@ download-minio-certificate() {
     local cert_file="$cert_dir/minio-cert.pem"
 
     if [[ "$provider" != "aws" ]]; then
-        echo -e "${RED}ERROR${NC}: Certificate download is only supported for AWS deployments"
+        echo -e "${RED}ERROR${NC}: Certificate download is only supported for AWS deployments" >&2
         return 1
     fi
 
     # Ensure directory exists
-    mkdir -p "$cert_dir" || { echo -e "${RED}ERROR${NC}: Failed to create cert directory $cert_dir"; return 1; }
+    mkdir -p "$cert_dir" || { echo -e "${RED}ERROR${NC}: Failed to create cert directory $cert_dir" >&2; return 1; }
 
     # Check if certificate already exists
     if [[ -f "$cert_file" && -s "$cert_file" && "$force" == false ]]; then
@@ -445,7 +445,7 @@ download-minio-certificate() {
             echo -e "${GREEN}SUCCESS${NC}: Existing certificate is valid"
             return 0
         else
-            echo -e "${YELLOW}WARN${NC}: Existing certificate appears invalid, re-downloading..."
+            echo -e "${YELLOW}WARN${NC}: Existing certificate appears invalid, re-downloading..." >&2
         fi
     fi
 
@@ -454,7 +454,7 @@ download-minio-certificate() {
 
     # First check if HTTPS is responding
     if ! curl -k -s --connect-timeout 10 --max-time 15 "https://${public_dns}:9000/minio/health/ready" &>/dev/null; then
-        echo -e "${RED}ERROR${NC}: MinIO HTTPS endpoint is not responding"
+        echo -e "${RED}ERROR${NC}: MinIO HTTPS endpoint is not responding" >&2
         echo -e "${YELLOW}HINT${NC}: Make sure the MinIO deployment is running"
         echo -e "${YELLOW}HINT${NC}: For Docker deployments, MinIO may take 2-3 minutes to start"
         echo -e "${YELLOW}HINT${NC}: You can check with: curl -k $endpoint/minio/health/ready"
@@ -495,7 +495,7 @@ download-minio-certificate() {
 
             return 0
         else
-            echo -e "${RED}ERROR${NC}: Downloaded file is not a valid certificate"
+            echo -e "${RED}ERROR${NC}: Downloaded file is not a valid certificate" >&2
             rm -f "$temp_cert"
             return 1
         fi
@@ -504,7 +504,7 @@ download-minio-certificate() {
     # Clean up temp file if it exists
     rm -f "$temp_cert"
 
-    echo -e "${RED}ERROR${NC}: Failed to extract certificate from HTTPS connection"
+    echo -e "${RED}ERROR${NC}: Failed to extract certificate from HTTPS connection" >&2
     echo -e "${YELLOW}HINT${NC}: Make sure MinIO is running with HTTPS enabled"
     echo -e "${YELLOW}HINT${NC}: You can test the connection with: curl -k $endpoint/minio/health/ready"
     return 1
@@ -518,12 +518,12 @@ check-minio-docker-status() {
     local key_name="$2"
 
     if [[ -z "$name" ]]; then
-        echo -e "${RED}ERROR${NC}: MinIO deployment name is required"
+        echo -e "${RED}ERROR${NC}: MinIO deployment name is required" >&2
         echo "Usage: check-minio-docker-status <deployment-name> [key-name]"
         return 1
     fi
     if ! command -v curl &>/dev/null; then
-        echo -e "${RED}ERROR${NC}: curl not found. Install it with: brew install curl"
+        echo -e "${RED}ERROR${NC}: curl not found. Install it with: brew install curl" >&2
         return 1
     fi
     if ! command -v jq &>/dev/null; then
@@ -542,7 +542,7 @@ check-minio-docker-status() {
     endpoint=$(jq -r '.endpoint' <<< "$config")
 
     if [[ "$provider" != "aws" ]]; then
-        echo -e "${RED}ERROR${NC}: Docker status check is only supported for AWS deployments"
+        echo -e "${RED}ERROR${NC}: Docker status check is only supported for AWS deployments" >&2
         return 1
     fi
 
@@ -556,7 +556,7 @@ check-minio-docker-status() {
         echo -e "${BLUE}INFO${NC}: Console: https://${public_dns}:9001"
         return 0
     else
-        echo -e "${YELLOW}WARN${NC}: MinIO is not responding on HTTPS"
+        echo -e "${YELLOW}WARN${NC}: MinIO is not responding on HTTPS" >&2
 
         if [[ -n "$key_name" ]]; then
             echo -e "${BLUE}INFO${NC}: Attempting to check Docker status via SSH..."
@@ -570,7 +570,7 @@ check-minio-docker-status() {
             elif [[ -f ${key_name} ]]; then
                 key_path="${key_name}"
             else
-                echo -e "${RED}ERROR${NC}: SSH key not found"
+                echo -e "${RED}ERROR${NC}: SSH key not found" >&2
                 return 1
             fi
 
@@ -579,7 +579,7 @@ check-minio-docker-status() {
                 echo -e "${BLUE}INFO${NC}: Checking Docker logs (last 20 lines)..."
                 ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 -i "$key_path" "ec2-user@${public_dns}" "docker logs minio --tail 20" 2>/dev/null
             else
-                echo -e "${RED}ERROR${NC}: Could not connect via SSH"
+                echo -e "${RED}ERROR${NC}: Could not connect via SSH" >&2
             fi
         else
             echo -e "${YELLOW}HINT${NC}: Provide SSH key name to check Docker container status"
@@ -595,12 +595,12 @@ ensure-default-bucket() {
     local bucket_name="${2:-default-bucket}"
     
     if [[ -z "$deployment_name" ]]; then
-        echo -e "${RED}ERROR${NC}: Deployment name is required"
+        echo -e "${RED}ERROR${NC}: Deployment name is required" >&2
         echo "Usage: ensure-default-bucket <deployment-name> [bucket-name]"
         return 1
     fi
     if ! command -v aws &>/dev/null; then
-        echo -e "${RED}ERROR${NC}: aws not found. Install it with: brew install awscli"
+        echo -e "${RED}ERROR${NC}: aws not found. Install it with: brew install awscli" >&2
         return 1
     fi
     if ! command -v jq &>/dev/null; then
@@ -610,7 +610,7 @@ ensure-default-bucket() {
     
     local deployment_file="$MINIO_DEPLOYMENTS_DIR/${deployment_name}.json"
     if [[ ! -f "$deployment_file" ]]; then
-        echo -e "${RED}ERROR${NC}: Deployment '$deployment_name' not found"
+        echo -e "${RED}ERROR${NC}: Deployment '$deployment_name' not found" >&2
         return 1
     fi
     
@@ -634,7 +634,7 @@ ensure-default-bucket() {
         echo -e "${GREEN}SUCCESS${NC}: Created bucket '$bucket_name'"
         return 0
     else
-        echo -e "${RED}ERROR${NC}: Failed to create bucket '$bucket_name'"
+        echo -e "${RED}ERROR${NC}: Failed to create bucket '$bucket_name'" >&2
         echo -e "${YELLOW}HINT${NC}: Make sure AWS credentials are set (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY)"
         return 1
     fi
@@ -643,7 +643,7 @@ ensure-default-bucket() {
 # Function to create Velero DataProtectionApplication for MinIO
 create-velero-dpa-for-minio() {
     if ! command -v oc &>/dev/null; then
-        echo -e "${RED}ERROR${NC}: oc not found. Install it with: brew install openshift-cli"
+        echo -e "${RED}ERROR${NC}: oc not found. Install it with: brew install openshift-cli" >&2
         return 1
     fi
 
@@ -654,7 +654,7 @@ create-velero-dpa-for-minio() {
 
     # Check for required environment variables
     if [[ -z "$AWS_ACCESS_KEY_ID" ]] || [[ -z "$AWS_SECRET_ACCESS_KEY" ]] || [[ -z "$AWS_ENDPOINT_URL" ]]; then
-        echo -e "${RED}ERROR${NC}: Required MinIO environment variables not set"
+        echo -e "${RED}ERROR${NC}: Required MinIO environment variables not set" >&2
         echo "Please ensure the following are exported:"
         echo "  - AWS_ACCESS_KEY_ID"
         echo "  - AWS_SECRET_ACCESS_KEY"
