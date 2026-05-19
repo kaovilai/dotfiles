@@ -161,6 +161,11 @@ exec-dirs-ds() {
     local branch_name="$4"
     local cmd="$5"
 
+    if [[ -z "$(find . -type d -maxdepth 1 -name "$pattern" -print -quit)" ]]; then
+        echo "❌ No directories found matching pattern: $pattern" >&2
+        return 1
+    fi
+
     # Use find to locate matching directories
     find . -type d -maxdepth 1 -name "$pattern" | while read -r dir; do
         (
@@ -213,6 +218,11 @@ exec-dirs-ds-echo() {
     local base_branch="$3"
     local branch_name="$4"
     local cmd="$5"
+
+    if [[ -z "$(find . -type d -maxdepth 1 -name "$pattern" -print -quit)" ]]; then
+        echo "❌ No directories found matching pattern: $pattern" >&2
+        return 1
+    fi
 
     # Pass the same arguments but set a flag to only echo commands
     find . -type d -maxdepth 1 -name "$pattern" | while read -r dir; do
