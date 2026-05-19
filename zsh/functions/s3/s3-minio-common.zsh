@@ -69,7 +69,7 @@ list-minio-deployments() {
     
     local name config provider endpoint deployment_status config_file
     for config_file in "${_config_files[@]}"; do
-        name=$(basename "$config_file" .json)
+        name=${config_file:t:r}
         config=$(< "$config_file")
         provider=$(jq -r '.provider // "unknown"' <<< "$config")
         endpoint=$(jq -r '.endpoint // "unknown"' <<< "$config")
@@ -250,7 +250,7 @@ trust-certificate-in-system() {
     else
         echo -e "${BLUE}INFO${NC}: Adding certificate to Linux system trust store"
         local cert_name
-        cert_name=$(basename "$cert_file" .pem)
+        cert_name=${cert_file:t:r}
         sudo cp "$cert_file" "/usr/local/share/ca-certificates/${cert_name}.crt" || { echo -e "${RED}ERROR${NC}: Failed to copy certificate to system trust store" >&2; return 1; }
         if sudo update-ca-certificates; then
             echo -e "${GREEN}SUCCESS${NC}: Certificate added to Linux trust store"
@@ -283,7 +283,7 @@ remove-certificate-from-system() {
     else
         echo -e "${BLUE}INFO${NC}: Removing certificate from Linux system trust store"
         local cert_name
-        cert_name=$(basename "$cert_file" .pem)
+        cert_name=${cert_file:t:r}
         sudo rm -f "/usr/local/share/ca-certificates/${cert_name}.crt"
         sudo update-ca-certificates
         echo -e "${GREEN}SUCCESS${NC}: Certificate removed from Linux trust store"

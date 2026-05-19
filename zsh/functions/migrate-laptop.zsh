@@ -602,7 +602,7 @@ $(ls -la "$backup_dir")
 EOF
     
     success "Backup completed at $backup_dir"
-    echo "Compress with: tar -czf laptop-backup.tar.gz -C $HOME $(basename $backup_dir)"
+    echo "Compress with: tar -czf laptop-backup.tar.gz -C $HOME ${backup_dir:t}"
 }
 
 # Function to update Brewfile from current system
