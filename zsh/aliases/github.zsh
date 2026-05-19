@@ -385,6 +385,7 @@ review-prs() {
     wait "$pid"
   done
   rm -rf "$tmpdir"
+  trap - EXIT INT TERM
 
   echo -n "Approval comment (default: /lgtm): "
   local comment
