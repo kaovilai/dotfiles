@@ -367,7 +367,7 @@ review-prs() {
   tmpdir=$(mktemp -d) || { echo "❌ Failed to create temp directory"; return 1; }
   trap "rm -rf \"$tmpdir\"" EXIT INT TERM
   local pids=()
-  local repo pr_num diff_file ref pid
+  local repo pr_num diff_file ref pid label
 
   for ref in "${pr_refs[@]}"; do
     repo="${ref%#*}"

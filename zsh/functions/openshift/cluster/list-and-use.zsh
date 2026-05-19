@@ -41,6 +41,7 @@ list-ocp-clusters() {
     fi
 
     local show_full=false
+    local dir
     if [[ "$1" == "--full" ]]; then
         show_full=true
     fi
@@ -195,8 +196,7 @@ use-ocp-cluster() {
     local search_pattern="$1"
     local kubeconfig_files=()
     local cluster_names=()
-    
-    # Find all cloud provider clusters
+    local dir
     if [[ -d "$OCP_MANIFESTS_DIR" ]]; then
         while IFS= read -r -d '' dir; do
             if [[ -f "$dir/kubeconfig" ]]; then
