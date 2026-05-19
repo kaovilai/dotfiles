@@ -89,6 +89,8 @@ set-dns-servers() {
         done
     fi
 
+    # Check if running on macOS
+    if [[ "$OSTYPE" != darwin* ]]; then
         echo "Error: This function is only supported on macOS" >&2
         return 1
     fi
