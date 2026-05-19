@@ -76,6 +76,7 @@ _lazy_load_dns() {
 for func in set-dns-servers clear-dns-servers; do
     eval "${func}() { _lazy_load_dns || return 1; ${func} \"\$@\"; }"
 done
+unset func
 
 # SD card symlink utilities (lazy-loaded — ~240 lines only parsed when first used)
 typeset -g SYMLINK_SD_LOADED=0
@@ -87,6 +88,7 @@ _lazy_load_symlink_sd() {
 for func in symlink-to-sd unsymlink-from-sd relink-from-sd; do
     eval "${func}() { _lazy_load_symlink_sd || return 1; ${func} \"\$@\"; }"
 done
+unset func
 
 # WiFi utilities (lazy-loaded — ~62 lines only parsed when first used)
 typeset -g WIFI_FUNCTIONS_LOADED=0
@@ -98,6 +100,7 @@ _lazy_load_wifi() {
 for func in wifi-standard; do
     eval "${func}() { _lazy_load_wifi || return 1; ${func} \"\$@\"; }"
 done
+unset func
 source ~/git/dotfiles/zsh/util.zsh
 if [[ "$TERM_PROGRAM" != "vscode" ]]; then
   # Git status check (background to avoid blocking startup)
