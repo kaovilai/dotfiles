@@ -3,11 +3,11 @@
 # Usage: cherrypick-pr <#PR-number> ...
 cherrypick-pr() {
     if ! command -v gh &>/dev/null; then
-        echo "❌ gh not found. Install it with: brew install gh"
+        echo "❌ gh not found. Install it with: brew install gh" >&2
         return 1
     fi
     if ! command -v jq &>/dev/null; then
-        echo "❌ jq not found. Install it with: brew install jq"
+        echo "❌ jq not found. Install it with: brew install jq" >&2
         return 1
     fi
     printf '%s\n' "$@" | xargs -n 1 -I {} sh -c 'git cherry-pick $(gh pr view {} --json commits | jq ".commits[].oid" --raw-output | xargs)'
@@ -31,11 +31,11 @@ cherrypick-pr-to-branch() {
 # Helper function to create a new changelog for velero repos
 new-changelog() {
     if ! command -v gh &>/dev/null; then
-        echo "❌ gh not found. Install it with: brew install gh"
+        echo "❌ gh not found. Install it with: brew install gh" >&2
         return 1
     fi
     if ! command -v jq &>/dev/null; then
-        echo "❌ jq not found. Install it with: brew install jq"
+        echo "❌ jq not found. Install it with: brew install jq" >&2
         return 1
     fi
     local GH_PR_JSON GH_LOGIN GH_PR_NUMBER CHANGELOG_BODY
@@ -65,7 +65,7 @@ go-mod-upgrade() {
     return 1
     fi
     if ! command -v go &>/dev/null; then
-        echo "❌ go not found. Install it with: brew install go"
+        echo "❌ go not found. Install it with: brew install go" >&2
         return 1
     fi
     go get "$1" && go mod tidy && git add go.mod go.sum && git commit -sm "go-mod-upgrade: $1"
@@ -85,11 +85,11 @@ go-mod-upgrade-dirs() {
         return 1
     fi
     if ! command -v go &>/dev/null; then
-        echo "❌ go not found. Install it with: brew install go"
+        echo "❌ go not found. Install it with: brew install go" >&2
         return 1
     fi
     if ! command -v gh &>/dev/null; then
-        echo "❌ gh not found. Install it with: brew install gh"
+        echo "❌ gh not found. Install it with: brew install gh" >&2
         return 1
     fi
     find . -type d -maxdepth 1 -name "$1" -exec sh -c '
@@ -133,7 +133,7 @@ exec-dirs() {
 # $5: command
 exec-dirs-ds() {
     if ! command -v gh &>/dev/null; then
-        echo "❌ gh not found. Install it with: brew install gh"
+        echo "❌ gh not found. Install it with: brew install gh" >&2
         return 1
     fi
     if [[ -z "$1" || -z "$2" || -z "$3" || -z "$4" || -z "$5" ]]; then
@@ -221,11 +221,11 @@ code-dirs() {
         return 1
     fi
     if ! command -v parallel &> /dev/null; then
-        echo "❌ parallel not found. Install it with: brew install parallel"
+        echo "❌ parallel not found. Install it with: brew install parallel" >&2
         return 1
     fi
     if ! command -v code &>/dev/null; then
-        echo "❌ code not found. Install VS Code and run: Shell Command: Install 'code' command in PATH"
+        echo "❌ code not found. Install VS Code and run: Shell Command: Install 'code' command in PATH" >&2
         return 1
     fi
 
@@ -236,7 +236,7 @@ code-dirs() {
 # ex: finder-dirs "velero*"
 finder-dirs() {
     if [[ "$OSTYPE" != darwin* ]]; then
-        echo "Error: finder-dirs is only supported on macOS"
+        echo "Error: finder-dirs is only supported on macOS" >&2
         return 1
     fi
     if [[ -z "$1" ]]; then
@@ -245,7 +245,7 @@ finder-dirs() {
         return 1
     fi
     if ! command -v parallel &> /dev/null; then
-        echo "❌ parallel not found. Install it with: brew install parallel"
+        echo "❌ parallel not found. Install it with: brew install parallel" >&2
         return 1
     fi
 
