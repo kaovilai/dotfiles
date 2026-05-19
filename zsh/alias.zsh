@@ -25,6 +25,7 @@ _lazy_load_linux_dev() {
 for func in podman-linux ec2-linux az-linux gcp-linux; do
     eval "${func}() { _lazy_load_linux_dev || return 1; ${func} \"\$@\"; }"
 done
+unset func
 
 # Migration utilities (lazy-loaded — ~634 lines only parsed when first used)
 typeset -g MIGRATE_LAPTOP_LOADED=0
@@ -46,3 +47,4 @@ for func in \
     brewfile-cleanup; do
     eval "${func}() { _lazy_load_migrate || return 1; ${func} \"\$@\"; }"
 done
+unset func

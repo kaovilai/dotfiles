@@ -91,6 +91,7 @@ for func in \
     watch-all-pod-logs-in-namespace; do
     eval "${func}() { _lazy_load_openshift; ${func} \"\$@\"; }"
 done
+unset func
 
 # Backwards compatibility aliases for renamed camelCase/snake_case functions
 alias copyKUBECONFIG='copy-kubeconfig'
