@@ -221,5 +221,8 @@ function vid2gif(){
     echo "Converting $input to $output..."
     if ffmpeg -i "$input" -vf "fps=10,scale=480:-1:flags=lanczos,split[s0][s1];[s0]palettegen[p];[s1][p]paletteuse" "$output"; then
         echo "Conversion complete: $output"
+    else
+        echo "Error: Conversion failed" >&2
+        return 1
     fi
 }
