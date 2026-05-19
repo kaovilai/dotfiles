@@ -21,7 +21,7 @@ merge-claude-settings() {
     if [[ ! -f "$global_settings" ]]; then
         echo "Error: Global settings file not found at $global_settings" >&2
         echo "Creating directory and empty settings file..." >&2
-        mkdir -p "$(dirname "$global_settings")" || { echo "Error: Failed to create settings directory" >&2; return 1; }
+        mkdir -p "${global_settings:h}" || { echo "Error: Failed to create settings directory" >&2; return 1; }
         echo '{"permissions": {"allow": [], "deny": []}}' > "$global_settings"
     fi
     

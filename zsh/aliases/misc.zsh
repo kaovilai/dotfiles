@@ -206,7 +206,7 @@ function vid2gif(){
         echo "Usage: vid2gif <input-video>"
         return 1
     fi
-    local output="$HOME/Downloads/$(basename "${input%.*}").gif"
+    local output="$HOME/Downloads/${input:t:r}.gif"
     
     if [[ ! -f "$input" ]]; then
         echo "Error: Input file '$input' not found" >&2

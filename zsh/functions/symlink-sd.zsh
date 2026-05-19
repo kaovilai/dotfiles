@@ -18,7 +18,7 @@ function symlink-to-sd() {
     fi
 
     # Create parent directory structure on SD
-    if ! mkdir -p "$(dirname "$sd_target")"; then
+    if ! mkdir -p "${sd_target:h}"; then
         echo "Error: Failed to create directory structure on SD volume" >&2
         return 1
     fi
@@ -39,7 +39,7 @@ function symlink-to-sd() {
     # Copy hidden files separately (since * doesn't match them)
     # Use find to avoid issues with .* expanding to include . and ..
     find "$current_dir" -maxdepth 1 -name ".*" -type f -o -name ".*" -type d ! -path "$current_dir" | while IFS= read -r file; do
-        cp -R "$file" "$sd_target/" 2>/dev/null || echo "Warning: Could not copy $(basename "$file")" >&2
+        cp -R "$file" "$sd_target/" 2>/dev/null || echo "Warning: Could not copy ${file:t}" >&2
     done
 
     echo "Files copied to SD volume successfully."
@@ -51,7 +51,7 @@ function symlink-to-sd() {
 
     # Backup hidden files using find to avoid issues with .* expansion
     find "$sd_target" -maxdepth 1 -name ".*" -type f -o -name ".*" -type d ! -path "$sd_target" | while IFS= read -r file; do
-        cp -R "$file" "$sd_backup/" 2>/dev/null || echo "Warning: Could not backup $(basename "$file")" >&2
+        cp -R "$file" "$sd_backup/" 2>/dev/null || echo "Warning: Could not backup ${file:t}" >&2
     done
 
     # Navigate to parent directory so we can replace the current directory
@@ -143,7 +143,7 @@ function unsymlink-from-sd() {
 
     # Copy hidden files separately using find to avoid .* expansion issues
     find "$symlink_target" -maxdepth 1 -name ".*" -type f -o -name ".*" -type d ! -path "$symlink_target" | while IFS= read -r file; do
-        cp -R "$file" "$temp_dir/" 2>/dev/null || echo "Warning: Could not copy $(basename "$file")" >&2
+        cp -R "$file" "$temp_dir/" 2>/dev/null || echo "Warning: Could not copy ${file:t}" >&2
     done
 
     # Remove the symlink
@@ -157,7 +157,7 @@ function unsymlink-from-sd() {
 
     # Move hidden files using find to avoid expansion issues
     find "$temp_dir" -maxdepth 1 -name ".*" -type f -o -name ".*" -type d ! -path "$temp_dir" | while IFS= read -r file; do
-        mv "$file" "$dir_name/" 2>/dev/null || echo "Warning: Could not move $(basename "$file")" >&2
+        mv "$file" "$dir_name/" 2>/dev/null || echo "Warning: Could not move ${file:t}" >&2
     done
 
     # Remove temporary directory
