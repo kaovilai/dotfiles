@@ -6,7 +6,7 @@ check-qemu-stuck() {
     local machine_name="${1:-podman-machine-default}"
 
     if ! command -v podman &>/dev/null; then
-        echo "❌ podman not found. Install it with: brew install podman"
+        echo "❌ podman not found. Install it with: brew install podman" >&2
         return 1
     fi
 
@@ -15,14 +15,14 @@ check-qemu-stuck() {
 
     # Check if podman machine is running
     if ! podman machine list | grep -q "Currently running"; then
-        echo "❌ No podman machine is running"
+        echo "❌ No podman machine is running" >&2
         return 1
     fi
 
     # Get QEMU processes — split SSH and grep so SSH failures are explicit
     local all_procs line
     all_procs=$(podman machine ssh -- 'ps -eo pid,ppid,etime,stat,wchan:30,cmd 2>/dev/null') || {
-        echo "❌ Failed to retrieve process list from podman machine"
+        echo "❌ Failed to retrieve process list from podman machine" >&2
         return 1
     }
     local qemu_procs
@@ -81,7 +81,7 @@ check-qemu-stuck() {
 # Kill stuck QEMU processes in podman machine (interactive with fzf)
 kill-stuck-qemu() {
     if ! command -v podman &>/dev/null; then
-        echo "❌ podman not found. Install it with: brew install podman"
+        echo "❌ podman not found. Install it with: brew install podman" >&2
         return 1
     fi
 
@@ -90,7 +90,7 @@ kill-stuck-qemu() {
     # Get detailed process info — split SSH and grep so SSH failures are explicit
     local ssh_out
     ssh_out=$(podman machine ssh -- 'ps -eo pid,ppid,etime,wchan:30,cmd 2>/dev/null') || {
-        echo "❌ Failed to retrieve process list from podman machine"
+        echo "❌ Failed to retrieve process list from podman machine" >&2
         return 1
     }
     local stuck_procs
@@ -103,7 +103,7 @@ kill-stuck-qemu() {
 
     # Check if fzf is available
     if ! command -v fzf &> /dev/null; then
-        echo "❌ fzf not found. Install it with: brew install fzf"
+        echo "❌ fzf not found. Install it with: brew install fzf" >&2
         return 1
     fi
 
@@ -213,7 +213,7 @@ podman-build-multiarch() {
 
     if [[ $exit_code -ne 0 ]]; then
         echo
-        echo "❌ Build failed. Checking for stuck QEMU processes..."
+        echo "❌ Build failed. Checking for stuck QEMU processes..." >&2
         check-qemu-stuck
     fi
 

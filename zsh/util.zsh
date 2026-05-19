@@ -6,7 +6,7 @@ code-git() {
         return 1
     fi
     if ! command -v code &>/dev/null; then
-        echo "❌ code not found. Install VS Code and run: Shell Command: Install 'code' command in PATH"
+        echo "❌ code not found. Install VS Code and run: Shell Command: Install 'code' command in PATH" >&2
         return 1
     fi
     code ~/git/"$1"
@@ -18,7 +18,7 @@ if [[ "$TERM_PROGRAM" != "vscode" ]]; then
     # view-pr-dirs "velero*"
     function view-pr-dirs() {
         if ! command -v gh &>/dev/null; then
-            echo "❌ gh not found. Install it with: brew install gh"
+            echo "❌ gh not found. Install it with: brew install gh" >&2
             return 1
         fi
         if [[ -z "$1" ]]; then
@@ -33,7 +33,7 @@ fi
 # Update local .zshrc from the dotfiles repository
 update-zshrc-from-dotfiles() {
     if [[ ! -d "$HOME/git/dotfiles" ]]; then
-        echo "Error: Dotfiles repository not found at $HOME/git/dotfiles"
+        echo "Error: Dotfiles repository not found at $HOME/git/dotfiles" >&2
         return 1
     fi
 
@@ -57,7 +57,7 @@ update-zshrc-from-dotfiles() {
     local reply
     read -r "reply?Apply these changes? [y/N] "
     if [[ "$reply" =~ ^[Yy]$ ]]; then
-        cp "$HOME/git/dotfiles/.zshrc" "$HOME/.zshrc" || { echo "Error: Failed to copy .zshrc"; return 1; }
+        cp "$HOME/git/dotfiles/.zshrc" "$HOME/.zshrc" || { echo "Error: Failed to copy .zshrc" >&2; return 1; }
         echo "Updated. Reload your shell or run 'source ~/.zshrc' to apply changes."
     else
         echo "Aborted."
