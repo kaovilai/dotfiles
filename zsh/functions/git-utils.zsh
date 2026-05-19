@@ -92,6 +92,10 @@ go-mod-upgrade-dirs() {
         echo "❌ gh not found. Install it with: brew install gh" >&2
         return 1
     fi
+    if [[ -z "$(find . -type d -maxdepth 1 -name "$1" -print -quit)" ]]; then
+        echo "❌ No directories found matching pattern: $1" >&2
+        return 1
+    fi
     find . -type d -maxdepth 1 -name "$1" -exec sh -c '
         dir="$1" pkg="$2" extra_cmd="$3" prefix="$4"
         cd "$dir" && pwd &&
@@ -112,6 +116,10 @@ exec-dirs() {
     if [[ -z "$1" || -z "$2" || -z "$3" ]]; then
         echo "Usage: exec-dirs <pattern> <branch> <command>"
         echo "Example: exec-dirs \"velero*\" my-branch \"go mod tidy\""
+        return 1
+    fi
+    if [[ -z "$(find . -type d -maxdepth 1 -name "$1" -print -quit)" ]]; then
+        echo "❌ No directories found matching pattern: $1" >&2
         return 1
     fi
     find . -type d -maxdepth 1 -name "$1" -exec sh -c '
@@ -229,6 +237,10 @@ code-dirs() {
         return 1
     fi
 
+    if [[ -z "$(find . -type d -maxdepth 1 -name "$1" -print -quit)" ]]; then
+        echo "❌ No directories found matching pattern: $1" >&2
+        return 1
+    fi
     find . -type d -maxdepth 1 -name "$1" | parallel code {}
 }
 
@@ -249,5 +261,9 @@ finder-dirs() {
         return 1
     fi
 
+    if [[ -z "$(find . -type d -maxdepth 1 -name "$1" -print -quit)" ]]; then
+        echo "❌ No directories found matching pattern: $1" >&2
+        return 1
+    fi
     find . -type d -maxdepth 1 -name "$1" | parallel open -a Finder {}
 }
