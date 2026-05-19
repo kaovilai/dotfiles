@@ -110,7 +110,13 @@ fi
 
 # kill apps that are not essential
 give-me-ram(){
-    ps aux | grep -v grep | grep -E '/Messenger.app/|Acrobat|Fathom|Todoist|LINE' | sed -E 's/ +/ /g' | cut -d ' ' -f 2 | xargs kill -9
+    local pids
+    pids=$(ps aux | grep -v grep | grep -E '/Messenger.app/|Acrobat|Fathom|Todoist|LINE' | sed -E 's/ +/ /g' | cut -d ' ' -f 2)
+    if [[ -z "$pids" ]]; then
+        echo "No matching processes found."
+        return 0
+    fi
+    echo "$pids" | xargs kill -9
 }
 
 # AA Inflight WiFi automation - randomize MAC every 20 minutes for free WiFi
