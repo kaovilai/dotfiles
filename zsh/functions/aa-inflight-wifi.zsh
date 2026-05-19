@@ -5,7 +5,7 @@
 # Function to handle AA inflight WiFi reconnection
 aa-inflight-wifi() {
     if [[ "$OSTYPE" != darwin* ]]; then
-        echo "Error: aa-inflight-wifi is only supported on macOS"
+        echo "Error: aa-inflight-wifi is only supported on macOS" >&2
         return 1
     fi
 
@@ -21,7 +21,7 @@ aa-inflight-wifi() {
     local wifi_interface
     wifi_interface=$(networksetup -listallhardwareports | grep -A 1 "Wi-Fi" | grep "Device:" | awk '{print $2}')
     if [[ -z "$wifi_interface" ]]; then
-        echo "Error: Could not detect WiFi interface"
+        echo "Error: Could not detect WiFi interface" >&2
         return 1
     fi
 
@@ -52,7 +52,7 @@ aa-inflight-wifi() {
             local mac_script="${0:A:h}/randomize-mac.zsh"
             [[ -f "$mac_script" ]] || mac_script="$HOME/git/dotfiles/zsh/functions/randomize-mac.zsh"
             if [[ ! -f "$mac_script" ]]; then
-                echo "Error: randomize-mac.zsh not found"
+                echo "Error: randomize-mac.zsh not found" >&2
                 return 1
             fi
             source "$mac_script"
