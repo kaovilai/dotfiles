@@ -9,6 +9,8 @@ aa-inflight-wifi() {
         return 1
     fi
 
+    trap 'unfunction check_internet reconnect_wifi 2>/dev/null' RETURN
+
     local SSID="aainflight.com"
     local WIFI_URL="https://www.aainflight.com/wifi/free"
     local WAIT_TIME=$((20 * 60))  # 20 minutes in seconds
