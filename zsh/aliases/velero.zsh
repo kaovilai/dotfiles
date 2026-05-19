@@ -15,7 +15,7 @@ alias ocregistry_notag='echo "$(oc-registry-route)/${PWD:t}"'
 # Wait for deployments and follow logs
 logs-velero() {
   if ! command -v oc &>/dev/null; then
-    echo "❌ oc not found. Install it with: brew install openshift-cli"
+    echo "❌ oc not found. Install it with: brew install openshift-cli" >&2
     return 1
   fi
   local ns="${1:-$(oc config view --minify -o jsonpath='{.contexts[0].context.namespace}')}"
@@ -29,7 +29,7 @@ logs-velero() {
 
 logs-oadp() {
   if ! command -v oc &>/dev/null; then
-    echo "❌ oc not found. Install it with: brew install openshift-cli"
+    echo "❌ oc not found. Install it with: brew install openshift-cli" >&2
     return 1
   fi
   local ns="${1:-$(oc config view --minify -o jsonpath='{.contexts[0].context.namespace}')}"
@@ -44,7 +44,7 @@ logs-oadp() {
 # Set PR_REVIEW_USERS to current Velero maintainers (excluding emeritus)
 set-velero-pr-review-users() {
   if ! command -v curl &>/dev/null; then
-    echo "❌ curl not found. Install it with: brew install curl"
+    echo "❌ curl not found. Install it with: brew install curl" >&2
     return 1
   fi
   # Fetch current maintainers from GitHub
@@ -53,7 +53,7 @@ set-velero-pr-review-users() {
   maintainers=$(curl -s --fail --connect-timeout 10 "$maintainers_url" | grep -E '@[a-zA-Z0-9_-]+' | grep -v -i 'emeritus' | sed -E 's/.*@([a-zA-Z0-9_-]+).*/\1/' | sort -u | tr '\n' ' ')
   
   if [[ -z "$maintainers" ]]; then
-    echo "Error: Could not fetch Velero maintainers"
+    echo "Error: Could not fetch Velero maintainers" >&2
     return 1
   fi
   
@@ -69,7 +69,7 @@ alias velero-set-reviewers='set-velero-pr-review-users'
 # Set PR_REVIEW_USERS to current OADP operator owners
 set-oadp-pr-review-users() {
   if ! command -v curl &>/dev/null; then
-    echo "❌ curl not found. Install it with: brew install curl"
+    echo "❌ curl not found. Install it with: brew install curl" >&2
     return 1
   fi
   # Fetch current owners from GitHub OWNERS file
@@ -78,7 +78,7 @@ set-oadp-pr-review-users() {
   owners=$(curl -s --fail --connect-timeout 10 "$owners_url" | grep -E '^\s*-\s+[a-zA-Z0-9_-]+\s*$' | sed -E 's/^\s*-\s+([a-zA-Z0-9_-]+)\s*$/\1/' | sort -u | tr '\n' ' ')
   
   if [[ -z "$owners" ]]; then
-    echo "Error: Could not fetch OADP owners"
+    echo "Error: Could not fetch OADP owners" >&2
     return 1
   fi
   
@@ -94,7 +94,7 @@ alias oadp-set-reviewers='set-oadp-pr-review-users'
 # Review PRs from a specific author
 pr-review-user() {
   if ! command -v gh &>/dev/null; then
-    echo "❌ gh not found. Install it with: brew install gh"
+    echo "❌ gh not found. Install it with: brew install gh" >&2
     return 1
   fi
   local user="${1:-kaovilai}"
@@ -105,14 +105,14 @@ pr-review-user() {
 # Review PRs from multiple users defined in environment variable
 pr-review-all-users() {
   if ! command -v gh &>/dev/null; then
-    echo "❌ gh not found. Install it with: brew install gh"
+    echo "❌ gh not found. Install it with: brew install gh" >&2
     return 1
   fi
   local repo="${1:-vmware-tanzu/velero}"
   
   # Check if PR_REVIEW_USERS is set
   if [[ -z "$PR_REVIEW_USERS" ]]; then
-    echo "Error: PR_REVIEW_USERS environment variable not set"
+    echo "Error: PR_REVIEW_USERS environment variable not set" >&2
     echo "Add 'export PR_REVIEW_USERS=\"user1 user2 user3\"' to ~/secrets.zsh"
     echo "Or use velero-set-reviewers or oadp-set-reviewers to set automatically"
     return 1
@@ -129,11 +129,11 @@ pr-review-all-users() {
 # Review all Velero maintainer PRs without setting environment variable
 review-velero-maintainer-prs() {
   if ! command -v gh &>/dev/null; then
-    echo "❌ gh not found. Install it with: brew install gh"
+    echo "❌ gh not found. Install it with: brew install gh" >&2
     return 1
   fi
   if ! command -v curl &>/dev/null; then
-    echo "❌ curl not found. Install it with: brew install curl"
+    echo "❌ curl not found. Install it with: brew install curl" >&2
     return 1
   fi
   echo "Fetching Velero maintainers..."
@@ -142,7 +142,7 @@ review-velero-maintainer-prs() {
   maintainers=$(curl -s --fail --connect-timeout 10 "$maintainers_url" | grep -E '@[a-zA-Z0-9_-]+' | grep -v -i 'emeritus' | sed -E 's/.*@([a-zA-Z0-9_-]+).*/\1/' | sort -u)
   
   if [[ -z "$maintainers" ]]; then
-    echo "Error: Could not fetch Velero maintainers"
+    echo "Error: Could not fetch Velero maintainers" >&2
     return 1
   fi
   
@@ -160,11 +160,11 @@ review-velero-maintainer-prs() {
 # Review all OADP owner PRs without setting environment variable
 review-oadp-owner-prs() {
   if ! command -v gh &>/dev/null; then
-    echo "❌ gh not found. Install it with: brew install gh"
+    echo "❌ gh not found. Install it with: brew install gh" >&2
     return 1
   fi
   if ! command -v curl &>/dev/null; then
-    echo "❌ curl not found. Install it with: brew install curl"
+    echo "❌ curl not found. Install it with: brew install curl" >&2
     return 1
   fi
   echo "Fetching OADP owners..."
@@ -173,7 +173,7 @@ review-oadp-owner-prs() {
   owners=$(curl -s --fail --connect-timeout 10 "$owners_url" | grep -E '^\s*-\s+[a-zA-Z0-9_-]+\s*$' | sed -E 's/^\s*-\s+([a-zA-Z0-9_-]+)\s*$/\1/' | sort -u)
   
   if [[ -z "$owners" ]]; then
-    echo "Error: Could not fetch OADP owners"
+    echo "Error: Could not fetch OADP owners" >&2
     return 1
   fi
   

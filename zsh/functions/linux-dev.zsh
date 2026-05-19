@@ -12,7 +12,7 @@
 # 1) Quick local container - runs current directory in a Fedora container via podman
 podman-linux() {
     if ! command -v podman &>/dev/null; then
-        echo "❌ podman not found. Install it with: brew install podman"
+        echo "❌ podman not found. Install it with: brew install podman" >&2
         return 1
     fi
 

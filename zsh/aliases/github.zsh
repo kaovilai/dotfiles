@@ -4,7 +4,7 @@ alias gh-pr-view='gh pr view --web'
 # Clone repo to ~/git/<repo-name> and open in VS Code
 ghcc() {
   if ! command -v gh &>/dev/null; then
-    echo "❌ gh not found. Install it with: brew install gh"
+    echo "❌ gh not found. Install it with: brew install gh" >&2
     return 1
   fi
   if [[ -z "$1" ]]; then
@@ -13,7 +13,7 @@ ghcc() {
     return 1
   fi
   if ! command -v code &>/dev/null; then
-    echo "❌ code not found. Install VS Code and run: Shell Command: Install 'code' command in PATH"
+    echo "❌ code not found. Install VS Code and run: Shell Command: Install 'code' command in PATH" >&2
     return 1
   fi
 
@@ -60,7 +60,7 @@ glcc() {
     return 1
   fi
   if ! command -v code &>/dev/null; then
-    echo "❌ code not found. Install VS Code and run: Shell Command: Install 'code' command in PATH"
+    echo "❌ code not found. Install VS Code and run: Shell Command: Install 'code' command in PATH" >&2
     return 1
   fi
 
@@ -84,7 +84,7 @@ glcc() {
   fi
 
   if ! command -v glab &>/dev/null; then
-    echo "❌ glab not found. Install it with: brew install glab"
+    echo "❌ glab not found. Install it with: brew install glab" >&2
     return 1
   fi
 
@@ -95,7 +95,7 @@ alias glclone='glcc'
 # Fork, clone and open repo in VS Code
 ghfc() {
   if ! command -v gh &>/dev/null; then
-    echo "❌ gh not found. Install it with: brew install gh"
+    echo "❌ gh not found. Install it with: brew install gh" >&2
     return 1
   fi
   if [[ -z "$1" ]]; then
@@ -104,7 +104,7 @@ ghfc() {
     return 1
   fi
   if ! command -v code &>/dev/null; then
-    echo "❌ code not found. Install VS Code and run: Shell Command: Install 'code' command in PATH"
+    echo "❌ code not found. Install VS Code and run: Shell Command: Install 'code' command in PATH" >&2
     return 1
   fi
 
@@ -135,7 +135,7 @@ ghfc() {
   local gh_user
   gh_user=$(gh api user --jq .login) || { echo "Failed to get GitHub username"; return 1; }
   if [[ -z "$gh_user" ]]; then
-    echo "Error: Could not determine GitHub username. Run 'gh auth login' first."
+    echo "Error: Could not determine GitHub username. Run 'gh auth login' first." >&2
     return 1
   fi
 
@@ -208,13 +208,13 @@ alias changelog-not-required='((gh pr view --json labels | jq .labels | grep -q 
 # Set GitHub default repository to upstream
 gh-set-default-upstream() {
   if ! command -v gh &>/dev/null; then
-    echo "❌ gh not found. Install it with: brew install gh"
+    echo "❌ gh not found. Install it with: brew install gh" >&2
     return 1
   fi
   local upstream_url
   upstream_url=$(git remote get-url upstream 2>/dev/null)
   if [[ -z "$upstream_url" ]]; then
-    echo "Error: No upstream remote found"
+    echo "Error: No upstream remote found" >&2
     return 1
   fi
 
@@ -228,7 +228,7 @@ gh-set-default-upstream() {
     repo_spec="${match[1]}"
     gh repo set-default "$repo_spec"
   else
-    echo "Error: Could not parse upstream URL: $upstream_url"
+    echo "Error: Could not parse upstream URL: $upstream_url" >&2
     return 1
   fi
 }
@@ -238,7 +238,7 @@ alias gh-set-upstream-default='gh-set-default-upstream'
 # Delete a single tag from a GitHub Container Registry package
 gh-delete-package-tag() {
   if ! command -v gh &>/dev/null; then
-    echo "❌ gh not found. Install it with: brew install gh"
+    echo "❌ gh not found. Install it with: brew install gh" >&2
     return 1
   fi
   local org package tag
@@ -251,7 +251,7 @@ gh-delete-package-tag() {
       package="${match[2]}"
       tag="${match[3]}"
     else
-      echo "Error: Invalid format. Expected ghcr.io/org/package:tag"
+      echo "Error: Invalid format. Expected ghcr.io/org/package:tag" >&2
       echo ""
       echo "Usage: gh-delete-package-tag <org> <package> <tag>"
       echo "   or: gh-delete-package-tag ghcr.io/<org>/<package>:<tag>"
@@ -284,10 +284,10 @@ gh-delete-package-tag() {
   # Find the version ID for the specified tag
   local version_id
   version_id=$(gh api "/orgs/$org/packages/container/$package/versions" \
-    --jq ".[] | select(.metadata.container.tags[]? == \"$tag\") | .id") || { echo "❌ Failed to query package versions"; return 1; }
+    --jq ".[] | select(.metadata.container.tags[]? == \"$tag\") | .id") || { echo "❌ Failed to query package versions" >&2; return 1; }
 
   if [[ -z "$version_id" ]]; then
-    echo "Error: Tag '$tag' not found in package '$org/$package'"
+    echo "Error: Tag '$tag' not found in package '$org/$package'" >&2
     echo ""
     echo "Available tags:"
     gh api "/orgs/$org/packages/container/$package/versions" --jq '.[].metadata.container.tags[]' | sort -u
@@ -309,7 +309,7 @@ gh-delete-package-tag() {
   if gh api --method DELETE "/orgs/$org/packages/container/$package/versions/$version_id"; then
     echo "Successfully deleted tag '$tag'"
   else
-    echo "Error: Failed to delete tag '$tag'"
+    echo "Error: Failed to delete tag '$tag'" >&2
     return 1
   fi
 }
@@ -321,15 +321,15 @@ review-prs() {
   local raw_input=""
 
   if ! command -v gh &>/dev/null; then
-    echo "❌ gh not found. Install it with: brew install gh"
+    echo "❌ gh not found. Install it with: brew install gh" >&2
     return 1
   fi
   if ! command -v fzf &>/dev/null; then
-    echo "❌ fzf not found. Install it with: brew install fzf"
+    echo "❌ fzf not found. Install it with: brew install fzf" >&2
     return 1
   fi
   if ! command -v code &>/dev/null; then
-    echo "❌ code not found. Install VS Code and run: Shell Command: Install 'code' command in PATH"
+    echo "❌ code not found. Install VS Code and run: Shell Command: Install 'code' command in PATH" >&2
     return 1
   fi
 
@@ -364,7 +364,7 @@ review-prs() {
   echo "Found ${#pr_refs[@]} PRs: ${pr_refs[*]}"
 
   local tmpdir
-  tmpdir=$(mktemp -d) || { echo "❌ Failed to create temp directory"; return 1; }
+  tmpdir=$(mktemp -d) || { echo "❌ Failed to create temp directory" >&2; return 1; }
   trap "rm -rf \"$tmpdir\"" EXIT INT TERM
   local pids=()
   local repo pr_num diff_file ref pid label

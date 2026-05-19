@@ -6,7 +6,7 @@ if [[ "$TERM_PROGRAM" != "vscode" ]]; then
 # Usage: wifi-standard
 function wifi-standard() {
     if [[ "$OSTYPE" != darwin* ]]; then
-        echo "Error: wifi-standard is only supported on macOS"
+        echo "Error: wifi-standard is only supported on macOS" >&2
         return 1
     fi
 
