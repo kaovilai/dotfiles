@@ -46,10 +46,8 @@ check-qemu-stuck() {
     if [[ -n "$stuck_procs" ]]; then
         echo "⚠️  STUCK PROCESSES DETECTED (futex_wait_queue):"
         while IFS= read -r line; do
-            local pid etime cmd state
-            pid=$(awk '{print $1}' <<< "$line")
-            etime=$(awk '{print $3}' <<< "$line")
-            cmd=$(awk '{for(i=6;i<=NF;i++) printf $i" "; print ""}' <<< "$line")
+            local pid _ppid etime _stat _wchan cmd state
+            read -r pid _ppid etime _stat _wchan cmd <<< "$line"
             echo "  PID: $pid | Runtime: $etime | Cmd: $cmd"
 
             # Get process state details
@@ -110,11 +108,8 @@ kill-stuck-qemu() {
     # Format processes for selection
     local formatted_procs
     formatted_procs=$(while IFS= read -r line; do
-        local pid ppid etime cmd arch
-        pid=$(awk '{print $1}' <<< "$line")
-        ppid=$(awk '{print $2}' <<< "$line")
-        etime=$(awk '{print $3}' <<< "$line")
-        cmd=$(awk '{for(i=5;i<=NF;i++) printf $i" "; print ""}' <<< "$line")
+        local pid ppid etime _col4 cmd arch
+        read -r pid ppid etime _col4 cmd <<< "$line"
 
         # Extract architecture from qemu binary name
         arch=$(grep -o 'qemu-[a-z0-9_]*-static' <<< "$cmd" | sed 's/qemu-//;s/-static//')
