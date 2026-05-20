@@ -127,13 +127,13 @@ ghfc() {
   # Fork the repo first (without cloning)
   echo "Forking $repo_spec..."
   if ! gh repo fork "$repo_spec" --remote=false; then
-    echo "Failed to fork repository"
+    echo "Failed to fork repository" >&2
     return 1
   fi
   
   # Get the current user's GitHub username
   local gh_user
-  gh_user=$(gh api user --jq .login) || { echo "Failed to get GitHub username"; return 1; }
+  gh_user=$(gh api user --jq .login) || { echo "Failed to get GitHub username" >&2; return 1; }
   if [[ -z "$gh_user" ]]; then
     echo "Error: Could not determine GitHub username. Run 'gh auth login' first." >&2
     return 1
@@ -149,7 +149,7 @@ ghfc() {
 
     code "$target_dir/$repo_name"
   else
-    echo "Failed to clone forked repository"
+    echo "Failed to clone forked repository" >&2
     return 1
   fi
 }
