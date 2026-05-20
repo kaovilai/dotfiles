@@ -98,6 +98,7 @@ ec2-linux() {
     case "$architecture" in
         arm64|aarch64) ami_arch="arm64" ;;
         amd64|x86_64)  ami_arch="x86_64" ;;
+        *) echo "${RED}ERROR${NC}: Unknown architecture: $architecture" >&2; return 1 ;;
     esac
 
     # --- Temporary SSH key ---
@@ -419,6 +420,7 @@ az-linux() {
     case "$architecture" in
         arm64|aarch64) image_urn="Canonical:ubuntu-24_04-lts-arm64:server-arm64:latest" ;;
         amd64|x86_64)  image_urn="Canonical:ubuntu-24_04-lts:server:latest" ;;
+        *) echo "${RED}ERROR${NC}: Unknown architecture: $architecture" >&2; return 1 ;;
     esac
 
     # --- Create VM ---

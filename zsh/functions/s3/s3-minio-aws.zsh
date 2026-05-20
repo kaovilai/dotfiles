@@ -225,6 +225,11 @@ create-minio-aws() {
         "amd64"|"x86_64")
             ami_arch="x86_64"
             ;;
+        *)
+            echo "${RED}ERROR${NC}: Unknown architecture: $architecture" >&2
+            echo "Supported architectures: arm64, amd64"
+            return 1
+            ;;
     esac
     
     echo "${BLUE}INFO${NC}: Finding latest Amazon Linux 2 AMI for $ami_arch..."
