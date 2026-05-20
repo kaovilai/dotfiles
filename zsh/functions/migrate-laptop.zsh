@@ -110,7 +110,7 @@ migrate-to-new-laptop() {
             # Use fzf to let user select which packages to install
             local all_packages selected
             all_packages=$(grep -E '^(brew|cask|tap|vscode)' ~/git/dotfiles/Brewfile)
-            selected=$(echo "$all_packages" | fzf --multi --height 60% --reverse \
+            selected=$(fzf --multi --height 60% --reverse <<< "$all_packages" \
                 --header "Select packages to install (Tab to select, Enter to confirm, Ctrl+A to select all)" \
                 --bind 'ctrl-a:select-all')
 
