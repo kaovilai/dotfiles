@@ -256,7 +256,8 @@ create-minio-aws() {
     minio_root_password=$(openssl rand -base64 32 | tr -d "=+/" | cut -c1-25)
     
     # Create user data script for MinIO installation using Docker
-    local user_data=$(cat << 'EOF'
+    local user_data
+    user_data=$(cat << 'EOF'
 #!/bin/bash
 set -e
 
