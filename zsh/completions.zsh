@@ -10,6 +10,19 @@ fi
 # the global namespace. Functions defined here are still globally accessible.
 () {
 
+# Helper: serve cached completion from fpath; regenerate in background when stale.
+# Usage: _regen_tool_completion <tool>
+# Assumes the tool supports `<tool> completion zsh`.
+_regen_tool_completion() {
+  local tool="$1"
+  local cache_file="$ZSH_COMPLETION_CACHE_DIR/_${tool}_generated"
+  [[ -f "$cache_file" ]] && cp "$cache_file" "${fpath[1]}/_${tool}" &!
+  if completion_cache_expired "$cache_file"; then
+    ("$tool" completion zsh > "${cache_file}.tmp" 2>/dev/null \
+      && mv "${cache_file}.tmp" "$cache_file") &!
+  fi
+}
+
 # -- PHASE 1: Essential completions (foreground) --
 
 # VS Code shell integration (if we're running in VS Code)
@@ -55,22 +68,10 @@ if has_command gh; then
 fi
 
 # Kubernetes CLI - cache for stable tools
-if has_command kubectl; then
-  local kubectl_completion_cache="$ZSH_COMPLETION_CACHE_DIR/_kubectl_generated"
-  [[ -f "$kubectl_completion_cache" ]] && cp "$kubectl_completion_cache" "${fpath[1]}/_kubectl" &!
-  if completion_cache_expired "$kubectl_completion_cache"; then
-    (kubectl completion zsh > "${kubectl_completion_cache}.tmp" 2>/dev/null && mv "${kubectl_completion_cache}.tmp" "$kubectl_completion_cache") &!
-  fi
-fi
+has_command kubectl && _regen_tool_completion kubectl
 
 # OpenShift Client - cache for stable tools
-if has_command oc; then
-  local oc_completion_cache="$ZSH_COMPLETION_CACHE_DIR/_oc_generated"
-  [[ -f "$oc_completion_cache" ]] && cp "$oc_completion_cache" "${fpath[1]}/_oc" &!
-  if completion_cache_expired "$oc_completion_cache"; then
-    (oc completion zsh > "${oc_completion_cache}.tmp" 2>/dev/null && mv "${oc_completion_cache}.tmp" "$oc_completion_cache") &!
-  fi
-fi
+has_command oc && _regen_tool_completion oc
 
 # Podman completion - use centralized cache location
 if has_command podman; then
@@ -91,67 +92,25 @@ if has_command podman; then
 fi
 
 # Rosa CLI - cached
-if has_command rosa; then
-  local rosa_completion_cache="$ZSH_COMPLETION_CACHE_DIR/_rosa_generated"
-  [[ -f "$rosa_completion_cache" ]] && cp "$rosa_completion_cache" "${fpath[1]}/_rosa" &!
-  if completion_cache_expired "$rosa_completion_cache"; then
-    (rosa completion zsh > "${rosa_completion_cache}.tmp" 2>/dev/null && mv "${rosa_completion_cache}.tmp" "$rosa_completion_cache") &!
-  fi
-fi
+has_command rosa && _regen_tool_completion rosa
 
 # CCOCTL - cached
-if has_command ccoctl; then
-  local ccoctl_completion_cache="$ZSH_COMPLETION_CACHE_DIR/_ccoctl_generated"
-  [[ -f "$ccoctl_completion_cache" ]] && cp "$ccoctl_completion_cache" "${fpath[1]}/_ccoctl" &!
-  if completion_cache_expired "$ccoctl_completion_cache"; then
-    (ccoctl completion zsh > "${ccoctl_completion_cache}.tmp" 2>/dev/null && mv "${ccoctl_completion_cache}.tmp" "$ccoctl_completion_cache") &!
-  fi
-fi
+has_command ccoctl && _regen_tool_completion ccoctl
 
 # Velero - cached
-if has_command velero; then
-  local velero_completion_cache="$ZSH_COMPLETION_CACHE_DIR/_velero_generated"
-  [[ -f "$velero_completion_cache" ]] && cp "$velero_completion_cache" "${fpath[1]}/_velero" &!
-  if completion_cache_expired "$velero_completion_cache"; then
-    (velero completion zsh > "${velero_completion_cache}.tmp" 2>/dev/null && mv "${velero_completion_cache}.tmp" "$velero_completion_cache") &!
-  fi
-fi
+has_command velero && _regen_tool_completion velero
 
 # YQ - cached
-if has_command yq; then
-  local yq_completion_cache="$ZSH_COMPLETION_CACHE_DIR/_yq_generated"
-  [[ -f "$yq_completion_cache" ]] && cp "$yq_completion_cache" "${fpath[1]}/_yq" &!
-  if completion_cache_expired "$yq_completion_cache"; then
-    (yq completion zsh > "${yq_completion_cache}.tmp" 2>/dev/null && mv "${yq_completion_cache}.tmp" "$yq_completion_cache") &!
-  fi
-fi
+has_command yq && _regen_tool_completion yq
 
 # Kind - cached
-if has_command kind; then
-  local kind_completion_cache="$ZSH_COMPLETION_CACHE_DIR/_kind_generated"
-  [[ -f "$kind_completion_cache" ]] && cp "$kind_completion_cache" "${fpath[1]}/_kind" &!
-  if completion_cache_expired "$kind_completion_cache"; then
-    (kind completion zsh > "${kind_completion_cache}.tmp" 2>/dev/null && mv "${kind_completion_cache}.tmp" "$kind_completion_cache") &!
-  fi
-fi
+has_command kind && _regen_tool_completion kind
 
 # Helm - cached
-if has_command helm; then
-  local helm_completion_cache="$ZSH_COMPLETION_CACHE_DIR/_helm_generated"
-  [[ -f "$helm_completion_cache" ]] && cp "$helm_completion_cache" "${fpath[1]}/_helm" &!
-  if completion_cache_expired "$helm_completion_cache"; then
-    (helm completion zsh > "${helm_completion_cache}.tmp" 2>/dev/null && mv "${helm_completion_cache}.tmp" "$helm_completion_cache") &!
-  fi
-fi
+has_command helm && _regen_tool_completion helm
 
 # Kustomize - cached
-if has_command kustomize; then
-  local kustomize_completion_cache="$ZSH_COMPLETION_CACHE_DIR/_kustomize_generated"
-  [[ -f "$kustomize_completion_cache" ]] && cp "$kustomize_completion_cache" "${fpath[1]}/_kustomize" &!
-  if completion_cache_expired "$kustomize_completion_cache"; then
-    (kustomize completion zsh > "${kustomize_completion_cache}.tmp" 2>/dev/null && mv "${kustomize_completion_cache}.tmp" "$kustomize_completion_cache") &!
-  fi
-fi
+has_command kustomize && _regen_tool_completion kustomize
 
 # Direnv - cached
 if has_command direnv; then
@@ -194,13 +153,7 @@ if has_command claude || has_command happy; then
 fi
 
 # Netbird - cached
-if has_command netbird; then
-  local netbird_completion_cache="$ZSH_COMPLETION_CACHE_DIR/_netbird_generated"
-  [[ -f "$netbird_completion_cache" ]] && cp "$netbird_completion_cache" "${fpath[1]}/_netbird" &!
-  if completion_cache_expired "$netbird_completion_cache"; then
-    (netbird completion zsh > "${netbird_completion_cache}.tmp" 2>/dev/null && mv "${netbird_completion_cache}.tmp" "$netbird_completion_cache") &!
-  fi
-fi
+has_command netbird && _regen_tool_completion netbird
 
 # Custom code-git completion
 cat << EOF > "${fpath[1]}/_code-git" &!
