@@ -134,7 +134,7 @@ kill-stuck-qemu() {
         --pointer="▶" \
         --marker="✓" \
         --color="header:italic:underline" <<< "$formatted_procs") || {
-        echo "❌ No processes selected"
+        echo "❌ No processes selected" >&2
         return 1
     }
 
@@ -173,7 +173,7 @@ kill-stuck-qemu() {
             fi
         fi
     else
-        echo "❌ Cancelled"
+        echo "❌ Cancelled" >&2
         return 1
     fi
 }

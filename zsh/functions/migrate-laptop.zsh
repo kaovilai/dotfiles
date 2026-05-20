@@ -22,12 +22,12 @@ success() {
 
 # Warning indicator
 warning() {
-    echo "${YELLOW}⚠${NC} $1"
+    echo "${YELLOW}⚠${NC} $1" >&2
 }
 
 # Error indicator
 error() {
-    echo "${RED}✗${NC} $1"
+    echo "${RED}✗${NC} $1" >&2
 }
 
 # Check if command exists
