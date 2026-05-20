@@ -189,7 +189,7 @@ pr-me() {
   pr_list=$(gh pr list --author @me) || { echo "❌ gh pr list failed. Run 'gh auth login' if not authenticated." >&2; return 1; }
   
   if [[ -z "$pr_list" ]]; then
-    echo "No PRs found for your user"
+    echo "No PRs found for your user" >&2
     return 1
   fi
   
@@ -224,7 +224,7 @@ pr-me() {
     
     # If there are no PRs after removing the header, exit
     if [[ ${#pr_lines[@]} -eq 0 ]]; then
-      echo "No PRs found"
+      echo "No PRs found" >&2
       return 1
     fi
     
@@ -264,7 +264,7 @@ pr-me() {
     
     # If we don't have a PR number at this point, exit
     if [[ -z "$pr_number" ]]; then
-      echo "No PR selected"
+      echo "No PR selected" >&2
       return 1
     fi
   fi
