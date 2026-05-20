@@ -25,6 +25,10 @@ install-pkg-from-url(){
         echo "Error: Only HTTPS URLs are supported" >&2
         return 1
     fi
+    if ! command -v curl &>/dev/null; then
+        echo "❌ curl not found. Install it with: brew install curl" >&2
+        return 1
+    fi
     echo "Warning: Installing unverified package from URL. No checksum verification."
     local pkg_file=~/Downloads/"${${1:t}%%\?*}"
     curl -Lm 60 -o "$pkg_file" "$1" && install-pkg "$pkg_file"

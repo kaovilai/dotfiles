@@ -28,7 +28,7 @@ if has_command docker; then
   fi
   
   # Update check and download in the background
-  if [[ "$TERM_PROGRAM" != "vscode" ]]; then
+  if [[ "$TERM_PROGRAM" != "vscode" ]] && has_command curl; then
     if completion_cache_expired "$docker_completion_file" $CACHE_TTL_STABLE; then  # 30 days for stable tools
       (curl -sLm 10 https://raw.githubusercontent.com/docker/docker-ce/master/components/cli/contrib/completion/zsh/_docker > "${docker_completion_file}.tmp" && 
       mv "${docker_completion_file}.tmp" "$docker_completion_file" || 
@@ -81,7 +81,7 @@ if has_command podman; then
   fi
   
   # Update check and download in the background
-  if [[ "$TERM_PROGRAM" != "vscode" ]]; then
+  if [[ "$TERM_PROGRAM" != "vscode" ]] && has_command curl; then
     if completion_cache_expired "$podman_completion_file" $CACHE_TTL_STABLE; then  # 30 days for stable tools
       (curl -sLm 10 https://raw.githubusercontent.com/containers/podman/main/completions/zsh/_podman > "${podman_completion_file}.tmp" && 
       mv "${podman_completion_file}.tmp" "$podman_completion_file" || 
@@ -184,7 +184,7 @@ if has_command claude || has_command happy; then
     # Also register completions for happy (claude is aliased to happy)
     sed 's/^#compdef claude/#compdef claude happy/' "$claude_completion_file" > "${fpath[1]}/_happy" &!
   fi
-  if completion_cache_expired "$claude_completion_file"; then  # 7 days
+  if has_command curl && completion_cache_expired "$claude_completion_file"; then  # 7 days
     (curl -sLm 10 https://raw.githubusercontent.com/wbingli/zsh-claudecode-completion/main/_claude > "${claude_completion_file}.tmp" &&
     mv "${claude_completion_file}.tmp" "$claude_completion_file" &&
     cp "$claude_completion_file" "${fpath[1]}/_claude" &&
