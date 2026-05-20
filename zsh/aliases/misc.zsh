@@ -86,8 +86,11 @@ activepieces-restart() {
         echo "Looking for activepieces machines in Tailscale..."
 
         local devices_json
-        devices_json=$(curl -s --connect-timeout 10 -H "Authorization: Bearer $TAILSCALE_API_KEY" \
-            "https://api.tailscale.com/api/v2/tailnet/$TAILSCALE_TAILNET/devices")
+        devices_json=$(curl -s --fail --connect-timeout 10 -H "Authorization: Bearer $TAILSCALE_API_KEY" \
+            "https://api.tailscale.com/api/v2/tailnet/$TAILSCALE_TAILNET/devices") || {
+            echo "❌ Failed to query Tailscale devices API (check TAILSCALE_API_KEY and TAILSCALE_TAILNET)" >&2
+            return 1
+        }
 
         local machine_ids
         machine_ids=$(jq -r \
@@ -98,8 +101,9 @@ activepieces-restart() {
             local id
             for id in ${(f)machine_ids}; do
                 echo "Deleting Tailscale machine: $id"
-                curl -s --connect-timeout 10 -X DELETE -H "Authorization: Bearer $TAILSCALE_API_KEY" \
-                    "https://api.tailscale.com/api/v2/device/$id"
+                curl -s --fail --connect-timeout 10 -X DELETE -H "Authorization: Bearer $TAILSCALE_API_KEY" \
+                    "https://api.tailscale.com/api/v2/device/$id" || \
+                    echo "⚠️  Failed to delete Tailscale machine: $id" >&2
             done
         else
             echo "No activepieces machines found in Tailscale"
