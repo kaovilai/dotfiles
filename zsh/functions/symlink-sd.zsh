@@ -10,6 +10,7 @@ function symlink-to-sd() {
     local parent_dir="${current_dir:h}"
     local sd_target="/Volumes/SD$current_dir"
     local sd_backup="/Volumes/SD$current_dir.backup.$(date +%Y%m%d%H%M%S)"
+    local file
 
     # Check if SD volume is mounted
     if [[ ! -d "/Volumes/SD" ]]; then
@@ -90,6 +91,7 @@ function unsymlink-from-sd() {
     local parent_dir="${current_path:h}"
     local dir_name="${current_path:t}"
     local keep_sd_files=false
+    local file
 
     # Check for option to keep SD files
     if [[ "$1" == "--keep-sd-files" ]]; then
