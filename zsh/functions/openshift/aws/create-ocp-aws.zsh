@@ -263,3 +263,47 @@ function create-ocp-aws-amd64() {
     # AMD64 wrapper function
     create-ocp-aws "$1" "amd64"
 }
+
+trigger-create-ocp-aws() {
+    local arch=${1:-amd64}
+    local stream=${2:-dev-preview}
+    local action=${3:-create}
+    local repo="kaovilai/dotfiles"
+
+    gh workflow run create-ocp-aws.yml \
+        -f arch="$arch" \
+        -f stream="$stream" \
+        -f action="$action" \
+        --repo "$repo"
+
+    echo "Triggered create-ocp-aws (arch=$arch, stream=$stream, action=$action)"
+    echo "Watch:  gh run watch --repo $repo"
+    echo "Fetch:  download-ocp-aws-auth <RUN_ID>"
+}
+
+download-ocp-aws-auth() {
+    local run_id=$1
+    local repo="kaovilai/dotfiles"
+
+    if [[ -z "$run_id" ]]; then
+        echo "Usage: download-ocp-aws-auth <RUN_ID>"
+        echo "Find run ID: gh run list --workflow create-ocp-aws.yml --repo $repo"
+        return 1
+    fi
+
+    local tmpdir=$(mktemp -d)
+    gh run download "$run_id" --repo "$repo" --dir "$tmpdir"
+
+    local gpg_file=$(find "$tmpdir" -name '*.gpg' | head -1)
+    if [[ -z "$gpg_file" ]]; then
+        echo "No encrypted artifact found in run $run_id"
+        rm -rf "$tmpdir"
+        return 1
+    fi
+
+    gpg --decrypt "$gpg_file" | tar xzf -
+    rm -rf "$tmpdir"
+
+    echo "Extracted auth/ directory"
+    echo "export KUBECONFIG=$(pwd)/auth/kubeconfig"
+}

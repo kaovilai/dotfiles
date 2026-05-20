@@ -940,3 +940,45 @@ setup-velero-oadp-for-gcp-cluster() {
 # Alias for convenience
 alias setup-velero-gcp='setup-velero-oadp-for-gcp-cluster'
 alias setup-cluster-with-oadp-gcp='create-ocp-gcp-wif && oc login -u kubeadmin -p $(cat $OCP_CREATE_DIR/auth/kubeadmin-password) $(oc whoami --show-server) && create-velero-identity-for-gcp-cluster && create-velero-bucket-for-gcp-cluster && make deploy-olm-stsflow-gcp && create-velero-dpa-for-gcp-cluster && oc apply -f velero-dpa-*.yaml'
+
+trigger-create-ocp-gcp-wif() {
+    local stream=${1:-dev-preview}
+    local action=${2:-create}
+    local repo="kaovilai/dotfiles"
+
+    gh workflow run create-ocp-gcp-wif.yml \
+        -f stream="$stream" \
+        -f action="$action" \
+        --repo "$repo"
+
+    echo "Triggered create-ocp-gcp-wif (stream=$stream, action=$action)"
+    echo "Watch:  gh run watch --repo $repo"
+    echo "Fetch:  download-ocp-gcp-wif-auth <RUN_ID>"
+}
+
+download-ocp-gcp-wif-auth() {
+    local run_id=$1
+    local repo="kaovilai/dotfiles"
+
+    if [[ -z "$run_id" ]]; then
+        echo "Usage: download-ocp-gcp-wif-auth <RUN_ID>"
+        echo "Find run ID: gh run list --workflow create-ocp-gcp-wif.yml --repo $repo"
+        return 1
+    fi
+
+    local tmpdir=$(mktemp -d)
+    gh run download "$run_id" --repo "$repo" --dir "$tmpdir"
+
+    local gpg_file=$(find "$tmpdir" -name '*.gpg' | head -1)
+    if [[ -z "$gpg_file" ]]; then
+        echo "No encrypted artifact found in run $run_id"
+        rm -rf "$tmpdir"
+        return 1
+    fi
+
+    gpg --decrypt "$gpg_file" | tar xzf -
+    rm -rf "$tmpdir"
+
+    echo "Extracted auth/ directory"
+    echo "export KUBECONFIG=$(pwd)/auth/kubeconfig"
+}
