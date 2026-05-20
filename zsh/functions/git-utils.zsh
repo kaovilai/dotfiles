@@ -196,7 +196,7 @@ exec-dirs-ds() {
                 echo "Would execute: $cmd"
             else
                 echo "Executing command..."
-                sh -c "$cmd" || { print "\033[1;31mCommand execution failed\033[0m"; return 1; }
+                zsh -c "$cmd" || { print "\033[1;31mCommand execution failed\033[0m"; return 1; }
 
                 echo "Pushing branch..."
                 git push --force -u origin "$branch_full" || { print "\033[1;31mFailed to push branch\033[0m"; return 1; }
