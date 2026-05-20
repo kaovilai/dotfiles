@@ -55,6 +55,7 @@ merge-claude-settings() {
     
     # Ask about each new permission and add immediately
     local permissions_added=0
+    local perm
     for perm in "${new_permissions[@]}"; do
         # Permission is already a raw string, no need to decode
         local response
