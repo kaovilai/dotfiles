@@ -25,11 +25,19 @@
 #   export ocpclientarch="arm64"
 #   install-oc
 install-oc(){
-    curl --silent https://mirror.openshift.com/pub/openshift-v4/clients/ocp/latest/openshift-client-$ocpclientos-$ocpclientarch.tar.gz -o ~/Downloads/openshift-client-$ocpclientos-$ocpclientarch.tar.gz && \
-    tar -xvf ~/Downloads/openshift-client-$ocpclientos-$ocpclientarch.tar.gz -C ~/Downloads && \
+    if ! command -v curl &>/dev/null; then
+        echo "❌ curl not found. Install it with: brew install curl" >&2
+        return 1
+    fi
+    if [[ -z "$ocpclientos" || -z "$ocpclientarch" ]]; then
+        echo "❌ \$ocpclientos and \$ocpclientarch must be set (e.g., 'mac'/'linux' and 'amd64'/'arm64')" >&2
+        return 1
+    fi
+    curl --silent "https://mirror.openshift.com/pub/openshift-v4/clients/ocp/latest/openshift-client-${ocpclientos}-${ocpclientarch}.tar.gz" -o ~/Downloads/openshift-client-"${ocpclientos}"-"${ocpclientarch}".tar.gz && \
+    tar -xvf ~/Downloads/openshift-client-"${ocpclientos}"-"${ocpclientarch}".tar.gz -C ~/Downloads && \
     sudo mv ~/Downloads/oc /usr/local/bin && \
     sudo mv ~/Downloads/kubectl /usr/local/bin && \
-    rm ~/Downloads/openshift-client-$ocpclientos-$ocpclientarch.tar.gz
+    rm ~/Downloads/openshift-client-"${ocpclientos}"-"${ocpclientarch}".tar.gz
     rm ~/Downloads/README.md
 }
 
@@ -45,10 +53,18 @@ install-oc(){
 #   export ocpclientarch="amd64"
 #   install-ocp-installer
 install-ocp-installer(){
-    curl --silent https://mirror.openshift.com/pub/openshift-v4/clients/ocp/latest/openshift-install-$ocpclientos-$ocpclientarch.tar.gz -o ~/Downloads/openshift-install-$ocpclientos-$ocpclientarch.tar.gz && \
-    tar -xvf ~/Downloads/openshift-install-$ocpclientos-$ocpclientarch.tar.gz -C ~/Downloads && \
+    if ! command -v curl &>/dev/null; then
+        echo "❌ curl not found. Install it with: brew install curl" >&2
+        return 1
+    fi
+    if [[ -z "$ocpclientos" || -z "$ocpclientarch" ]]; then
+        echo "❌ \$ocpclientos and \$ocpclientarch must be set (e.g., 'mac'/'linux' and 'amd64'/'arm64')" >&2
+        return 1
+    fi
+    curl --silent "https://mirror.openshift.com/pub/openshift-v4/clients/ocp/latest/openshift-install-${ocpclientos}-${ocpclientarch}.tar.gz" -o ~/Downloads/openshift-install-"${ocpclientos}"-"${ocpclientarch}".tar.gz && \
+    tar -xvf ~/Downloads/openshift-install-"${ocpclientos}"-"${ocpclientarch}".tar.gz -C ~/Downloads && \
     sudo mv ~/Downloads/openshift-install /usr/local/bin
-    rm ~/Downloads/openshift-install-$ocpclientos-$ocpclientarch.tar.gz
+    rm ~/Downloads/openshift-install-"${ocpclientos}"-"${ocpclientarch}".tar.gz
     rm ~/Downloads/README.md
 }
 
