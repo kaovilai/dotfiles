@@ -2,7 +2,7 @@
 znap get_latest_amd64_release_image() {
     local pullSpec
     pullSpec=$(curl -sm 10 https://amd64.ocp.releases.ci.openshift.org/api/v1/releasestream/4-dev-preview/latest | jq -r '.pullSpec' 2>/dev/null)
-    if [ -z "$pullSpec" ]; then
+    if [[ -z "$pullSpec" ]]; then
         echo "ERROR: Failed to fetch latest AMD64 release image from OpenShift CI API" >&2
         return 1
     else
@@ -14,7 +14,7 @@ znap get_latest_amd64_release_image() {
 znap get_latest_arm64_release_image() {
     local pullSpec
     pullSpec=$(curl -sm 10 https://arm64.ocp.releases.ci.openshift.org/api/v1/releasestream/4-dev-preview-arm64/latest | jq -r '.pullSpec' 2>/dev/null)
-    if [ -z "$pullSpec" ]; then
+    if [[ -z "$pullSpec" ]]; then
         echo "ERROR: Failed to fetch latest ARM64 release image from OpenShift CI API" >&2
         return 1
     else
@@ -26,7 +26,7 @@ znap get_latest_arm64_release_image() {
 znap get_latest_ec_version() {
     local version
     version=$(curl -sm 10 https://amd64.ocp.releases.ci.openshift.org/api/v1/releasestream/4-dev-preview/latest | jq -r '.name' 2>/dev/null)
-    if [ -z "$version" ]; then
+    if [[ -z "$version" ]]; then
         echo "ERROR: Failed to fetch latest EC version from OpenShift CI API" >&2
         return 1
     else
@@ -38,7 +38,7 @@ znap get_latest_ec_version() {
 znap get_latest_multi_release_image() {
     local pullSpec
     pullSpec=$(curl -sm 10 https://multi.ocp.releases.ci.openshift.org/api/v1/releasestream/4-dev-preview-multi/latest | jq -r '.pullSpec' 2>/dev/null)
-    if [ -z "$pullSpec" ]; then
+    if [[ -z "$pullSpec" ]]; then
         echo "ERROR: Failed to fetch latest multi-arch release image from OpenShift CI API" >&2
         return 1
     else
@@ -68,7 +68,7 @@ get-ocp-release-image-multi() {
 znap get_latest_stable_amd64_release_image() {
     local pullSpec
     pullSpec=$(curl -sm 10 https://amd64.ocp.releases.ci.openshift.org/api/v1/releasestream/4-stable/latest | jq -r '.pullSpec' 2>/dev/null)
-    if [ -z "$pullSpec" ]; then
+    if [[ -z "$pullSpec" ]]; then
         echo "ERROR: Failed to fetch latest stable AMD64 release image from OpenShift CI API" >&2
         return 1
     else
@@ -80,7 +80,7 @@ znap get_latest_stable_amd64_release_image() {
 znap get_latest_stable_arm64_release_image() {
     local pullSpec
     pullSpec=$(curl -sm 10 https://arm64.ocp.releases.ci.openshift.org/api/v1/releasestream/4-stable-arm64/latest | jq -r '.pullSpec' 2>/dev/null)
-    if [ -z "$pullSpec" ]; then
+    if [[ -z "$pullSpec" ]]; then
         echo "ERROR: Failed to fetch latest stable ARM64 release image from OpenShift CI API" >&2
         return 1
     else
@@ -92,7 +92,7 @@ znap get_latest_stable_arm64_release_image() {
 znap get_latest_stable_multi_release_image() {
     local pullSpec
     pullSpec=$(curl -sm 10 https://multi.ocp.releases.ci.openshift.org/api/v1/releasestream/4-stable-multi/latest | jq -r '.pullSpec' 2>/dev/null)
-    if [ -z "$pullSpec" ]; then
+    if [[ -z "$pullSpec" ]]; then
         echo "ERROR: Failed to fetch latest stable multi-arch release image from OpenShift CI API" >&2
         return 1
     else
@@ -104,7 +104,7 @@ znap get_latest_stable_multi_release_image() {
 znap get_latest_stable_version() {
     local version
     version=$(curl -sm 10 https://amd64.ocp.releases.ci.openshift.org/api/v1/releasestream/4-stable/latest | jq -r '.name' 2>/dev/null)
-    if [ -z "$version" ]; then
+    if [[ -z "$version" ]]; then
         echo "ERROR: Failed to fetch latest stable version from OpenShift CI API" >&2
         return 1
     else
@@ -137,11 +137,11 @@ export OCP_MANIFESTS_DIR=~/OCP/manifests
 export TODAY=${TODAY:-$(date +%y%m%d)}
 
 # Set client OS and architecture (used for downloading clients)
-if [ -n "$(command -v sw_vers)" ]; then
+if command -v sw_vers &>/dev/null; then
     export ocpclientos='mac'
     export ocpclientarch=$(arch)
 else
-    if [ -n "$(command -v lsb_release)" ]; then
+    if command -v lsb_release &>/dev/null; then
         export ocpclientos='linux'
         export ocpclientarch=$(dpkg --print-architecture)
     else
