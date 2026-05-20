@@ -24,7 +24,7 @@ fi
 if has_command docker; then
   local docker_completion_file="$ZSH_COMPLETION_CACHE_DIR/_docker"
   if [[ -f "$docker_completion_file" ]]; then
-    cat "$docker_completion_file" > "${fpath[1]}/_docker" &!
+    cp "$docker_completion_file" "${fpath[1]}/_docker" &!
   fi
   
   # Update check and download in the background
@@ -42,13 +42,13 @@ fi
 
 # OpenShift Install - uses cached file to avoid generating completion on every shell start
 if has_command openshift-install; then
-  cat ~/git/dotfiles/openshift-install-completion-zsh.txt > "${fpath[1]}/_openshift-install" &!
+  cp ~/git/dotfiles/openshift-install-completion-zsh.txt "${fpath[1]}/_openshift-install" &!
 fi
 
 # GitHub CLI completion - cache for stable tools
 if has_command gh; then
   local gh_completion_cache="$ZSH_COMPLETION_CACHE_DIR/_gh_generated"
-  [[ -f "$gh_completion_cache" ]] && cat "$gh_completion_cache" > "${fpath[1]}/_gh" &!
+  [[ -f "$gh_completion_cache" ]] && cp "$gh_completion_cache" "${fpath[1]}/_gh" &!
   if completion_cache_expired "$gh_completion_cache"; then  # 7 days
     (gh completion -s zsh > "${gh_completion_cache}.tmp" 2>/dev/null && mv "${gh_completion_cache}.tmp" "$gh_completion_cache") &!
   fi
@@ -57,7 +57,7 @@ fi
 # Kubernetes CLI - cache for stable tools
 if has_command kubectl; then
   local kubectl_completion_cache="$ZSH_COMPLETION_CACHE_DIR/_kubectl_generated"
-  [[ -f "$kubectl_completion_cache" ]] && cat "$kubectl_completion_cache" > "${fpath[1]}/_kubectl" &!
+  [[ -f "$kubectl_completion_cache" ]] && cp "$kubectl_completion_cache" "${fpath[1]}/_kubectl" &!
   if completion_cache_expired "$kubectl_completion_cache"; then
     (kubectl completion zsh > "${kubectl_completion_cache}.tmp" 2>/dev/null && mv "${kubectl_completion_cache}.tmp" "$kubectl_completion_cache") &!
   fi
@@ -66,7 +66,7 @@ fi
 # OpenShift Client - cache for stable tools
 if has_command oc; then
   local oc_completion_cache="$ZSH_COMPLETION_CACHE_DIR/_oc_generated"
-  [[ -f "$oc_completion_cache" ]] && cat "$oc_completion_cache" > "${fpath[1]}/_oc" &!
+  [[ -f "$oc_completion_cache" ]] && cp "$oc_completion_cache" "${fpath[1]}/_oc" &!
   if completion_cache_expired "$oc_completion_cache"; then
     (oc completion zsh > "${oc_completion_cache}.tmp" 2>/dev/null && mv "${oc_completion_cache}.tmp" "$oc_completion_cache") &!
   fi
@@ -77,7 +77,7 @@ if has_command podman; then
   local podman_completion_file="$ZSH_COMPLETION_CACHE_DIR/_podman"
   
   if [[ -f "$podman_completion_file" ]]; then
-    cat "$podman_completion_file" > "${fpath[1]}/_podman" &!
+    cp "$podman_completion_file" "${fpath[1]}/_podman" &!
   fi
   
   # Update check and download in the background
@@ -93,7 +93,7 @@ fi
 # Rosa CLI - cached
 if has_command rosa; then
   local rosa_completion_cache="$ZSH_COMPLETION_CACHE_DIR/_rosa_generated"
-  [[ -f "$rosa_completion_cache" ]] && cat "$rosa_completion_cache" > "${fpath[1]}/_rosa" &!
+  [[ -f "$rosa_completion_cache" ]] && cp "$rosa_completion_cache" "${fpath[1]}/_rosa" &!
   if completion_cache_expired "$rosa_completion_cache"; then
     (rosa completion zsh > "${rosa_completion_cache}.tmp" 2>/dev/null && mv "${rosa_completion_cache}.tmp" "$rosa_completion_cache") &!
   fi
@@ -102,7 +102,7 @@ fi
 # CCOCTL - cached
 if has_command ccoctl; then
   local ccoctl_completion_cache="$ZSH_COMPLETION_CACHE_DIR/_ccoctl_generated"
-  [[ -f "$ccoctl_completion_cache" ]] && cat "$ccoctl_completion_cache" > "${fpath[1]}/_ccoctl" &!
+  [[ -f "$ccoctl_completion_cache" ]] && cp "$ccoctl_completion_cache" "${fpath[1]}/_ccoctl" &!
   if completion_cache_expired "$ccoctl_completion_cache"; then
     (ccoctl completion zsh > "${ccoctl_completion_cache}.tmp" 2>/dev/null && mv "${ccoctl_completion_cache}.tmp" "$ccoctl_completion_cache") &!
   fi
@@ -111,7 +111,7 @@ fi
 # Velero - cached
 if has_command velero; then
   local velero_completion_cache="$ZSH_COMPLETION_CACHE_DIR/_velero_generated"
-  [[ -f "$velero_completion_cache" ]] && cat "$velero_completion_cache" > "${fpath[1]}/_velero" &!
+  [[ -f "$velero_completion_cache" ]] && cp "$velero_completion_cache" "${fpath[1]}/_velero" &!
   if completion_cache_expired "$velero_completion_cache"; then
     (velero completion zsh > "${velero_completion_cache}.tmp" 2>/dev/null && mv "${velero_completion_cache}.tmp" "$velero_completion_cache") &!
   fi
@@ -120,7 +120,7 @@ fi
 # YQ - cached
 if has_command yq; then
   local yq_completion_cache="$ZSH_COMPLETION_CACHE_DIR/_yq_generated"
-  [[ -f "$yq_completion_cache" ]] && cat "$yq_completion_cache" > "${fpath[1]}/_yq" &!
+  [[ -f "$yq_completion_cache" ]] && cp "$yq_completion_cache" "${fpath[1]}/_yq" &!
   if completion_cache_expired "$yq_completion_cache"; then
     (yq completion zsh > "${yq_completion_cache}.tmp" 2>/dev/null && mv "${yq_completion_cache}.tmp" "$yq_completion_cache") &!
   fi
@@ -129,7 +129,7 @@ fi
 # Kind - cached
 if has_command kind; then
   local kind_completion_cache="$ZSH_COMPLETION_CACHE_DIR/_kind_generated"
-  [[ -f "$kind_completion_cache" ]] && cat "$kind_completion_cache" > "${fpath[1]}/_kind" &!
+  [[ -f "$kind_completion_cache" ]] && cp "$kind_completion_cache" "${fpath[1]}/_kind" &!
   if completion_cache_expired "$kind_completion_cache"; then
     (kind completion zsh > "${kind_completion_cache}.tmp" 2>/dev/null && mv "${kind_completion_cache}.tmp" "$kind_completion_cache") &!
   fi
@@ -138,7 +138,7 @@ fi
 # Helm - cached
 if has_command helm; then
   local helm_completion_cache="$ZSH_COMPLETION_CACHE_DIR/_helm_generated"
-  [[ -f "$helm_completion_cache" ]] && cat "$helm_completion_cache" > "${fpath[1]}/_helm" &!
+  [[ -f "$helm_completion_cache" ]] && cp "$helm_completion_cache" "${fpath[1]}/_helm" &!
   if completion_cache_expired "$helm_completion_cache"; then
     (helm completion zsh > "${helm_completion_cache}.tmp" 2>/dev/null && mv "${helm_completion_cache}.tmp" "$helm_completion_cache") &!
   fi
@@ -147,7 +147,7 @@ fi
 # Kustomize - cached
 if has_command kustomize; then
   local kustomize_completion_cache="$ZSH_COMPLETION_CACHE_DIR/_kustomize_generated"
-  [[ -f "$kustomize_completion_cache" ]] && cat "$kustomize_completion_cache" > "${fpath[1]}/_kustomize" &!
+  [[ -f "$kustomize_completion_cache" ]] && cp "$kustomize_completion_cache" "${fpath[1]}/_kustomize" &!
   if completion_cache_expired "$kustomize_completion_cache"; then
     (kustomize completion zsh > "${kustomize_completion_cache}.tmp" 2>/dev/null && mv "${kustomize_completion_cache}.tmp" "$kustomize_completion_cache") &!
   fi
@@ -168,19 +168,19 @@ if has_command pipenv; then
   if completion_cache_expired "$pipenv_completion_cache"; then
     _PIPENV_COMPLETE=zsh_source pipenv > "$pipenv_completion_cache" 2>/dev/null
   fi
-  [[ -f "$pipenv_completion_cache" ]] && cat "$pipenv_completion_cache" > "${fpath[1]}/_pipenv" &!
+  [[ -f "$pipenv_completion_cache" ]] && cp "$pipenv_completion_cache" "${fpath[1]}/_pipenv" &!
 fi
 
 # IBM Cloud completion - if needed
 if [[ -f /usr/local/ibmcloud/autocomplete/zsh_autocomplete ]]; then
-  cat /usr/local/ibmcloud/autocomplete/zsh_autocomplete > "${fpath[1]}/_ibmcloud" &!
+  cp /usr/local/ibmcloud/autocomplete/zsh_autocomplete "${fpath[1]}/_ibmcloud" &!
 fi
 
 # Claude Code CLI - download from community-maintained repo
 if has_command claude || has_command happy; then
   local claude_completion_file="$ZSH_COMPLETION_CACHE_DIR/_claude"
   if [[ -f "$claude_completion_file" ]]; then
-    cat "$claude_completion_file" > "${fpath[1]}/_claude" &!
+    cp "$claude_completion_file" "${fpath[1]}/_claude" &!
     # Also register completions for happy (claude is aliased to happy)
     sed 's/^#compdef claude/#compdef claude happy/' "$claude_completion_file" > "${fpath[1]}/_happy" &!
   fi
@@ -196,7 +196,7 @@ fi
 # Netbird - cached
 if has_command netbird; then
   local netbird_completion_cache="$ZSH_COMPLETION_CACHE_DIR/_netbird_generated"
-  [[ -f "$netbird_completion_cache" ]] && cat "$netbird_completion_cache" > "${fpath[1]}/_netbird" &!
+  [[ -f "$netbird_completion_cache" ]] && cp "$netbird_completion_cache" "${fpath[1]}/_netbird" &!
   if completion_cache_expired "$netbird_completion_cache"; then
     (netbird completion zsh > "${netbird_completion_cache}.tmp" 2>/dev/null && mv "${netbird_completion_cache}.tmp" "$netbird_completion_cache") &!
   fi
