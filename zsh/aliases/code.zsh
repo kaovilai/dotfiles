@@ -23,7 +23,7 @@ cg() {
     echo "❌ code not found. Install VS Code and run: Shell Command: Install 'code' command in PATH" >&2
     return 1
   fi
-  local dirs
+  local dirs d
   dirs=$(print -l ~/git/*(N/:t) | fzf --multi --prompt="~/git/ > " --preview 'git -C ~/git/{} status -sb 2>/dev/null || echo "Not a git repo"') || return
   while IFS= read -r d; do
     code ~/git/"$d" </dev/null
