@@ -16,7 +16,7 @@ save-cluster-login() {
     local kubeconfig_path="${kubeconfig_dir}/${name}"
 
     # Create directory if it doesn't exist
-    mkdir -p "$kubeconfig_dir"
+    mkdir -p "$kubeconfig_dir" || { echo "✗ Failed to create kubeconfig directory: $kubeconfig_dir" >&2; return 1; }
 
     # Execute the oc login command with the specified kubeconfig
     echo "Logging in and saving kubeconfig to: ${kubeconfig_path}"

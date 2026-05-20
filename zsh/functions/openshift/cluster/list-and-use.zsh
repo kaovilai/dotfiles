@@ -364,7 +364,7 @@ use-ocp-cluster() {
     local copy
     read -r "copy?Copy to ~/.kube/config? (y/n): "
     if [[ $copy == "y" || $copy == "Y" ]]; then
-        mkdir -p ~/.kube
+        mkdir -p ~/.kube || { echo "✗ Failed to create ~/.kube directory" >&2; return 1; }
         cp "$KUBECONFIG" ~/.kube/config
         echo "Copied to ~/.kube/config"
     fi
