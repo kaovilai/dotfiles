@@ -23,41 +23,34 @@
 prompt-release-stream() {
     echo "Fetching available versions..." >&2
 
-    local versions=""
-
-    # Fetch EC/RC versions from Quay (fast, single call)
-    local quay_tags=$(curl -sm 15 \
-        'https://quay.io/api/v1/repository/openshift-release-dev/ocp-release/tag/?limit=100&onlyActiveTags=true' \
-        2>/dev/null | jq -r '[.tags[].name
-        | select(test("x86_64$") and (test("multi") | not))
-        | rtrimstr("-x86_64")
-        | select(test("ec\\.|rc\\."))] | sort | reverse | .[]' 2>/dev/null)
-
-    if [[ -n "$quay_tags" ]]; then
-        while IFS= read -r tag; do
-            if [[ "$tag" == *-ec.* || "$tag" == *-rc.* ]]; then
-                versions+="[dev-preview] $tag"$'\n'
-            fi
-        done <<< "$quay_tags"
-    fi
-
-    # Fetch stable versions from Cincinnati (multiple channels in parallel)
     local tmpdir=$(mktemp -d)
-    for minor in 22 21 20 19 18 17 16; do
-        curl -sm 10 -H 'Accept: application/json' \
-            "https://api.openshift.com/api/upgrades_info/v1/graph?channel=stable-4.${minor}&arch=amd64" \
-            2>/dev/null | jq -r '[.nodes[].version] | sort_by(split(".") | map(tonumber? // 0)) | reverse | .[0:5] | .[]' \
-            > "$tmpdir/stable-4.${minor}" 2>/dev/null &
+
+    # Fetch from Quay: x86_64 tags for recent major.minor ranges (parallel)
+    for prefix in "5." "4.2" "4.1" "4.0"; do
+        curl -sm 15 \
+            "https://quay.io/api/v1/repository/openshift-release-dev/ocp-release/tag/?limit=100&onlyActiveTags=true&filter_tag_name=like:${prefix}%-x86_64" \
+            2>/dev/null | jq -r '[.tags[].name
+            | select(test("-multi") | not)
+            | rtrimstr("-x86_64")] | .[]' \
+            > "$tmpdir/quay-${prefix}" 2>/dev/null &
     done
     wait
 
-    for minor in 22 21 20 19 18 17 16; do
-        if [[ -s "$tmpdir/stable-4.${minor}" ]]; then
-            while IFS= read -r ver; do
-                versions+="[stable-4.${minor}] $ver"$'\n'
-            done < "$tmpdir/stable-4.${minor}"
+    # Combine and categorize
+    local versions=""
+    cat "$tmpdir"/quay-* 2>/dev/null | sort -Vr | uniq | while IFS= read -r ver; do
+        [[ -z "$ver" ]] && continue
+        local label
+        if [[ "$ver" == *-ec.* || "$ver" == *-rc.* ]]; then
+            label="dev-preview"
+        else
+            local minor=${ver%.*}
+            label="stable-${minor}"
         fi
-    done
+        echo "[${label}] $ver"
+    done > "$tmpdir/all-versions"
+
+    versions=$(cat "$tmpdir/all-versions" 2>/dev/null)
     rm -rf "$tmpdir"
 
     if [[ -z "$versions" ]]; then
@@ -67,19 +60,16 @@ prompt-release-stream() {
         return 0
     fi
 
-    # Remove trailing newline
-    versions=${versions%$'\n'}
-
     local selected
     if command -v fzf >/dev/null 2>&1; then
         selected=$(echo "$versions" | fzf --height 40% --reverse \
-            --header "Select OpenShift version (type to filter)" \
+            --header "Select OpenShift version (type to filter, e.g. 4.17)" \
             --prompt "Version> " </dev/tty)
     else
         echo "" >&2
         echo "$versions" | cat -n >&2
         echo "" >&2
-        echo -n "Enter version number or full version string: " >&2
+        echo -n "Enter line number or full version string: " >&2
         read -r selected
         if [[ "$selected" =~ ^[0-9]+$ ]]; then
             selected=$(echo "$versions" | sed -n "${selected}p")
