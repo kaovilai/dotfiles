@@ -149,12 +149,20 @@ claude-review() {
         echo "Error: claude-review is only supported on macOS" >&2
         return 1
     fi
+    if [[ -z "$1" ]]; then
+        echo "Usage: claude-review <topic>" >&2
+        return 1
+    fi
     osascript -e "tell app \"Terminal\" to do script \"cd $HOME/experiments/ && happy --enable-auto-mode --permission-mode auto \\\"/review $1\\\"\""
 }
 alias cr='claude-review'
 gemini-review() {
     if [[ "$OSTYPE" != darwin* ]]; then
         echo "Error: gemini-review is only supported on macOS" >&2
+        return 1
+    fi
+    if [[ -z "$1" ]]; then
+        echo "Usage: gemini-review <topic>" >&2
         return 1
     fi
     osascript -e "tell app \"Terminal\" to do script \"cd $HOME/experiments/ && gemini -p \\\"/review $1\\\"\""

@@ -1,5 +1,6 @@
 # Safe source: reports errors without killing the shell
 _safe_source() {
+  [[ -f "$1" ]] || { print -P "%F{yellow}[dotfiles] File not found: $1%f" >&2; return 1; }
   source "$1" || print -P "%F{red}[dotfiles] Failed to source: $1%f" >&2
 }
 
