@@ -1,7 +1,7 @@
 
 # Cache infrastructure provided by command-cache.zsh (sourced via .zshrc or below)
 if [[ -z "$ZSH_COMPLETION_CACHE_DIR" ]]; then
-  source ~/git/dotfiles/zsh/command-cache.zsh
+  _safe_source ~/git/dotfiles/zsh/command-cache.zsh
 fi
 
 # Run completion setup in an anonymous function to properly scope local variables.
