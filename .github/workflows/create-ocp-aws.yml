@@ -12,13 +12,18 @@ on:
           - arm64
         default: amd64
       stream:
-        description: 'Release stream'
+        description: 'Release stream (ignored if version is set)'
         required: true
         type: choice
         options:
           - dev-preview
           - stable
         default: dev-preview
+      version:
+        description: 'Specific version (e.g. 4.17.9, 4.22.0-ec.5). Leave empty for latest.'
+        required: false
+        type: string
+        default: ''
       action:
         description: 'Action to perform'
         required: true
@@ -90,13 +95,20 @@ jobs:
 
           STREAM="${{ inputs.stream }}"
           ARCH="${{ inputs.arch }}"
+          VERSION="${{ inputs.version }}"
+
+          # If specific version requested, set it for get-release-image
+          if [[ -n "$VERSION" ]]; then
+            export OCP_RELEASE_VERSION="$VERSION"
+            echo "INFO: Using specific version: $VERSION"
+          fi
 
           FLAGS=(--force-new)
-          if [[ "$STREAM" == "dev-preview" ]]; then
+          if [[ "$STREAM" == "dev-preview" && -z "$VERSION" ]]; then
             FLAGS+=(--ec)
           fi
 
-          echo "::group::Creating OCP cluster (arch=$ARCH, stream=$STREAM)"
+          echo "::group::Creating OCP cluster (arch=$ARCH, stream=$STREAM, version=${VERSION:-latest})"
           "create-ocp-aws-${ARCH}" "${FLAGS[@]}"
           echo "::endgroup::"
 

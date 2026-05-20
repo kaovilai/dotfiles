@@ -4,13 +4,18 @@ on:
   workflow_dispatch:
     inputs:
       stream:
-        description: 'Release stream'
+        description: 'Release stream (ignored if version is set)'
         required: true
         type: choice
         options:
           - dev-preview
           - stable
         default: dev-preview
+      version:
+        description: 'Specific version (e.g. 4.17.9, 4.22.0-ec.5). Leave empty for latest.'
+        required: false
+        type: string
+        default: ''
       action:
         description: 'Action to perform'
         required: true
@@ -114,12 +119,19 @@ jobs:
           source ./zsh/functions/openshift/gcp/delete-ocp-gcp-wif.zsh
           source ./zsh/functions/openshift/gcp/create-ocp-gcp-wif.zsh
 
+          # If specific version requested, set it for get-release-image
+          VERSION="${{ inputs.version }}"
+          if [[ -n "$VERSION" ]]; then
+            export OCP_RELEASE_VERSION="$VERSION"
+            echo "INFO: Using specific version: $VERSION"
+          fi
+
           FLAGS=(--force-new)
-          if [[ "${{ inputs.stream }}" == "dev-preview" ]]; then
+          if [[ "${{ inputs.stream }}" == "dev-preview" && -z "$VERSION" ]]; then
             FLAGS+=(--ec)
           fi
 
-          echo "::group::Creating OCP GCP-WIF cluster (stream=${{ inputs.stream }})"
+          echo "::group::Creating OCP GCP-WIF cluster (stream=${{ inputs.stream }}, version=${VERSION:-latest})"
           # Pipe "n" to skip the post-create secrets.zsh update prompt
           echo "n" | create-ocp-gcp-wif "${FLAGS[@]}"
           echo "::endgroup::"
