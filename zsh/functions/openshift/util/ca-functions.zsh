@@ -24,7 +24,7 @@
 #   # Use with: curl --cacert router-ca.crt https://my-route.apps.cluster.com
 get-oc-router-ca(){
     if ! command -v oc &>/dev/null; then
-        echo "❌ oc not found. Install it with: brew install openshift-cli"
+        echo "❌ oc not found. Install it with: brew install openshift-cli" >&2
         return 1
     fi
     echo "Getting Ingress Router CA for server"
@@ -76,7 +76,7 @@ trust-oc-router-ca(){
 
 get-api-ca(){
     if ! command -v oc &>/dev/null; then
-        echo "❌ oc not found. Install it with: brew install openshift-cli"
+        echo "❌ oc not found. Install it with: brew install openshift-cli" >&2
         return 1
     fi
     echo "Getting API CA for server"
