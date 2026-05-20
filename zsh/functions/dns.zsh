@@ -109,7 +109,7 @@ set-dns-servers() {
         if sudo networksetup -setdnsservers "$service" ${=ipv4_servers}; then
             echo "✓ IPv4 DNS servers set successfully"
         else
-            echo "✗ Failed to set IPv4 DNS servers"
+            echo "✗ Failed to set IPv4 DNS servers" >&2
             return 1
         fi
     fi
@@ -207,7 +207,7 @@ clear-dns-servers() {
         echo "✓ DNS servers cleared successfully"
         echo "The system will now use DNS servers provided by DHCP"
     else
-        echo "✗ Failed to clear DNS servers"
+        echo "✗ Failed to clear DNS servers" >&2
         return 1
     fi
 

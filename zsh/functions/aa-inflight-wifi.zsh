@@ -121,7 +121,7 @@ aa-inflight-wifi() {
             echo "Internet connection established!"
             return 0
         else
-            echo "Failed to establish internet connection. Please check the login page."
+            echo "Failed to establish internet connection. Please check the login page." >&2
             return 1
         fi
     }
