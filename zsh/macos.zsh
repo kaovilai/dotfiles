@@ -30,7 +30,7 @@ install-pkg-from-url(){
     curl -Lm 60 -o "$pkg_file" "$1" && install-pkg "$pkg_file"
 }
 
-PATH=$PATH:/Library/Frameworks/Python.framework/Versions/Current/bin
+path+=(/Library/Frameworks/Python.framework/Versions/Current/bin(N))
 
 # Source heavy operations only when not in VS Code
 if [[ "$TERM_PROGRAM" != "vscode" ]]; then
