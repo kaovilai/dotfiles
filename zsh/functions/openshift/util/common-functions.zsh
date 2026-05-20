@@ -15,35 +15,94 @@
 #   - generate-unique-cluster-name: Generate unique cluster name to avoid conflicts
 #   - cleanup-on-failure: Clean up resources when cluster creation fails
 
-# Function to prompt for release stream selection
+# Function to prompt for release version selection
 # Usage: stream=$(prompt-release-stream)
-# Description: Interactively prompts user to select between dev-preview (EC) or stable release
-# Returns: "dev-preview" or "stable" to stdout
+# Description: Shows all available OCP versions in fzf for selection.
+#   Sets OCP_RELEASE_VERSION with the selected version.
+# Returns: "dev-preview" or "stable" to stdout (for backward compat)
 prompt-release-stream() {
-    local ec_ver=$(get-ocp-latest-ec-version)
-    local stable_ver=$(get-ocp-latest-stable-version)
-    local options="1) 4-dev-preview (Early Candidate) - Version: $ec_ver
-2) 4-stable (Release Candidate)   - Version: $stable_ver"
+    echo "Fetching available versions..." >&2
 
-    local stream_choice
-    if command -v fzf >/dev/null 2>&1; then
-        local selected=$(echo "$options" | fzf --height 40% --reverse --header "Select OpenShift release stream" </dev/tty)
-        stream_choice=$(echo "$selected" | awk -F')' '{print $1}')
-    else
-        echo "" >&2
-        echo "Select OpenShift release stream:" >&2
-        echo "$options" >&2
-        echo "" >&2
-        echo -n "Enter your choice (1 or 2): " >&2
-        read -r stream_choice
+    local versions=""
+
+    # Fetch EC/RC versions from Quay (fast, single call)
+    local quay_tags=$(curl -sm 15 \
+        'https://quay.io/api/v1/repository/openshift-release-dev/ocp-release/tag/?limit=100&onlyActiveTags=true' \
+        2>/dev/null | jq -r '[.tags[].name
+        | select(test("x86_64$") and (test("multi") | not))
+        | rtrimstr("-x86_64")
+        | select(test("ec\\.|rc\\."))] | sort | reverse | .[]' 2>/dev/null)
+
+    if [[ -n "$quay_tags" ]]; then
+        while IFS= read -r tag; do
+            if [[ "$tag" == *-ec.* || "$tag" == *-rc.* ]]; then
+                versions+="[dev-preview] $tag"$'\n'
+            fi
+        done <<< "$quay_tags"
     fi
 
-    if [[ "$stream_choice" == "2" ]]; then
-        echo "INFO: Using 4-stable release stream (version: $stable_ver)" >&2
-        echo "stable"
-    else
-        echo "INFO: Using 4-dev-preview release stream (version: $ec_ver)" >&2
+    # Fetch stable versions from Cincinnati (multiple channels in parallel)
+    local tmpdir=$(mktemp -d)
+    for minor in 22 21 20 19 18 17 16; do
+        curl -sm 10 -H 'Accept: application/json' \
+            "https://api.openshift.com/api/upgrades_info/v1/graph?channel=stable-4.${minor}&arch=amd64" \
+            2>/dev/null | jq -r '[.nodes[].version] | sort_by(split(".") | map(tonumber? // 0)) | reverse | .[0:5] | .[]' \
+            > "$tmpdir/stable-4.${minor}" 2>/dev/null &
+    done
+    wait
+
+    for minor in 22 21 20 19 18 17 16; do
+        if [[ -s "$tmpdir/stable-4.${minor}" ]]; then
+            while IFS= read -r ver; do
+                versions+="[stable-4.${minor}] $ver"$'\n'
+            done < "$tmpdir/stable-4.${minor}"
+        fi
+    done
+    rm -rf "$tmpdir"
+
+    if [[ -z "$versions" ]]; then
+        echo "WARN: Could not fetch versions, falling back to latest" >&2
+        unset OCP_RELEASE_VERSION
         echo "dev-preview"
+        return 0
+    fi
+
+    # Remove trailing newline
+    versions=${versions%$'\n'}
+
+    local selected
+    if command -v fzf >/dev/null 2>&1; then
+        selected=$(echo "$versions" | fzf --height 40% --reverse \
+            --header "Select OpenShift version (type to filter)" \
+            --prompt "Version> " </dev/tty)
+    else
+        echo "" >&2
+        echo "$versions" | cat -n >&2
+        echo "" >&2
+        echo -n "Enter version number or full version string: " >&2
+        read -r selected
+        if [[ "$selected" =~ ^[0-9]+$ ]]; then
+            selected=$(echo "$versions" | sed -n "${selected}p")
+        fi
+    fi
+
+    if [[ -z "$selected" ]]; then
+        echo "No version selected, using latest dev-preview" >&2
+        unset OCP_RELEASE_VERSION
+        echo "dev-preview"
+        return 0
+    fi
+
+    local version=$(echo "$selected" | awk '{print $2}')
+    local stream_tag=$(echo "$selected" | awk '{print $1}' | tr -d '[]')
+
+    export OCP_RELEASE_VERSION="$version"
+    echo "INFO: Selected version $version ($stream_tag)" >&2
+
+    if [[ "$stream_tag" == "dev-preview" ]]; then
+        echo "dev-preview"
+    else
+        echo "stable"
     fi
 }
 
@@ -59,7 +118,23 @@ prompt-release-stream() {
 get-release-image() {
     local stream=$1
     local architecture=$2
-    
+
+    # If a specific version was selected, construct pullSpec directly
+    if [[ -n "$OCP_RELEASE_VERSION" ]]; then
+        local quay_arch
+        case "$architecture" in
+            "amd64"|"x86_64") quay_arch="x86_64" ;;
+            "arm64"|"aarch64") quay_arch="aarch64" ;;
+            "multi") quay_arch="multi" ;;
+            *)
+                echo "ERROR: Unknown architecture: $architecture" >&2
+                return 1
+                ;;
+        esac
+        echo "quay.io/openshift-release-dev/ocp-release:${OCP_RELEASE_VERSION}-${quay_arch}"
+        return 0
+    fi
+
     if [[ "$stream" == "stable" ]]; then
         case "$architecture" in
             "amd64"|"x86_64")
