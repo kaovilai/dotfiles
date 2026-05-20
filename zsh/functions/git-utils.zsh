@@ -51,11 +51,11 @@ new-changelog() {
     { read -r GH_LOGIN; read -r GH_PR_NUMBER; read -r CHANGELOG_BODY; } \
         < <(jq -r '.author.login, (.number | tostring), .title' 2>/dev/null <<< "$GH_PR_JSON")
     if [[ -z "$GH_LOGIN" ]]; then
-        echo "branch does not have PR or cli not logged in, try 'gh auth login' or 'gh pr create'"
+        echo "branch does not have PR or cli not logged in, try 'gh auth login' or 'gh pr create'" >&2
         return 1
     fi
     if [[ -z "$GH_PR_NUMBER" ]]; then
-        echo "Could not determine PR number. Make sure the branch has an open PR."
+        echo "Could not determine PR number. Make sure the branch has an open PR." >&2
         return 1
     fi
     mkdir -p ./changelogs/unreleased/ && \
@@ -177,34 +177,34 @@ exec-dirs-ds() {
     find . -type d -maxdepth 1 -name "$pattern" | while read -r dir; do
         (
             print "\033[1;34mProcessing $dir...\033[0m"
-            cd "$dir" || { print "\033[1;31mFailed to cd into $dir\033[0m"; return 1; }
+            cd "$dir" || { print "\033[1;31mFailed to cd into $dir\033[0m" >&2; return 1; }
 
             echo "Fetching from $ds_name..."
-            git fetch "$ds_name" || { print "\033[1;31mFailed to fetch $ds_name\033[0m"; return 1; }
+            git fetch "$ds_name" || { print "\033[1;31mFailed to fetch $ds_name\033[0m" >&2; return 1; }
 
             echo "Checking out $ds_name/$base_branch..."
-            git checkout "$ds_name/$base_branch" || { print "\033[1;31mFailed to checkout $ds_name/$base_branch\033[0m"; return 1; }
+            git checkout "$ds_name/$base_branch" || { print "\033[1;31mFailed to checkout $ds_name/$base_branch\033[0m" >&2; return 1; }
 
             local branch_full="$ds_name-$base_branch-$branch_name"
             echo "Creating/checking out branch $branch_full..."
             git checkout -b "$branch_full" 2>/dev/null || (
                 git checkout "$branch_full" &&
                 git reset --hard "$ds_name/$base_branch"
-            ) || { print "\033[1;31mFailed to setup branch $branch_full\033[0m"; return 1; }
+            ) || { print "\033[1;31mFailed to setup branch $branch_full\033[0m" >&2; return 1; }
 
             if [[ "$echo_only" == true ]]; then
                 echo "Would execute: $cmd"
             else
                 echo "Executing command..."
-                zsh -c "$cmd" || { print "\033[1;31mCommand execution failed\033[0m"; return 1; }
+                zsh -c "$cmd" || { print "\033[1;31mCommand execution failed\033[0m" >&2; return 1; }
 
                 echo "Pushing branch..."
-                git push --force -u origin "$branch_full" || { print "\033[1;31mFailed to push branch\033[0m"; return 1; }
+                git push --force -u origin "$branch_full" || { print "\033[1;31mFailed to push branch\033[0m" >&2; return 1; }
 
                 echo "Creating PR..."
                 local repo_name=${dir:t}
                 gh pr create --repo "$ds_name/$repo_name" --base "$base_branch" --title "$base_branch-$branch_name" || {
-                    print "\033[1;31mFailed to create PR, but branch was pushed. Create PR manually for $ds_name/$repo_name\033[0m";
+                    print "\033[1;31mFailed to create PR, but branch was pushed. Create PR manually for $ds_name/$repo_name\033[0m" >&2;
                 }
             fi
 

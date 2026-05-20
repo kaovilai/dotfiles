@@ -357,7 +357,7 @@ review-prs() {
   pr_refs=(${(u)pr_refs})
 
   if [[ ${#pr_refs[@]} -eq 0 ]]; then
-    echo "No PR references found"
+    echo "No PR references found" >&2
     return 1
   fi
 
