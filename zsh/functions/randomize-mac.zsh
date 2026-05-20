@@ -106,10 +106,10 @@ randomize-mac-ifconfig() {
         [[ "$quiet" == false ]] && echo "✓ MAC randomized successfully"
         return 0
     else
-        echo "✗ MAC randomization may have failed"
-        echo "Expected: $new_mac"
-        echo "Actual: $actual_mac"
-        echo "Note: Some networks may reject certain MAC addresses"
+        echo "✗ MAC randomization may have failed" >&2
+        echo "Expected: $new_mac" >&2
+        echo "Actual: $actual_mac" >&2
+        echo "Note: Some networks may reject certain MAC addresses" >&2
         return 1
     fi
 }

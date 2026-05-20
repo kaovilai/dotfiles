@@ -195,10 +195,10 @@ podman-build-multiarch() {
     check-qemu-stuck
     local _stuck_exit=$?
     if [[ $_stuck_exit -eq 2 ]]; then
-        echo "⚠️  Found stuck processes. Clean up first with kill-stuck-qemu"
+        echo "⚠️  Found stuck processes. Clean up first with kill-stuck-qemu" >&2
         return 1
     elif [[ $_stuck_exit -eq 1 ]]; then
-        echo "⚠️  Pre-build check failed (podman not installed or machine not running)"
+        echo "⚠️  Pre-build check failed (podman not installed or machine not running)" >&2
         return 1
     fi
 
