@@ -458,7 +458,7 @@ EOF
     read -r "create_archive?Create compressed archive? (y/n): "
     if [[ "$create_archive" == "y" ]]; then
         local archive_name="wifi-export-$(date +%Y%m%d-%H%M%S).tar.gz"
-        tar -czf "$HOME/$archive_name" -C "$export_dir" .
+        tar -czf "$HOME/$archive_name" -C "$export_dir" . || { warning "Failed to create archive $HOME/$archive_name"; return 1; }
         success "Created archive: $HOME/$archive_name"
         echo "Transfer this file to your new laptop"
     fi
@@ -622,7 +622,7 @@ update-brewfile() {
     fi
     
     # Generate new Brewfile
-    brew bundle dump --force --file=~/git/dotfiles/Brewfile
+    brew bundle dump --force --file=~/git/dotfiles/Brewfile || { error "Failed to generate Brewfile"; return 1; }
     success "Generated Brewfile from current system"
     
     # Show what changed
@@ -652,14 +652,14 @@ brewfile-cleanup() {
     
     echo ""
     echo "The following would be removed:"
-    brew bundle cleanup --file=~/git/dotfiles/Brewfile
+    brew bundle cleanup --file=~/git/dotfiles/Brewfile || warning "Failed to list cleanup candidates"
     
     echo ""
     local do_cleanup
     read -r "do_cleanup?Remove these packages? (y/n): "
     
     if [[ "$do_cleanup" == "y" ]]; then
-        brew bundle cleanup --file=~/git/dotfiles/Brewfile --force
+        brew bundle cleanup --file=~/git/dotfiles/Brewfile --force || { error "Cleanup failed"; return 1; }
         success "Cleanup completed"
     else
         echo "Cleanup cancelled"
