@@ -1,3 +1,6 @@
+# Deduplicate PATH entries — prevents duplicates when .zshrc is re-sourced
+typeset -U path
+
 # Build PATH using ZSH path array with (N) glob qualifier to silently omit non-existent directories
 path=(
     /opt/homebrew/opt/gnu-sed/libexec/gnubin(N)
