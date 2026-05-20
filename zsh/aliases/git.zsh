@@ -139,6 +139,7 @@ git-worktree-remove() {
   else
     echo "Select a worktree to remove (or Ctrl+C to cancel):"
     local wt_lines=("${(@f)removable}")
+    local choice
     select choice in "${wt_lines[@]}"; do
       if [[ -n "$choice" ]]; then
         selected="$choice"
@@ -178,7 +179,7 @@ pr-me() {
   # List PRs by the current user and allow interactive selection for checkout
   # Usage: pr-me [worktree|wt]
   # If "worktree" or "wt" is passed as an argument, checkout to a worktree using gwc
-  local pr_list selected pr_number pr_lines pr_display pr_numbers pr_num pr_title line pr_input index branch_name
+  local pr_list selected pr_number pr_lines pr_display pr_numbers pr_num pr_title line pr_input index branch_name choice
 
   if ! command -v gh &>/dev/null; then
     echo "❌ gh not found. Install it with: brew install gh" >&2
