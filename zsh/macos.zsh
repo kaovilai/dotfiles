@@ -34,5 +34,5 @@ path+=(/Library/Frameworks/Python.framework/Versions/Current/bin(N))
 
 # Source heavy operations only when not in VS Code
 if [[ "$TERM_PROGRAM" != "vscode" ]]; then
-    source ~/git/dotfiles/zsh/macos-notvscode.zsh
+    _safe_source ~/git/dotfiles/zsh/macos-notvscode.zsh
 fi
