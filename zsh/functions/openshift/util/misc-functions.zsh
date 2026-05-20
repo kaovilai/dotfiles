@@ -19,11 +19,11 @@
 #   watch-all-pod-logs-in-namespace my-app
 watch-all-pod-logs-in-namespace(){
     if ! command -v oc &>/dev/null; then
-        echo "❌ oc not found. Install it with: brew install openshift-cli"
+        echo "❌ oc not found. Install it with: brew install openshift-cli" >&2
         return 1
     fi
     if [[ -z "$1" ]]; then
-        echo "No namespace supplied"
+        echo "No namespace supplied" >&2
         return 1
     fi
     oc get pods -n "$1" -o name | xargs -n 1 -P 100 oc logs -f -n "$1"
@@ -39,11 +39,11 @@ watch-all-pod-logs-in-namespace(){
 #   watch-all-pod-errors-in-namespace openshift-adp
 watch-all-pod-errors-in-namespace(){
     if ! command -v oc &>/dev/null; then
-        echo "❌ oc not found. Install it with: brew install openshift-cli"
+        echo "❌ oc not found. Install it with: brew install openshift-cli" >&2
         return 1
     fi
     if [[ -z "$1" ]]; then
-        echo "No namespace supplied"
+        echo "No namespace supplied" >&2
         return 1
     fi
     # get all pod logs in namespace, grep for error, and prefix with pod name
@@ -62,15 +62,15 @@ watch-all-pod-errors-in-namespace(){
 #   patch-csv-replicas my-operator.v1.0.0 0  # Scale down to 0
 patch-csv-replicas(){
     if ! command -v oc &>/dev/null; then
-        echo "❌ oc not found. Install it with: brew install openshift-cli"
+        echo "❌ oc not found. Install it with: brew install openshift-cli" >&2
         return 1
     fi
     if [[ -z "$1" ]]; then
-        echo "No CSV name supplied"
+        echo "No CSV name supplied" >&2
         return 1
     fi
     if [[ -z "$2" ]]; then
-        echo "No replicas supplied"
+        echo "No replicas supplied" >&2
         return 1
     fi
     oc patch csv "$1" --type='json' -p '[
@@ -85,7 +85,7 @@ patch-csv-replicas(){
 
 agd-kubeadmin-password(){
  if [[ -z "$1" ]]; then
-  echo "No GUID supplied"
+  echo "No GUID supplied" >&2
   return 1
  else
   echo "parsing guid $1"
