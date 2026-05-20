@@ -2,6 +2,7 @@
 # This file is sourced only when not in VS Code to keep terminal startup fast
 
 is-at-home() {
+    [[ "$OSTYPE" != darwin* ]] && return 1
     local usb_info
     usb_info=$(ioreg -p IOUSB) &&
     grep -q "Plugable USBC-6950U" <<< "$usb_info" &&
@@ -9,22 +10,35 @@ is-at-home() {
     networksetup -getnetworkserviceenabled "Thunderbolt Ethernet Slot 2" | grep -q Enabled
 }
 is-displaylink-connected() {
+    [[ "$OSTYPE" != darwin* ]] && return 1
     local display_info
     display_info=$(system_profiler SPDisplaysDataType)
     grep -q "ARZOPA" <<< "$display_info" ||
     grep -q "TYPE-C" <<< "$display_info"
 }
 restart-displaylink() {
+    if [[ "$OSTYPE" != darwin* ]]; then
+        echo "Error: restart-displaylink is only supported on macOS" >&2
+        return 1
+    fi
     osascript -e 'quit app "DisplayLink Manager"'
     while pgrep DisplayLinkUserAgent > /dev/null; do sleep 0.1; done
     open -a "DisplayLink Manager"
 }
 
 set-ttl-for-hotspot(){
+    if [[ "$OSTYPE" != darwin* ]]; then
+        echo "Error: set-ttl-for-hotspot is only supported on macOS" >&2
+        return 1
+    fi
     sudo sysctl -w net.inet.ip.ttl=65
 }
 
 set-tf-proxy(){
+    if [[ "$OSTYPE" != darwin* ]]; then
+        echo "Error: set-tf-proxy is only supported on macOS" >&2
+        return 1
+    fi
     local _router_ip
     _router_ip=$(networksetup -getinfo Wi-Fi | grep -e "^Router" | cut -d " " -f 2)
     if [[ -z "$_router_ip" ]]; then
@@ -42,6 +56,10 @@ set-tf-proxy(){
 }
 
 unset-tf-proxy(){
+    if [[ "$OSTYPE" != darwin* ]]; then
+        echo "Error: unset-tf-proxy is only supported on macOS" >&2
+        return 1
+    fi
     networksetup -setwebproxystate Wi-Fi off
     networksetup -setsecurewebproxystate Wi-Fi off
     unset http_proxy
@@ -49,6 +67,10 @@ unset-tf-proxy(){
 }
 
 set-socks-proxy(){
+    if [[ "$OSTYPE" != darwin* ]]; then
+        echo "Error: set-socks-proxy is only supported on macOS" >&2
+        return 1
+    fi
     # Allow IP override via parameter, otherwise get from router
     if [[ -n "$1" ]]; then
         export SOCKS_ROUTER_IP="$1"
@@ -67,6 +89,10 @@ set-socks-proxy(){
 }
 
 unset-socks-proxy(){
+    if [[ "$OSTYPE" != darwin* ]]; then
+        echo "Error: unset-socks-proxy is only supported on macOS" >&2
+        return 1
+    fi
     networksetup -setsocksfirewallproxystate Wi-Fi off
 }
 
