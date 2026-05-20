@@ -1,2 +1,11 @@
-# Build PATH once to avoid multiple string operations
-export PATH="/opt/homebrew/opt/gnu-sed/libexec/gnubin:/opt/homebrew/opt/grep/libexec/gnubin:$HOME/go/bin:${KREW_ROOT:-$HOME/.krew}/bin:$HOME/.npm-global/bin:$HOME/.local/bin:$PATH:$HOME/google-cloud-sdk/bin"
+# Build PATH using ZSH path array with (N) glob qualifier to silently omit non-existent directories
+path=(
+    /opt/homebrew/opt/gnu-sed/libexec/gnubin(N)
+    /opt/homebrew/opt/grep/libexec/gnubin(N)
+    $HOME/go/bin(N)
+    ${KREW_ROOT:-$HOME/.krew}/bin(N)
+    $HOME/.npm-global/bin(N)
+    $HOME/.local/bin(N)
+    $path
+    $HOME/google-cloud-sdk/bin(N)
+)
