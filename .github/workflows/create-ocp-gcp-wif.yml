@@ -1,0 +1,258 @@
+name: Create OCP GCP-WIF Cluster
+
+on:
+  workflow_dispatch:
+    inputs:
+      stream:
+        description: 'Release stream'
+        required: true
+        type: choice
+        options:
+          - dev-preview
+          - stable
+        default: dev-preview
+      action:
+        description: 'Action to perform'
+        required: true
+        type: choice
+        options:
+          - create
+          - delete
+        default: create
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  create-cluster:
+    if: inputs.action == 'create'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    defaults:
+      run:
+        shell: zsh {0}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y zsh jq gnupg podman
+
+      - name: Install oc and ccoctl
+        shell: bash
+        run: |
+          CHANNEL="stable"
+          if [[ "${{ inputs.stream }}" == "dev-preview" ]]; then
+            CHANNEL="ocp-dev-preview/latest"
+          else
+            CHANNEL="ocp/stable"
+          fi
+          curl -sL "https://mirror.openshift.com/pub/openshift-v4/clients/${CHANNEL}/openshift-client-linux.tar.gz" \
+            | sudo tar xzf - -C /usr/local/bin oc kubectl
+          curl -sL "https://mirror.openshift.com/pub/openshift-v4/clients/${CHANNEL}/ccoctl-linux.tar.gz" \
+            | sudo tar xzf - -C /usr/local/bin ccoctl
+          oc version --client
+          ccoctl version || ccoctl --help | head -1
+
+      - name: Set up credentials
+        shell: bash
+        run: |
+          # Pull secret
+          echo '${{ secrets.PULL_SECRET }}' > ~/pull-secret.txt
+
+          # SSH key (ephemeral)
+          mkdir -p ~/.ssh
+          ssh-keygen -t ed25519 -f ~/.ssh/id_rsa -N "" -q
+
+          # Podman auth from pull secret (so handle-registry-login sees "already logged in")
+          mkdir -p "${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/containers" 2>/dev/null \
+            || mkdir -p ~/.config/containers
+          cp ~/pull-secret.txt "${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/containers/auth.json" 2>/dev/null \
+            || cp ~/pull-secret.txt ~/.config/containers/auth.json
+
+      - name: Authenticate to GCP
+        shell: bash
+        env:
+          GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}
+        run: |
+          echo "$GCP_SA_KEY" > /tmp/gcp-sa-key.json
+          gcloud auth activate-service-account --key-file=/tmp/gcp-sa-key.json
+          export GOOGLE_APPLICATION_CREDENTIALS=/tmp/gcp-sa-key.json
+          echo "GOOGLE_APPLICATION_CREDENTIALS=/tmp/gcp-sa-key.json" >> "$GITHUB_ENV"
+          gcloud config set project "${{ secrets.GCP_PROJECT_ID }}"
+
+      - name: Import GPG public key
+        shell: bash
+        run: |
+          echo '${{ secrets.GPG_PUBLIC_KEY }}' | gpg --import
+          GPG_FP=$(gpg --list-keys --with-colons 2>/dev/null | grep '^fpr:' | head -1 | cut -d: -f10)
+          echo "GPG_FINGERPRINT=$GPG_FP" >> "$GITHUB_ENV"
+          echo "Imported GPG key: $GPG_FP"
+
+      - name: Create cluster
+        env:
+          GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+          GCP_REGION: ${{ secrets.GCP_REGION }}
+          GCP_BASEDOMAIN: ${{ secrets.GCP_BASEDOMAIN }}
+        run: |
+          set -euo pipefail
+
+          export TODAY=$(date +%y%m%d)
+          export OCP_MANIFESTS_DIR=$HOME/ocp-manifests
+          export FORCE_NEW_CLUSTER=true
+          mkdir -p "$OCP_MANIFESTS_DIR"
+
+          # Source needed function files
+          source ./zsh/functions/openshift/variables.zsh
+          source ./zsh/functions/openshift/util/common-functions.zsh
+          source ./zsh/functions/openshift/cluster/check-existing-clusters.zsh
+          source ./zsh/functions/openshift/gcp/delete-ocp-gcp-wif.zsh
+          source ./zsh/functions/openshift/gcp/create-ocp-gcp-wif.zsh
+
+          FLAGS=(--force-new)
+          if [[ "${{ inputs.stream }}" == "dev-preview" ]]; then
+            FLAGS+=(--ec)
+          fi
+
+          echo "::group::Creating OCP GCP-WIF cluster (stream=${{ inputs.stream }})"
+          # Pipe "n" to skip the post-create secrets.zsh update prompt
+          echo "n" | create-ocp-gcp-wif "${FLAGS[@]}"
+          echo "::endgroup::"
+
+          # Save cluster dir path for later steps
+          OCP_DIR=$(find "$OCP_MANIFESTS_DIR" -maxdepth 1 -type d -name "*-gcp-wif*" | head -1)
+          echo "OCP_CREATE_DIR=$OCP_DIR" >> "$GITHUB_ENV"
+
+          # Extract cluster name for issue tracking
+          CLUSTER_NAME=$(basename "$OCP_DIR" | sed 's/^[0-9]*-/tkaovila-/' | sed 's/^/tkaovila-/' | head -c 63)
+          echo "CLUSTER_NAME=tkaovila-${TODAY}-wif" >> "$GITHUB_ENV"
+
+      - name: Create tracking issue
+        if: success()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const issue = await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `Cluster: ${process.env.CLUSTER_NAME} (GCP-WIF)`,
+              body: [
+                `## Active Cluster`,
+                `- **Name:** ${process.env.CLUSTER_NAME}`,
+                `- **Provider:** GCP (Workload Identity Federation)`,
+                `- **Stream:** ${{ inputs.stream }}`,
+                `- **Created:** ${new Date().toISOString()}`,
+                `- **Run:** [${context.runId}](${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId})`,
+                ``,
+                `### Retrieve credentials`,
+                `\`\`\`bash`,
+                `download-ocp-gcp-wif-auth ${context.runId}`,
+                `export KUBECONFIG=$(pwd)/auth/kubeconfig`,
+                `\`\`\``,
+                ``,
+                `> [!Note]`,
+                `> Close this issue after tearing down the cluster.`,
+              ].join('\n'),
+              labels: ['cluster', 'gcp-wif'],
+            });
+            core.exportVariable('TRACKING_ISSUE_NUMBER', issue.data.number);
+
+      - name: Encrypt and upload cluster auth
+        if: always() && env.OCP_CREATE_DIR != ''
+        shell: bash
+        run: |
+          OCP_DIR="${OCP_CREATE_DIR}"
+          if [[ -d "$OCP_DIR/auth" ]]; then
+            tar czf auth-bundle.tar.gz -C "$OCP_DIR" auth/
+            gpg --batch --yes --trust-model always \
+              --encrypt --recipient "$GPG_FINGERPRINT" \
+              auth-bundle.tar.gz
+            echo "Auth bundle encrypted successfully"
+          else
+            echo "No auth directory found at $OCP_DIR/auth"
+          fi
+
+      - name: Upload encrypted auth artifact
+        if: always() && env.OCP_CREATE_DIR != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: cluster-auth-gcp-wif-${{ github.run_id }}
+          path: auth-bundle.tar.gz.gpg
+          retention-days: 7
+          if-no-files-found: warn
+
+      - name: Upload install logs on failure
+        if: failure() && env.OCP_CREATE_DIR != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: install-logs-gcp-wif-${{ github.run_id }}
+          path: |
+            ${{ env.OCP_CREATE_DIR }}/.openshift_install.log
+            ${{ env.OCP_CREATE_DIR }}/terraform.*.log
+          retention-days: 3
+          if-no-files-found: warn
+
+  delete-cluster:
+    if: inputs.action == 'delete'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: zsh {0}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y zsh jq podman
+
+      - name: Install oc and ccoctl
+        shell: bash
+        run: |
+          CHANNEL="ocp/stable"
+          curl -sL "https://mirror.openshift.com/pub/openshift-v4/clients/${CHANNEL}/openshift-client-linux.tar.gz" \
+            | sudo tar xzf - -C /usr/local/bin oc kubectl
+          curl -sL "https://mirror.openshift.com/pub/openshift-v4/clients/${CHANNEL}/ccoctl-linux.tar.gz" \
+            | sudo tar xzf - -C /usr/local/bin ccoctl
+
+      - name: Authenticate to GCP
+        shell: bash
+        env:
+          GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}
+        run: |
+          echo "$GCP_SA_KEY" > /tmp/gcp-sa-key.json
+          gcloud auth activate-service-account --key-file=/tmp/gcp-sa-key.json
+          export GOOGLE_APPLICATION_CREDENTIALS=/tmp/gcp-sa-key.json
+          echo "GOOGLE_APPLICATION_CREDENTIALS=/tmp/gcp-sa-key.json" >> "$GITHUB_ENV"
+          gcloud config set project "${{ secrets.GCP_PROJECT_ID }}"
+
+      - name: Delete cluster
+        env:
+          GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+          GCP_REGION: ${{ secrets.GCP_REGION }}
+          GCP_BASEDOMAIN: ${{ secrets.GCP_BASEDOMAIN }}
+        run: |
+          set -euo pipefail
+
+          export TODAY=$(date +%y%m%d)
+          export OCP_MANIFESTS_DIR=$HOME/ocp-manifests
+          mkdir -p "$OCP_MANIFESTS_DIR"
+
+          source ./zsh/functions/openshift/variables.zsh
+          source ./zsh/functions/openshift/util/common-functions.zsh
+          source ./zsh/functions/openshift/cluster/check-existing-clusters.zsh
+          source ./zsh/functions/openshift/gcp/delete-ocp-gcp-wif.zsh
+          source ./zsh/functions/openshift/gcp/create-ocp-gcp-wif.zsh
+
+          echo "::group::Deleting OCP GCP-WIF cluster"
+          create-ocp-gcp-wif delete
+          echo "::endgroup::"

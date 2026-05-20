@@ -1,0 +1,214 @@
+name: Create OCP AWS Cluster
+
+on:
+  workflow_dispatch:
+    inputs:
+      arch:
+        description: 'Target architecture'
+        required: true
+        type: choice
+        options:
+          - amd64
+          - arm64
+        default: amd64
+      stream:
+        description: 'Release stream'
+        required: true
+        type: choice
+        options:
+          - dev-preview
+          - stable
+        default: dev-preview
+      action:
+        description: 'Action to perform'
+        required: true
+        type: choice
+        options:
+          - create
+          - delete
+        default: create
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  create-cluster:
+    if: inputs.action == 'create'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    defaults:
+      run:
+        shell: zsh {0}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y zsh jq gnupg
+
+      - name: Set up credentials
+        shell: bash
+        run: |
+          echo '${{ secrets.PULL_SECRET }}' > ~/pull-secret.txt
+          mkdir -p ~/.ssh
+          ssh-keygen -t ed25519 -f ~/.ssh/id_rsa -N "" -q
+          echo "SSH keypair generated for cluster nodes"
+
+      - name: Import GPG public key
+        shell: bash
+        run: |
+          echo '${{ secrets.GPG_PUBLIC_KEY }}' | gpg --import
+          GPG_FP=$(gpg --list-keys --with-colons 2>/dev/null | grep '^fpr:' | head -1 | cut -d: -f10)
+          echo "GPG_FINGERPRINT=$GPG_FP" >> "$GITHUB_ENV"
+          echo "Imported GPG key: $GPG_FP"
+
+      - name: Create cluster
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_BASEDOMAIN: ${{ secrets.AWS_BASEDOMAIN }}
+          AWS_REGION: us-east-1
+        run: |
+          set -euo pipefail
+
+          export TODAY=$(date +%y%m%d)
+          export OCP_MANIFESTS_DIR=$HOME/ocp-manifests
+          export FORCE_NEW_CLUSTER=true
+          mkdir -p "$OCP_MANIFESTS_DIR"
+
+          # Source only needed function files (order matters)
+          source ./zsh/functions/openshift/variables.zsh
+          source ./zsh/functions/openshift/util/common-functions.zsh
+          source ./zsh/functions/openshift/cluster/check-existing-clusters.zsh
+          source ./zsh/functions/openshift/aws/delete-ocp-aws.zsh
+          source ./zsh/functions/openshift/aws/create-ocp-aws.zsh
+
+          STREAM="${{ inputs.stream }}"
+          ARCH="${{ inputs.arch }}"
+
+          FLAGS=(--force-new)
+          if [[ "$STREAM" == "dev-preview" ]]; then
+            FLAGS+=(--ec)
+          fi
+
+          echo "::group::Creating OCP cluster (arch=$ARCH, stream=$STREAM)"
+          "create-ocp-aws-${ARCH}" "${FLAGS[@]}"
+          echo "::endgroup::"
+
+          # Save cluster dir path for later steps
+          OCP_DIR=$(find "$OCP_MANIFESTS_DIR" -maxdepth 1 -type d -name "*-aws-${ARCH}*" | head -1)
+          echo "OCP_CREATE_DIR=$OCP_DIR" >> "$GITHUB_ENV"
+          echo "CLUSTER_NAME=tkaovila-${TODAY}-${ARCH}" >> "$GITHUB_ENV"
+
+      - name: Create tracking issue
+        if: success()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const issue = await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `Cluster: ${process.env.CLUSTER_NAME} (AWS)`,
+              body: [
+                `## Active Cluster`,
+                `- **Name:** ${process.env.CLUSTER_NAME}`,
+                `- **Provider:** AWS`,
+                `- **Architecture:** ${{ inputs.arch }}`,
+                `- **Stream:** ${{ inputs.stream }}`,
+                `- **Created:** ${new Date().toISOString()}`,
+                `- **Run:** [${context.runId}](${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId})`,
+                ``,
+                `### Retrieve credentials`,
+                `\`\`\`bash`,
+                `download-ocp-aws-auth ${context.runId}`,
+                `export KUBECONFIG=$(pwd)/auth/kubeconfig`,
+                `\`\`\``,
+                ``,
+                `> [!Note]`,
+                `> Close this issue after tearing down the cluster.`,
+              ].join('\n'),
+              labels: ['cluster', 'aws'],
+            });
+
+      - name: Encrypt and upload cluster auth
+        if: always() && env.OCP_CREATE_DIR != ''
+        shell: bash
+        run: |
+          OCP_DIR="${OCP_CREATE_DIR}"
+          if [[ -d "$OCP_DIR/auth" ]]; then
+            tar czf auth-bundle.tar.gz -C "$OCP_DIR" auth/
+            gpg --batch --yes --trust-model always \
+              --encrypt --recipient "$GPG_FINGERPRINT" \
+              auth-bundle.tar.gz
+            echo "Auth bundle encrypted successfully"
+          else
+            echo "No auth directory found at $OCP_DIR/auth"
+          fi
+
+      - name: Upload encrypted auth artifact
+        if: always() && env.OCP_CREATE_DIR != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: cluster-auth-${{ inputs.arch }}-${{ github.run_id }}
+          path: auth-bundle.tar.gz.gpg
+          retention-days: 7
+          if-no-files-found: warn
+
+      - name: Upload install logs on failure
+        if: failure() && env.OCP_CREATE_DIR != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: install-logs-${{ inputs.arch }}-${{ github.run_id }}
+          path: |
+            ${{ env.OCP_CREATE_DIR }}/.openshift_install.log
+            ${{ env.OCP_CREATE_DIR }}/terraform.*.log
+          retention-days: 3
+          if-no-files-found: warn
+
+  delete-cluster:
+    if: inputs.action == 'delete'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: zsh {0}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y zsh jq
+
+      - name: Delete cluster
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_BASEDOMAIN: ${{ secrets.AWS_BASEDOMAIN }}
+          AWS_REGION: us-east-1
+        run: |
+          set -euo pipefail
+
+          export TODAY=$(date +%y%m%d)
+          export OCP_MANIFESTS_DIR=$HOME/ocp-manifests
+          mkdir -p "$OCP_MANIFESTS_DIR"
+
+          source ./zsh/functions/openshift/variables.zsh
+          source ./zsh/functions/openshift/util/common-functions.zsh
+          source ./zsh/functions/openshift/cluster/check-existing-clusters.zsh
+          source ./zsh/functions/openshift/aws/delete-ocp-aws.zsh
+          source ./zsh/functions/openshift/aws/create-ocp-aws.zsh
+
+          ARCH="${{ inputs.arch }}"
+
+          echo "::group::Deleting OCP cluster (arch=$ARCH)"
+          "create-ocp-aws-${ARCH}" delete
+          echo "::endgroup::"
