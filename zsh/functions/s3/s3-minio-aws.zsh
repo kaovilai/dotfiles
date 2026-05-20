@@ -964,7 +964,7 @@ spec:
 EOF
 )
     
-    if echo "$test_manifest" | oc apply -f -; then
+    if oc apply -f - <<< "$test_manifest"; then
         echo "${BLUE}INFO${NC}: Test pod created. Waiting for completion..."
         
         # Wait for pod to complete (max 60 seconds)
