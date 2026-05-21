@@ -33,6 +33,10 @@ alias pbubi_manifest='podman build --platform "$(dockerplatforms-amdarm)" -f Doc
 # https://github.com/socktainer/socktainer#quick-start
 
 function socktainer-symlink-docker() {
+  if [[ ! -S "$HOME/.socktainer/container.sock" ]]; then
+    echo "❌ Socktainer socket not found at $HOME/.socktainer/container.sock — is socktainer running?" >&2
+    return 1
+  fi
   sudo ln -sf "$HOME/.socktainer/container.sock" /var/run/docker.sock || {
     echo "❌ Failed to create symlink /var/run/docker.sock" >&2
     return 1
@@ -46,6 +50,10 @@ function socktainer-symlink-docker-undo() {
 }
 
 function socktainer-symlink-podman() {
+  if [[ ! -S "$HOME/.socktainer/container.sock" ]]; then
+    echo "❌ Socktainer socket not found at $HOME/.socktainer/container.sock — is socktainer running?" >&2
+    return 1
+  fi
   local podman_sock_dir="${TMPDIR%/}/storage-run-$(id -u)/podman"
   mkdir -p "$podman_sock_dir" || { echo "Error: Failed to create podman socket directory $podman_sock_dir" >&2; return 1; }
   ln -sf "$HOME/.socktainer/container.sock" "$podman_sock_dir/podman.sock" || {
@@ -71,6 +79,10 @@ function socktainer-symlink-all-undo() {
 }
 
 function socktainer-export-docker() {
+  if [[ ! -S "$HOME/.socktainer/container.sock" ]]; then
+    echo "❌ Socktainer socket not found at $HOME/.socktainer/container.sock — is socktainer running?" >&2
+    return 1
+  fi
   export DOCKER_HOST="unix://$HOME/.socktainer/container.sock"
   echo "DOCKER_HOST=$DOCKER_HOST"
 }
@@ -81,6 +93,10 @@ function socktainer-export-docker-undo() {
 }
 
 function socktainer-export-podman() {
+  if [[ ! -S "$HOME/.socktainer/container.sock" ]]; then
+    echo "❌ Socktainer socket not found at $HOME/.socktainer/container.sock — is socktainer running?" >&2
+    return 1
+  fi
   export CONTAINER_HOST="unix://$HOME/.socktainer/container.sock"
   echo "CONTAINER_HOST=$CONTAINER_HOST"
 }
