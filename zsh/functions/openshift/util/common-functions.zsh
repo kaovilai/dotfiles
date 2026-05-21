@@ -41,7 +41,7 @@ prompt-release-stream() {
     if command -v fzf >/dev/null 2>&1; then
         chosen_range=$(echo "$ranges" | fzf --height 30% --reverse \
             --header "Select version range" \
-            --prompt "Range> " </dev/tty)
+            --prompt "Range> ")
     else
         echo "Available ranges:" >&2
         echo "$ranges" | cat -n >&2
@@ -85,7 +85,7 @@ prompt-release-stream() {
     if command -v fzf >/dev/null 2>&1; then
         selected=$(echo "$versions" | fzf --height 40% --reverse \
             --header "Select ${chosen_range}.x version" \
-            --prompt "Version> " </dev/tty)
+            --prompt "Version> ")
     else
         echo "" >&2
         echo "$versions" | cat -n >&2
