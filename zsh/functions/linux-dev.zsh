@@ -111,6 +111,7 @@ ec2-linux() {
         if ! aws ec2 create-key-pair --region "$region" \
             --key-name "$key_name" \
             --query 'KeyMaterial' --output text > "$key_path" 2>/dev/null; then
+            rm -f "$key_path"
             echo "${RED}ERROR${NC}: Failed to create key pair" >&2
             return 1
         fi
