@@ -105,7 +105,8 @@ go-mod-upgrade-dirs() {
     fi
     find . -type d -maxdepth 1 -name "$1" -exec sh -c '
         dir="$1" pkg="$2" extra_cmd="$3" prefix="$4"
-        cd "$dir" && pwd &&
+        cd "$dir" || { echo "Failed to cd into $dir" >&2; exit 1; }
+        pwd &&
         git fetch upstream && (git checkout upstream/main || git checkout upstream/master || git checkout upstream/oadp-dev) &&
         (git checkout -b "$pkg" || git checkout "$pkg") &&
         go get "$pkg" && go mod tidy && git add go.mod go.sum &&
@@ -131,7 +132,8 @@ exec-dirs() {
     fi
     find . -type d -maxdepth 1 -name "$1" -exec sh -c '
         dir="$1" branch="$2" cmd="$3"
-        cd "$dir" && pwd &&
+        cd "$dir" || { echo "Failed to cd into $dir" >&2; exit 1; }
+        pwd &&
         git fetch upstream && (git checkout upstream/main || git checkout upstream/master || git checkout upstream/oadp-dev) &&
         (git checkout -b "$branch" || git checkout "$branch") &&
         sh -c "$cmd"
