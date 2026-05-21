@@ -21,54 +21,75 @@
 #   Sets OCP_RELEASE_VERSION with the selected version.
 # Returns: "dev-preview" or "stable" to stdout (for backward compat)
 prompt-release-stream() {
-    echo "Fetching available versions..." >&2
+    # Step 1: Discover available ranges dynamically from release controller
+    local ranges
+    ranges=$(curl -sm 10 \
+        'https://amd64.ocp.releases.ci.openshift.org/api/v1/releasestreams/accepted' \
+        2>/dev/null \
+    | jq -r 'keys[] | select(test("^[0-9]+\\.[0-9]"))' \
+    | grep -oE '^[0-9]+\.[0-9]+' | sort -Vru)
 
-    # Fetch x86_64 tags from Quay per major.minor, categorize in jq
-    # Uses explicit major.minor. prefix (Quay like: is substring match)
-    local versions=""
-    local tmpdir=$(mktemp -d)
-    local minors=(5.0 4.22 4.21 4.20 4.19 4.18 4.17 4.16)
-
-    for minor in "${minors[@]}"; do
-        curl -sm 15 \
-            "https://quay.io/api/v1/repository/openshift-release-dev/ocp-release/tag/?limit=50&onlyActiveTags=true&filter_tag_name=like:${minor}.%-x86_64" \
-            2>/dev/null \
-        | jq -r '
-            [.tags[].name
-            | select(test("-multi") | not)
-            | rtrimstr("-x86_64")]
-            | unique | sort_by(split(".-") | map(tonumber? // 99)) | reverse
-            | .[] as $v
-            | if ($v | test("ec\\.|rc\\.")) then "[dev-preview] \($v)"
-              else "[stable-\($v | split(".")[0:2] | join("."))] \($v)"
-              end
-        ' > "$tmpdir/quay-${minor}" 2>/dev/null &
-    done
-    wait
-
-    versions=""
-    for minor in "${minors[@]}"; do
-        [[ -s "$tmpdir/quay-${minor}" ]] && versions+=$(cat "$tmpdir/quay-${minor}")$'\n'
-    done
-    rm -rf "$tmpdir"
-
-    if [[ -z "$versions" ]]; then
-        echo "WARN: Could not fetch versions, falling back to latest" >&2
+    if [[ -z "$ranges" ]]; then
+        echo "WARN: Could not fetch version ranges, falling back to latest" >&2
         unset OCP_RELEASE_VERSION
         echo "dev-preview"
         return 0
     fi
 
+    # Step 2: Pick major.minor range (instant, no extra fetch)
+    local chosen_range
+    if command -v fzf >/dev/null 2>&1; then
+        chosen_range=$(echo "$ranges" | fzf --height 30% --reverse \
+            --header "Select version range" \
+            --prompt "Range> " </dev/tty)
+    else
+        echo "Available ranges:" >&2
+        echo "$ranges" | cat -n >&2
+        echo -n "Enter range (e.g. 4.17): " >&2
+        read -r chosen_range </dev/tty
+    fi
+
+    if [[ -z "$chosen_range" ]]; then
+        echo "No range selected, using latest dev-preview" >&2
+        unset OCP_RELEASE_VERSION
+        echo "dev-preview"
+        return 0
+    fi
+
+    # Step 3: Fetch versions for chosen range only (single API call)
+    echo "Fetching ${chosen_range}.x versions..." >&2
+    local versions
+    versions=$(curl -sm 15 \
+        "https://quay.io/api/v1/repository/openshift-release-dev/ocp-release/tag/?limit=100&onlyActiveTags=true&filter_tag_name=like:${chosen_range}.%-x86_64" \
+        2>/dev/null \
+    | jq -r '
+        [.tags[].name
+        | select(test("-multi") | not)
+        | rtrimstr("-x86_64")]
+        | unique | sort_by(split(".-") | map(tonumber? // 99)) | reverse
+        | .[] as $v
+        | if ($v | test("ec\\.|rc\\.")) then "[dev-preview] \($v)"
+          else "[stable-\($v | split(".")[0:2] | join("."))] \($v)"
+          end
+    ' 2>/dev/null)
+
+    if [[ -z "$versions" ]]; then
+        echo "WARN: No versions found for ${chosen_range}, falling back to latest" >&2
+        unset OCP_RELEASE_VERSION
+        echo "dev-preview"
+        return 0
+    fi
+
+    # Step 4: Pick specific version
     local selected
     if command -v fzf >/dev/null 2>&1; then
         selected=$(echo "$versions" | fzf --height 40% --reverse \
-            --header "Select OpenShift version (type to filter, e.g. 4.17)" \
+            --header "Select ${chosen_range}.x version" \
             --prompt "Version> " </dev/tty)
     else
         echo "" >&2
         echo "$versions" | cat -n >&2
-        echo "" >&2
-        echo -n "Enter line number or full version string: " >&2
+        echo -n "Enter line number or version: " >&2
         read -r selected </dev/tty
         if [[ "$selected" =~ ^[0-9]+$ ]]; then
             selected=$(echo "$versions" | sed -n "${selected}p")
