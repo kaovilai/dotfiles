@@ -273,88 +273,24 @@ get-openshift-install() {
         return
     fi
 
-    # Function to check if binary is executable and get its architecture
+    # Check if binary is executable on this host
+    # Note: "release architecture" in openshift-install version output is the
+    # TARGET cluster architecture, not the binary's CPU architecture.
     local check_binary_arch() {
         local binary=$1
-        # First check if the binary is executable
-        if ! $binary version &>/dev/null; then
-            return 2  # Binary not executable
+        if $binary version &>/dev/null; then
+            return 0  # Binary runs successfully
         fi
-
-        local version_output=$($binary version 2>/dev/null | grep "release architecture")
-        local binary_arch=$(echo "$version_output" | awk '{print $3}')
-
-        if [[ "$binary_arch" == "$host_arch" ]]; then
-            return 0  # Correct architecture
-        else
-            # Check if it's macOS where Rosetta can run amd64 on arm64
-            if [[ "$(uname)" == "Darwin" ]] && [[ "$host_arch" == "arm64" ]] && [[ "$binary_arch" == "amd64" ]]; then
-                # Binary is amd64 on arm64 macOS - Rosetta can handle this
-                # Return special code to indicate it works but is cross-arch
-                return 3
-            fi
-            return 1  # Wrong architecture and won't work
-        fi
+        return 2  # Binary not executable (wrong CPU arch, missing deps, etc.)
     }
 
-    # Try EC version first
-    if command -v "openshift-install-${ec_version}" &> /dev/null; then
-        local binary="openshift-install-${ec_version}"
-        check_binary_arch "$binary"
-        local arch_status=$?
-
-        if [[ $arch_status -eq 0 ]]; then
-            # Correct architecture
-            echo "$binary"
-            return 0
-        elif [[ $arch_status -eq 3 ]]; then
-            # Cross-architecture but works via Rosetta on macOS
-            # Use it without prompting - it works fine
-            echo "$binary"
-            return 0
-        elif [[ $arch_status -eq 1 ]]; then
-            # Wrong architecture and won't work
-            echo "WARN: Found $binary but it's not built for $host_arch architecture" >&2
-            echo "WARN: Would you like to re-download the correct $host_arch version? (y/n)" >&2
-            local redownload_choice
-            read -r redownload_choice
-            if [[ "$redownload_choice" == "y" || "$redownload_choice" == "Y" ]]; then
-                # Remove the incorrect binary and download correct version
-                local binary_path=$(command -v "$binary")
-                echo "Removing incorrect binary: $binary_path" >&2
-                sudo rm "$binary_path"
-                # Jump directly to download
-                _download-openshift-install "$ec_version" "$host_arch"
-                return $?
-            else
-                echo "$binary"
-                return 0
-            fi
-        fi
-        # If arch_status -eq 2 (not executable), fall through to try other binaries
-    fi
-
-    # Try stable version
-    if command -v "openshift-install-${stable_version}" &> /dev/null; then
-        local binary="openshift-install-${stable_version}"
-        check_binary_arch "$binary"
-        local arch_status=$?
-        if [[ $arch_status -eq 0 ]] || [[ $arch_status -eq 3 ]]; then
+    # Try EC version first, then stable, then generic
+    for binary in "openshift-install-${ec_version}" "openshift-install-${stable_version}" "openshift-install"; do
+        if command -v "$binary" &> /dev/null && check_binary_arch "$binary"; then
             echo "$binary"
             return 0
         fi
-    fi
-
-    # Try generic openshift-install
-    if command -v "openshift-install" &> /dev/null; then
-        local binary="openshift-install"
-        check_binary_arch "$binary"
-        local arch_status=$?
-        if [[ $arch_status -eq 0 ]] || [[ $arch_status -eq 3 ]]; then
-            echo "$binary"
-            return 0
-        fi
-    fi
+    done
 
     # No suitable binary found, offer to install
     if true; then
