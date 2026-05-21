@@ -387,9 +387,8 @@ review-prs() {
   rm -rf "$tmpdir"
   trap - EXIT INT TERM
 
-  echo -n "Approval comment (default: /lgtm): "
   local comment
-  read -r comment
+  read -r "comment?Approval comment (default: /lgtm): "
   [[ -z "$comment" ]] && comment="/lgtm"
 
   local selected
