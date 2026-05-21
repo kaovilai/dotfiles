@@ -24,7 +24,7 @@ _lazy_load_linux_dev() {
     fi
 }
 for func in podman-linux ec2-linux az-linux gcp-linux; do
-    eval "${func}() { _lazy_load_linux_dev || return 1; ${func} \"\$@\"; }"
+    functions[$func]="_lazy_load_linux_dev || return 1; ${func} \"\$@\""
 done
 unset func
 
@@ -46,6 +46,6 @@ for func in \
     backup-before-migration \
     update-brewfile \
     brewfile-cleanup; do
-    eval "${func}() { _lazy_load_migrate || return 1; ${func} \"\$@\"; }"
+    functions[$func]="_lazy_load_migrate || return 1; ${func} \"\$@\""
 done
 unset func
