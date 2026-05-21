@@ -275,7 +275,7 @@ pr-me() {
     # Get the branch name for this PR
     branch_name=$(gh pr view "$pr_number" --json headRefName -q ".headRefName") || { echo "❌ Failed to get branch name for PR #$pr_number" >&2; return 1; }
     if [[ -z "$branch_name" ]]; then
-      echo "Failed to get branch name for PR #$pr_number"
+      echo "Failed to get branch name for PR #$pr_number" >&2
       return 1
     fi
     
