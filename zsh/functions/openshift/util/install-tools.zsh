@@ -38,7 +38,7 @@ install-oc(){
     sudo mv ~/Downloads/oc /usr/local/bin && \
     sudo mv ~/Downloads/kubectl /usr/local/bin && \
     rm ~/Downloads/openshift-client-"${ocpclientos}"-"${ocpclientarch}".tar.gz
-    rm ~/Downloads/README.md
+    rm ~/Downloads/README.md 2>/dev/null || true
 }
 
 # Download and install openshift-install binary
@@ -65,7 +65,7 @@ install-ocp-installer(){
     tar -xvf ~/Downloads/openshift-install-"${ocpclientos}"-"${ocpclientarch}".tar.gz -C ~/Downloads && \
     sudo mv ~/Downloads/openshift-install /usr/local/bin
     rm ~/Downloads/openshift-install-"${ocpclientos}"-"${ocpclientarch}".tar.gz
-    rm ~/Downloads/README.md
+    rm ~/Downloads/README.md 2>/dev/null || true
 }
 
 # Install Cloud Credential Operator CLI from source
