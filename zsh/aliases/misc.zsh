@@ -126,6 +126,10 @@ c() {
         echo "Error: c is only supported on macOS" >&2
         return 1
     fi
+    if ! command -v happy &>/dev/null; then
+        echo "❌ happy not found. Install Claude Code CLI." >&2
+        return 1
+    fi
     osascript -e "tell app \"Terminal\" to do script \"cd $HOME/experiments/ && happy --enable-auto-mode --permission-mode auto \\\"$1\\\"\""
 }
 alias ce='cd ~/experiments/ && happy --enable-auto-mode --permission-mode auto'
@@ -153,6 +157,10 @@ claude-review() {
         echo "Usage: claude-review <topic>" >&2
         return 1
     fi
+    if ! command -v happy &>/dev/null; then
+        echo "❌ happy not found. Install Claude Code CLI." >&2
+        return 1
+    fi
     osascript -e "tell app \"Terminal\" to do script \"cd $HOME/experiments/ && happy --enable-auto-mode --permission-mode auto \\\"/review $1\\\"\""
 }
 alias cr='claude-review'
@@ -163,6 +171,10 @@ gemini-review() {
     fi
     if [[ -z "$1" ]]; then
         echo "Usage: gemini-review <topic>" >&2
+        return 1
+    fi
+    if ! command -v gemini &>/dev/null; then
+        echo "❌ gemini not found. Install Google Gemini CLI." >&2
         return 1
     fi
     osascript -e "tell app \"Terminal\" to do script \"cd $HOME/experiments/ && gemini -p \\\"/review $1\\\"\""
