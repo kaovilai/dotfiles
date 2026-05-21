@@ -11,11 +11,11 @@ aa-inflight-wifi() {
 
     trap 'unfunction check_internet reconnect_wifi 2>/dev/null' RETURN
 
-    local SSID="aainflight.com"
-    local WIFI_URL="https://www.aainflight.com/wifi/free"
-    local WAIT_TIME=$((20 * 60))  # 20 minutes in seconds
-    local CHECK_INTERVAL=5
-    local MAX_ATTEMPTS=60  # Max attempts to reconnect (5 min timeout)
+    local ssid="aainflight.com"
+    local wifi_url="https://www.aainflight.com/wifi/free"
+    local wait_time=$((20 * 60))  # 20 minutes in seconds
+    local check_interval=5
+    local max_attempts=60  # Max attempts to reconnect (5 min timeout)
 
     # Detect WiFi interface dynamically
     local wifi_interface
@@ -33,7 +33,7 @@ aa-inflight-wifi() {
     # # Function to check if we're connected to the right network
     # check_ssid() {
     #     local current_ssid=$(networksetup -getairportnetwork en0 2>/dev/null | awk -F': ' '{print $2}')
-    #     [[ "$current_ssid" == "$SSID" ]]
+    #     [[ "$current_ssid" == "$ssid" ]]
     # }
 
     # Function to check internet connectivity
@@ -60,7 +60,7 @@ aa-inflight-wifi() {
 
         # Use the new MAC randomization function with network forgetting
         # This will forget the network and randomize the MAC in one operation
-        randomize-mac-ifconfig --network "$SSID" --interface "$wifi_interface"
+        randomize-mac-ifconfig --network "$ssid" --interface "$wifi_interface"
 
         # Small delay to let the interface stabilize
         sleep 2
@@ -73,45 +73,45 @@ aa-inflight-wifi() {
         sleep 3
 
         # Try to connect to the network
-        echo "Attempting to connect to $SSID..."
-        sudo networksetup -setairportnetwork "$wifi_interface" "$SSID" 2>/dev/null || true
+        echo "Attempting to connect to $ssid..."
+        sudo networksetup -setairportnetwork "$wifi_interface" "$ssid" 2>/dev/null || true
 
         sleep 2
 
         # Open the WiFi login page
         echo "Opening WiFi login page..."
-        open "$WIFI_URL"
+        open "$wifi_url"
 
         # # Wait for connection
-        # echo "Waiting for connection to $SSID..."
+        # echo "Waiting for connection to $ssid..."
         # local attempts=0
-        # while ! check_ssid && [[ $attempts -lt $MAX_ATTEMPTS ]]; do
-        #     sleep $CHECK_INTERVAL
+        # while ! check_ssid && [[ $attempts -lt $max_attempts ]]; do
+        #     sleep $check_interval
         #     ((attempts++))
         #     echo -n "."
 
         #     # # Try to connect again every 10 attempts
         #     # if [[ $((attempts % 10)) -eq 0 ]]; then
         #     #     echo
-        #     #     echo "Retrying connection to $SSID..."
-        #     #     sudo networksetup -setairportnetwork en0 "$SSID" 2>/dev/null || true
+        #     #     echo "Retrying connection to $ssid..."
+        #     #     sudo networksetup -setairportnetwork en0 "$ssid" 2>/dev/null || true
         #     # fi
         # done
         # echo
 
         # if ! check_ssid; then
-        #     echo "Failed to connect to $SSID. Please connect manually."
+        #     echo "Failed to connect to $ssid. Please connect manually."
         #     echo "You may need to manually select the network from WiFi menu."
         #     return 1
         # fi
 
-        # echo "Connected to $SSID"
+        # echo "Connected to $ssid"
 
         # Wait for internet to become available
         echo "Waiting for internet connection (complete the login in your browser)..."
         local attempts=0
-        while ! check_internet && [[ $attempts -lt $MAX_ATTEMPTS ]]; do
-            sleep $CHECK_INTERVAL
+        while ! check_internet && [[ $attempts -lt $max_attempts ]]; do
+            sleep $check_interval
             ((attempts++))
             echo -n "."
         done
@@ -130,10 +130,10 @@ aa-inflight-wifi() {
     while true; do
         # Check if we're on the AA inflight network
         # if ! check_ssid; then
-        #     echo "Not connected to $SSID network. Please connect first."
-        #     echo "Waiting for connection to $SSID..."
+        #     echo "Not connected to $ssid network. Please connect first."
+        #     echo "Waiting for connection to $ssid..."
         #     while ! check_ssid; do
-        #         sleep $CHECK_INTERVAL
+        #         sleep $check_interval
         #     done
         # fi
 
@@ -141,8 +141,8 @@ aa-inflight-wifi() {
         if reconnect_wifi; then
             # Success - wait 20 minutes before next cycle
             echo "$(date '+%Y-%m-%d %H:%M:%S') - Waiting 20 minutes before next reconnection..."
-            echo "Next reconnection at: $(date -v +${WAIT_TIME}S '+%Y-%m-%d %H:%M:%S')"
-            sleep $WAIT_TIME
+            echo "Next reconnection at: $(date -v +${wait_time}S '+%Y-%m-%d %H:%M:%S')"
+            sleep $wait_time
         else
             # Failed - wait a bit before retrying
             echo "Reconnection failed. Retrying in 30 seconds..."
