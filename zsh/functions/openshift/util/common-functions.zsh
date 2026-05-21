@@ -23,34 +23,33 @@
 prompt-release-stream() {
     echo "Fetching available versions..." >&2
 
+    # Fetch x86_64 tags from Quay per major.minor, categorize in jq
+    # Uses explicit major.minor. prefix (Quay like: is substring match)
+    local versions=""
     local tmpdir=$(mktemp -d)
+    local minors=(5.0 4.22 4.21 4.20 4.19 4.18 4.17 4.16)
 
-    # Fetch from Quay: x86_64 tags for recent major.minor ranges (parallel)
-    for prefix in "5." "4.2" "4.1" "4.0"; do
+    for minor in "${minors[@]}"; do
         curl -sm 15 \
-            "https://quay.io/api/v1/repository/openshift-release-dev/ocp-release/tag/?limit=100&onlyActiveTags=true&filter_tag_name=like:${prefix}%-x86_64" \
-            2>/dev/null | jq -r '[.tags[].name
+            "https://quay.io/api/v1/repository/openshift-release-dev/ocp-release/tag/?limit=50&onlyActiveTags=true&filter_tag_name=like:${minor}.%-x86_64" \
+            2>/dev/null \
+        | jq -r '
+            [.tags[].name
             | select(test("-multi") | not)
-            | rtrimstr("-x86_64")] | .[]' \
-            > "$tmpdir/quay-${prefix}" 2>/dev/null &
+            | rtrimstr("-x86_64")]
+            | unique | sort_by(split(".-") | map(tonumber? // 99)) | reverse
+            | .[] as $v
+            | if ($v | test("ec\\.|rc\\.")) then "[dev-preview] \($v)"
+              else "[stable-\($v | split(".")[0:2] | join("."))] \($v)"
+              end
+        ' > "$tmpdir/quay-${minor}" 2>/dev/null &
     done
     wait
 
-    # Combine and categorize
-    local versions=""
-    cat "$tmpdir"/quay-* 2>/dev/null | sort -Vr | uniq | while IFS= read -r ver; do
-        [[ -z "$ver" ]] && continue
-        local label
-        if [[ "$ver" == *-ec.* || "$ver" == *-rc.* ]]; then
-            label="dev-preview"
-        else
-            local minor=${ver%.*}
-            label="stable-${minor}"
-        fi
-        echo "[${label}] $ver"
-    done > "$tmpdir/all-versions"
-
-    versions=$(cat "$tmpdir/all-versions" 2>/dev/null)
+    versions=""
+    for minor in "${minors[@]}"; do
+        [[ -s "$tmpdir/quay-${minor}" ]] && versions+=$(cat "$tmpdir/quay-${minor}")$'\n'
+    done
     rm -rf "$tmpdir"
 
     if [[ -z "$versions" ]]; then
@@ -70,7 +69,7 @@ prompt-release-stream() {
         echo "$versions" | cat -n >&2
         echo "" >&2
         echo -n "Enter line number or full version string: " >&2
-        read -r selected
+        read -r selected </dev/tty
         if [[ "$selected" =~ ^[0-9]+$ ]]; then
             selected=$(echo "$versions" | sed -n "${selected}p")
         fi
