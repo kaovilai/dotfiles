@@ -37,8 +37,8 @@ randomize-mac-ifconfig() {
                 return 0
                 ;;
             *)
-                echo "Unknown option: $1"
-                echo "Use --help for usage information"
+                echo "Unknown option: $1" >&2
+                echo "Use --help for usage information" >&2
                 return 1
                 ;;
         esac
