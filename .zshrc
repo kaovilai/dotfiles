@@ -63,7 +63,18 @@ source ~/git/dotfiles/zsh/paths.zsh
   source ~/git/dotfiles/zsh/functions/openshift/load-lazy.zsh
   source ~/git/dotfiles/zsh/functions/claude/functions.zsh
   source ~/git/dotfiles/zsh/functions/s3/load-lazy.zsh
-source ~/git/dotfiles/zsh/functions/git-utils.zsh
+# Git batch operation utilities (lazy-loaded — ~293 lines only parsed when first used)
+typeset -g GIT_UTILS_LOADED=0
+_lazy_load_git_utils() {
+    if [[ $GIT_UTILS_LOADED -eq 0 ]]; then
+        source ~/git/dotfiles/zsh/functions/git-utils.zsh && GIT_UTILS_LOADED=1
+    fi
+}
+for func in cherrypick-pr cherrypick-pr-to-branch new-changelog go-mod-upgrade go-mod-upgrade-dirs exec-dirs exec-dirs-ds exec-dirs-ds-echo code-dirs finder-dirs; do
+    eval "${func}() { _lazy_load_git_utils || return 1; ${func} \"\$@\"; }"
+done
+unset func
+
   source ~/git/dotfiles/zsh/functions/podman-utils.zsh
 
 # DNS utilities (lazy-loaded — ~215 lines only parsed when first used)
