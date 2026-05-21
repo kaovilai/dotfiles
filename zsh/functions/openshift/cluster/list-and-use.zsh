@@ -293,7 +293,7 @@ use-ocp-cluster() {
     
     # Build selection list with indices
     local selection_list=""
-    for i in $(seq 1 ${#kubeconfig_files[@]}); do
+    for ((i=1; i<=${#kubeconfig_files[@]}; i++)); do
         selection_list+="$i. ${cluster_names[$i]}"$'\n'
     done
     selection_list=${selection_list%$'\n'}
@@ -318,7 +318,7 @@ use-ocp-cluster() {
         return 0
     fi
 
-    choice=$(echo "$selected" | awk -F'.' '{print $1}')
+    choice=${selected%%.*}
 
     # Handle special ROSA clusters
     local selected_path="${kubeconfig_files[$choice]}"
