@@ -28,12 +28,12 @@ cherrypick-pr-to-branch() {
         echo "Example: cherrypick-pr-to-branch 42 upstream/main my-backport"
         return 1
     fi
-    local PR_NUMBER=$1
-    local BRANCH=$2
-    local NEW_BRANCH=$3
-    echo "Cherry-picking PR $PR_NUMBER to branch $BRANCH"
-    git checkout -b "$NEW_BRANCH" "$BRANCH" || (git checkout "$NEW_BRANCH" && git reset --hard "$BRANCH") || return 1
-    cherrypick-pr "$PR_NUMBER"
+    local pr_number=$1
+    local branch=$2
+    local new_branch=$3
+    echo "Cherry-picking PR $pr_number to branch $branch"
+    git checkout -b "$new_branch" "$branch" || (git checkout "$new_branch" && git reset --hard "$branch") || return 1
+    cherrypick-pr "$pr_number"
 }
 
 # Helper function to create a new changelog for velero repos
@@ -46,21 +46,21 @@ new-changelog() {
         echo "❌ jq not found. Install it with: brew install jq" >&2
         return 1
     fi
-    local GH_PR_JSON GH_LOGIN GH_PR_NUMBER CHANGELOG_BODY
-    GH_PR_JSON=$(gh pr view --json author,number,title 2>/dev/null)
-    { read -r GH_LOGIN; read -r GH_PR_NUMBER; read -r CHANGELOG_BODY; } \
-        < <(jq -r '.author.login, (.number | tostring), .title' 2>/dev/null <<< "$GH_PR_JSON")
-    if [[ -z "$GH_LOGIN" ]]; then
+    local gh_pr_json gh_login gh_pr_number changelog_body
+    gh_pr_json=$(gh pr view --json author,number,title 2>/dev/null)
+    { read -r gh_login; read -r gh_pr_number; read -r changelog_body; } \
+        < <(jq -r '.author.login, (.number | tostring), .title' 2>/dev/null <<< "$gh_pr_json")
+    if [[ -z "$gh_login" ]]; then
         echo "branch does not have PR or cli not logged in, try 'gh auth login' or 'gh pr create'" >&2
         return 1
     fi
-    if [[ -z "$GH_PR_NUMBER" ]]; then
+    if [[ -z "$gh_pr_number" ]]; then
         echo "Could not determine PR number. Make sure the branch has an open PR." >&2
         return 1
     fi
     mkdir -p ./changelogs/unreleased/ && \
-    echo "$CHANGELOG_BODY" > "./changelogs/unreleased/$GH_PR_NUMBER-$GH_LOGIN" && \
-    echo "\"$CHANGELOG_BODY\" added to ./changelogs/unreleased/$GH_PR_NUMBER-$GH_LOGIN"
+    echo "$changelog_body" > "./changelogs/unreleased/$gh_pr_number-$gh_login" && \
+    echo "\"$changelog_body\" added to ./changelogs/unreleased/$gh_pr_number-$gh_login"
 }
 
 go-mod-upgrade() {
