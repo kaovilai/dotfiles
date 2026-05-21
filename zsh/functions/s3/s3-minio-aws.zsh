@@ -413,23 +413,25 @@ EOF
     
     # Launch EC2 instance
     echo "${BLUE}INFO${NC}: Launching EC2 instance..."
-    
-    local launch_cmd="aws ec2 run-instances \
-        --region '$region' \
-        --image-id '$ami_id' \
-        --count 1 \
-        --instance-type '$instance_type' \
-        --security-group-ids '$sg_id' \
-        --subnet-id '$subnet_id' \
-        --user-data '$encoded_user_data' \
-        --tag-specifications 'ResourceType=instance,Tags=[{Key=Name,Value=minio-$name},{Key=Purpose,Value=MinIO-Storage}]'"
-    
+
+    local -a launch_cmd=(
+        aws ec2 run-instances
+        --region "$region"
+        --image-id "$ami_id"
+        --count 1
+        --instance-type "$instance_type"
+        --security-group-ids "$sg_id"
+        --subnet-id "$subnet_id"
+        --user-data "$encoded_user_data"
+        --tag-specifications "ResourceType=instance,Tags=[{Key=Name,Value=minio-$name},{Key=Purpose,Value=MinIO-Storage}]"
+    )
+
     if [[ -n "$key_name" ]]; then
-        launch_cmd="$launch_cmd --key-name '$key_name'"
+        launch_cmd+=(--key-name "$key_name")
     fi
-    
+
     local instance_info
-    if ! instance_info=$(eval "$launch_cmd" 2>/dev/null); then
+    if ! instance_info=$("${launch_cmd[@]}" 2>/dev/null); then
         echo "${RED}ERROR${NC}: Failed to launch EC2 instance" >&2
         # Cleanup security group
         aws ec2 delete-security-group --region "$region" --group-id "$sg_id" &>/dev/null
