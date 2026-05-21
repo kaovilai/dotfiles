@@ -52,8 +52,8 @@ set-dns-servers() {
                 return 0
                 ;;
             *)
-                echo "Unknown option: $1"
-                echo "Use --help for usage information"
+                echo "Unknown option: $1" >&2
+                echo "Use --help for usage information" >&2
                 return 1
                 ;;
         esac
@@ -62,8 +62,8 @@ set-dns-servers() {
     # Check if at least one DNS server type is specified
     if [[ -z "$ipv4_servers" && -z "$ipv6_servers" ]]; then
         echo "Error: No DNS servers specified" >&2
-        echo "Use --ipv4 and/or --ipv6 to specify DNS servers"
-        echo "Use --help for more information"
+        echo "Use --ipv4 and/or --ipv6 to specify DNS servers" >&2
+        echo "Use --help for more information" >&2
         return 1
     fi
 
@@ -179,8 +179,8 @@ clear-dns-servers() {
                 return 0
                 ;;
             *)
-                echo "Unknown option: $1"
-                echo "Use --help for usage information"
+                echo "Unknown option: $1" >&2
+                echo "Use --help for usage information" >&2
                 return 1
                 ;;
         esac
