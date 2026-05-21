@@ -47,7 +47,7 @@ watch-all-pod-errors-in-namespace(){
         return 1
     fi
     # get all pod logs in namespace, grep for error, and prefix with pod name
-    oc get pods -n "$1" -o name | xargs -n 1 -P 100 -I {} sh -c "oc logs -n \"$1\" -f {} | grep --line-buffered error | sed \"s#^#{}: #\""
+    oc get pods -n "$1" -o name | xargs -n 1 -P 100 -I {} sh -c 'oc logs -n "$1" -f "$2" | grep --line-buffered error | sed "s#^#$2: #"' -- "$1" {}
 }
 
 # Patch ClusterServiceVersion replica count
