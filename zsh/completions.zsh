@@ -15,6 +15,7 @@ fi
 # Assumes the tool supports `<tool> completion zsh`.
 _regen_tool_completion() {
   local tool="$1"
+  command -v "$tool" &>/dev/null || return 0
   local cache_file="$ZSH_COMPLETION_CACHE_DIR/_${tool}_generated"
   [[ -f "$cache_file" ]] && cp "$cache_file" "${fpath[1]}/_${tool}" &!
   if completion_cache_expired "$cache_file"; then
