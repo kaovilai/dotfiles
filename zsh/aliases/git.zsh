@@ -79,7 +79,11 @@ git-worktree-code() {
     echo "❌ code not found. Install VS Code and run: Shell Command: Install 'code' command in PATH" >&2
     return 1
   fi
-  
+  if ! git rev-parse --git-dir > /dev/null 2>&1; then
+    echo "Error: Not in a git repository" >&2
+    return 1
+  fi
+
   # Extract Jira issue key from URL if provided
   local branch_name="$1"
   if [[ "$1" =~ ^https://issues\.redhat\.com/browse/([A-Z]+-[0-9]+) ]]; then
