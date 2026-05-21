@@ -396,7 +396,7 @@ echo "$networks" | while IFS= read -r network; do
                 if networksetup -addpreferredwirelessnetworkatindex "$wifi_interface" "$network" 0 WPA2 "$password"; then
                     echo "✓ Added $network"
                 else
-                    echo "✗ Failed to add $network"
+                    echo "✗ Failed to add $network" >&2
                 fi
             else
                 echo "Skipped $network (no password provided)"
