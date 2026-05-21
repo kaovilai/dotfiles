@@ -409,7 +409,7 @@ EOF
     
     # Encode user data for EC2
     local encoded_user_data
-    encoded_user_data=$(echo "$user_data" | base64 | tr -d '\n')
+    encoded_user_data=$(base64 <<< "$user_data" | tr -d '\n')
     
     # Launch EC2 instance
     echo "${BLUE}INFO${NC}: Launching EC2 instance..."

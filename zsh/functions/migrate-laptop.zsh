@@ -324,7 +324,7 @@ export-wifi-credentials() {
 EOF
     
     # Export each network
-    echo "$networks" | while IFS= read -r network; do
+    while IFS= read -r network; do
         if [[ -n "$network" ]]; then
             echo "  Exporting: $network"
             cat >> "$wifi_file" << EOF
@@ -334,7 +334,7 @@ EOF
         </dict>
 EOF
         fi
-    done
+    done <<< "$networks"
     
     cat >> "$wifi_file" << 'EOF'
     </array>
