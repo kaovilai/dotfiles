@@ -71,7 +71,7 @@ _lazy_load_git_utils() {
     fi
 }
 for func in cherrypick-pr cherrypick-pr-to-branch new-changelog go-mod-upgrade go-mod-upgrade-dirs exec-dirs exec-dirs-ds exec-dirs-ds-echo code-dirs finder-dirs; do
-    eval "${func}() { _lazy_load_git_utils || return 1; ${func} \"\$@\"; }"
+    functions[$func]="_lazy_load_git_utils || return 1; ${func} \"\$@\""
 done
 unset func
 
