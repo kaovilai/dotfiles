@@ -187,7 +187,12 @@ alias gr='gemini-review'
 alias tailscale="/Applications/Tailscale.app/Contents/MacOS/Tailscale"
 # Find and kill orphaned zsh processes that are busy-spinning CPU.
 # Detects: PPID=1 (parent died) + no TTY (lost terminal) + state R (busy-loop on closed fd)
+# Relies on macOS-specific ps(1) output: "??" no-TTY marker and -o lstart.
 kill-orphan-zsh(){
+    if [[ "$OSTYPE" != darwin* ]]; then
+        echo "Error: kill-orphan-zsh is only supported on macOS" >&2
+        return 1
+    fi
     local pids
     local pids_csv
     pids_csv=$(ps -eo pid,ppid,stat,tty,command | awk '$2 == 1 && $3 ~ /^R/ && $4 == "??" && /\/bin\/zsh -il/ {printf sep $1; sep=","}')
