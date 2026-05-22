@@ -153,7 +153,7 @@ give-me-ram(){
         echo "No matching processes found."
         return 0
     fi
-    xargs kill -9 <<< "$pids"
+    kill -9 ${=pids}
 }
 
 # AA Inflight WiFi automation - randomize MAC every 20 minutes for free WiFi

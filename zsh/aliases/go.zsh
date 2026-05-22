@@ -10,7 +10,7 @@ _gofmt_files() {
         echo "No modified .go files to format"
         return 0
     fi
-    xargs -L 1 go fmt <<< "$files"
+    go fmt ${(f)files}
 }
 gofmtgitdiff()       { _gofmt_files; }
 gofmtgitdiffmain()   { _gofmt_files upstream/main; }
