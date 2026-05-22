@@ -197,7 +197,7 @@ create-minio-aws() {
     
     # SSH port (22) - restrict to your IP if possible
     local my_ip
-    my_ip=$(curl -s --connect-timeout 5 ifconfig.me)
+    my_ip=$(curl -sf --connect-timeout 5 ifconfig.me)
     if [[ -n "$my_ip" ]]; then
         aws ec2 authorize-security-group-ingress \
             --region "$region" \
@@ -493,7 +493,7 @@ EOF
         echo "${BLUE}INFO${NC}: Attempt $attempt/$max_attempts to download certificate..."
 
         # First check if HTTPS is responding (indicates certificates are ready)
-        if curl -k -s --connect-timeout 10 --max-time 15 "https://${public_dns}:9000/minio/health/ready" &>/dev/null; then
+        if curl -kf -s --connect-timeout 10 --max-time 15 "https://${public_dns}:9000/minio/health/ready" &>/dev/null; then
             echo "${BLUE}INFO${NC}: HTTPS is responding, attempting to download certificate..."
 
             # Try to get the certificate file via SCP if key is available
@@ -540,7 +540,7 @@ EOF
             fi
         else
             # HTTPS not ready yet, check if HTTP is responding (service is starting)
-            if curl -s --connect-timeout 5 --max-time 10 "http://${public_dns}:9000/minio/health/ready" &>/dev/null; then
+            if curl -sf --connect-timeout 5 --max-time 10 "http://${public_dns}:9000/minio/health/ready" &>/dev/null; then
                 echo "${BLUE}INFO${NC}: MinIO is starting (HTTP responding), waiting for HTTPS..."
             else
                 echo "${BLUE}INFO${NC}: MinIO service is still initializing..."
