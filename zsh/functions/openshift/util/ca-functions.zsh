@@ -36,6 +36,10 @@ get-oc-router-ca(){
 # Usage: rm-router-ca
 # Description: Deletes router-ca.crt from current directory
 rm-router-ca(){
+    if [[ ! -f router-ca.crt ]]; then
+        echo "❌ router-ca.crt not found in current directory" >&2
+        return 1
+    fi
     echo "Removing Ingress Router CA"
     rm router-ca.crt
 }
@@ -50,6 +54,10 @@ rm-router-ca(){
 #   get-oc-router-ca
 #   trust-oc-router-ca-from-file
 trust-oc-router-ca-from-file(){
+    if [[ ! -f router-ca.crt ]]; then
+        echo "❌ router-ca.crt not found in current directory" >&2
+        return 1
+    fi
     if [[ "$OSTYPE" == darwin* ]]; then
         echo "Mac OS detected, trusting oc router ca"
         sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain router-ca.crt
@@ -86,11 +94,19 @@ get-api-ca(){
 }
 
 rm-api-ca(){
+    if [[ ! -f api-ca.crt ]]; then
+        echo "❌ api-ca.crt not found in current directory" >&2
+        return 1
+    fi
     echo "Removing API CA"
     rm api-ca.crt
 }
 
 trust-api-ca-from-file(){
+    if [[ ! -f api-ca.crt ]]; then
+        echo "❌ api-ca.crt not found in current directory" >&2
+        return 1
+    fi
     if [[ "$OSTYPE" == darwin* ]]; then
         echo "Mac OS detected"
         sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain api-ca.crt
