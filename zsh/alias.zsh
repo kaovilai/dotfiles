@@ -1,7 +1,7 @@
 # Safe source: reports errors without killing the shell
 _safe_source() {
   [[ -f "$1" ]] || { print -P "%F{yellow}[dotfiles] File not found: $1%f" >&2; return 1; }
-  source "$1" || print -P "%F{red}[dotfiles] Failed to source: $1%f" >&2
+  source "$1" || { print -P "%F{red}[dotfiles] Failed to source: $1%f" >&2; return 1; }
 }
 
 # Load all alias categories
@@ -20,7 +20,7 @@ _lazy_load_linux_dev() {
     if [[ $LINUX_DEV_LOADED -eq 0 ]]; then
         # Sourcing redefines functions by the same names, replacing these wrappers
         # via ZSH dynamic dispatch — no recursion on success.
-        source ~/git/dotfiles/zsh/functions/linux-dev.zsh && LINUX_DEV_LOADED=1
+        _safe_source ~/git/dotfiles/zsh/functions/linux-dev.zsh && LINUX_DEV_LOADED=1
     fi
 }
 for func in podman-linux ec2-linux az-linux gcp-linux; do
@@ -34,7 +34,7 @@ _lazy_load_migrate() {
     if [[ $MIGRATE_LAPTOP_LOADED -eq 0 ]]; then
         # Sourcing redefines functions by the same names, replacing these wrappers
         # via ZSH dynamic dispatch — no recursion on success.
-        source ~/git/dotfiles/zsh/functions/migrate-laptop.zsh && MIGRATE_LAPTOP_LOADED=1
+        _safe_source ~/git/dotfiles/zsh/functions/migrate-laptop.zsh && MIGRATE_LAPTOP_LOADED=1
     fi
 }
 for func in \
