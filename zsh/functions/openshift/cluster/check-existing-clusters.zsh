@@ -73,10 +73,11 @@ check-for-existing-clusters() {
 
     # Find AWS and GCP cluster directories
     if [[ -d "$OCP_MANIFESTS_DIR" ]]; then
-        for dir in $(find "$OCP_MANIFESTS_DIR" -type d -name "auth" 2>/dev/null | sort); do
+        while IFS= read -r dir; do
             if [[ -f "$dir/kubeconfig" ]]; then
-                local cluster_dir=$(dirname "$dir")
-                local cluster_name=$(basename "$cluster_dir")
+                local cluster_dir cluster_name
+                cluster_dir=$(dirname "$dir")
+                cluster_name=$(basename "$cluster_dir")
                 
                 # Filter by provider if specified
                 if [[ "$provider" == "aws" && ! "$cluster_name" =~ "aws" ]]; then
@@ -105,13 +106,14 @@ check-for-existing-clusters() {
                     fi
                 fi
             fi
-        done
+        done < <(find "$OCP_MANIFESTS_DIR" -type d -name "auth" 2>/dev/null | sort)
         
         # Check for ROSA clusters without kubeconfig files
         if [[ "$provider" == "all" || "$provider" == "rosa" ]]; then
-            for dir in $(find "$OCP_MANIFESTS_DIR" -type d -name "*-rosa-sts-*" 2>/dev/null | sort); do
+            while IFS= read -r dir; do
                 if [[ ! -f "$dir/auth/kubeconfig" && -f "$dir/cluster-admin.txt" ]]; then
-                    local cluster_name=$(basename "$dir")
+                    local cluster_name
+                    cluster_name=$(basename "$dir")
                     
                     # Apply pattern filter if provided
                     if [[ -z $pattern || $cluster_name == *$pattern* ]]; then
@@ -121,7 +123,7 @@ check-for-existing-clusters() {
                         found=true
                     fi
                 fi
-            done
+            done < <(find "$OCP_MANIFESTS_DIR" -type d -name "*-rosa-sts-*" 2>/dev/null | sort)
         fi
         
         # Also check for legacy clusters with empty TODAY variable
@@ -193,10 +195,11 @@ check-for-existing-clusters() {
     
     # Check local clusters
     if [[ -d "$HOME/clusters" ]]; then
-        for dir in $(find $HOME/clusters -type d -name "auth" 2>/dev/null | sort); do
+        while IFS= read -r dir; do
             if [[ -f "$dir/kubeconfig" ]]; then
-                local cluster_dir=$(dirname "$dir")
-                local cluster_name=$(basename "$cluster_dir")
+                local cluster_dir cluster_name
+                cluster_dir=$(dirname "$dir")
+                cluster_name=$(basename "$cluster_dir")
                 
                 # Apply pattern filter if provided
                 if [[ -z $pattern || $cluster_name == *$pattern* ]]; then
@@ -211,7 +214,7 @@ check-for-existing-clusters() {
                     fi
                 fi
             fi
-        done
+        done < <(find "$HOME/clusters" -type d -name "auth" 2>/dev/null | sort)
     fi
     
     # If no clusters found, proceed silently
