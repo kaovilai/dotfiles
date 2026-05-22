@@ -149,14 +149,14 @@ exec-dirs() {
 # $4: branch checkout name
 # $5: command
 exec-dirs-ds() {
-    if ! command -v gh &>/dev/null; then
-        echo "❌ gh not found. Install it with: brew install gh" >&2
-        return 1
-    fi
     local echo_only=false
     if [[ "$1" == "--echo-only" ]]; then
         echo_only=true
         shift
+    fi
+    if [[ "$echo_only" == false ]] && ! command -v gh &>/dev/null; then
+        echo "❌ gh not found. Install it with: brew install gh" >&2
+        return 1
     fi
     if [[ -z "$1" || -z "$2" || -z "$3" || -z "$4" || -z "$5" ]]; then
         echo "Usage: exec-dirs-ds [--echo-only] <pattern> <ds-name> <base-branch> <branch-name> <command>" >&2
