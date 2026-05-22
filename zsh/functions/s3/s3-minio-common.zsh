@@ -287,9 +287,13 @@ remove-certificate-from-system() {
         echo "${BLUE}INFO${NC}: Removing certificate from Linux system trust store"
         local cert_name
         cert_name=${cert_file:t:r}
-        sudo rm -f "/usr/local/share/ca-certificates/${cert_name}.crt"
-        sudo update-ca-certificates
-        echo "${GREEN}SUCCESS${NC}: Certificate removed from Linux trust store"
+        sudo rm -f "/usr/local/share/ca-certificates/${cert_name}.crt" || { echo "${RED}ERROR${NC}: Failed to remove certificate file from trust store" >&2; return 1; }
+        if sudo update-ca-certificates; then
+            echo "${GREEN}SUCCESS${NC}: Certificate removed from Linux trust store"
+        else
+            echo "${RED}ERROR${NC}: Failed to update ca-certificates" >&2
+            return 1
+        fi
     fi
 }
 
