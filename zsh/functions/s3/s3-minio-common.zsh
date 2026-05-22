@@ -774,7 +774,7 @@ EOF
         echo "${YELLOW}INFO${NC}: Applying configuration to cluster..."
 
         # Create namespace if it doesn't exist
-        oc create namespace $namespace --dry-run=client -o yaml | oc apply -f -
+        oc create namespace "$namespace" --dry-run=client -o yaml | oc apply -f -
 
         # Apply credentials secret
         oc apply -f "${TMPDIR:-/tmp}/minio-credentials-secret.yaml"
