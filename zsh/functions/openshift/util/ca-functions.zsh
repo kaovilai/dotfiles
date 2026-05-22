@@ -77,8 +77,8 @@ trust-oc-router-ca-from-file(){
 # Example:
 #   trust-oc-router-ca
 trust-oc-router-ca(){
-    get-oc-router-ca
-    trust-oc-router-ca-from-file
+    get-oc-router-ca || return 1
+    trust-oc-router-ca-from-file || { rm-router-ca; return 1; }
     rm-router-ca
 }
 
@@ -117,8 +117,8 @@ trust-api-ca-from-file(){
 }
 
 trust-api-ca(){
-    get-api-ca
-    trust-api-ca-from-file
+    get-api-ca || return 1
+    trust-api-ca-from-file || { rm-api-ca; return 1; }
     rm-api-ca
 }
 
