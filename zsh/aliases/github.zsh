@@ -211,6 +211,10 @@ gh-set-default-upstream() {
     echo "❌ gh not found. Install it with: brew install gh" >&2
     return 1
   fi
+  if ! git rev-parse --git-dir > /dev/null 2>&1; then
+    echo "Error: Not in a git repository" >&2
+    return 1
+  fi
   local upstream_url
   upstream_url=$(git remote get-url upstream 2>/dev/null)
   if [[ -z "$upstream_url" ]]; then
