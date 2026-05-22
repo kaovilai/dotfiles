@@ -465,7 +465,7 @@ download-minio-certificate() {
 
     # Extract certificate from the HTTPS connection
     local temp_cert
-    temp_cert=$(mktemp /tmp/minio-cert-XXXXXX.pem) || { echo "${RED}ERROR${NC}: Failed to create temp file" >&2; return 1; }
+    temp_cert=$(mktemp "${TMPDIR:-/tmp}/minio-cert-XXXXXX.pem") || { echo "${RED}ERROR${NC}: Failed to create temp file" >&2; return 1; }
 
     # Use openssl with a connection timeout instead of external timeout command
     echo | openssl s_client -servername "$public_dns" -connect "${public_dns}:9000" -showcerts 2>/dev/null | \
@@ -683,7 +683,7 @@ aws_access_key_id=$AWS_ACCESS_KEY_ID
 aws_secret_access_key=$AWS_SECRET_ACCESS_KEY"
 
     # Create credentials secret YAML
-    cat <<EOF > /tmp/minio-credentials-secret.yaml
+    cat <<EOF > "${TMPDIR:-/tmp}/minio-credentials-secret.yaml"
 apiVersion: v1
 kind: Secret
 metadata:
@@ -695,7 +695,7 @@ data:
 EOF
 
     # Create DataProtectionApplication YAML
-    cat <<EOF > /tmp/minio-dpa.yaml
+    cat <<EOF > "${TMPDIR:-/tmp}/minio-dpa.yaml"
 apiVersion: oadp.openshift.io/v1alpha1
 kind: DataProtectionApplication
 metadata:
@@ -763,8 +763,8 @@ EOF
     echo "  - Skip TLS Verify: $skip_tls_verify"
     echo ""
     echo "Files created:"
-    echo "  - /tmp/minio-credentials-secret.yaml"
-    echo "  - /tmp/minio-dpa.yaml"
+    echo "  - ${TMPDIR:-/tmp}/minio-credentials-secret.yaml"
+    echo "  - ${TMPDIR:-/tmp}/minio-dpa.yaml"
 
     if [[ "$apply" == "true" ]]; then
         echo ""
@@ -774,10 +774,10 @@ EOF
         oc create namespace $namespace --dry-run=client -o yaml | oc apply -f -
 
         # Apply credentials secret
-        oc apply -f /tmp/minio-credentials-secret.yaml
+        oc apply -f "${TMPDIR:-/tmp}/minio-credentials-secret.yaml"
 
         # Apply DataProtectionApplication
-        oc apply -f /tmp/minio-dpa.yaml
+        oc apply -f "${TMPDIR:-/tmp}/minio-dpa.yaml"
 
         echo ""
         echo "${GREEN}SUCCESS${NC}: Configuration applied. Check status with:"
@@ -786,8 +786,8 @@ EOF
     else
         echo ""
         echo "To apply this configuration to your cluster, run:"
-        echo "  oc apply -f /tmp/minio-credentials-secret.yaml"
-        echo "  oc apply -f /tmp/minio-dpa.yaml"
+        echo "  oc apply -f ${TMPDIR:-/tmp}/minio-credentials-secret.yaml"
+        echo "  oc apply -f ${TMPDIR:-/tmp}/minio-dpa.yaml"
         echo ""
         echo "Or re-run with 'apply' parameter:"
         echo "  create-velero-dpa-for-minio '$cluster_name' '$bucket_name' '$namespace' true"
