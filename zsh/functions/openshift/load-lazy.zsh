@@ -88,7 +88,7 @@ for func in \
     validate-velero-role-assignments-for-rosa-cluster \
     watch-all-pod-errors-in-namespace \
     watch-all-pod-logs-in-namespace; do
-    eval "${func}() { _lazy_load_openshift || return 1; ${func} \"\$@\"; }"
+    functions[$func]="_lazy_load_openshift || return 1; ${func} \"\$@\""
 done
 unset func
 
