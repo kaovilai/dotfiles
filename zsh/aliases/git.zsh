@@ -41,6 +41,10 @@ alias code-lastcommitted='code $(git log --name-only --pretty=format: | head -n 
 alias code-git-exclude='code .git/info/exclude'
 alias git-exclude-claude='echo "CLAUDE.md" >> .git/info/exclude'
 dco() {
+    if ! git rev-parse --git-dir > /dev/null 2>&1; then
+        echo "Error: Not in a git repository" >&2
+        return 1
+    fi
     if ! command -v gh &>/dev/null; then
         echo "❌ gh not found. Install it with: brew install gh" >&2
         return 1
