@@ -291,3 +291,11 @@ finder-dirs() {
     fi
     find . -type d -maxdepth 1 -name "$1" | parallel open -a Finder {}
 }
+
+# noglob aliases: allow unquoted glob patterns (e.g. exec-dirs velero* instead of exec-dirs "velero*")
+alias go-mod-upgrade-dirs='noglob go-mod-upgrade-dirs'
+alias exec-dirs='noglob exec-dirs'
+alias exec-dirs-ds='noglob exec-dirs-ds'
+alias exec-dirs-ds-echo='noglob exec-dirs-ds-echo'
+alias code-dirs='noglob code-dirs'
+alias finder-dirs='noglob finder-dirs'
