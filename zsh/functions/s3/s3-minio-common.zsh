@@ -129,7 +129,8 @@ get-minio-connection-info() {
         echo "  Certificate: ${cert_file}"
     fi
     
-    echo "\n${BLUE}AWS CLI Configuration:${NC}"
+    echo ""
+    echo "${BLUE}AWS CLI Configuration:${NC}"
     echo "export AWS_ACCESS_KEY_ID='$access_key'"
     echo "export AWS_SECRET_ACCESS_KEY='$secret_key'"
     echo "export AWS_ENDPOINT_URL='$endpoint'"
@@ -137,13 +138,15 @@ get-minio-connection-info() {
         echo "export AWS_CA_BUNDLE='$cert_file'"
     fi
     
-    echo "\n${BLUE}MinIO Client (mc) Configuration:${NC}"
+    echo ""
+    echo "${BLUE}MinIO Client (mc) Configuration:${NC}"
     echo "mc config host add $name $endpoint $access_key $secret_key"
     if [[ -n "$cert_file" && "$cert_file" != "null" && -f "$cert_file" ]]; then
         echo "# Note: mc will automatically use system trust store for certificate validation"
     fi
     
-    echo "\n${BLUE}Test Commands:${NC}"
+    echo ""
+    echo "${BLUE}Test Commands:${NC}"
     echo "# List buckets:"
     echo "aws s3 ls --endpoint-url $endpoint"
     if [[ -n "$cert_file" && "$cert_file" != "null" ]]; then
