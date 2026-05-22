@@ -123,8 +123,8 @@ pr-review-all-users() {
   # Check if PR_REVIEW_USERS is set
   if [[ -z "$PR_REVIEW_USERS" ]]; then
     echo "Error: PR_REVIEW_USERS environment variable not set" >&2
-    echo "Add 'export PR_REVIEW_USERS=\"user1 user2 user3\"' to ~/secrets.zsh"
-    echo "Or use velero-set-reviewers or oadp-set-reviewers to set automatically"
+    echo "Add 'export PR_REVIEW_USERS=\"user1 user2 user3\"' to ~/secrets.zsh" >&2
+    echo "Or use velero-set-reviewers or oadp-set-reviewers to set automatically" >&2
     return 1
   fi
   
