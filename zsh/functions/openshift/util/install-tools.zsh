@@ -112,6 +112,10 @@ install-opm(){
 #   openshift-patch-versions-arm64
 #   latest=$(openshift-patch-versions-arm64 | tail -n 1)
 function openshift-patch-versions-arm64(){
+    if ! command -v curl &>/dev/null; then
+        echo "❌ curl not found. Install it with: brew install curl" >&2
+        return 1
+    fi
     curl --silent https://openshift-release-artifacts-arm64.apps.ci.l2s4.p1.openshiftapps.com/ | grep -vE "${OPENSHIFT_REJECT_VERSIONS_EXPRESSION:-^$}" | cut -d '"' -f 2 | sed "s/\///g" | grep -vE "<|>|en|utf|^$" | grep -ve "\.\." | sort -V | awk -F. '{if(!a[$1"."$2]++)print $1"."$2"."$NF}'
 }
 
@@ -126,6 +130,10 @@ function openshift-patch-versions-arm64(){
 #   openshift-patch-versions-amd64
 #   latest=$(openshift-patch-versions-amd64 | tail -n 1)
 function openshift-patch-versions-amd64(){
+    if ! command -v curl &>/dev/null; then
+        echo "❌ curl not found. Install it with: brew install curl" >&2
+        return 1
+    fi
     curl --silent https://openshift-release-artifacts.apps.ci.l2s4.p1.openshiftapps.com/ | grep -vE "${OPENSHIFT_REJECT_VERSIONS_EXPRESSION:-^$}" | cut -d '"' -f 2 | sed "s/\///g" | grep -vE "<|>|en|utf|^$" | grep -ve "\.\." | sort -V | awk -F. '{if(!a[$1"."$2]++)print $1"."$2"."$NF}'
 }
 
