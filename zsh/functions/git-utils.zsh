@@ -71,6 +71,10 @@ go-mod-upgrade() {
     echo "Example: go-mod-upgrade github.com/openshift/oadp-operator@v1.2.0" >&2
     return 1
     fi
+    if ! git rev-parse --git-dir > /dev/null 2>&1; then
+        echo "Error: Not in a git repository" >&2
+        return 1
+    fi
     if ! command -v go &>/dev/null; then
         echo "❌ go not found. Install it with: brew install go" >&2
         return 1
