@@ -2,6 +2,10 @@
 
 # Usage: cherrypick-pr <#PR-number> ...
 cherrypick-pr() {
+    if ! git rev-parse --git-dir > /dev/null 2>&1; then
+        echo "Error: Not in a git repository" >&2
+        return 1
+    fi
     if ! command -v gh &>/dev/null; then
         echo "❌ gh not found. Install it with: brew install gh" >&2
         return 1
@@ -15,6 +19,10 @@ cherrypick-pr() {
 
 # Usage: cherrypick-pr-to-branch <#PR-number> <remote/branch> <new-branch-name>
 cherrypick-pr-to-branch() {
+    if ! git rev-parse --git-dir > /dev/null 2>&1; then
+        echo "Error: Not in a git repository" >&2
+        return 1
+    fi
     if ! command -v gh &>/dev/null; then
         echo "❌ gh not found. Install it with: brew install gh" >&2
         return 1
@@ -38,6 +46,10 @@ cherrypick-pr-to-branch() {
 
 # Helper function to create a new changelog for velero repos
 new-changelog() {
+    if ! git rev-parse --git-dir > /dev/null 2>&1; then
+        echo "Error: Not in a git repository" >&2
+        return 1
+    fi
     if ! command -v gh &>/dev/null; then
         echo "❌ gh not found. Install it with: brew install gh" >&2
         return 1
