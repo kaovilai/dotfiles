@@ -45,8 +45,8 @@ check-qemu-stuck() {
 
     if [[ -n "$stuck_procs" ]]; then
         echo "⚠️  STUCK PROCESSES DETECTED (futex_wait_queue):"
+        local pid _ppid etime _stat _wchan cmd state
         while IFS= read -r line; do
-            local pid _ppid etime _stat _wchan cmd state
             read -r pid _ppid etime _stat _wchan cmd <<< "$line"
             echo "  PID: $pid | Runtime: $etime | Cmd: $cmd"
 
