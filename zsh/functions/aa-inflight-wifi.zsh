@@ -9,7 +9,7 @@ aa-inflight-wifi() {
         return 1
     fi
 
-    trap 'unfunction check_internet reconnect_wifi 2>/dev/null' RETURN
+    trap 'unfunction check_internet reconnect_wifi 2>/dev/null' RETURN INT
 
     local ssid="aainflight.com"
     local wifi_url="https://www.aainflight.com/wifi/free"
