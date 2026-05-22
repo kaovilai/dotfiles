@@ -28,9 +28,9 @@ cherrypick-pr-to-branch() {
         echo "Example: cherrypick-pr-to-branch 42 upstream/main my-backport" >&2
         return 1
     fi
-    local pr_number=$1
-    local branch=$2
-    local new_branch=$3
+    local pr_number="$1"
+    local branch="$2"
+    local new_branch="$3"
     echo "Cherry-picking PR $pr_number to branch $branch"
     git checkout -b "$new_branch" "$branch" || (git checkout "$new_branch" && git reset --hard "$branch") || return 1
     cherrypick-pr "$pr_number"
