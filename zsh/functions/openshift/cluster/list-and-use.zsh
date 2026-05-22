@@ -218,7 +218,7 @@ use-ocp-cluster() {
                 fi
                 
                 # Apply pattern filter if provided
-                if [[ -z $search_pattern || $cluster_name == *$search_pattern* ]]; then
+                if [[ -z $search_pattern || $cluster_name == *"$search_pattern"* ]]; then
                     kubeconfig_files+=("$dir/kubeconfig")
                     cluster_names+=("$cluster_name ($cluster_type)")
                 fi
@@ -231,7 +231,7 @@ use-ocp-cluster() {
                 cluster_name=$(basename "$dir")
                 
                 # Apply pattern filter if provided
-                if [[ -z $search_pattern || $cluster_name == *$search_pattern* ]]; then
+                if [[ -z $search_pattern || $cluster_name == *"$search_pattern"* ]]; then
                     # For ROSA clusters without kubeconfig, we'll add a special marker
                     kubeconfig_files+=("ROSA:$dir")
                     cluster_names+=("$cluster_name (ROSA - requires use-rosa-sts)")
@@ -248,7 +248,7 @@ use-ocp-cluster() {
                 cluster_name=$(basename "$cluster_dir")
                 
                 # Apply pattern filter if provided
-                if [[ -z $search_pattern || $cluster_name == *$search_pattern* ]]; then
+                if [[ -z $search_pattern || $cluster_name == *"$search_pattern"* ]]; then
                     kubeconfig_files+=("$dir/kubeconfig")
                     cluster_names+=("$cluster_name (Local)")
                 fi
@@ -258,7 +258,7 @@ use-ocp-cluster() {
     
     # Check CRC
     if [[ -f "$HOME/.crc/machines/crc/kubeconfig" ]]; then
-        if [[ -z $search_pattern || "crc" == *$search_pattern* ]]; then
+        if [[ -z $search_pattern || "crc" == *"$search_pattern"* ]]; then
             # Check CRC status
             local crc_status=""
             if command -v crc &> /dev/null; then
