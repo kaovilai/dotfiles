@@ -465,7 +465,7 @@ download-minio-certificate() {
 
     # Extract certificate from the HTTPS connection
     local temp_cert
-    temp_cert=$(mktemp /tmp/minio-cert-XXXXXX.pem) || { echo "${RED}ERROR${NC}: Failed to create temp file" >&2; return 1; }
+    temp_cert=$(mktemp "${TMPDIR:-/tmp}/minio-cert-XXXXXX.pem") || { echo "${RED}ERROR${NC}: Failed to create temp file" >&2; return 1; }
 
     # Use openssl with a connection timeout instead of external timeout command
     echo | openssl s_client -servername "$public_dns" -connect "${public_dns}:9000" -showcerts 2>/dev/null | \
