@@ -128,7 +128,7 @@ ec2-linux() {
         done
         if [[ -z "$key_path" ]]; then
             echo "${RED}ERROR${NC}: Cannot find private key for '$key_name'" >&2
-            echo "Looked in ~/.ssh/${key_name}.pem, ~/.ssh/${key_name}, ~/${key_name}.pem"
+            echo "Looked in ~/.ssh/${key_name}.pem, ~/.ssh/${key_name}, ~/${key_name}.pem" >&2
             return 1
         fi
     fi

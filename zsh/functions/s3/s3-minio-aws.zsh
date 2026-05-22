@@ -133,7 +133,7 @@ create-minio-aws() {
     # Check AWS credentials
     if ! aws sts get-caller-identity &> /dev/null; then
         echo "${RED}ERROR${NC}: AWS credentials not configured or invalid" >&2
-        echo "Please run: aws configure"
+        echo "Please run: aws configure" >&2
         return 1
     fi
     
@@ -143,7 +143,7 @@ create-minio-aws() {
         vpc_id=$(aws ec2 describe-vpcs --region "$region" --filters "Name=is-default,Values=true" --query "Vpcs[0].VpcId" --output text 2>/dev/null)
         if [[ "$vpc_id" == "None" || -z "$vpc_id" ]]; then
             echo "${RED}ERROR${NC}: No default VPC found in region $region" >&2
-            echo "Please specify --vpc-id"
+            echo "Please specify --vpc-id" >&2
             return 1
         fi
         echo "${BLUE}INFO${NC}: Using default VPC: $vpc_id"
@@ -154,7 +154,7 @@ create-minio-aws() {
         subnet_id=$(aws ec2 describe-subnets --region "$region" --filters "Name=vpc-id,Values=$vpc_id" "Name=map-public-ip-on-launch,Values=true" --query "Subnets[0].SubnetId" --output text 2>/dev/null)
         if [[ "$subnet_id" == "None" || -z "$subnet_id" ]]; then
             echo "${RED}ERROR${NC}: No public subnet found in VPC $vpc_id" >&2
-            echo "Please specify --subnet-id"
+            echo "Please specify --subnet-id" >&2
             return 1
         fi
         echo "${BLUE}INFO${NC}: Using subnet: $subnet_id"
