@@ -7,8 +7,7 @@ typeset -g OPENSHIFT_FUNCTIONS_LOADED=0
 # Load real implementations on first use
 _lazy_load_openshift() {
     if [[ $OPENSHIFT_FUNCTIONS_LOADED -eq 0 ]]; then
-        source ~/git/dotfiles/zsh/functions/openshift/load.zsh
-        OPENSHIFT_FUNCTIONS_LOADED=1
+        source ~/git/dotfiles/zsh/functions/openshift/load.zsh && OPENSHIFT_FUNCTIONS_LOADED=1
     fi
 }
 
@@ -89,7 +88,7 @@ for func in \
     validate-velero-role-assignments-for-rosa-cluster \
     watch-all-pod-errors-in-namespace \
     watch-all-pod-logs-in-namespace; do
-    eval "${func}() { _lazy_load_openshift; ${func} \"\$@\"; }"
+    eval "${func}() { _lazy_load_openshift || return 1; ${func} \"\$@\"; }"
 done
 unset func
 
