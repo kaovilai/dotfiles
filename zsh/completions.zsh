@@ -178,7 +178,7 @@ EOF
 } # end anonymous function
 
 # Help command to view cache status
-zsh_completion_cache_status() {
+zsh-completion-cache-status() {
   echo "ZSH completion cache directory: $ZSH_COMPLETION_CACHE_DIR"
   echo "Cache files:"
   local file
@@ -192,10 +192,12 @@ zsh_completion_cache_status() {
     fi
   done
 }
+zsh_completion_cache_status() { zsh-completion-cache-status "$@"; }
 
 # Command to clear the completion cache
-zsh_completion_cache_clear() {
+zsh-completion-cache-clear() {
   echo "Clearing ZSH completion cache..."
   rm -f "$ZSH_COMPLETION_CACHE_DIR"/_*
   echo "Cache cleared. Restart your shell to regenerate completions."
 }
+zsh_completion_cache_clear() { zsh-completion-cache-clear "$@"; }

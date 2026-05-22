@@ -13,8 +13,8 @@ export ZSH_COMPLETION_CACHE_DIR="$HOME/.zsh-completion-cache"
 [[ -d $ZSH_COMPLETION_CACHE_DIR ]] || mkdir -p "$ZSH_COMPLETION_CACHE_DIR"
 
 # Unified function to check if a cache file is expired
-# Usage: cache_file_expired <file> [max_age_seconds]
-cache_file_expired() {
+# Usage: cache-file-expired <file> [max_age_seconds]
+cache-file-expired() {
   local file="$1"
   local max_age="${2:-$CACHE_TTL_DEFAULT}"
 
@@ -40,12 +40,15 @@ cache_file_expired() {
 }
 
 # Backward-compatible aliases
-command_cache_expired() { cache_file_expired "$@"; }
-completion_cache_expired() { cache_file_expired "${1}" "${2:-$CACHE_TTL_COMPLETION}"; }
+cache_file_expired() { cache-file-expired "$@"; }
+command-cache-expired() { cache-file-expired "$@"; }
+command_cache_expired() { cache-file-expired "$@"; }
+completion-cache-expired() { cache-file-expired "${1}" "${2:-$CACHE_TTL_COMPLETION}"; }
+completion_cache_expired() { cache-file-expired "${1}" "${2:-$CACHE_TTL_COMPLETION}"; }
 
 # Function to execute a command with caching
-# Usage: cached_exec [cache_time_seconds] [cache_key] command_to_run
-cached_exec() {
+# Usage: cached-exec [cache_time_seconds] [cache_key] command_to_run
+cached-exec() {
   # Check if first argument is a number (cache time)
   if [[ "$1" =~ ^[0-9]+$ ]]; then
     local cache_time="$1"
@@ -73,7 +76,7 @@ cached_exec() {
   fi
 
   # Check if cache is valid
-  if ! command_cache_expired "$cache_file" "$cache_time"; then
+  if ! cache-file-expired "$cache_file" "$cache_time"; then
     cat "$cache_file"
     return $?
   fi
@@ -99,10 +102,11 @@ cached_exec() {
 }
 
 # Alias for more readable usage
-alias cache='cached_exec'
+alias cache='cached-exec'
+cached_exec() { cached-exec "$@"; }
 
 # Function to view cache status
-command_cache_status() {
+command-cache-status() {
   echo "Command cache directory: $ZSH_COMMAND_CACHE_DIR"
   echo "Cache files:"
   
@@ -123,12 +127,14 @@ command_cache_status() {
 }
 
 # Function to clear command cache
-command_cache_clear() {
+command-cache-clear() {
   echo "Clearing command cache..."
   rm -rf "$ZSH_COMMAND_CACHE_DIR"/*
   mkdir -p "$ZSH_COMMAND_CACHE_DIR"
   echo "Command cache cleared"
 }
+command_cache_status() { command-cache-status "$@"; }
+command_cache_clear() { command-cache-clear "$@"; }
 
 # -- Command existence caching (in-memory) --
 # Avoids repeated PATH lookups during shell initialization
@@ -136,7 +142,7 @@ command_cache_clear() {
 typeset -gA _command_cache
 
 # Check if a command exists (cached in-memory)
-has_command() {
+has-command() {
     local cmd="$1"
     if [[ -z "${_command_cache[$cmd]+x}" ]]; then
         if command -v "$cmd" >/dev/null 2>&1; then
@@ -147,8 +153,9 @@ has_command() {
     fi
     return $(( 1 - $_command_cache[$cmd] ))
 }
+has_command() { has-command "$@"; }
 
-# has_command lazily caches results in _command_cache on first use per session
+# has-command lazily caches results in _command_cache on first use per session
 
 # Example usage:
 # cache 3600 kubectl-get-pods kubectl get pods  # Cache for 1 hour with explicit key
