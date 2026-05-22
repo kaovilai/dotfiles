@@ -304,7 +304,7 @@ export-wifi-credentials() {
     
     # Get list of WiFi networks
     progress "Finding saved WiFi networks..."
-    local networks _wifi_iface
+    local networks _wifi_iface network
     _wifi_iface=$(networksetup -listallhardwareports 2>/dev/null | awk '/Wi-Fi/{found=1} found && /Device:/{print $2; exit}')
     networks=$(networksetup -listpreferredwirelessnetworks "${_wifi_iface:-en0}" 2>/dev/null | tail -n +2 | sed 's/^[[:space:]]*//')
     
