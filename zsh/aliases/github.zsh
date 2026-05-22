@@ -252,13 +252,13 @@ gh-delete-package-tag() {
       tag="${match[3]}"
     else
       echo "Error: Invalid format. Expected ghcr.io/org/package:tag" >&2
-      echo ""
-      echo "Usage: gh-delete-package-tag <org> <package> <tag>"
-      echo "   or: gh-delete-package-tag ghcr.io/<org>/<package>:<tag>"
-      echo ""
-      echo "Examples:"
-      echo "  gh-delete-package-tag kubernetes-csi csi-snapshot-metadata multiarch-grpc-health-probe"
-      echo "  gh-delete-package-tag ghcr.io/kubernetes-csi/csi-snapshot-metadata:multiarch-grpc-health-probe"
+      echo "" >&2
+      echo "Usage: gh-delete-package-tag <org> <package> <tag>" >&2
+      echo "   or: gh-delete-package-tag ghcr.io/<org>/<package>:<tag>" >&2
+      echo "" >&2
+      echo "Examples:" >&2
+      echo "  gh-delete-package-tag kubernetes-csi csi-snapshot-metadata multiarch-grpc-health-probe" >&2
+      echo "  gh-delete-package-tag ghcr.io/kubernetes-csi/csi-snapshot-metadata:multiarch-grpc-health-probe" >&2
       return 1
     fi
   elif [[ "$#" -eq 3 ]]; then
@@ -267,15 +267,15 @@ gh-delete-package-tag() {
     package="$2"
     tag="$3"
   else
-    echo "Usage: gh-delete-package-tag <org> <package> <tag>"
-    echo "   or: gh-delete-package-tag ghcr.io/<org>/<package>:<tag>"
-    echo ""
-    echo "Examples:"
-    echo "  gh-delete-package-tag kubernetes-csi csi-snapshot-metadata multiarch-grpc-health-probe"
-    echo "  gh-delete-package-tag ghcr.io/kubernetes-csi/csi-snapshot-metadata:multiarch-grpc-health-probe"
-    echo ""
-    echo "To list available tags first:"
-    echo "  gh api /orgs/<org>/packages/container/<package>/versions --jq '.[].metadata.container.tags[]'"
+    echo "Usage: gh-delete-package-tag <org> <package> <tag>" >&2
+    echo "   or: gh-delete-package-tag ghcr.io/<org>/<package>:<tag>" >&2
+    echo "" >&2
+    echo "Examples:" >&2
+    echo "  gh-delete-package-tag kubernetes-csi csi-snapshot-metadata multiarch-grpc-health-probe" >&2
+    echo "  gh-delete-package-tag ghcr.io/kubernetes-csi/csi-snapshot-metadata:multiarch-grpc-health-probe" >&2
+    echo "" >&2
+    echo "To list available tags first:" >&2
+    echo "  gh api /orgs/<org>/packages/container/<package>/versions --jq '.[].metadata.container.tags[]'" >&2
     return 1
   fi
 
@@ -288,9 +288,9 @@ gh-delete-package-tag() {
 
   if [[ -z "$version_id" ]]; then
     echo "Error: Tag '$tag' not found in package '$org/$package'" >&2
-    echo ""
-    echo "Available tags:"
-    gh api "/orgs/$org/packages/container/$package/versions" --jq '.[].metadata.container.tags[]' | sort -u
+    echo "" >&2
+    echo "Available tags:" >&2
+    gh api "/orgs/$org/packages/container/$package/versions" --jq '.[].metadata.container.tags[]' | sort -u >&2
     return 1
   fi
 
