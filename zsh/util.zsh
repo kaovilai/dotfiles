@@ -2,7 +2,7 @@
 
 code-git() {
     if [[ -z "$1" ]]; then
-        echo "Usage: code-git <repo-name>"
+        echo "Usage: code-git <repo-name>" >&2
         return 1
     fi
     if ! command -v code &>/dev/null; then
@@ -22,8 +22,8 @@ if [[ "$TERM_PROGRAM" != "vscode" ]]; then
             return 1
         fi
         if [[ -z "$1" ]]; then
-            echo "Usage: view-pr-dirs <pattern>"
-            echo "Example: view-pr-dirs \"velero*\""
+            echo "Usage: view-pr-dirs <pattern>" >&2
+            echo "Example: view-pr-dirs \"velero*\"" >&2
             return 1
         fi
         if [[ -z "$(find . -type d -maxdepth 1 -name "$1" -print -quit)" ]]; then

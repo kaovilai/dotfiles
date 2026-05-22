@@ -24,8 +24,8 @@ cherrypick-pr-to-branch() {
         return 1
     fi
     if [[ -z "$1" || -z "$2" || -z "$3" ]]; then
-        echo "Usage: cherrypick-pr-to-branch <PR-number> <remote/branch> <new-branch-name>"
-        echo "Example: cherrypick-pr-to-branch 42 upstream/main my-backport"
+        echo "Usage: cherrypick-pr-to-branch <PR-number> <remote/branch> <new-branch-name>" >&2
+        echo "Example: cherrypick-pr-to-branch 42 upstream/main my-backport" >&2
         return 1
     fi
     local pr_number=$1
@@ -66,9 +66,9 @@ new-changelog() {
 go-mod-upgrade() {
     # first argument is the package to upgrade
     if [[ -z "$1" ]]; then
-    echo "Usage: go-mod-upgrade <package>"
-    echo "Example: go-mod-upgrade github.com/openshift/oadp-operator"
-    echo "Example: go-mod-upgrade github.com/openshift/oadp-operator@v1.2.0"
+    echo "Usage: go-mod-upgrade <package>" >&2
+    echo "Example: go-mod-upgrade github.com/openshift/oadp-operator" >&2
+    echo "Example: go-mod-upgrade github.com/openshift/oadp-operator@v1.2.0" >&2
     return 1
     fi
     if ! command -v go &>/dev/null; then
@@ -87,8 +87,8 @@ go-mod-upgrade() {
 # Examples: GOTOOLCHAIN=go1.23.6 go-mod-upgrade-dirs "velero*" golang.org/x/crypto@v0.35.0 "gsed -i \"s/golang:1.22-bookworm/golang:1.23-bookworm/g\" Dockerfile && git add Dockerfile" CVE-2025-22869
 go-mod-upgrade-dirs() {
     if [[ -z "$1" || -z "$2" ]]; then
-        echo "Usage: go-mod-upgrade-dirs <dir-pattern> <package> [extra-cmd] [commit-prefix]"
-        echo "Example: go-mod-upgrade-dirs \"velero*\" golang.org/x/oauth2@v0.27.0"
+        echo "Usage: go-mod-upgrade-dirs <dir-pattern> <package> [extra-cmd] [commit-prefix]" >&2
+        echo "Example: go-mod-upgrade-dirs \"velero*\" golang.org/x/oauth2@v0.27.0" >&2
         return 1
     fi
     if ! command -v go &>/dev/null; then
@@ -122,8 +122,8 @@ go-mod-upgrade-dirs() {
 # Examples: exec-dirs "velero*" golang.org/x/oauth2@v0.27.0 "snyk test"
 exec-dirs() {
     if [[ -z "$1" || -z "$2" || -z "$3" ]]; then
-        echo "Usage: exec-dirs <pattern> <branch> <command>"
-        echo "Example: exec-dirs \"velero*\" my-branch \"go mod tidy\""
+        echo "Usage: exec-dirs <pattern> <branch> <command>" >&2
+        echo "Example: exec-dirs \"velero*\" my-branch \"go mod tidy\"" >&2
         return 1
     fi
     if [[ -z "$(find . -type d -maxdepth 1 -name "$1" -print -quit)" ]]; then
@@ -159,9 +159,9 @@ exec-dirs-ds() {
         shift
     fi
     if [[ -z "$1" || -z "$2" || -z "$3" || -z "$4" || -z "$5" ]]; then
-        echo "Usage: exec-dirs-ds [--echo-only] <pattern> <ds-name> <base-branch> <branch-name> <command>"
-        echo "Example: exec-dirs-ds \"velero*\" upstream main fix-123 \"go mod tidy\""
-        echo "         exec-dirs-ds --echo-only \"velero*\" upstream main fix-123 \"go mod tidy\""
+        echo "Usage: exec-dirs-ds [--echo-only] <pattern> <ds-name> <base-branch> <branch-name> <command>" >&2
+        echo "Example: exec-dirs-ds \"velero*\" upstream main fix-123 \"go mod tidy\"" >&2
+        echo "         exec-dirs-ds --echo-only \"velero*\" upstream main fix-123 \"go mod tidy\"" >&2
         return 1
     fi
     local pattern="$1"
@@ -218,8 +218,8 @@ exec-dirs-ds() {
 # Echo-only version of exec-dirs-ds (for testing what would happen)
 exec-dirs-ds-echo() {
     if [[ -z "$1" || -z "$2" || -z "$3" || -z "$4" || -z "$5" ]]; then
-        echo "Usage: exec-dirs-ds-echo <pattern> <ds-name> <base-branch> <branch-name> <command>"
-        echo "Example: exec-dirs-ds-echo \"velero*\" upstream main fix-123 \"go mod tidy\""
+        echo "Usage: exec-dirs-ds-echo <pattern> <ds-name> <base-branch> <branch-name> <command>" >&2
+        echo "Example: exec-dirs-ds-echo \"velero*\" upstream main fix-123 \"go mod tidy\"" >&2
         return 1
     fi
     local pattern="$1"
@@ -248,8 +248,8 @@ exec-dirs-ds-echo() {
 # ex: code-dirs "velero*"
 code-dirs() {
     if [[ -z "$1" ]]; then
-        echo "Usage: code-dirs <pattern>"
-        echo "Example: code-dirs \"velero*\""
+        echo "Usage: code-dirs <pattern>" >&2
+        echo "Example: code-dirs \"velero*\"" >&2
         return 1
     fi
     if ! command -v parallel &> /dev/null; then
@@ -276,8 +276,8 @@ finder-dirs() {
         return 1
     fi
     if [[ -z "$1" ]]; then
-        echo "Usage: finder-dirs <pattern>"
-        echo "Example: finder-dirs \"velero*\""
+        echo "Usage: finder-dirs <pattern>" >&2
+        echo "Example: finder-dirs \"velero*\"" >&2
         return 1
     fi
     if ! command -v parallel &> /dev/null; then
