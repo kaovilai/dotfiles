@@ -405,7 +405,12 @@ update-pull-secret-with-podman() {
     fi
     
     # Extract auth for the specific registry
-    local registry_auth=$(jq -r --arg reg "$registry" '.auths[$reg] // empty' "$podman_auth_file")
+    # Note: declare local first, then assign so jq's exit status is preserved.
+    local registry_auth
+    registry_auth=$(jq -r --arg reg "$registry" '.auths[$reg] // empty' "$podman_auth_file") || {
+        echo "WARN: Failed to parse podman auth file for $registry" >&2
+        return 1
+    }
     
     if [[ -z "$registry_auth" ]]; then
         echo "WARN: No auth found for $registry in podman auth file"
@@ -413,10 +418,18 @@ update-pull-secret-with-podman() {
     fi
     
     # Read current pull secret
-    local pull_secret=$(cat ~/pull-secret.txt)
+    local pull_secret
+    pull_secret=$(cat ~/pull-secret.txt) || {
+        echo "WARN: Failed to read ~/pull-secret.txt" >&2
+        return 1
+    }
     
     # Update pull secret with the registry auth
-    local updated_pull_secret=$(echo "$pull_secret" | jq --arg reg "$registry" --argjson auth "$registry_auth" '.auths[$reg] = $auth')
+    local updated_pull_secret
+    updated_pull_secret=$(echo "$pull_secret" | jq --arg reg "$registry" --argjson auth "$registry_auth" '.auths[$reg] = $auth') || {
+        echo "WARN: Failed to update pull secret JSON for $registry" >&2
+        return 1
+    }
     
     # Write back to pull-secret.txt
     echo "$updated_pull_secret" > ~/pull-secret.txt
