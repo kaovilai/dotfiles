@@ -143,7 +143,17 @@ if command -v sw_vers &>/dev/null; then
 else
     if command -v lsb_release &>/dev/null; then
         export ocpclientos='linux'
-        export ocpclientarch=$(dpkg --print-architecture)
+        if command -v dpkg &>/dev/null; then
+            export ocpclientarch=$(dpkg --print-architecture)
+        else
+            _ocp_uname_m=$(uname -m)
+            case "$_ocp_uname_m" in
+                x86_64)         export ocpclientarch='amd64' ;;
+                aarch64|arm64)  export ocpclientarch='arm64' ;;
+                *)              export ocpclientarch="$_ocp_uname_m" ;;
+            esac
+            unset _ocp_uname_m
+        fi
     else
         echo "zsh/functions/openshift/variables.zsh: Unknown OS"
     fi
