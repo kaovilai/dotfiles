@@ -57,14 +57,14 @@ export BUILDX_PLATFORMS=linux/amd64,linux/arm64
 export BUILDX_INSTANCE=default
 export HAPPY_CLAUDE_PATH=~/.local/bin/claude
 # Load OS-specific essentials (lightweight aliases always loaded)
-[[ "$OSTYPE" == darwin* ]] && source ~/git/dotfiles/zsh/macos.zsh
+[[ "$OSTYPE" == darwin* ]] && _safe_source ~/git/dotfiles/zsh/macos.zsh
 # Essential utilities (needed for basic shell functionality)
-source ~/git/dotfiles/zsh/paths.zsh
-  source ~/git/dotfiles/zsh/functions/openshift/load-lazy.zsh
-  source ~/git/dotfiles/zsh/functions/claude/functions.zsh
-  source ~/git/dotfiles/zsh/functions/s3/load-lazy.zsh
-source ~/git/dotfiles/zsh/functions/git-utils.zsh
-  source ~/git/dotfiles/zsh/functions/podman-utils.zsh
+_safe_source ~/git/dotfiles/zsh/paths.zsh
+_safe_source ~/git/dotfiles/zsh/functions/openshift/load-lazy.zsh
+_safe_source ~/git/dotfiles/zsh/functions/claude/functions.zsh
+_safe_source ~/git/dotfiles/zsh/functions/s3/load-lazy.zsh
+_safe_source ~/git/dotfiles/zsh/functions/git-utils.zsh
+_safe_source ~/git/dotfiles/zsh/functions/podman-utils.zsh
 
 # DNS utilities (lazy-loaded — ~215 lines only parsed when first used)
 typeset -g DNS_FUNCTIONS_LOADED=0
@@ -101,7 +101,7 @@ for func in wifi-standard; do
     functions[$func]="_lazy_load_wifi || return 1; ${func} \"\$@\""
 done
 unset func
-source ~/git/dotfiles/zsh/util.zsh
+_safe_source ~/git/dotfiles/zsh/util.zsh
 if [[ "$TERM_PROGRAM" != "vscode" ]]; then
   # Git status check (background to avoid blocking startup)
   {
