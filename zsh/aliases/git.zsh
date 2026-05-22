@@ -40,8 +40,20 @@ alias rev-sha-short='git rev-parse --short HEAD'
 alias code-lastcommitted='code $(git log --name-only --pretty=format: | head -n 1)'
 alias code-git-exclude='code .git/info/exclude'
 alias git-exclude-claude='echo "CLAUDE.md" >> .git/info/exclude'
-alias dco='git rebase HEAD~$(gh pr view --json commits -q ".commits | length") --signoff'
-alias dco-push='dco && git push --force'
+dco() {
+    if ! command -v gh &>/dev/null; then
+        echo "❌ gh not found. Install it with: brew install gh" >&2
+        return 1
+    fi
+    local commit_count
+    commit_count=$(gh pr view --json commits -q ".commits | length") || return 1
+    if [[ -z "$commit_count" || ! "$commit_count" =~ ^[0-9]+$ ]]; then
+        echo "❌ Could not determine commit count for this PR" >&2
+        return 1
+    fi
+    git rebase "HEAD~$commit_count" --signoff
+}
+dco-push() { dco && git push --force; }
 
 # Opencommit aliases
 alias ococ='oco -y'
