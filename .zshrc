@@ -63,8 +63,29 @@ _safe_source ~/git/dotfiles/zsh/paths.zsh
 _safe_source ~/git/dotfiles/zsh/functions/openshift/load-lazy.zsh
 _safe_source ~/git/dotfiles/zsh/functions/claude/functions.zsh
 _safe_source ~/git/dotfiles/zsh/functions/s3/load-lazy.zsh
-_safe_source ~/git/dotfiles/zsh/functions/git-utils.zsh
-_safe_source ~/git/dotfiles/zsh/functions/podman-utils.zsh
+# Git utilities (lazy-loaded — ~303 lines only parsed when first used)
+typeset -g GIT_UTILS_LOADED=0
+_lazy_load_git_utils() {
+    if [[ $GIT_UTILS_LOADED -eq 0 ]]; then
+        source ~/git/dotfiles/zsh/functions/git-utils.zsh && GIT_UTILS_LOADED=1
+    fi
+}
+for func in cherrypick-pr cherrypick-pr-to-branch new-changelog go-mod-upgrade go-mod-upgrade-dirs exec-dirs exec-dirs-ds exec-dirs-ds-echo code-dirs finder-dirs; do
+    functions[$func]="_lazy_load_git_utils || return 1; ${func} \"\$@\""
+done
+unset func
+
+# Podman utilities (lazy-loaded — ~216 lines only parsed when first used)
+typeset -g PODMAN_UTILS_LOADED=0
+_lazy_load_podman_utils() {
+    if [[ $PODMAN_UTILS_LOADED -eq 0 ]]; then
+        source ~/git/dotfiles/zsh/functions/podman-utils.zsh && PODMAN_UTILS_LOADED=1
+    fi
+}
+for func in check-qemu-stuck kill-stuck-qemu podman-build-multiarch; do
+    functions[$func]="_lazy_load_podman_utils || return 1; ${func} \"\$@\""
+done
+unset func
 
 # DNS utilities (lazy-loaded — ~215 lines only parsed when first used)
 typeset -g DNS_FUNCTIONS_LOADED=0
