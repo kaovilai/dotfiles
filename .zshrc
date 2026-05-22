@@ -27,12 +27,17 @@ function timezsh() {
 # Don't put secrets here, put them in ~/secrets.zsh
 # edit ~/.zshrc first then run copy-to-dotfiles-from-zshrc to copy to dotfiles
 if [[ -f ~/secrets.zsh ]]; then
-  zmodload -F zsh/stat b:zstat
-  local -a secrets_stat
-  zstat -A secrets_stat +mode ~/secrets.zsh
-  if (( (secrets_stat[1] & 8#777) != 8#600 )); then
-    print -P "%F{yellow}[dotfiles] Warning: ~/secrets.zsh has unexpected permissions (should be 600)%f" >&2
-  fi
+  # Wrap in anonymous function so `local -a secrets_stat` is properly scoped.
+  # At the top level of a sourced file, `local` is a no-op in ZSH and the
+  # variable would leak into the global namespace.
+  () {
+    zmodload -F zsh/stat b:zstat
+    local -a secrets_stat
+    zstat -A secrets_stat +mode ~/secrets.zsh
+    if (( (secrets_stat[1] & 8#777) != 8#600 )); then
+      print -P "%F{yellow}[dotfiles] Warning: ~/secrets.zsh has unexpected permissions (should be 600)%f" >&2
+    fi
+  }
   source ~/secrets.zsh
 fi
 export HISTSIZE=100000 # number of commands stored in history
