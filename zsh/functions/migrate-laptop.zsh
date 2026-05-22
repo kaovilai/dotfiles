@@ -37,6 +37,10 @@ command_exists() {
 
 # Function to manually install packages (fallback when no Brewfile)
 install_packages_manually() {
+    if ! command_exists brew; then
+        error "brew not found. Install Homebrew: https://brew.sh"
+        return 1
+    fi
     progress "Installing essential tools..."
     local essential_tools=(
         "git"
