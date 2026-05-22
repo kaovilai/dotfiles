@@ -65,6 +65,10 @@ alias oco-confirm-signoff-push-force='(oco -y || (open -a Ollama && oco -y)) && 
 
 # Branch rename function for master to oadp-dev
 git-rename-master-to-oadp-dev() {
+  if ! git rev-parse --git-dir > /dev/null 2>&1; then
+    echo "Error: Not in a git repository" >&2
+    return 1
+  fi
   echo "Renaming master branch to oadp-dev..."
   git branch -m master oadp-dev || { echo "Error: Failed to rename branch master to oadp-dev" >&2; return 1; }
   echo "Fetching origin..."
