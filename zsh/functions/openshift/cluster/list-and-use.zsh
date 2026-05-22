@@ -365,7 +365,7 @@ use-ocp-cluster() {
     read -r "copy?Copy to ~/.kube/config? (y/n): "
     if [[ $copy == "y" || $copy == "Y" ]]; then
         mkdir -p ~/.kube || { echo "✗ Failed to create ~/.kube directory" >&2; return 1; }
-        cp "$KUBECONFIG" ~/.kube/config
+        cp "$KUBECONFIG" ~/.kube/config || { echo "✗ Failed to copy KUBECONFIG to ~/.kube/config" >&2; return 1; }
         echo "Copied to ~/.kube/config"
     fi
 }
@@ -382,11 +382,11 @@ use-ocp-cluster() {
 #   copy-kubeconfig
 copy-kubeconfig() {
     if [[ ! -f "$KUBECONFIG" ]]; then
-        echo "KUBECONFIG not set or file does not exist"
+        echo "KUBECONFIG not set or file does not exist" >&2
         return 1
     fi
     echo "KUBECONFIG set to $KUBECONFIG"
     echo "Copying to ~/.kube/config"
     mkdir -p ~/.kube || { echo "✗ Failed to create ~/.kube directory" >&2; return 1; }
-    cp "$KUBECONFIG" ~/.kube/config
+    cp "$KUBECONFIG" ~/.kube/config || { echo "✗ Failed to copy KUBECONFIG to ~/.kube/config" >&2; return 1; }
 }
