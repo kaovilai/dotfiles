@@ -116,23 +116,23 @@ has_command kustomize && _regen_tool_completion kustomize
 # Direnv - cached
 if has_command direnv; then
   local direnv_completion_cache="$ZSH_COMPLETION_CACHE_DIR/_direnv_generated"
-  if completion_cache_expired "$direnv_completion_cache"; then
-    direnv hook zsh > "${direnv_completion_cache}.tmp" 2>/dev/null \
-      && mv "${direnv_completion_cache}.tmp" "$direnv_completion_cache" \
-      || rm -f "${direnv_completion_cache}.tmp"
-  fi
   [[ -f "$direnv_completion_cache" ]] && source "$direnv_completion_cache"
+  if completion_cache_expired "$direnv_completion_cache"; then
+    (direnv hook zsh > "${direnv_completion_cache}.tmp" 2>/dev/null \
+      && mv "${direnv_completion_cache}.tmp" "$direnv_completion_cache" \
+      || rm -f "${direnv_completion_cache}.tmp") &!
+  fi
 fi
 
 # Pipenv - cached
 if has_command pipenv; then
   local pipenv_completion_cache="$ZSH_COMPLETION_CACHE_DIR/_pipenv_generated"
-  if completion_cache_expired "$pipenv_completion_cache"; then
-    _PIPENV_COMPLETE=zsh_source pipenv > "${pipenv_completion_cache}.tmp" 2>/dev/null \
-      && mv "${pipenv_completion_cache}.tmp" "$pipenv_completion_cache" \
-      || rm -f "${pipenv_completion_cache}.tmp"
-  fi
   [[ -f "$pipenv_completion_cache" ]] && cp "$pipenv_completion_cache" "${fpath[1]}/_pipenv" &!
+  if completion_cache_expired "$pipenv_completion_cache"; then
+    (_PIPENV_COMPLETE=zsh_source pipenv > "${pipenv_completion_cache}.tmp" 2>/dev/null \
+      && mv "${pipenv_completion_cache}.tmp" "$pipenv_completion_cache" \
+      || rm -f "${pipenv_completion_cache}.tmp") &!
+  fi
 fi
 
 # IBM Cloud completion - if needed
