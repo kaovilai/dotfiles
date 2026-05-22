@@ -197,7 +197,7 @@ ec2-linux() {
     fi
 
     local my_ip
-    my_ip=$(curl -s --connect-timeout 5 ifconfig.me)
+    my_ip=$(curl -sf --connect-timeout 5 ifconfig.me)
     local cidr="0.0.0.0/0"
     if [[ -n "$my_ip" ]]; then
         cidr="${my_ip}/32"
@@ -639,7 +639,7 @@ gcp-linux() {
 
     # --- Create firewall rule for SSH from my IP ---
     local my_ip
-    my_ip=$(curl -s --connect-timeout 5 ifconfig.me)
+    my_ip=$(curl -sf --connect-timeout 5 ifconfig.me)
     local cidr="0.0.0.0/0"
     if [[ -n "$my_ip" ]]; then
         cidr="${my_ip}/32"
