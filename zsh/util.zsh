@@ -53,7 +53,9 @@ update-zshrc-from-dotfiles() {
     echo ""
 
     echo "Updating .zshrc from dotfiles repository..."
-    diff --color "$HOME/.zshrc" "$HOME/git/dotfiles/.zshrc" && {
+    local _diff_color=()
+    diff --color /dev/null /dev/null &>/dev/null && _diff_color=(--color)
+    diff "${_diff_color[@]}" "$HOME/.zshrc" "$HOME/git/dotfiles/.zshrc" && {
         echo "No changes to apply."
         return 0
     }
