@@ -3,6 +3,11 @@
 # Set DNS servers for IPv4 and/or IPv6
 # Usage: set-dns-servers [--ipv4 "8.8.8.8 8.8.4.4"] [--ipv6 "2001:4860:4860::8888 2001:4860:4860::8844"] [--service "Wi-Fi"]
 set-dns-servers() {
+    if [[ "$OSTYPE" != darwin* ]]; then
+        echo "Error: set-dns-servers is only supported on macOS" >&2
+        return 1
+    fi
+
     local ipv4_servers=""
     local ipv6_servers=""
     local service="Wi-Fi"  # Default network service
@@ -89,12 +94,6 @@ set-dns-servers() {
         done
     fi
 
-    # Check if running on macOS
-    if [[ "$OSTYPE" != darwin* ]]; then
-        echo "Error: This function is only supported on macOS" >&2
-        return 1
-    fi
-
     # Verify the network service exists
     if ! networksetup -listallnetworkservices | grep -q "^$service$"; then
         echo "Error: Network service '$service' not found" >&2
@@ -153,6 +152,11 @@ set-dns-servers() {
 # Clear DNS servers to use network defaults (DHCP)
 # Usage: clear-dns-servers [--service "Wi-Fi"]
 clear-dns-servers() {
+    if [[ "$OSTYPE" != darwin* ]]; then
+        echo "Error: clear-dns-servers is only supported on macOS" >&2
+        return 1
+    fi
+
     local service="Wi-Fi"  # Default network service
 
     # Parse arguments
@@ -185,12 +189,6 @@ clear-dns-servers() {
                 ;;
         esac
     done
-
-    # Check if running on macOS
-    if [[ "$OSTYPE" != darwin* ]]; then
-        echo "Error: This function is only supported on macOS" >&2
-        return 1
-    fi
 
     # Verify the network service exists
     if ! networksetup -listallnetworkservices | grep -q "^$service$"; then
