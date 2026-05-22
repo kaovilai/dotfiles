@@ -106,7 +106,7 @@ ec2-linux() {
     local key_path=""
     if [[ -z "$key_name" ]]; then
         key_name="ec2-linux-tmp-$(date +%s)-${RANDOM}"
-        key_path="/tmp/${key_name}.pem"
+        key_path="${TMPDIR:-/tmp}/${key_name}.pem"
         echo "${BLUE}INFO${NC}: Creating temporary key pair: $key_name"
         if ! aws ec2 create-key-pair --region "$region" \
             --key-name "$key_name" \
@@ -388,7 +388,7 @@ az-linux() {
     local vm_name="az-linux-dev"
 
     # --- Temporary SSH key ---
-    local key_path="/tmp/${rg_name}"
+    local key_path="${TMPDIR:-/tmp}/${rg_name}"
     echo "${BLUE}INFO${NC}: Generating temporary SSH key..."
     if ! ssh-keygen -t ed25519 -f "$key_path" -N "" -q; then
         echo "${RED}ERROR${NC}: Failed to generate SSH key" >&2
@@ -590,7 +590,7 @@ gcp-linux() {
     local instance_name="gcp-linux-dev-$(date +%s)-${RANDOM}"
 
     # --- Temporary SSH key ---
-    local key_path="/tmp/${instance_name}"
+    local key_path="${TMPDIR:-/tmp}/${instance_name}"
     echo "${BLUE}INFO${NC}: Generating temporary SSH key..."
     if ! ssh-keygen -t ed25519 -f "$key_path" -N "" -q -C "gcp-linux-dev"; then
         echo "${RED}ERROR${NC}: Failed to generate SSH key" >&2
