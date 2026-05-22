@@ -72,7 +72,7 @@ _safe_source ~/git/dotfiles/zsh/functions/s3/load-lazy.zsh
 typeset -g GIT_UTILS_LOADED=0
 _lazy_load_git_utils() {
     if [[ $GIT_UTILS_LOADED -eq 0 ]]; then
-        source ~/git/dotfiles/zsh/functions/git-utils.zsh && GIT_UTILS_LOADED=1
+        _safe_source ~/git/dotfiles/zsh/functions/git-utils.zsh && GIT_UTILS_LOADED=1
     fi
 }
 for func in cherrypick-pr cherrypick-pr-to-branch new-changelog go-mod-upgrade go-mod-upgrade-dirs exec-dirs exec-dirs-ds exec-dirs-ds-echo code-dirs finder-dirs; do
@@ -84,7 +84,7 @@ unset func
 typeset -g PODMAN_UTILS_LOADED=0
 _lazy_load_podman_utils() {
     if [[ $PODMAN_UTILS_LOADED -eq 0 ]]; then
-        source ~/git/dotfiles/zsh/functions/podman-utils.zsh && PODMAN_UTILS_LOADED=1
+        _safe_source ~/git/dotfiles/zsh/functions/podman-utils.zsh && PODMAN_UTILS_LOADED=1
     fi
 }
 for func in check-qemu-stuck kill-stuck-qemu podman-build-multiarch; do
@@ -96,7 +96,7 @@ unset func
 typeset -g DNS_FUNCTIONS_LOADED=0
 _lazy_load_dns() {
     if [[ $DNS_FUNCTIONS_LOADED -eq 0 ]]; then
-        source ~/git/dotfiles/zsh/functions/dns.zsh && DNS_FUNCTIONS_LOADED=1
+        _safe_source ~/git/dotfiles/zsh/functions/dns.zsh && DNS_FUNCTIONS_LOADED=1
     fi
 }
 for func in set-dns-servers clear-dns-servers; do
@@ -108,7 +108,7 @@ unset func
 typeset -g SYMLINK_SD_LOADED=0
 _lazy_load_symlink_sd() {
     if [[ $SYMLINK_SD_LOADED -eq 0 ]]; then
-        source ~/git/dotfiles/zsh/functions/symlink-sd.zsh && SYMLINK_SD_LOADED=1
+        _safe_source ~/git/dotfiles/zsh/functions/symlink-sd.zsh && SYMLINK_SD_LOADED=1
     fi
 }
 for func in symlink-to-sd unsymlink-from-sd relink-from-sd; do
@@ -120,7 +120,7 @@ unset func
 typeset -g WIFI_FUNCTIONS_LOADED=0
 _lazy_load_wifi() {
     if [[ $WIFI_FUNCTIONS_LOADED -eq 0 ]]; then
-        source ~/git/dotfiles/zsh/functions/wifi.zsh && WIFI_FUNCTIONS_LOADED=1
+        _safe_source ~/git/dotfiles/zsh/functions/wifi.zsh && WIFI_FUNCTIONS_LOADED=1
     fi
 }
 for func in wifi-standard; do
