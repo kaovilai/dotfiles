@@ -32,6 +32,7 @@ if [[ "$TERM_PROGRAM" != "vscode" ]]; then
         fi
         find . -type d -maxdepth 1 -name "$1" -exec sh -c 'cd "$1" || { echo "Failed to cd into $1" >&2; exit 1; }; pwd && gh pr view --web' _ {} \;
     }
+    alias view-pr-dirs='noglob view-pr-dirs'
 fi
 
 # Update local .zshrc from the dotfiles repository
