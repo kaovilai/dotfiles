@@ -387,5 +387,6 @@ copy-kubeconfig() {
     fi
     echo "KUBECONFIG set to $KUBECONFIG"
     echo "Copying to ~/.kube/config"
+    mkdir -p ~/.kube || { echo "✗ Failed to create ~/.kube directory" >&2; return 1; }
     cp "$KUBECONFIG" ~/.kube/config
 }
