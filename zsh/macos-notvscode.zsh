@@ -97,6 +97,10 @@ unset-socks-proxy(){
 }
 
 get-socks-proxy(){
+    if [[ "$OSTYPE" != darwin* ]]; then
+        echo "Error: get-socks-proxy is only supported on macOS" >&2
+        return 1
+    fi
     local router_ip="${SOCKS_ROUTER_IP}"
     if [[ -z "$router_ip" ]]; then
         router_ip=$(networksetup -getinfo Wi-Fi | grep -e "^Router" | cut -d " " -f 2)
@@ -139,6 +143,10 @@ fi
 
 # kill apps that are not essential
 give-me-ram(){
+    if [[ "$OSTYPE" != darwin* ]]; then
+        echo "Error: give-me-ram is only supported on macOS" >&2
+        return 1
+    fi
     local pids
     pids=$(ps aux | grep -v grep | grep -E '/Messenger.app/|Acrobat|Fathom|Todoist|LINE' | sed -E 's/ +/ /g' | cut -d ' ' -f 2)
     if [[ -z "$pids" ]]; then
