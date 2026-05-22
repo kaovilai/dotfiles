@@ -86,6 +86,10 @@ install_packages_manually() {
 
 # Main migration function
 migrate-to-new-laptop() {
+    if [[ "$OSTYPE" != darwin* ]]; then
+        error "migrate-to-new-laptop is only supported on macOS"
+        return 1
+    fi
     echo "${BLUE}Starting laptop migration setup...${NC}"
     echo ""
     
