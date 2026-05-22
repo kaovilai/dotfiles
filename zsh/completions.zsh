@@ -56,7 +56,8 @@ fi
 
 # OpenShift Install - uses cached file to avoid generating completion on every shell start
 if has_command openshift-install; then
-  cp ~/git/dotfiles/openshift-install-completion-zsh.txt "${fpath[1]}/_openshift-install" &!
+  [[ -f ~/git/dotfiles/openshift-install-completion-zsh.txt ]] && \
+    cp ~/git/dotfiles/openshift-install-completion-zsh.txt "${fpath[1]}/_openshift-install" &!
 fi
 
 # GitHub CLI completion - cache for stable tools
