@@ -11,14 +11,15 @@ fi
 () {
 
 # Helper: serve cached completion from fpath; regenerate in background when stale.
-# Usage: _regen_tool_completion <tool>
+# Usage: _regen_tool_completion <tool> [ttl_seconds]
 # Assumes the tool supports `<tool> completion zsh`.
 _regen_tool_completion() {
   local tool="$1"
+  local ttl="${2:-$CACHE_TTL_COMPLETION}"
   command -v "$tool" &>/dev/null || return 0
   local cache_file="$ZSH_COMPLETION_CACHE_DIR/_${tool}_generated"
   [[ -f "$cache_file" ]] && cp "$cache_file" "${fpath[1]}/_${tool}" &!
-  if completion_cache_expired "$cache_file"; then
+  if completion_cache_expired "$cache_file" "$ttl"; then
     ("$tool" completion zsh > "${cache_file}.tmp" 2>/dev/null \
       && mv "${cache_file}.tmp" "$cache_file") &!
   fi
@@ -70,10 +71,10 @@ if has_command gh; then
 fi
 
 # Kubernetes CLI - cache for stable tools
-has_command kubectl && _regen_tool_completion kubectl
+has_command kubectl && _regen_tool_completion kubectl $CACHE_TTL_STABLE
 
 # OpenShift Client - cache for stable tools
-has_command oc && _regen_tool_completion oc
+has_command oc && _regen_tool_completion oc $CACHE_TTL_STABLE
 
 # Podman completion - use centralized cache location
 if has_command podman; then
@@ -94,25 +95,25 @@ if has_command podman; then
 fi
 
 # Rosa CLI - cached
-has_command rosa && _regen_tool_completion rosa
+has_command rosa && _regen_tool_completion rosa $CACHE_TTL_STABLE
 
 # CCOCTL - cached
-has_command ccoctl && _regen_tool_completion ccoctl
+has_command ccoctl && _regen_tool_completion ccoctl $CACHE_TTL_STABLE
 
 # Velero - cached
-has_command velero && _regen_tool_completion velero
+has_command velero && _regen_tool_completion velero $CACHE_TTL_STABLE
 
 # YQ - cached
-has_command yq && _regen_tool_completion yq
+has_command yq && _regen_tool_completion yq $CACHE_TTL_STABLE
 
 # Kind - cached
-has_command kind && _regen_tool_completion kind
+has_command kind && _regen_tool_completion kind $CACHE_TTL_STABLE
 
 # Helm - cached
-has_command helm && _regen_tool_completion helm
+has_command helm && _regen_tool_completion helm $CACHE_TTL_STABLE
 
 # Kustomize - cached
-has_command kustomize && _regen_tool_completion kustomize
+has_command kustomize && _regen_tool_completion kustomize $CACHE_TTL_STABLE
 
 # Direnv - cached
 if has_command direnv; then
@@ -159,7 +160,7 @@ if has_command claude || has_command happy; then
 fi
 
 # Netbird - cached
-has_command netbird && _regen_tool_completion netbird
+has_command netbird && _regen_tool_completion netbird $CACHE_TTL_STABLE
 
 # Custom code-git completion
 cat << EOF > "${fpath[1]}/_code-git" &!
