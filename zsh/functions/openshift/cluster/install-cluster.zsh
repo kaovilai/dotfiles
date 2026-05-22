@@ -4,20 +4,20 @@ install-cluster-openshift-install(){
         unset SSH_AUTH_SOCK
     fi
     
-    [ $(command -v openshift-install-official) ] || [ $(command -v openshift-install) ] || {
+    { command -v openshift-install-official &>/dev/null || command -v openshift-install &>/dev/null; } || {
         echo "openshift-install-official or openshift-install not found"
         return 1
     }
 
     local OC_INSTALLER
-    [ $(command -v openshift-install-official) ] && OC_INSTALLER=openshift-install-official || OC_INSTALLER=openshift-install
+    command -v openshift-install-official &>/dev/null && OC_INSTALLER=openshift-install-official || OC_INSTALLER=openshift-install
     echo "Using $OC_INSTALLER"
     [ -f ~/install-config.yaml ] || {
         echo "install-config.yaml not found in home dir"
         echo "Please create one using the ${RED}openshift-install create install-config${NC} command"
         return 1
     }
-    [ $(command -v yq) ] || {
+    command -v yq &>/dev/null || {
         echo "yq not found"
         echo "Please install yq"
         return 1
@@ -27,7 +27,7 @@ install-cluster-openshift-install(){
     local DATE
     DATE=$(date +%b%d-%H%M)
     # lowercase the date
-    DATE=$(echo $DATE | tr '[:upper:]' '[:lower:]')
+    DATE=${DATE:l}
     
     # Check for existing clusters before proceeding
     check-for-existing-clusters "all" "$DATE" || return 1
