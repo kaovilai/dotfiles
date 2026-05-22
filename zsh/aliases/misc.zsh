@@ -130,7 +130,11 @@ c() {
         echo "❌ happy not found. Install Claude Code CLI." >&2
         return 1
     fi
-    osascript -e "tell app \"Terminal\" to do script \"cd $HOME/experiments/ && happy --enable-auto-mode --permission-mode auto \\\"$1\\\"\""
+    if [[ -n "$1" ]]; then
+        osascript -e "tell app \"Terminal\" to do script \"cd $HOME/experiments/ && happy --enable-auto-mode --permission-mode auto \\\"$1\\\"\""
+    else
+        osascript -e "tell app \"Terminal\" to do script \"cd $HOME/experiments/ && happy --enable-auto-mode --permission-mode auto\""
+    fi
 }
 alias ce='cd ~/experiments/ && happy --enable-auto-mode --permission-mode auto'
 alias cec='podman run --rm -it -v ~/experiments:/workspace:Z -v "$HOME/.config/claude-container:/claude" -v "$HOME/.config/gcloud:/home/node/.config/gcloud:ro" -e CLAUDE_CONFIG_DIR=/claude -e CLAUDE_CODE_USE_VERTEX -e ANTHROPIC_VERTEX_PROJECT_ID -e CLOUD_ML_REGION -e ANTHROPIC_VERTEX_BASE_URL ghcr.io/kaovilai/claude-container:latest claude --enable-auto-mode --permission-mode auto'
