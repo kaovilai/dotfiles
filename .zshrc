@@ -74,7 +74,7 @@ _lazy_load_dns() {
     fi
 }
 for func in set-dns-servers clear-dns-servers; do
-    eval "${func}() { _lazy_load_dns || return 1; ${func} \"\$@\"; }"
+    functions[$func]="_lazy_load_dns || return 1; ${func} \"\$@\""
 done
 unset func
 
@@ -86,7 +86,7 @@ _lazy_load_symlink_sd() {
     fi
 }
 for func in symlink-to-sd unsymlink-from-sd relink-from-sd; do
-    eval "${func}() { _lazy_load_symlink_sd || return 1; ${func} \"\$@\"; }"
+    functions[$func]="_lazy_load_symlink_sd || return 1; ${func} \"\$@\""
 done
 unset func
 
@@ -98,7 +98,7 @@ _lazy_load_wifi() {
     fi
 }
 for func in wifi-standard; do
-    eval "${func}() { _lazy_load_wifi || return 1; ${func} \"\$@\"; }"
+    functions[$func]="_lazy_load_wifi || return 1; ${func} \"\$@\""
 done
 unset func
 source ~/git/dotfiles/zsh/util.zsh
