@@ -156,6 +156,7 @@ ec2-linux() {
             echo "${GREEN}OK${NC}: Temporary key pair deleted"
         fi
     }
+    trap 'unfunction _ec2_linux_cleanup 2>/dev/null' RETURN
     trap '_ec2_linux_cleanup; return 1' INT TERM
 
     # --- VPC / Subnet ---
@@ -406,6 +407,7 @@ az-linux() {
         rm -f "$key_path" "${key_path}.pub"
         echo "${GREEN}OK${NC}: Temporary SSH key deleted"
     }
+    trap 'unfunction _az_linux_cleanup 2>/dev/null' RETURN
     trap '_az_linux_cleanup; return 1' INT TERM
 
     # --- Create resource group ---
@@ -632,6 +634,7 @@ gcp-linux() {
         rm -f "$key_path" "${key_path}.pub"
         echo "${GREEN}OK${NC}: Temporary SSH key deleted"
     }
+    trap 'unfunction _gcp_linux_cleanup 2>/dev/null' RETURN
     trap '_gcp_linux_cleanup; return 1' INT TERM
 
     # --- Create firewall rule for SSH from my IP ---
