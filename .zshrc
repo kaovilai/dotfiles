@@ -79,6 +79,12 @@ for func in cherrypick-pr cherrypick-pr-to-branch new-changelog go-mod-upgrade g
     functions[$func]="_lazy_load_git_utils || return 1; ${func} \"\$@\""
 done
 unset func
+# noglob aliases must be set here so glob-aware git-utils functions work on
+# the very first call (before lazy-load fires and git-utils.zsh sets them).
+for func in go-mod-upgrade-dirs exec-dirs exec-dirs-ds exec-dirs-ds-echo code-dirs finder-dirs; do
+    alias "$func"="noglob $func"
+done
+unset func
 
 # Podman utilities (lazy-loaded — ~216 lines only parsed when first used)
 typeset -g PODMAN_UTILS_LOADED=0
