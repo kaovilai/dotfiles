@@ -4,6 +4,10 @@ _gofmt_files() {
         echo "❌ go not found. Install it with: brew install go" >&2
         return 1
     fi
+    if ! git rev-parse --git-dir > /dev/null 2>&1; then
+        echo "❌ Not in a git repository" >&2
+        return 1
+    fi
     local files
     files=$(git diff "${diff_args[@]}" --name-only | grep "\.go$")
     if [[ -z "$files" ]]; then
