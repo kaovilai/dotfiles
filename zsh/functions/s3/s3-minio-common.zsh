@@ -698,7 +698,7 @@ metadata:
   namespace: $namespace
 type: Opaque
 data:
-  cloud: $(echo -n "$credentials_content" | base64)
+  cloud: $(printf '%s' "$credentials_content" | base64)
 EOF
 
     # Create DataProtectionApplication YAML
