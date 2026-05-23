@@ -109,7 +109,7 @@ pr-review-user() {
   fi
   local user="${1:-kaovilai}"
   local repo="${2:-vmware-tanzu/velero}"
-  gh pr list --repo "$repo" --author "$user" --state open --json url --jq '.[].url' | xargs -I {} zsh -ic 'claude-review {}'
+  gh pr list --repo "$repo" --author "$user" --state open --json url --jq '.[].url' | while read -r url; do claude-review "$url"; done
 }
 
 # Review PRs from multiple users defined in environment variable
