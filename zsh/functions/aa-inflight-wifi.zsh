@@ -113,7 +113,7 @@ aa-inflight-wifi() {
         while ! check_internet && [[ $attempts -lt $max_attempts ]]; do
             sleep $check_interval
             ((attempts++))
-            echo -n "."
+            printf '.'
         done
         echo
 
