@@ -1,5 +1,5 @@
 # Deduplicate PATH entries — prevents duplicates when .zshrc is re-sourced
-typeset -U path
+typeset -gU path
 
 # Build PATH using ZSH path array with (N) glob qualifier to silently omit non-existent directories
 path=(

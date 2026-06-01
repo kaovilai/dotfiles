@@ -211,22 +211,26 @@ credentialsMode: Manual # needed for WIF"
     export OPENSHIFT_INSTALL_RELEASE_IMAGE_OVERRIDE=$RELEASE_IMAGE
     echo "INFO: Exported OPENSHIFT_INSTALL_RELEASE_IMAGE_OVERRIDE=$RELEASE_IMAGE"
 
-    # Purge any soft-deleted GCP workload identity resources to avoid 409 conflicts
-    # GCP keeps deleted pools/providers for ~30 days; undelete+recreate causes alreadyExists errors
+    # Clean up existing GCP workload identity resources to avoid 409 conflicts
+    # GCP soft-deletes pools for ~30 days; ccoctl undeletes them but providers persist → alreadyExists
+    # Strategy: undelete pool if soft-deleted, delete provider, then let ccoctl recreate cleanly
     if gcloud iam workload-identity-pools describe "$CLUSTER_NAME" \
         --location=global --project="$GCP_PROJECT_ID" &>/dev/null; then
-        echo "INFO: Purging existing workload identity resources for $CLUSTER_NAME..."
+        echo "INFO: Found existing workload identity pool $CLUSTER_NAME, cleaning provider..."
+        # Undelete pool if it's in soft-deleted state (no-op if already active)
+        gcloud iam workload-identity-pools undelete "$CLUSTER_NAME" \
+            --location=global --project="$GCP_PROJECT_ID" --quiet 2>/dev/null || true
+        # Delete the provider so ccoctl can recreate it fresh
         gcloud iam workload-identity-pools providers delete "$CLUSTER_NAME" \
             --workload-identity-pool="$CLUSTER_NAME" \
             --location=global --project="$GCP_PROJECT_ID" --quiet 2>/dev/null || true
-        gcloud iam workload-identity-pools delete "$CLUSTER_NAME" \
-            --location=global --project="$GCP_PROJECT_ID" --quiet 2>/dev/null || true
-        echo "INFO: Waiting for workload identity pool deletion to propagate..."
-        local purge_retries=30
+        echo "INFO: Waiting for provider deletion to propagate..."
+        local purge_retries=24
         while (( purge_retries-- > 0 )); do
-            if ! gcloud iam workload-identity-pools describe "$CLUSTER_NAME" \
+            if ! gcloud iam workload-identity-pools providers describe "$CLUSTER_NAME" \
+                --workload-identity-pool="$CLUSTER_NAME" \
                 --location=global --project="$GCP_PROJECT_ID" &>/dev/null; then
-                echo "INFO: Workload identity pool purged"
+                echo "INFO: Provider deleted, pool ready for ccoctl"
                 break
             fi
             echo -n "."
@@ -234,7 +238,7 @@ credentialsMode: Manual # needed for WIF"
         done
         if (( purge_retries <= 0 )); then
             echo ""
-            echo "WARNING: Workload identity pool still exists after timeout, ccoctl may hit 409 errors"
+            echo "WARNING: Provider still exists after timeout, ccoctl may hit 409 errors"
         fi
     fi
 
