@@ -211,6 +211,33 @@ credentialsMode: Manual # needed for WIF"
     export OPENSHIFT_INSTALL_RELEASE_IMAGE_OVERRIDE=$RELEASE_IMAGE
     echo "INFO: Exported OPENSHIFT_INSTALL_RELEASE_IMAGE_OVERRIDE=$RELEASE_IMAGE"
 
+    # Purge any soft-deleted GCP workload identity resources to avoid 409 conflicts
+    # GCP keeps deleted pools/providers for ~30 days; undelete+recreate causes alreadyExists errors
+    if gcloud iam workload-identity-pools describe "$CLUSTER_NAME" \
+        --location=global --project="$GCP_PROJECT_ID" &>/dev/null; then
+        echo "INFO: Purging existing workload identity resources for $CLUSTER_NAME..."
+        gcloud iam workload-identity-pools providers delete "$CLUSTER_NAME" \
+            --workload-identity-pool="$CLUSTER_NAME" \
+            --location=global --project="$GCP_PROJECT_ID" --quiet 2>/dev/null || true
+        gcloud iam workload-identity-pools delete "$CLUSTER_NAME" \
+            --location=global --project="$GCP_PROJECT_ID" --quiet 2>/dev/null || true
+        echo "INFO: Waiting for workload identity pool deletion to propagate..."
+        local purge_retries=30
+        while (( purge_retries-- > 0 )); do
+            if ! gcloud iam workload-identity-pools describe "$CLUSTER_NAME" \
+                --location=global --project="$GCP_PROJECT_ID" &>/dev/null; then
+                echo "INFO: Workload identity pool purged"
+                break
+            fi
+            echo -n "."
+            sleep 5
+        done
+        if (( purge_retries <= 0 )); then
+            echo ""
+            echo "WARNING: Workload identity pool still exists after timeout, ccoctl may hit 409 errors"
+        fi
+    fi
+
     echo "extracting credential-requests" && oc adm release extract \
       --from=$RELEASE_IMAGE \
       --credentials-requests \
