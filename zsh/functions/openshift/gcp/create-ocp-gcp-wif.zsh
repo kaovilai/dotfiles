@@ -42,6 +42,15 @@ create-ocp-gcp-wif(){
     [[ -z "$OPENSHIFT_INSTALL" ]] && return 1
     $OPENSHIFT_INSTALL version
 
+    # Verify ccoctl is available (needed for GCP WIF credential management)
+    if ! command -v ccoctl &>/dev/null; then
+        echo "ERROR: ccoctl not found in PATH"
+        echo "Install options:"
+        echo "  - From source: install-ccoctl"
+        echo "  - From release: curl -sL https://mirror.openshift.com/pub/openshift-v4/clients/ocp/stable/ccoctl-linux.tar.gz | tar xzf - -C /usr/local/bin ccoctl"
+        return 1
+    fi
+
     # openshift-install create install-config --dir $OCP_MANIFESTS_DIR/$TODAY-gcp-wif --log-level debug
     # https://docs.redhat.com/en/documentation/openshift_container_platform/4.17/html-single/installing_on_gcp/index#cco-ccoctl-configuring_installing-gcp-customizations
     # prompt and remove if exists already so user can interrupt if uninstall is needed.
