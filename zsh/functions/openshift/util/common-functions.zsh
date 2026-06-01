@@ -541,6 +541,10 @@ cleanup-on-failure() {
 
             # Run destroy if metadata.json exists (installer can identify resources)
             if [[ -f "$cluster_dir/metadata.json" ]]; then
+                # Back up metadata.json so pre-create destroy works even if dir is removed
+                local backup_path="${OCP_MANIFESTS_DIR}/.metadata-backup-$(basename "$cluster_dir").json"
+                cp "$cluster_dir/metadata.json" "$backup_path" 2>/dev/null && \
+                    echo "INFO: Backed up metadata.json to $backup_path"
                 echo "Running openshift-install destroy cluster..."
                 $openshift_install destroy cluster --dir "$cluster_dir" || \
                     echo "WARNING: destroy cluster failed, may need manual cleanup"
