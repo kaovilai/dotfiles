@@ -80,6 +80,7 @@ create-ocp-gcp-wif(){
         return 0
     fi
     if [[ $1 != "no-delete" ]]; then
+        local metadata_backup="$OCP_MANIFESTS_DIR/.metadata-backup-$(basename $OCP_CREATE_DIR).json"
         if [[ -d "$OCP_CREATE_DIR" ]]; then
             $OPENSHIFT_INSTALL destroy cluster --dir $OCP_CREATE_DIR || echo "no existing cluster"
             $OPENSHIFT_INSTALL destroy bootstrap --dir $OCP_CREATE_DIR || echo "no existing bootstrap"
@@ -88,6 +89,14 @@ create-ocp-gcp-wif(){
             --project $GCP_PROJECT_ID \
             --credentials-requests-dir $OCP_CREATE_DIR/credentials-requests && echo "cleaned up ccoctl gcp resources") || true
             ((rm -r $OCP_CREATE_DIR && echo "removed existing create dir") || (true && echo "no existing install dir")) || return 1
+            rm -f "$metadata_backup" 2>/dev/null
+        elif [[ -f "$metadata_backup" ]]; then
+            # Restore metadata.json from backup to run destroy on orphaned resources
+            echo "INFO: Restoring metadata.json from backup for destroy..."
+            mkdir -p "$OCP_CREATE_DIR"
+            cp "$metadata_backup" "$OCP_CREATE_DIR/metadata.json"
+            $OPENSHIFT_INSTALL destroy cluster --dir $OCP_CREATE_DIR || echo "no existing cluster"
+            rm -rf "$OCP_CREATE_DIR" "$metadata_backup"
         else
             echo "Directory $OCP_CREATE_DIR does not exist, nothing to delete"
         fi
