@@ -106,6 +106,7 @@ jobs:
           GCP_BASEDOMAIN: ${{ secrets.GCP_BASEDOMAIN }}
         run: |
           set -euo pipefail
+          export PATH="/usr/local/bin:$PATH"
 
           export TODAY=$(date +%y%m%d)
           export OCP_MANIFESTS_DIR=$HOME/ocp-manifests
@@ -254,6 +255,7 @@ jobs:
           GCP_BASEDOMAIN: ${{ secrets.GCP_BASEDOMAIN }}
         run: |
           set -euo pipefail
+          export PATH="/usr/local/bin:$PATH"
 
           export TODAY=$(date +%y%m%d)
           export OCP_MANIFESTS_DIR=$HOME/ocp-manifests
