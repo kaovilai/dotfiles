@@ -8,10 +8,7 @@ create-ocp-aws() {
     if [[ "$(uname)" == "Darwin" ]]; then
         unset SSH_AUTH_SOCK
     fi
-    
-    # Get openshift-install binary
-    local OPENSHIFT_INSTALL=$(get-openshift-install)
-    [[ -z "$OPENSHIFT_INSTALL" ]] && return 1
+
     # Detect host architecture for cross-arch support
     local HOST_ARCH=""
     case "$(uname -m)" in
@@ -38,8 +35,7 @@ create-ocp-aws() {
         USE_MULTI_ARCH="true"
     fi
 
-    $OPENSHIFT_INSTALL version
-    # Check if help is requested
+    # Check if help is requested (before expensive get-openshift-install)
     if [[ $1 == "help" ]]; then
         echo "Usage: create-ocp-aws-$ARCH_SUFFIX [OPTION] [FLAGS]"
         echo "Create an OpenShift cluster on AWS using $ARCHITECTURE architecture"
@@ -75,7 +71,12 @@ create-ocp-aws() {
         echo "  The --ec flag automatically selects the Early Candidate release stream"
         return 0
     fi
-    
+
+    # Get openshift-install binary
+    local OPENSHIFT_INSTALL=$(get-openshift-install)
+    [[ -z "$OPENSHIFT_INSTALL" ]] && return 1
+    $OPENSHIFT_INSTALL version
+
     # Set default values for AWS_REGION and AWS_BASEDOMAIN if not already set
     if [[ -z "$AWS_REGION" ]]; then
         echo "INFO: AWS_REGION not set, defaulting to us-east-1"
@@ -176,7 +177,15 @@ create-ocp-aws() {
     
     # Prompt for release stream selection and get release image
     local stream
-    if [[ -n "$AUTO_SELECT_EC" ]]; then
+    if [[ -n "$OCP_RELEASE_VERSION" ]]; then
+        if [[ "$OCP_RELEASE_VERSION" =~ (ec|rc)\. ]]; then
+            stream="dev-preview"
+        else
+            stream="stable"
+        fi
+        echo "INFO: Using pre-set OCP_RELEASE_VERSION=$OCP_RELEASE_VERSION (stream=$stream)"
+        unset AUTO_SELECT_EC
+    elif [[ -n "$AUTO_SELECT_EC" ]]; then
         stream="4-dev-preview"
         echo "Automatically selecting Early Candidate release stream"
         unset AUTO_SELECT_EC
@@ -246,12 +255,12 @@ publish: External"
     # Create the cluster with error handling
     if ! $OPENSHIFT_INSTALL create cluster --dir $OCP_CREATE_DIR --log-level=info; then
         cleanup-on-failure "$OCP_CREATE_DIR" "$CLUSTER_NAME" "aws"
+        unset OPENSHIFT_INSTALL_RELEASE_IMAGE_OVERRIDE AUTO_SELECT_EC PROCEED_WITH_EXISTING_CLUSTERS
         return 1
     fi
-    
+
     # Cleanup
-    unset OPENSHIFT_INSTALL_RELEASE_IMAGE_OVERRIDE
-    [[ -n "$PROCEED_WITH_EXISTING_CLUSTERS" ]] && unset PROCEED_WITH_EXISTING_CLUSTERS
+    unset OPENSHIFT_INSTALL_RELEASE_IMAGE_OVERRIDE AUTO_SELECT_EC PROCEED_WITH_EXISTING_CLUSTERS
 }
 
 function create-ocp-aws-arm64() {

@@ -5,12 +5,8 @@ create-ocp-gcp-wif(){
     if [[ "$(uname)" == "Darwin" ]]; then
         unset SSH_AUTH_SOCK
     fi
-    
-    # Get openshift-install binary
-    local OPENSHIFT_INSTALL=$(get-openshift-install)
-    [[ -z "$OPENSHIFT_INSTALL" ]] && return 1
-    $OPENSHIFT_INSTALL version
-    # Check if help is requested
+
+    # Check if help is requested (before expensive get-openshift-install)
     if [[ $1 == "help" ]]; then
         echo "Usage: create-ocp-gcp-wif [OPTION]"
         echo "Create an OpenShift cluster on GCP with Workload Identity Federation"
@@ -40,7 +36,12 @@ create-ocp-gcp-wif(){
         echo "  The --ec flag automatically selects the Early Candidate release stream"
         return 0
     fi
-    
+
+    # Get openshift-install binary
+    local OPENSHIFT_INSTALL=$(get-openshift-install)
+    [[ -z "$OPENSHIFT_INSTALL" ]] && return 1
+    $OPENSHIFT_INSTALL version
+
     # openshift-install create install-config --dir $OCP_MANIFESTS_DIR/$TODAY-gcp-wif --log-level debug
     # https://docs.redhat.com/en/documentation/openshift_container_platform/4.17/html-single/installing_on_gcp/index#cco-ccoctl-configuring_installing-gcp-customizations
     # prompt and remove if exists already so user can interrupt if uninstall is needed.
@@ -146,7 +147,7 @@ create-ocp-gcp-wif(){
     echo "INFO: Using release image: $RELEASE_IMAGE"
     # RELEASE_IMAGE=$($OPENSHIFT_INSTALL version | awk '/release image/ {print $3}')
     # make sure logged into registry since cco steps requires it.
-    BASE_RELEASE_IMAGE_REGISTRY=$(echo $RELEASE_IMAGE | awk -F/ '{print $1}')
+    local BASE_RELEASE_IMAGE_REGISTRY=$(echo $RELEASE_IMAGE | awk -F/ '{print $1}')
 
     # Handle registry login and pull secret update
     handle-registry-login "$BASE_RELEASE_IMAGE_REGISTRY"
@@ -191,30 +192,30 @@ credentialsMode: Manual # needed for WIF"
     
     echo "created install-config.yaml"
 
-echo "INFO: Using AMD64 architecture release image for GCP: $RELEASE_IMAGE"
+    echo "INFO: Using release image for GCP: $RELEASE_IMAGE"
 
-# Export the release image override
-export OPENSHIFT_INSTALL_RELEASE_IMAGE_OVERRIDE=$RELEASE_IMAGE
-echo "INFO: Exported OPENSHIFT_INSTALL_RELEASE_IMAGE_OVERRIDE=$RELEASE_IMAGE"
-# Extract the list of CredentialsRequest custom resources (CRs) from the OpenShift Container Platform release image by running the following command:
-echo "extracting credential-requests" && oc adm release extract \
-  --from=$RELEASE_IMAGE \
-  --credentials-requests \
-  --included \
-  --install-config=$OCP_CREATE_DIR/install-config.yaml \
-  --to=$OCP_CREATE_DIR/credentials-requests || return 1 #credential requests are stored in credentials-requests dir
-ccoctl gcp create-all \
---name $CLUSTER_NAME \
---project $GCP_PROJECT_ID \
---region $GCP_REGION \
---output-dir $OCP_CREATE_DIR \
---credentials-requests-dir $OCP_CREATE_DIR/credentials-requests || return 1
+    export OPENSHIFT_INSTALL_RELEASE_IMAGE_OVERRIDE=$RELEASE_IMAGE
+    echo "INFO: Exported OPENSHIFT_INSTALL_RELEASE_IMAGE_OVERRIDE=$RELEASE_IMAGE"
+
+    echo "extracting credential-requests" && oc adm release extract \
+      --from=$RELEASE_IMAGE \
+      --credentials-requests \
+      --included \
+      --install-config=$OCP_CREATE_DIR/install-config.yaml \
+      --to=$OCP_CREATE_DIR/credentials-requests || return 1
+    ccoctl gcp create-all \
+      --name $CLUSTER_NAME \
+      --project $GCP_PROJECT_ID \
+      --region $GCP_REGION \
+      --output-dir $OCP_CREATE_DIR \
+      --credentials-requests-dir $OCP_CREATE_DIR/credentials-requests || return 1
     $OPENSHIFT_INSTALL create manifests --dir $OCP_CREATE_DIR || return 1
     cp $OCP_CREATE_DIR/credentials-requests/* $OCP_CREATE_DIR/manifests/ || return 1 # copy cred requests to manifests dir, ccoctl delete will delete cred requests in separate dir
     
     # Create the cluster with error handling
     if ! $OPENSHIFT_INSTALL create cluster --dir $OCP_CREATE_DIR --log-level=info; then
         cleanup-on-failure "$OCP_CREATE_DIR" "$CLUSTER_NAME" "gcp"
+        unset OPENSHIFT_INSTALL_RELEASE_IMAGE_OVERRIDE AUTO_SELECT_EC PROCEED_WITH_EXISTING_CLUSTERS
         return 1
     fi
     
@@ -265,8 +266,7 @@ ccoctl gcp create-all \
     fi
     
     # Cleanup
-    unset OPENSHIFT_INSTALL_RELEASE_IMAGE_OVERRIDE
-    [[ -n "$PROCEED_WITH_EXISTING_CLUSTERS" ]] && unset PROCEED_WITH_EXISTING_CLUSTERS
+    unset OPENSHIFT_INSTALL_RELEASE_IMAGE_OVERRIDE AUTO_SELECT_EC PROCEED_WITH_EXISTING_CLUSTERS
 }
 
 # Function to create Velero identity for current GCP OpenShift cluster
