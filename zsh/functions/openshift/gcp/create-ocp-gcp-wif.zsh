@@ -125,7 +125,15 @@ create-ocp-gcp-wif(){
     
     # Prompt for release stream selection and get release image
     local stream
-    if [[ -n "$AUTO_SELECT_EC" ]]; then
+    if [[ -n "$OCP_RELEASE_VERSION" ]]; then
+        if [[ "$OCP_RELEASE_VERSION" =~ (ec|rc)\. ]]; then
+            stream="dev-preview"
+        else
+            stream="stable"
+        fi
+        echo "INFO: Using pre-set OCP_RELEASE_VERSION=$OCP_RELEASE_VERSION (stream=$stream)"
+        unset AUTO_SELECT_EC
+    elif [[ -n "$AUTO_SELECT_EC" ]]; then
         stream="4-dev-preview"
         echo "Automatically selecting Early Candidate release stream"
         unset AUTO_SELECT_EC
