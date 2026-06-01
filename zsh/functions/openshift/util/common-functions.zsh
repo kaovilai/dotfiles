@@ -106,13 +106,12 @@ prompt-release-stream() {
     local version=$(echo "$selected" | awk '{print $2}')
     local stream_tag=$(echo "$selected" | awk '{print $1}' | tr -d '[]')
 
-    export OCP_RELEASE_VERSION="$version"
     echo "INFO: Selected version $version ($stream_tag)" >&2
 
     if [[ "$stream_tag" == "dev-preview" ]]; then
-        echo "dev-preview"
+        echo "dev-preview $version"
     else
-        echo "stable"
+        echo "stable $version"
     fi
 }
 

@@ -139,7 +139,12 @@ create-ocp-gcp-wif(){
         echo "Automatically selecting Early Candidate release stream"
         unset AUTO_SELECT_EC
     else
-        stream=$(prompt-release-stream)
+        local stream_output=$(prompt-release-stream)
+        stream=${stream_output%% *}
+        local selected_version=${stream_output#* }
+        if [[ "$selected_version" != "$stream" ]]; then
+            export OCP_RELEASE_VERSION="$selected_version"
+        fi
     fi
     local RELEASE_IMAGE=$(get-release-image "$stream" "multi")
     [[ -z "$RELEASE_IMAGE" ]] && return 1
