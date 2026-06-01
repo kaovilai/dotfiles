@@ -1,5 +1,48 @@
 # Description: General-purpose small utilities
 
+# Poll a URL until it responds successfully, then notify via macOS say/sound.
+# Usage: wait-for-url <url> [interval_seconds] [label]
+# Examples:
+#   wait-for-url https://quay.io/health
+#   wait-for-url https://quay.io/api/v1/repository/ 30 "Quay.io"
+#   wait-for-url https://api.example.com/status 60 "My API"
+wait-for-url() {
+    local url=$1
+    local interval=${2:-30}
+    local label=${3:-$url}
+
+    if [[ -z "$url" ]]; then
+        echo "Usage: wait-for-url <url> [interval_seconds] [label]" >&2
+        return 1
+    fi
+
+    echo "Polling $label every ${interval}s until it responds..."
+    echo "URL: $url"
+    echo "Press Ctrl-C to stop."
+
+    local attempt=0
+    while true; do
+        ((attempt++))
+        local http_code
+        http_code=$(curl -sm 10 -o /dev/null -w '%{http_code}' "$url" 2>/dev/null)
+
+        if [[ "$http_code" =~ ^[23] ]]; then
+            echo ""
+            echo "$(date '+%H:%M:%S') - $label is UP (HTTP $http_code)"
+            if [[ "$(uname)" == "Darwin" ]]; then
+                say "${label} is back up" &
+                afplay /System/Library/Sounds/Glass.aiff 2>/dev/null &
+                local escaped_label="${label//\"/\\\"}"
+                osascript -e "display notification \"${escaped_label} is back up (HTTP $http_code)\" with title \"Service Recovered\" sound name \"Glass\"" 2>/dev/null
+            fi
+            return 0
+        fi
+
+        printf "\r\033[K$(date '+%H:%M:%S') - attempt %d: HTTP %s - still down" "$attempt" "${http_code:-timeout}"
+        sleep "$interval"
+    done
+}
+
 code-git() {
     if [[ -z "$1" ]]; then
         echo "Usage: code-git <repo-name>" >&2
