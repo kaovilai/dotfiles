@@ -237,12 +237,15 @@ credentialsMode: Manual # needed for WIF"
         gcloud iam workload-identity-pools providers delete "$CLUSTER_NAME" \
             --workload-identity-pool="$CLUSTER_NAME" \
             --location=global --project="$GCP_PROJECT_ID" --quiet 2>/dev/null || true
+        # Wait for provider to be in DELETED state (describe returns DELETED providers too)
         echo "INFO: Waiting for provider deletion to propagate..."
         local purge_retries=24
         while (( purge_retries-- > 0 )); do
-            if ! gcloud iam workload-identity-pools providers describe "$CLUSTER_NAME" \
+            local provider_state=$(gcloud iam workload-identity-pools providers describe "$CLUSTER_NAME" \
                 --workload-identity-pool="$CLUSTER_NAME" \
-                --location=global --project="$GCP_PROJECT_ID" &>/dev/null; then
+                --location=global --project="$GCP_PROJECT_ID" \
+                --format='value(state)' 2>/dev/null)
+            if [[ -z "$provider_state" || "$provider_state" == "DELETED" ]]; then
                 echo "INFO: Provider deleted, pool ready for ccoctl"
                 break
             fi
