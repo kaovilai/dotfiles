@@ -91,6 +91,10 @@ create-ocp-gcp-wif(){
         else
             echo "Directory $OCP_CREATE_DIR does not exist, nothing to delete"
         fi
+        # Fallback: clean up orphaned GCP compute resources by name pattern
+        # Handles cases where openshift-install destroy failed (missing metadata.json)
+        # or left resources due to dependency ordering issues
+        cleanup-orphaned-gcp-resources "$CLUSTER_NAME" "$GCP_PROJECT_ID"
     fi
     # if param is delete then stop here
     if [[ $1 == "delete" ]]; then

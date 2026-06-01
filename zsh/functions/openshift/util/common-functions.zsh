@@ -529,18 +529,25 @@ cleanup-on-failure() {
     local cluster_dir=$1
     local cluster_name=$2
     local provider=$3
-    
+
     echo "ERROR: Cluster creation failed, cleaning up resources..."
-    
+
     # Try to gather bootstrap logs first
     if [[ -d "$cluster_dir" ]]; then
         local openshift_install=$(get-openshift-install)
         if [[ -n "$openshift_install" ]]; then
             echo "Attempting to gather bootstrap logs..."
             $openshift_install gather bootstrap --dir "$cluster_dir" || true
+
+            # Run destroy if metadata.json exists (installer can identify resources)
+            if [[ -f "$cluster_dir/metadata.json" ]]; then
+                echo "Running openshift-install destroy cluster..."
+                $openshift_install destroy cluster --dir "$cluster_dir" || \
+                    echo "WARNING: destroy cluster failed, may need manual cleanup"
+            fi
         fi
     fi
-    
+
     # Provider-specific cleanup
     case "$provider" in
         "aws"|"gcp"|"azure")
@@ -548,6 +555,74 @@ cleanup-on-failure() {
             echo "Check your $provider console for any orphaned resources"
             ;;
     esac
-    
+
     return 1
+}
+
+# Clean up orphaned GCP compute resources by cluster name pattern
+# Deletes in dependency order: forwarding rules → target proxies → backend services → instance groups
+# Skips silently if no orphaned resources found
+cleanup-orphaned-gcp-resources() {
+    local cluster_name=$1
+    local project=$2
+
+    [[ -z "$cluster_name" || -z "$project" ]] && return 0
+
+    local filter="name~${cluster_name}"
+    local found=false
+
+    # Check if any orphaned compute resources exist
+    local backend_services=$(gcloud compute backend-services list --project="$project" \
+        --filter="$filter" --format='value(name)' 2>/dev/null)
+    local instance_groups=$(gcloud compute instance-groups list --project="$project" \
+        --filter="$filter" --format='value(name,zone.basename())' 2>/dev/null)
+
+    [[ -z "$backend_services" && -z "$instance_groups" ]] && return 0
+
+    echo "INFO: Found orphaned GCP resources for $cluster_name, cleaning up..."
+
+    # Delete in GCP dependency order
+    # 1. Forwarding rules (reference target proxies)
+    gcloud compute forwarding-rules list --project="$project" --filter="$filter" \
+        --format='value(name,region.basename())' 2>/dev/null | while IFS=$'\t' read -r name region; do
+        [[ -n "$name" ]] || continue
+        echo "  Deleting forwarding rule: $name"
+        if [[ -n "$region" ]]; then
+            gcloud compute forwarding-rules delete "$name" --region="$region" --project="$project" --quiet 2>/dev/null || true
+        else
+            gcloud compute forwarding-rules delete "$name" --global --project="$project" --quiet 2>/dev/null || true
+        fi
+    done
+
+    # 2. Target TCP proxies (reference backend services)
+    gcloud compute target-tcp-proxies list --project="$project" --filter="$filter" \
+        --format='value(name)' 2>/dev/null | while read -r name; do
+        [[ -n "$name" ]] || continue
+        echo "  Deleting target TCP proxy: $name"
+        gcloud compute target-tcp-proxies delete "$name" --project="$project" --quiet 2>/dev/null || true
+    done
+
+    # 3. Backend services (reference instance groups)
+    echo "$backend_services" | while read -r name; do
+        [[ -n "$name" ]] || continue
+        echo "  Deleting backend service: $name"
+        gcloud compute backend-services delete "$name" --global --project="$project" --quiet 2>/dev/null || true
+    done
+
+    # 4. Instance groups (now unblocked)
+    echo "$instance_groups" | while IFS=$'\t' read -r name zone; do
+        [[ -n "$name" ]] || continue
+        echo "  Deleting instance group: $name (zone: $zone)"
+        gcloud compute instance-groups unmanaged delete "$name" --zone="$zone" --project="$project" --quiet 2>/dev/null || true
+    done
+
+    # 5. Health checks
+    gcloud compute health-checks list --project="$project" --filter="$filter" \
+        --format='value(name)' 2>/dev/null | while read -r name; do
+        [[ -n "$name" ]] || continue
+        echo "  Deleting health check: $name"
+        gcloud compute health-checks delete "$name" --project="$project" --quiet 2>/dev/null || true
+    done
+
+    echo "INFO: Orphaned GCP resource cleanup complete"
 }
