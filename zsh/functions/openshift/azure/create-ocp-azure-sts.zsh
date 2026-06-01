@@ -6,11 +6,7 @@ create-ocp-azure-sts(){
         unset SSH_AUTH_SOCK
     fi
     
-    # Get openshift-install binary
-    local OPENSHIFT_INSTALL=$(get-openshift-install)
-    [[ -z "$OPENSHIFT_INSTALL" ]] && return 1
-    $OPENSHIFT_INSTALL version
-    # Check if help is requested
+    # Check if help is requested (before expensive get-openshift-install)
     if [[ $1 == "help" ]]; then
         echo "Usage: create-ocp-azure-sts [OPTION]"
         echo "Create an OpenShift cluster on Azure with Workload Identity Federation"
@@ -58,7 +54,12 @@ create-ocp-azure-sts(){
         echo "  The --ec flag automatically selects the Early Candidate release stream"
         return 0
     fi
-    
+
+    # Get openshift-install binary
+    local OPENSHIFT_INSTALL=$(get-openshift-install)
+    [[ -z "$OPENSHIFT_INSTALL" ]] && return 1
+    $OPENSHIFT_INSTALL version
+
     # Safety check - ensure TODAY is not empty
     if [[ -z "$TODAY" ]]; then
         echo "WARNING: TODAY variable is empty, using current date"
@@ -394,7 +395,15 @@ create-ocp-azure-sts(){
     
     # Prompt for release stream selection and get release image
     local stream
-    if [[ -n "$AUTO_SELECT_EC" ]]; then
+    if [[ -n "$OCP_RELEASE_VERSION" ]]; then
+        if [[ "$OCP_RELEASE_VERSION" =~ (ec|rc)\. ]]; then
+            stream="dev-preview"
+        else
+            stream="stable"
+        fi
+        echo "INFO: Using pre-set OCP_RELEASE_VERSION=$OCP_RELEASE_VERSION (stream=$stream)"
+        unset AUTO_SELECT_EC
+    elif [[ -n "$AUTO_SELECT_EC" ]]; then
         stream="4-dev-preview"
         echo "Automatically selecting Early Candidate release stream"
         unset AUTO_SELECT_EC
@@ -403,10 +412,9 @@ create-ocp-azure-sts(){
     fi
     local RELEASE_IMAGE=$(get-release-image "$stream" "multi")
     [[ -z "$RELEASE_IMAGE" ]] && return 1
-    
+
     echo "INFO: Using release image: $RELEASE_IMAGE"
-    # make sure logged into registry since cco steps requires it.
-    BASE_RELEASE_IMAGE_REGISTRY=$(echo $RELEASE_IMAGE | awk -F/ '{print $1}')
+    local BASE_RELEASE_IMAGE_REGISTRY=$(echo $RELEASE_IMAGE | awk -F/ '{print $1}')
 
     # Handle registry login and pull secret update
     handle-registry-login "$BASE_RELEASE_IMAGE_REGISTRY"
@@ -455,31 +463,30 @@ sshKey: |
   $(cat ~/.ssh/id_rsa.pub)
 " > $OCP_CREATE_DIR/install-config.yaml && echo "created install-config.yaml" || return 1
 
-echo "INFO: Using multi-architecture release image for Azure: $RELEASE_IMAGE"
+    echo "INFO: Using multi-architecture release image for Azure: $RELEASE_IMAGE"
 
-# Export the release image override
-export OPENSHIFT_INSTALL_RELEASE_IMAGE_OVERRIDE=$RELEASE_IMAGE
-# Extract the list of CredentialsRequest custom resources (CRs) from the OpenShift Container Platform release image by running the following command:
-echo "extracting credential-requests" && oc adm release extract \
-  --from=$RELEASE_IMAGE \
-  --credentials-requests \
-  --included \
-  --install-config=$OCP_CREATE_DIR/install-config.yaml \
-  --to=$OCP_CREATE_DIR/credentials-requests || return 1 #credential requests are stored in credentials-requests dir
+    export OPENSHIFT_INSTALL_RELEASE_IMAGE_OVERRIDE=$RELEASE_IMAGE
+    echo "INFO: Exported OPENSHIFT_INSTALL_RELEASE_IMAGE_OVERRIDE=$RELEASE_IMAGE"
 
-# Create Azure service principal and credentials using ccoctl with retry logic
-echo "INFO: Running ccoctl azure create-all with retry logic for eventual consistency handling..."
-echo "INFO: Using installation resource group: $CLUSTER_RESOURCE_GROUP"
-retry-ccoctl-azure azure create-all \
---name $CLUSTER_NAME \
---subscription-id $AZURE_SUBSCRIPTION_ID \
---tenant-id $AZURE_TENANT_ID \
---region $AZURE_REGION \
---installation-resource-group-name $CLUSTER_RESOURCE_GROUP \
---dnszone-resource-group-name $AZURE_BASEDOMAIN_RESOURCE_GROUP \
---storage-account-name $STORAGE_ACCOUNT_NAME \
---output-dir $OCP_CREATE_DIR \
---credentials-requests-dir $OCP_CREATE_DIR/credentials-requests || return 1
+    echo "extracting credential-requests" && oc adm release extract \
+      --from=$RELEASE_IMAGE \
+      --credentials-requests \
+      --included \
+      --install-config=$OCP_CREATE_DIR/install-config.yaml \
+      --to=$OCP_CREATE_DIR/credentials-requests || return 1
+
+    echo "INFO: Running ccoctl azure create-all with retry logic for eventual consistency handling..."
+    echo "INFO: Using installation resource group: $CLUSTER_RESOURCE_GROUP"
+    retry-ccoctl-azure azure create-all \
+      --name $CLUSTER_NAME \
+      --subscription-id $AZURE_SUBSCRIPTION_ID \
+      --tenant-id $AZURE_TENANT_ID \
+      --region $AZURE_REGION \
+      --installation-resource-group-name $CLUSTER_RESOURCE_GROUP \
+      --dnszone-resource-group-name $AZURE_BASEDOMAIN_RESOURCE_GROUP \
+      --storage-account-name $STORAGE_ACCOUNT_NAME \
+      --output-dir $OCP_CREATE_DIR \
+      --credentials-requests-dir $OCP_CREATE_DIR/credentials-requests || return 1
 
     $OPENSHIFT_INSTALL create manifests --dir $OCP_CREATE_DIR || return 1
     cp $OCP_CREATE_DIR/credentials-requests/* $OCP_CREATE_DIR/manifests/ || return 1 # copy cred requests to manifests dir, ccoctl delete will delete cred requests in separate dir
@@ -487,17 +494,17 @@ retry-ccoctl-azure azure create-all \
     # Create the cluster with error handling
     if ! $OPENSHIFT_INSTALL create cluster --dir $OCP_CREATE_DIR --log-level=info; then
         cleanup-on-failure "$OCP_CREATE_DIR" "$CLUSTER_NAME" "azure"
+        unset OPENSHIFT_INSTALL_RELEASE_IMAGE_OVERRIDE AUTO_SELECT_EC PROCEED_WITH_EXISTING_CLUSTERS
         return 1
     fi
-    
+
     echo "azure-tenant-id: $AZURE_TENANT_ID"
     echo "azure-subscription-id: $AZURE_SUBSCRIPTION_ID"
     echo "azure-resource-group: $CLUSTER_RESOURCE_GROUP"
     echo "azure-basedomain-resource-group: $AZURE_BASEDOMAIN_RESOURCE_GROUP"
-    
+
     # Cleanup
-    unset OPENSHIFT_INSTALL_RELEASE_IMAGE_OVERRIDE
-    [[ -n "$PROCEED_WITH_EXISTING_CLUSTERS" ]] && unset PROCEED_WITH_EXISTING_CLUSTERS
+    unset OPENSHIFT_INSTALL_RELEASE_IMAGE_OVERRIDE AUTO_SELECT_EC PROCEED_WITH_EXISTING_CLUSTERS
 }
 
 # Function to create Velero identity for current Azure OpenShift cluster
