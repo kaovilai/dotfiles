@@ -292,6 +292,7 @@ credentialsMode: Manual # needed for WIF"
     echo "extracting credential-requests" && oc adm release extract \
       --from=$RELEASE_IMAGE \
       --credentials-requests \
+      --cloud=gcp \
       --included \
       --install-config=$OCP_CREATE_DIR/install-config.yaml \
       --to=$OCP_CREATE_DIR/credentials-requests || return 1
