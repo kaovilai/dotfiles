@@ -127,6 +127,8 @@ create-ocp-gcp-wif(){
     local force_new=false
     local auto_ec=false
     
+    local no_cleanup=false
+
     for arg in "$@"; do
         case "$arg" in
             --force-new)
@@ -134,6 +136,9 @@ create-ocp-gcp-wif(){
                 ;;
             --ec)
                 auto_ec=true
+                ;;
+            --no-cleanup)
+                no_cleanup=true
                 ;;
         esac
     done
@@ -301,7 +306,14 @@ credentialsMode: Manual # needed for WIF"
     
     # Create the cluster with error handling
     if ! $OPENSHIFT_INSTALL create cluster --dir $OCP_CREATE_DIR --log-level=info; then
-        cleanup-on-failure "$OCP_CREATE_DIR" "$CLUSTER_NAME" "gcp"
+        if [[ "$no_cleanup" == "true" ]]; then
+            echo "WARNING: Cluster creation failed but --no-cleanup set, skipping destroy"
+            echo "  Cluster dir: $OCP_CREATE_DIR"
+            echo "  KUBECONFIG: $OCP_CREATE_DIR/auth/kubeconfig"
+            echo "  Apply ILB fix: bash ~/.claude/skills/create-ocp-gcp-wif/scripts/fix-bootstrap-ilb.sh $GCP_PROJECT_ID $GCP_REGION"
+        else
+            cleanup-on-failure "$OCP_CREATE_DIR" "$CLUSTER_NAME" "gcp"
+        fi
         unset OPENSHIFT_INSTALL_RELEASE_IMAGE_OVERRIDE AUTO_SELECT_EC PROCEED_WITH_EXISTING_CLUSTERS
         return 1
     fi
