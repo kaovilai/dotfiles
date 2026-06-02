@@ -579,9 +579,9 @@ cleanup-orphaned-gcp-resources() {
     local found=false
 
     # Check if any orphaned compute resources exist
-    local backend_services=$(gcloud compute backend-services list --project="$project" \
+    local backend_services; backend_services=$(gcloud compute backend-services list --project="$project" \
         --filter="$filter" --format='value(name)' 2>/dev/null)
-    local instance_groups=$(gcloud compute instance-groups list --project="$project" \
+    local instance_groups; instance_groups=$(gcloud compute instance-groups list --project="$project" \
         --filter="$filter" --format='value(name,zone.basename())' 2>/dev/null)
 
     [[ -z "$backend_services" && -z "$instance_groups" ]] && return 0
