@@ -37,21 +37,17 @@ create-ocp-gcp-wif(){
         return 0
     fi
 
-    # Get openshift-install binary
-    # TODO: remove patched binary override when openshift/installer#10586 merges
-    # (fixes GCP destroy dependency ordering: backend services before instance groups)
-    local OPENSHIFT_INSTALL
-    if [[ -f /tmp/openshift-install-gcp-fix ]]; then
-        OPENSHIFT_INSTALL=/tmp/openshift-install-gcp-fix
-        echo "INFO: Using patched openshift-install (GCP destroy fix)"
-    else
-        echo "WARNING: /tmp/openshift-install-gcp-fix not found, using default openshift-install"
-        echo "  GCP destroy may leave orphaned resources (openshift/installer#10584)"
-        echo "  Rebuild: cd ~/git/installer && git fetch https://github.com/patrickdillon/installer.git gcp-destroy && git checkout FETCH_HEAD && go build -o /tmp/openshift-install-gcp-fix ./cmd/openshift-install"
-        OPENSHIFT_INSTALL=$(get-openshift-install)
-    fi
+    # Get openshift-install binary for creation
+    local OPENSHIFT_INSTALL=$(get-openshift-install)
     [[ -z "$OPENSHIFT_INSTALL" ]] && return 1
     $OPENSHIFT_INSTALL version
+    # TODO: remove OPENSHIFT_INSTALL_DESTROY override when openshift/installer#10586 merges
+    # Patched binary fixes GCP destroy dependency ordering but lacks embedded CoreOS data for create
+    local OPENSHIFT_INSTALL_DESTROY=$OPENSHIFT_INSTALL
+    if [[ -f /tmp/openshift-install-gcp-fix ]]; then
+        OPENSHIFT_INSTALL_DESTROY=/tmp/openshift-install-gcp-fix
+        echo "INFO: Using patched openshift-install for destroy operations (GCP destroy fix)"
+    fi
 
     # Verify ccoctl is available (needed for GCP WIF credential management)
     if ! command -v ccoctl &>/dev/null; then
@@ -93,8 +89,8 @@ create-ocp-gcp-wif(){
     if [[ $1 != "no-delete" ]]; then
         local metadata_backup="$OCP_MANIFESTS_DIR/.metadata-backup-$(basename $OCP_CREATE_DIR).json"
         if [[ -d "$OCP_CREATE_DIR" ]]; then
-            $OPENSHIFT_INSTALL destroy cluster --dir $OCP_CREATE_DIR || echo "no existing cluster"
-            $OPENSHIFT_INSTALL destroy bootstrap --dir $OCP_CREATE_DIR || echo "no existing bootstrap"
+            $OPENSHIFT_INSTALL_DESTROY destroy cluster --dir $OCP_CREATE_DIR || echo "no existing cluster"
+            $OPENSHIFT_INSTALL_DESTROY destroy bootstrap --dir $OCP_CREATE_DIR || echo "no existing bootstrap"
             (ccoctl gcp delete \
             --name $CLUSTER_NAME \
             --project $GCP_PROJECT_ID \
@@ -106,7 +102,7 @@ create-ocp-gcp-wif(){
             echo "INFO: Restoring metadata.json from backup for destroy..."
             mkdir -p "$OCP_CREATE_DIR"
             cp "$metadata_backup" "$OCP_CREATE_DIR/metadata.json"
-            $OPENSHIFT_INSTALL destroy cluster --dir $OCP_CREATE_DIR || echo "no existing cluster"
+            $OPENSHIFT_INSTALL_DESTROY destroy cluster --dir $OCP_CREATE_DIR || echo "no existing cluster"
             rm -rf "$OCP_CREATE_DIR" "$metadata_backup"
         else
             echo "Directory $OCP_CREATE_DIR does not exist, nothing to delete"
