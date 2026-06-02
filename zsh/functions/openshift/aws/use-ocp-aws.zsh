@@ -102,7 +102,7 @@ use-ocp-aws-dir() {
     fi
     
     # Check if directory exists
-    if [ ! -d "$1" ]; then
+    if [[ ! -d "$1" ]]; then
         echo "ERROR: Directory $1 does not exist"
         return 1
     fi
