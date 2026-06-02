@@ -289,13 +289,8 @@ credentialsMode: Manual # needed for WIF"
         fi
     fi
 
-    # Extract credential requests using version-matched oc (--cloud=gcp requires 4.22+)
-    # TODO: remove /tmp/oc-422 override when system oc is 4.22+
-    local OC_BIN=oc
-    if [[ -x /tmp/oc-422/oc ]]; then
-        OC_BIN=/tmp/oc-422/oc
-        echo "INFO: Using $($OC_BIN version --client | head -1) for credential extraction"
-    fi
+    # Use version-matched oc for credential extraction (--cloud=gcp requires 4.22+)
+    local OC_BIN=$(get-release-oc "$RELEASE_IMAGE")
     echo "extracting credential-requests" && $OC_BIN adm release extract \
       --from=$RELEASE_IMAGE \
       --credentials-requests \
