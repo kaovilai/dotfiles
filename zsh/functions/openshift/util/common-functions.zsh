@@ -532,6 +532,9 @@ cleanup-on-failure() {
 
     echo "ERROR: Cluster creation failed, cleaning up resources..."
 
+    # Archive logs before any cleanup destroys them
+    bash ~/.claude/skills/create-ocp-gcp-wif/scripts/archive-logs.sh "$cluster_dir" 2>/dev/null || true
+
     # Try to gather bootstrap logs first
     if [[ -d "$cluster_dir" ]]; then
         local openshift_install=$(get-openshift-install)
