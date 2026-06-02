@@ -233,32 +233,51 @@ credentialsMode: Manual # needed for WIF"
 
     # Clean up existing GCP workload identity resources to avoid 409 conflicts
     # GCP soft-deletes pools for ~30 days; ccoctl undeletes them but providers persist → alreadyExists
-    # Strategy: undelete pool if soft-deleted, delete provider, then let ccoctl recreate cleanly
+    # Strategy: undelete pool, wait for provider to restore to ACTIVE, delete it, wait for DELETED
     if gcloud iam workload-identity-pools describe "$CLUSTER_NAME" \
         --location=global --project="$GCP_PROJECT_ID" &>/dev/null; then
         echo "INFO: Found existing workload identity pool $CLUSTER_NAME, cleaning provider..."
         # Undelete pool if it's in soft-deleted state (no-op if already active)
         gcloud iam workload-identity-pools undelete "$CLUSTER_NAME" \
             --location=global --project="$GCP_PROJECT_ID" --quiet 2>/dev/null || true
-        # Delete the provider so ccoctl can recreate it fresh
-        gcloud iam workload-identity-pools providers delete "$CLUSTER_NAME" \
-            --workload-identity-pool="$CLUSTER_NAME" \
-            --location=global --project="$GCP_PROJECT_ID" --quiet 2>/dev/null || true
-        # Wait for provider to be in DELETED state (describe returns DELETED providers too)
-        echo "INFO: Waiting for provider deletion to propagate..."
-        local purge_retries=24
-        while (( purge_retries-- > 0 )); do
+        # Wait for provider to become ACTIVE (pool undelete restores providers async)
+        echo "INFO: Waiting for provider to be restored by pool undelete..."
+        local wait_retries=12
+        while (( wait_retries-- > 0 )); do
             local provider_state=$(gcloud iam workload-identity-pools providers describe "$CLUSTER_NAME" \
                 --workload-identity-pool="$CLUSTER_NAME" \
                 --location=global --project="$GCP_PROJECT_ID" \
                 --format='value(state)' 2>/dev/null)
-            if [[ -z "$provider_state" || "$provider_state" == "DELETED" ]]; then
-                echo "INFO: Provider deleted, pool ready for ccoctl"
+            if [[ "$provider_state" == "ACTIVE" ]]; then
+                echo "INFO: Provider is ACTIVE, deleting..."
+                break
+            elif [[ -z "$provider_state" ]]; then
+                echo "INFO: No provider found, clean state"
                 break
             fi
             echo -n "."
             sleep 5
         done
+        # Now delete the ACTIVE provider so ccoctl creates fresh with new OIDC keys
+        if [[ "$provider_state" == "ACTIVE" ]]; then
+            gcloud iam workload-identity-pools providers delete "$CLUSTER_NAME" \
+                --workload-identity-pool="$CLUSTER_NAME" \
+                --location=global --project="$GCP_PROJECT_ID" --quiet 2>/dev/null || true
+            echo "INFO: Waiting for provider deletion to propagate..."
+            local purge_retries=24
+            while (( purge_retries-- > 0 )); do
+                provider_state=$(gcloud iam workload-identity-pools providers describe "$CLUSTER_NAME" \
+                    --workload-identity-pool="$CLUSTER_NAME" \
+                    --location=global --project="$GCP_PROJECT_ID" \
+                    --format='value(state)' 2>/dev/null)
+                if [[ -z "$provider_state" || "$provider_state" == "DELETED" ]]; then
+                    echo "INFO: Provider deleted, pool ready for ccoctl"
+                    break
+                fi
+                echo -n "."
+                sleep 5
+            done
+        fi
         if (( purge_retries <= 0 )); then
             echo ""
             echo "WARNING: Provider still exists after timeout, ccoctl may hit 409 errors"
