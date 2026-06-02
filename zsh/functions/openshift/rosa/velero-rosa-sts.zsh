@@ -1031,7 +1031,7 @@ cleanup-velero-rosa-resources() {
     
     if command -v velero &>/dev/null; then
         # Get all backups
-        local backups=$(velero backup get -o json 2>/dev/null | jq -r '.items[].metadata.name' 2>/dev/null)
+        local backups; backups=$(velero backup get -o json 2>/dev/null | jq -r '.items[].metadata.name' 2>/dev/null)
         if [[ -n "$backups" ]]; then
             echo "Deleting backups:"
             while IFS= read -r backup; do
@@ -1043,7 +1043,7 @@ cleanup-velero-rosa-resources() {
         fi
         
         # Get all restores
-        local restores=$(velero restore get -o json 2>/dev/null | jq -r '.items[].metadata.name' 2>/dev/null)
+        local restores; restores=$(velero restore get -o json 2>/dev/null | jq -r '.items[].metadata.name' 2>/dev/null)
         if [[ -n "$restores" ]]; then
             echo "Deleting restores:"
             while IFS= read -r restore; do
