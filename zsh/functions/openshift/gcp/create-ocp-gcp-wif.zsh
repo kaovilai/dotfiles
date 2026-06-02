@@ -38,7 +38,18 @@ create-ocp-gcp-wif(){
     fi
 
     # Get openshift-install binary
-    local OPENSHIFT_INSTALL=$(get-openshift-install)
+    # TODO: remove patched binary override when openshift/installer#10586 merges
+    # (fixes GCP destroy dependency ordering: backend services before instance groups)
+    local OPENSHIFT_INSTALL
+    if [[ -f /tmp/openshift-install-gcp-fix ]]; then
+        OPENSHIFT_INSTALL=/tmp/openshift-install-gcp-fix
+        echo "INFO: Using patched openshift-install (GCP destroy fix)"
+    else
+        echo "WARNING: /tmp/openshift-install-gcp-fix not found, using default openshift-install"
+        echo "  GCP destroy may leave orphaned resources (openshift/installer#10584)"
+        echo "  Rebuild: cd ~/git/installer && git fetch https://github.com/patrickdillon/installer.git gcp-destroy && git checkout FETCH_HEAD && go build -o /tmp/openshift-install-gcp-fix ./cmd/openshift-install"
+        OPENSHIFT_INSTALL=$(get-openshift-install)
+    fi
     [[ -z "$OPENSHIFT_INSTALL" ]] && return 1
     $OPENSHIFT_INSTALL version
 
