@@ -525,6 +525,36 @@ generate-unique-cluster-name() {
 #       cleanup-on-failure "$dir" "$name" "aws"
 #       return 1
 #   fi
+# Get a version-matched oc binary from a release image
+# Extracts oc to /tmp/oc-<version>/oc if not cached, returns the path
+# Falls back to system oc if extraction fails
+# Usage: local OC_BIN=$(get-release-oc "$RELEASE_IMAGE")
+get-release-oc() {
+    local release_image=$1
+    [[ -z "$release_image" ]] && { echo "oc"; return; }
+
+    local version=$(echo "$release_image" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+-[a-z]+\.[0-9]+' | head -1)
+    [[ -z "$version" ]] && { echo "oc"; return; }
+
+    local oc_dir="/tmp/oc-${version}"
+    if [[ -x "$oc_dir/oc" ]]; then
+        echo "$oc_dir/oc"
+        return
+    fi
+
+    echo "INFO: Extracting oc $version from release image..." >&2
+    mkdir -p "$oc_dir"
+    oc adm release extract --command=oc --to "$oc_dir" \
+        --registry-config ~/pull-secret.txt "$release_image" 2>/dev/null
+    if [[ -x "$oc_dir/oc" ]]; then
+        echo "INFO: Cached oc $version at $oc_dir/oc" >&2
+        echo "$oc_dir/oc"
+    else
+        echo "WARNING: Failed to extract oc from release, using system oc" >&2
+        echo "oc"
+    fi
+}
+
 cleanup-on-failure() {
     local cluster_dir=$1
     local cluster_name=$2

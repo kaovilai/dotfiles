@@ -473,9 +473,12 @@ sshKey: |
     export OPENSHIFT_INSTALL_RELEASE_IMAGE_OVERRIDE=$RELEASE_IMAGE
     echo "INFO: Exported OPENSHIFT_INSTALL_RELEASE_IMAGE_OVERRIDE=$RELEASE_IMAGE"
 
-    echo "extracting credential-requests" && oc adm release extract \
+    # Use version-matched oc for credential extraction (--cloud=azure requires 4.22+)
+    local OC_BIN=$(get-release-oc "$RELEASE_IMAGE")
+    echo "extracting credential-requests" && $OC_BIN adm release extract \
       --from=$RELEASE_IMAGE \
       --credentials-requests \
+      --cloud=azure \
       --included \
       --install-config=$OCP_CREATE_DIR/install-config.yaml \
       --to=$OCP_CREATE_DIR/credentials-requests || return 1
