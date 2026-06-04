@@ -148,6 +148,28 @@ if [[ "$TERM_PROGRAM" != "vscode" ]]; then
       fi
     fi
   } &!
+  # Happy CLI update check (once per day, background)
+  {
+    local stamp="$HOME/.zsh-command-cache/happy-update-check"
+    [[ -d "${stamp:h}" ]] || mkdir -p "${stamp:h}"
+    local expired=1
+    if [[ -f "$stamp" ]]; then
+      local mtime now
+      mtime=$(stat -f "%m" "$stamp" 2>/dev/null || stat -c "%Y" "$stamp" 2>/dev/null) || expired=0
+      now=$(date +%s)
+      (( now - mtime > 86400 )) && expired=0 || expired=1
+    else
+      expired=0
+    fi
+    if (( expired == 0 )); then
+      local outdated
+      outdated=$(npm outdated -g happy 2>/dev/null)
+      touch "$stamp"
+      if [[ -n "$outdated" ]]; then
+        print -P "%F{yellow}[happy] New version available. Run: npm update -g happy%f"
+      fi
+    fi
+  } &!
 fi
 # -- Non-essential initialization (happens in background) --
 {
