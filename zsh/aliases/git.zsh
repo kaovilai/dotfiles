@@ -55,9 +55,29 @@ dco() {
         echo "❌ Could not determine commit count for this PR" >&2
         return 1
     fi
+    local unsigned=0
+    local sha
+    for sha in $(git log --format='%H' "HEAD~${commit_count}..HEAD"); do
+        if ! git log -1 --format='%B' "$sha" | grep -q '^Signed-off-by:'; then
+            ((unsigned++))
+        fi
+    done
+    if [[ $unsigned -eq 0 ]]; then
+        echo "✅ All $commit_count commits already signed off"
+        return 0
+    fi
+    echo "Signing off $unsigned of $commit_count commits..."
     git rebase "HEAD~$commit_count" --signoff
 }
-dco-push() { dco && git push --force; }
+dco-push() {
+    local head_before=$(git rev-parse HEAD)
+    dco || return 1
+    if [[ $(git rev-parse HEAD) != "$head_before" ]]; then
+        git push --force
+    else
+        echo "No changes, skipping push"
+    fi
+}
 
 # Opencommit aliases
 alias ococ='oco -y'
