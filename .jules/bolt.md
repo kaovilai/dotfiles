@@ -1,0 +1,3 @@
+## 2024-05-30 - Fix ZSH Glob Qualifiers Silently Failing in Conditions
+**Learning:** When using ZSH glob qualifiers like `(#qN.mh+24)` inside an `if [[ -n ... ]]` statement, the glob may not be evaluated as intended. If `extended_glob` is not enabled, the glob qualifier string evaluates as a literal string (e.g., `"/path/to/file(#qN.mh+24)"`). Because literal strings are not empty, `[[ -n "string" ]]` will silently evaluate to always true.
+**Action:** When relying on `(#q...)` glob evaluations inside conditional expressions in ZSH scripts, explicitly run `setopt local_options extended_glob`, then expand the result into an array like `local -a matches=( $file(#q...) )` and check the length using `${#matches} -gt 0`.
