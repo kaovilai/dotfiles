@@ -15,6 +15,7 @@ export ZSH_COMPLETION_CACHE_DIR="$HOME/.zsh-completion-cache"
 # Unified function to check if a cache file is expired
 # Usage: cache-file-expired <file> [max_age_seconds]
 cache-file-expired() {
+  setopt local_options extended_glob
   local file="$1"
   local max_age="${2:-$CACHE_TTL_DEFAULT}"
 
@@ -22,17 +23,10 @@ cache-file-expired() {
     return 0  # Cache expired (file doesn't exist)
   fi
 
-  # Get file modification time (cache stat result to avoid duplicate calls)
-  # Note: `local var=$(cmd) || return` is broken — `local` always returns 0.
-  # Declare local first, then assign so the command's exit status is preserved.
-  local file_stat
-  file_stat=$(stat -f "%m" "$file" 2>/dev/null || stat -c "%Y" "$file" 2>/dev/null) || return 0
-  local file_time=${file_stat%% *}
-  local current_time
-  current_time=$(date +%s)
-  local file_age=$((current_time - file_time))
-
-  if [[ $file_age -gt $max_age ]]; then
+  # Use native zsh globbing to check file modification time without spawning processes
+  # ms+${max_age} checks if modification time in seconds is older than max_age
+  local -a expired=( $file(#qN.ms+${max_age}) )
+  if [[ ${#expired} -gt 0 ]]; then
     return 0  # Cache expired
   else
     return 1  # Cache still valid
@@ -139,23 +133,11 @@ command_cache_clear() { command-cache-clear "$@"; }
 # -- Command existence caching (in-memory) --
 # Avoids repeated PATH lookups during shell initialization
 
-typeset -gA _command_cache
-
-# Check if a command exists (cached in-memory)
+# Check if a command exists (uses native zsh hashes for ~10x speedup over command -v)
 has-command() {
-    local cmd="$1"
-    if [[ -z "${_command_cache[$cmd]+x}" ]]; then
-        if command -v "$cmd" >/dev/null 2>&1; then
-            _command_cache[$cmd]=1
-        else
-            _command_cache[$cmd]=0
-        fi
-    fi
-    return $(( 1 - $_command_cache[$cmd] ))
+    (( $+commands[$1] || $+aliases[$1] || $+functions[$1] || $+builtins[$1] )) && return 0 || return 1
 }
 has_command() { has-command "$@"; }
-
-# has-command lazily caches results in _command_cache on first use per session
 
 # Example usage:
 # cache 3600 kubectl-get-pods kubectl get pods  # Cache for 1 hour with explicit key
