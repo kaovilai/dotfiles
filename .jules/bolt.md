@@ -1,0 +1,3 @@
+## 2024-05-24 - Zsh Shell Startup Bottlenecks: `has-command` and File Expiration Checks
+**Learning:** Checking command existence with `command -v` inside a shell function creates significant overhead (around 700ms for 10000 calls). Also, checking file age using external commands like `stat` and `date` in subshells is extremely slow compared to native features.
+**Action:** Use native Zsh hashes `(( $+commands[cmd] || $+aliases[cmd] || $+functions[cmd] || $+builtins[cmd] ))` which is about 10x faster. For checking file modifications, use native `extended_glob` functionality, specifically file age qualifiers `(#qN.ms+seconds)`.
