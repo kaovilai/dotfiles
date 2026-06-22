@@ -1,0 +1,3 @@
+## 2025-02-18 - Fix ZSH glob qualifier evaluation in conditional checks
+**Learning:** Using ZSH glob qualifiers like `(#qN.mh+24)` directly inside a string test `[[ -n $_zcompdump(#qN.mh+24) ]]` does not work correctly. Unless `extended_glob` is explicitly enabled, the pattern is treated as a literal string. Even with `extended_glob`, testing its length directly with `-n` doesn't evaluate the glob correctly.
+**Action:** When checking file modification times using ZSH glob qualifiers, ensure `setopt local_options extended_glob` is set, evaluate the glob into an array, and check the array length `[[ ${#array} -gt 0 ]]`.
