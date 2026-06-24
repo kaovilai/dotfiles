@@ -354,7 +354,7 @@ docker run -d \
 # Wait for MinIO to be ready
 log "Waiting for MinIO to start..."
 for i in {1..30}; do
-    if curl -k -s --connect-timeout 5 "https://localhost:9000/minio/health/ready" >/dev/null 2>&1; then
+    if curl -s --connect-timeout 5 "https://localhost:9000/minio/health/ready" >/dev/null 2>&1; then
         log "MinIO is ready after $((i*5)) seconds"
         break
     fi
@@ -493,7 +493,7 @@ EOF
         echo "${BLUE}INFO${NC}: Attempt $attempt/$max_attempts to download certificate..."
 
         # First check if HTTPS is responding (indicates certificates are ready)
-        if curl -kf -s --connect-timeout 10 --max-time 15 "https://${public_dns}:9000/minio/health/ready" &>/dev/null; then
+        if curl -f -s --connect-timeout 10 --max-time 15 "https://${public_dns}:9000/minio/health/ready" &>/dev/null; then
             echo "${BLUE}INFO${NC}: HTTPS is responding, attempting to download certificate..."
 
             # Try to get the certificate file via SCP if key is available
