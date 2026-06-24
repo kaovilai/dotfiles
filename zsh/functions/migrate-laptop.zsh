@@ -54,9 +54,12 @@ install_packages_manually() {
         "curl"
     )
     
+    # Fetch installed packages once to avoid N+1 queries
+    local -a installed_packages=($(brew list))
+
     local tool
     for tool in "${essential_tools[@]}"; do
-        if brew list "$tool" &>/dev/null; then
+        if (( ${installed_packages[(Ie)$tool]} )); then
             echo "  ${GREEN}✓${NC} $tool already installed"
         else
             echo "  Installing $tool..."
@@ -73,7 +76,7 @@ install_packages_manually() {
     )
     
     for tool in "${dev_tools[@]}"; do
-        if brew list "$tool" &>/dev/null; then
+        if (( ${installed_packages[(Ie)$tool]} )); then
             echo "  ${GREEN}✓${NC} $tool already installed"
         else
             echo "  Installing $tool..."
