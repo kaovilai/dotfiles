@@ -279,7 +279,8 @@ pr-me() {
     # Parse each line to extract PR number and title
     for line in "${pr_lines[@]}"; do
       pr_num="${${line%% *}#\#}"
-      pr_title=$(awk '{$1=""; $2=""; $3=""; $4=""; print $0}' <<< "$line" | sed 's/^[[:space:]]*//')
+      local words=(${=line})
+      pr_title="${words[*]:4}"
       pr_numbers+=("$pr_num")
       pr_display+=("PR #$pr_num: $pr_title")
     done
