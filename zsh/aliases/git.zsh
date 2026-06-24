@@ -55,13 +55,9 @@ dco() {
         echo "❌ Could not determine commit count for this PR" >&2
         return 1
     fi
-    local unsigned=0
-    local sha
-    for sha in $(git log --format='%H' "HEAD~${commit_count}..HEAD"); do
-        if ! git log -1 --format='%B' "$sha" | grep -q '^Signed-off-by:'; then
-            ((unsigned++))
-        fi
-    done
+    local unsigned
+    unsigned=$(git log --format='%H' --invert-grep --grep='^Signed-off-by:' "HEAD~${commit_count}..HEAD" | wc -l)
+    unsigned=$((unsigned))
     if [[ $unsigned -eq 0 ]]; then
         echo "✅ All $commit_count commits already signed off"
         return 0
