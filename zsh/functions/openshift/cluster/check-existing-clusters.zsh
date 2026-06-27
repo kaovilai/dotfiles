@@ -305,7 +305,7 @@ check-for-existing-clusters() {
 
     local choice
     if command -v fzf >/dev/null 2>&1; then
-        local selected=$(echo "$options" | fzf --height 40% --reverse --header "Select an action")
+        local selected; selected=$(echo "$options" | fzf --height 40% --reverse --header "Select an action")
         if [[ -z "$selected" ]]; then
             echo "Operation cancelled."
             return 1
@@ -328,7 +328,7 @@ check-for-existing-clusters() {
                     continue
                 fi
                 
-                local dir_name=$(basename "$dir")
+                local dir_name; dir_name=$(basename "$dir")
                 if [[ "$dir" == "$OCP_MANIFESTS_DIR/-aws-arm64" ]]; then
                     echo "Destroying legacy AWS ARM64 cluster: $dir_name"
                     if [[ -d "$dir" ]]; then
