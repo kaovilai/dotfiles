@@ -54,9 +54,15 @@ install_packages_manually() {
         "curl"
     )
     
+    # PERFORMANCE OPTIMIZATION:
+    # Fetch all installed brew packages into an array once to avoid
+    # N+1 `brew list` subprocess calls in loops which is very slow.
+    local -a installed_packages=($(brew list -1 2>/dev/null))
+
     local tool
     for tool in "${essential_tools[@]}"; do
-        if brew list "$tool" &>/dev/null; then
+        # Use fast in-memory exact-match index search on the array
+        if (( ${installed_packages[(Ie)$tool]} )); then
             echo "  ${GREEN}✓${NC} $tool already installed"
         else
             echo "  Installing $tool..."
@@ -73,7 +79,8 @@ install_packages_manually() {
     )
     
     for tool in "${dev_tools[@]}"; do
-        if brew list "$tool" &>/dev/null; then
+        # Use fast in-memory exact-match index search on the array
+        if (( ${installed_packages[(Ie)$tool]} )); then
             echo "  ${GREEN}✓${NC} $tool already installed"
         else
             echo "  Installing $tool..."
