@@ -5,7 +5,7 @@ select-rosa-cluster() {
     echo "Checking for available ROSA clusters..."
 
     # Get list of ROSA clusters
-    local clusters=$(rosa list clusters --output json 2>/dev/null | jq -r '.[] | .name' 2>/dev/null)
+    local clusters; clusters=$(rosa list clusters --output json 2>/dev/null | jq -r '.[] | .name' 2>/dev/null)
 
     if [[ -z "$clusters" ]]; then
         echo "No ROSA clusters found in AWS"
@@ -19,7 +19,7 @@ select-rosa-cluster() {
         for dir in $OCP_MANIFESTS_DIR/*-rosa-sts-*/; do
             if [[ -d "$dir" ]]; then
                 found_local=true
-                local dir_name=$(basename "$dir")
+                local dir_name; dir_name=$(basename "$dir")
                 echo "  - $dir_name"
             fi
         done
@@ -36,11 +36,11 @@ select-rosa-cluster() {
     fi
 
     # Count clusters
-    local cluster_count=$(echo "$clusters" | wc -l | tr -d ' ')
+    local cluster_count; cluster_count=$(echo "$clusters" | wc -l | tr -d ' ')
 
     if [[ $cluster_count -eq 1 ]]; then
         # Only one cluster, connect to it automatically
-        local cluster_name=$(echo "$clusters" | head -n 1)
+        local cluster_name; cluster_name=$(echo "$clusters" | head -n 1)
         echo "Found one ROSA cluster: $cluster_name"
         echo "Connecting..."
         use-rosa-sts "$cluster_name"
