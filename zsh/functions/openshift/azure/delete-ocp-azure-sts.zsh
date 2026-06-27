@@ -5,7 +5,7 @@ delete-ocp-azure-sts(){
     fi
     
     # Use specified openshift-install or default to latest EC version
-    local EC_VERSION=$(get-ocp-latest-ec-version)
+    local EC_VERSION; EC_VERSION=$(get-ocp-latest-ec-version)
     local OPENSHIFT_INSTALL=${OPENSHIFT_INSTALL:-openshift-install-${EC_VERSION}}
 
     # Check if help is requested
@@ -50,7 +50,7 @@ delete-ocp-azure-sts(){
         $OPENSHIFT_INSTALL destroy bootstrap --dir $EMPTY_TODAY_DIR || echo "no existing bootstrap in legacy directory"
         
         # Generate storage account name same way as create function
-        local LEGACY_STORAGE_ACCOUNT_NAME=$(echo "$LEGACY_CLUSTER_NAME" | tr -d '-' | tr '[:upper:]' '[:lower:]' | cut -c1-24)
+        local LEGACY_STORAGE_ACCOUNT_NAME; LEGACY_STORAGE_ACCOUNT_NAME=$(echo "$LEGACY_CLUSTER_NAME" | tr -d '-' | tr '[:upper:]' '[:lower:]' | cut -c1-24)
         (ccoctl azure delete \
         --name $LEGACY_CLUSTER_NAME \
         --subscription-id $AZURE_SUBSCRIPTION_ID \
@@ -70,7 +70,7 @@ $OPENSHIFT_INSTALL destroy cluster --dir $OCP_CREATE_DIR || echo "no existing cl
 echo "Destroying Azure bootstrap in directory: $OCP_CREATE_DIR"
 $OPENSHIFT_INSTALL destroy bootstrap --dir $OCP_CREATE_DIR || echo "no existing bootstrap"
     # Generate storage account name same way as create function
-    local STORAGE_ACCOUNT_NAME=$(echo "$CLUSTER_NAME" | tr -d '-' | tr '[:upper:]' '[:lower:]' | cut -c1-24)
+    local STORAGE_ACCOUNT_NAME; STORAGE_ACCOUNT_NAME=$(echo "$CLUSTER_NAME" | tr -d '-' | tr '[:upper:]' '[:lower:]' | cut -c1-24)
     (ccoctl azure delete \
     --name $CLUSTER_NAME \
     --subscription-id $AZURE_SUBSCRIPTION_ID \

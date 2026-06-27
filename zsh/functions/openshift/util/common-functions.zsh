@@ -533,7 +533,7 @@ get-release-oc() {
     local release_image=$1
     [[ -z "$release_image" ]] && { echo "oc"; return; }
 
-    local version=$(echo "$release_image" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+-[a-z]+\.[0-9]+' | head -1)
+    local version; version=$(echo "$release_image" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+-[a-z]+\.[0-9]+' | head -1)
     [[ -z "$version" ]] && { echo "oc"; return; }
 
     local oc_dir="/tmp/oc-${version}"
