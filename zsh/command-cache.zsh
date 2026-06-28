@@ -22,17 +22,13 @@ cache-file-expired() {
     return 0  # Cache expired (file doesn't exist)
   fi
 
-  # Get file modification time (cache stat result to avoid duplicate calls)
-  # Note: `local var=$(cmd) || return` is broken — `local` always returns 0.
-  # Declare local first, then assign so the command's exit status is preserved.
-  local file_stat
-  file_stat=$(stat -f "%m" "$file" 2>/dev/null || stat -c "%Y" "$file" 2>/dev/null) || return 0
-  local file_time=${file_stat%% *}
-  local current_time
-  current_time=$(date +%s)
-  local file_age=$((current_time - file_time))
+  # Optimize file age checks by using native ZSH extended globs instead of
+  # spawning `stat` and `date` subprocesses.
+  setopt local_options extended_glob
+  # #qNms+${max_age} means: return empty if no match (N), mod time in seconds (ms), older than max_age (+)
+  local files=($file(#qNms+${max_age}))
 
-  if [[ $file_age -gt $max_age ]]; then
+  if (( ${#files[@]} > 0 )); then
     return 0  # Cache expired
   else
     return 1  # Cache still valid
