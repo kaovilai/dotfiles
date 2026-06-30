@@ -8,9 +8,18 @@ autoload -Uz compinit
 #   - the dump doesn't exist yet (first run), OR
 #   - the dump is older than 24h (mh+24 = modified more than 24h ago)
 # Otherwise use -C to skip the fpath security scan for faster startup.
+#
+# Performance optimization:
+# Enable extended_glob locally to correctly parse the `(#qN.mh+24)` qualifier.
+# Expanding the result into an array avoids the issue where a bare glob string
+# evaluates to a non-empty literal string, which previously caused the slow
+# `compinit` to run on every startup instead of using the cache.
 () {
+  setopt local_options extended_glob
   local _zcompdump="${ZDOTDIR:-$HOME}/.zcompdump"
-  if [[ ! -f $_zcompdump || -n $_zcompdump(#qN.mh+24) ]]; then
+  local -a stale_dump=( $_zcompdump(#qN.mh+24) )
+
+  if [[ ! -f $_zcompdump ]] || (( ${#stale_dump[@]} > 0 )); then
     compinit          # no dump or stale: rebuild and re-check fpath security
   else
     compinit -C       # dump is fresh: skip security scan for faster startup
