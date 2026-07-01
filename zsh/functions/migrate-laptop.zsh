@@ -53,14 +53,19 @@ install_packages_manually() {
         "wget"
         "curl"
     )
+
+    # Optimization: Cache the list of installed brew packages to avoid N+1 subprocess bottleneck.
+    # We fetch the list once into an array, which speeds up the loop by avoiding slow `brew list` commands.
+    local -a installed_packages=($(brew list -1 2>/dev/null))
     
     local tool
     for tool in "${essential_tools[@]}"; do
-        if brew list "$tool" &>/dev/null; then
+        if (( ${installed_packages[(Ie)$tool]} )); then
             echo "  ${GREEN}✓${NC} $tool already installed"
         else
             echo "  Installing $tool..."
             brew install "$tool" || warning "Failed to install $tool"
+            installed_packages+=("$tool") # Add to cache after install just in case
         fi
     done
     
@@ -73,11 +78,12 @@ install_packages_manually() {
     )
     
     for tool in "${dev_tools[@]}"; do
-        if brew list "$tool" &>/dev/null; then
+        if (( ${installed_packages[(Ie)$tool]} )); then
             echo "  ${GREEN}✓${NC} $tool already installed"
         else
             echo "  Installing $tool..."
             brew install "$tool" || warning "Failed to install $tool"
+            installed_packages+=("$tool") # Add to cache after install
         fi
     done
     
