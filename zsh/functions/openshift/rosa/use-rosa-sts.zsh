@@ -183,7 +183,7 @@ use-rosa-sts() {
             
             if [[ -n "$admin_password" ]]; then
                 echo "Logging in as cluster-admin..."
-                if oc login "$api_url" --username="$admin_user" --password="$admin_password" --insecure-skip-tls-verify=true; then
+                if oc login "$api_url" --username="$admin_user" --password="$admin_password"; then
                     echo "Successfully logged in"
                 else
                     echo "Login failed, credentials may be expired"
@@ -210,7 +210,7 @@ use-rosa-sts() {
         
         if [[ -n "$admin_password" ]]; then
             echo "Logging in with new cluster-admin credentials..."
-            oc login "$api_url" --username="$admin_user" --password="$admin_password" --insecure-skip-tls-verify=true
+            oc login "$api_url" --username="$admin_user" --password="$admin_password"
         else
             echo "ERROR: Failed to create cluster-admin user or extract credentials"
             return 1
