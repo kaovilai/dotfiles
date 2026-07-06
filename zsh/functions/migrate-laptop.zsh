@@ -41,6 +41,11 @@ install_packages_manually() {
         error "brew not found. Install Homebrew: https://brew.sh"
         return 1
     fi
+    # PERFORMANCE OPTIMIZATION: Fetch list of installed packages once
+    # This prevents an N+1 subprocess bottleneck of running `brew list <pkg>` for every package,
+    # significantly reducing the setup time by replacing slow subprocesses with instant Zsh array checks.
+    local -a installed_packages=($(brew list))
+
     progress "Installing essential tools..."
     local essential_tools=(
         "git"
@@ -56,11 +61,16 @@ install_packages_manually() {
     
     local tool
     for tool in "${essential_tools[@]}"; do
-        if brew list "$tool" &>/dev/null; then
+        if (( ${installed_packages[(Ie)$tool]} )); then
             echo "  ${GREEN}✓${NC} $tool already installed"
         else
             echo "  Installing $tool..."
-            brew install "$tool" || warning "Failed to install $tool"
+            if brew install "$tool"; then
+                # Update cache after successful installation
+                installed_packages+=("$tool")
+            else
+                warning "Failed to install $tool"
+            fi
         fi
     done
     
@@ -73,11 +83,16 @@ install_packages_manually() {
     )
     
     for tool in "${dev_tools[@]}"; do
-        if brew list "$tool" &>/dev/null; then
+        if (( ${installed_packages[(Ie)$tool]} )); then
             echo "  ${GREEN}✓${NC} $tool already installed"
         else
             echo "  Installing $tool..."
-            brew install "$tool" || warning "Failed to install $tool"
+            if brew install "$tool"; then
+                # Update cache after successful installation
+                installed_packages+=("$tool")
+            else
+                warning "Failed to install $tool"
+            fi
         fi
     done
     
