@@ -154,10 +154,11 @@ if [[ "$TERM_PROGRAM" != "vscode" ]]; then
     [[ -d "${stamp:h}" ]] || mkdir -p "${stamp:h}"
     local expired=1
     if [[ -f "$stamp" ]]; then
-      local mtime now
-      mtime=$(stat -f "%m" "$stamp" 2>/dev/null || stat -c "%Y" "$stamp" 2>/dev/null) || expired=0
-      now=$(date +%s)
-      (( now - mtime > 86400 )) && expired=0 || expired=1
+      # Optimize file age check by using native Zsh extended globbing
+      # instead of spawning external stat and date subprocesses.
+      setopt local_options extended_glob
+      local -a old_stamp=("$stamp"(#qN.ms+86400))
+      (( ${#old_stamp} > 0 )) && expired=0 || expired=1
     else
       expired=0
     fi
