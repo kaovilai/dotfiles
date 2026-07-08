@@ -15,6 +15,8 @@ export ZSH_COMPLETION_CACHE_DIR="$HOME/.zsh-completion-cache"
 # Unified function to check if a cache file is expired
 # Usage: cache-file-expired <file> [max_age_seconds]
 cache-file-expired() {
+  setopt local_options extended_glob
+
   local file="$1"
   local max_age="${2:-$CACHE_TTL_DEFAULT}"
 
@@ -22,17 +24,13 @@ cache-file-expired() {
     return 0  # Cache expired (file doesn't exist)
   fi
 
-  # Get file modification time (cache stat result to avoid duplicate calls)
-  # Note: `local var=$(cmd) || return` is broken — `local` always returns 0.
-  # Declare local first, then assign so the command's exit status is preserved.
-  local file_stat
-  file_stat=$(stat -f "%m" "$file" 2>/dev/null || stat -c "%Y" "$file" 2>/dev/null) || return 0
-  local file_time=${file_stat%% *}
-  local current_time
-  current_time=$(date +%s)
-  local file_age=$((current_time - file_time))
+  # Using native Zsh extended globbing to check file age (fast, no subprocesses)
+  # (#qN.ms+max_age) matches the file if it's older than max_age seconds
+  # N = null_glob (empty array if no match)
+  # ms+ = modify time in seconds older than
+  local -a expired=("$file"(#qN.ms+${max_age}))
 
-  if [[ $file_age -gt $max_age ]]; then
+  if (( ${#expired} )); then
     return 0  # Cache expired
   else
     return 1  # Cache still valid
