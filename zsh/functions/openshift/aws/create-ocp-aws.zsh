@@ -60,6 +60,16 @@ create-ocp-aws() {
         echo "              Install OpenShift Virtualization (CNV/KubeVirt operator + a minimal"
         echo "              HyperConverged CR). Can be combined with --kvm/--kvm-spot or"
         echo "              --kvm-all-workers, or used alone."
+        echo "  --community-hco[=TAG]"
+        echo "              Install Community HCO (quay.io/kubevirt/hyperconverged-cluster-index)"
+        echo "              instead of productized CNV. Implies --install-cnv. TAG defaults to"
+        echo "              1.18.0 (matches OADP's virt e2e default, KubeVirt v1.8.4)."
+        echo "  --nightly[=X.Y]"
+        echo "              Use the raw per-minor-version OCP nightly release stream"
+        echo "              (X.Y.0-0.nightly) instead of dev-preview/stable/--ec. Prompts for"
+        echo "              the minor version if not given. Matches how OADP's virt e2e CI"
+        echo "              provisions its cluster -- pair with --community-hco for a directly"
+        echo "              comparable repro."
         echo ""
         echo "Examples:"
         echo "  create-ocp-aws-$ARCH_SUFFIX --force-new --ec"
@@ -91,6 +101,11 @@ create-ocp-aws() {
         echo "CNV/virt notes:"
         echo "  - --install-cnv installs the kubevirt-hyperconverged operator via OLM and waits"
         echo "    up to 15m for its CSV to reach Succeeded, then creates a HyperConverged CR."
+        echo "  - --community-hco installs from a custom CatalogSource (quay.io/kubevirt/"
+        echo "    hyperconverged-cluster-index:TAG) into the kubevirt-hyperconverged namespace"
+        echo "    instead. Use this to reproduce OADP's virt e2e CI setup, which falls back to"
+        echo "    Community HCO because productized CNV has no catalog build yet for an"
+        echo "    unreleased nightly OCP payload -- see --nightly."
         echo "  - If --kvm/--kvm-spot also ran and its metal node came up, the HyperConverged CR"
         echo "    gets a nodePlacement toleration for that node's dedicated=kubevirt:NoSchedule"
         echo "    taint (no nodeSelector, so KubeVirt components can use the node without forcing"
@@ -191,6 +206,10 @@ create-ocp-aws() {
     local kvm_spot=false
     local kvm_all_workers=false
     local install_cnv=false
+    local community_hco=false
+    local community_hco_tag="1.18.0"
+    local use_nightly=false
+    local nightly_minor=""
 
     for arg in "$@"; do
         case "$arg" in
@@ -212,6 +231,22 @@ create-ocp-aws() {
                 ;;
             --install-cnv)
                 install_cnv=true
+                ;;
+            --community-hco)
+                community_hco=true
+                install_cnv=true
+                ;;
+            --community-hco=*)
+                community_hco=true
+                install_cnv=true
+                community_hco_tag="${arg#--community-hco=}"
+                ;;
+            --nightly)
+                use_nightly=true
+                ;;
+            --nightly=*)
+                use_nightly=true
+                nightly_minor="${arg#--nightly=}"
                 ;;
         esac
     done
@@ -238,7 +273,15 @@ create-ocp-aws() {
     
     # Prompt for release stream selection and get release image
     local stream
-    if [[ -n "$OCP_RELEASE_VERSION" ]]; then
+    if [[ "$use_nightly" == "true" ]]; then
+        if [[ -z "$nightly_minor" ]]; then
+            nightly_minor=$(prompt-nightly-minor-version) || return 1
+        fi
+        export OCP_NIGHTLY_MINOR="$nightly_minor"
+        stream="nightly"
+        echo "INFO: --nightly requested: using raw ${nightly_minor}.0-0.nightly release stream"
+        unset AUTO_SELECT_EC
+    elif [[ -n "$OCP_RELEASE_VERSION" ]]; then
         if [[ "$OCP_RELEASE_VERSION" =~ (ec|rc)\. ]]; then
             stream="dev-preview"
         else
@@ -337,7 +380,7 @@ publish: External"
     # Create the cluster with error handling
     if ! $OPENSHIFT_INSTALL create cluster --dir $OCP_CREATE_DIR --log-level=info; then
         cleanup-on-failure "$OCP_CREATE_DIR" "$CLUSTER_NAME" "aws"
-        unset OPENSHIFT_INSTALL_RELEASE_IMAGE_OVERRIDE AUTO_SELECT_EC PROCEED_WITH_EXISTING_CLUSTERS
+        unset OPENSHIFT_INSTALL_RELEASE_IMAGE_OVERRIDE AUTO_SELECT_EC PROCEED_WITH_EXISTING_CLUSTERS OCP_NIGHTLY_MINOR
         return 1
     fi
 
@@ -356,11 +399,13 @@ publish: External"
     # Post-install: install OpenShift Virtualization (CNV/KubeVirt), if requested.
     # Best-effort, same rationale as above.
     if [[ "$install_cnv" == "true" ]]; then
-        KUBECONFIG="$OCP_CREATE_DIR/auth/kubeconfig" install-cnv-operator "$kvm_dedicated_node"
+        local cnv_community_tag=""
+        [[ "$community_hco" == "true" ]] && cnv_community_tag="$community_hco_tag"
+        KUBECONFIG="$OCP_CREATE_DIR/auth/kubeconfig" install-cnv-operator "$kvm_dedicated_node" "$cnv_community_tag"
     fi
 
     # Cleanup
-    unset OPENSHIFT_INSTALL_RELEASE_IMAGE_OVERRIDE AUTO_SELECT_EC PROCEED_WITH_EXISTING_CLUSTERS
+    unset OPENSHIFT_INSTALL_RELEASE_IMAGE_OVERRIDE AUTO_SELECT_EC PROCEED_WITH_EXISTING_CLUSTERS OCP_NIGHTLY_MINOR
 }
 
 # Resolve the default bare-metal EC2 instance type for /dev/kvm exposure,
@@ -474,19 +519,159 @@ add-kvm-machineset() {
     return 1
 }
 
+# Install Community HCO (quay.io/kubevirt/hyperconverged-cluster-index) from a
+# custom CatalogSource, instead of productized CNV from the default
+# redhat-operators catalog. This is the fallback path OADP's own virt e2e CI
+# uses (EnsureCommunityHcoCatalog/GetVirtOperator in openshift/oadp-operator's
+# tests/e2e/lib/virt_helpers.go) because productized CNV has no catalog build
+# yet for an unreleased nightly OCP payload -- see --nightly and the
+# kubevirt-datamover-controller project memory "oadp-virt-e2e-nightlies".
+#
+# Usage: KUBECONFIG=/path/to/kubeconfig _install-community-hco <index-tag> [tolerate-kvm-taint]
+_install-community-hco() {
+    local index_tag=$1
+    local tolerate_kvm_taint=${2:-false}
+
+    echo "INFO: --community-hco requested: installing Community HCO index tag $index_tag (best-effort)"
+
+    if ! oc apply -f - <<EOF
+apiVersion: operators.coreos.com/v1alpha1
+kind: CatalogSource
+metadata:
+  name: kubevirt-community-catalog
+  namespace: openshift-marketplace
+spec:
+  sourceType: grpc
+  image: quay.io/kubevirt/hyperconverged-cluster-index:${index_tag}
+  displayName: KubeVirt Community HCO
+  publisher: KubeVirt
+EOF
+    then
+        echo "WARN: --community-hco: failed to create CatalogSource" >&2
+        return 1
+    fi
+
+    # channel is derived from the index tag, e.g. 1.18.0 -> stable-v1.18
+    # (matches communityChannelFromTag in openshift/oadp-operator's virt_helpers.go)
+    local -a tag_parts=(${(s:.:)index_tag})
+    local channel="stable-v${tag_parts[1]}.${tag_parts[2]}"
+
+    echo "INFO: --community-hco: waiting up to 5m for community-kubevirt-hyperconverged PackageManifest with channel $channel..."
+    local elapsed=0 found=false
+    while (( elapsed < 300 )); do
+        if oc get packagemanifest community-kubevirt-hyperconverged -n default -o jsonpath='{.status.channels[*].name}' 2>/dev/null | grep -qw "$channel"; then
+            found=true
+            break
+        fi
+        sleep 5
+        (( elapsed += 5 ))
+    done
+    if [[ "$found" != "true" ]]; then
+        echo "WARN: --community-hco: PackageManifest channel $channel did not appear within 5m" >&2
+        return 1
+    fi
+
+    if ! oc apply -f - <<EOF
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: kubevirt-hyperconverged
+---
+apiVersion: operators.coreos.com/v1
+kind: OperatorGroup
+metadata:
+  name: kubevirt-hyperconverged-group
+  namespace: kubevirt-hyperconverged
+spec: {}
+---
+apiVersion: operators.coreos.com/v1alpha1
+kind: Subscription
+metadata:
+  name: community-kubevirt-hyperconverged
+  namespace: kubevirt-hyperconverged
+spec:
+  source: kubevirt-community-catalog
+  sourceNamespace: openshift-marketplace
+  name: community-kubevirt-hyperconverged
+  channel: ${channel}
+EOF
+    then
+        echo "WARN: --community-hco: failed to apply namespace/OperatorGroup/Subscription" >&2
+        return 1
+    fi
+
+    echo "INFO: --community-hco: waiting up to 15m for CSV to reach Succeeded (best-effort)..."
+    elapsed=0
+    local phase=""
+    while (( elapsed < 900 )); do
+        phase=$(oc get csv -n kubevirt-hyperconverged -l operators.coreos.com/community-kubevirt-hyperconverged.kubevirt-hyperconverged -o jsonpath='{.items[0].status.phase}' 2>/dev/null)
+        [[ "$phase" == "Succeeded" ]] && break
+        sleep 15
+        (( elapsed += 15 ))
+    done
+    if [[ "$phase" != "Succeeded" ]]; then
+        echo "WARN: --community-hco: CSV did not reach Succeeded within 15m (phase=${phase:-unknown})." >&2
+        echo "      Check: oc get csv -n kubevirt-hyperconverged" >&2
+        return 1
+    fi
+    echo "INFO: --community-hco: CSV reached Succeeded"
+
+    echo "INFO: --community-hco: creating HyperConverged CR"
+    local hco_manifest
+    if [[ "$tolerate_kvm_taint" == "true" ]]; then
+        hco_manifest='apiVersion: hco.kubevirt.io/v1beta1
+kind: HyperConverged
+metadata:
+  name: kubevirt-hyperconverged
+  namespace: kubevirt-hyperconverged
+spec:
+  workloads:
+    nodePlacement:
+      tolerations:
+      - key: dedicated
+        operator: Equal
+        value: kubevirt
+        effect: NoSchedule'
+    else
+        hco_manifest='apiVersion: hco.kubevirt.io/v1beta1
+kind: HyperConverged
+metadata:
+  name: kubevirt-hyperconverged
+  namespace: kubevirt-hyperconverged
+spec: {}'
+    fi
+
+    if ! echo "$hco_manifest" | oc apply -f -; then
+        echo "WARN: --community-hco: failed to create HyperConverged CR" >&2
+        return 1
+    fi
+
+    echo "INFO: --community-hco: HyperConverged CR created"
+    return 0
+}
+
 # Install OpenShift Virtualization (CNV/KubeVirt) via OLM and wait for the
 # operator to reach Succeeded, then create a minimal HyperConverged CR.
 # Best-effort -- the cluster itself already succeeded, so a failure or
 # timeout here is a warning, not a hard failure of the caller.
 #
-# Usage: KUBECONFIG=/path/to/kubeconfig install-cnv-operator [tolerate-kvm-taint]
+# Usage: KUBECONFIG=/path/to/kubeconfig install-cnv-operator [tolerate-kvm-taint] [community-index-tag]
 #
 # When tolerate-kvm-taint is "true", the HyperConverged CR is created with a
 # nodePlacement toleration for the dedicated=kubevirt:NoSchedule taint added
 # by add-kvm-machineset (no nodeSelector, so KubeVirt components can use the
 # node without forcing all VM workloads onto it).
+#
+# When community-index-tag is non-empty, installs Community HCO from that
+# index tag instead of productized CNV (see _install-community-hco).
 install-cnv-operator() {
     local tolerate_kvm_taint=${1:-false}
+    local community_index_tag=${2:-}
+
+    if [[ -n "$community_index_tag" ]]; then
+        _install-community-hco "$community_index_tag" "$tolerate_kvm_taint"
+        return $?
+    fi
 
     echo "INFO: --install-cnv requested: installing OpenShift Virtualization (best-effort)"
 
