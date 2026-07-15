@@ -161,20 +161,36 @@ _claude_container_anthropic_env_build() {
 }
 
 cecon() {
+    if ! command -v podman &>/dev/null; then
+        echo "❌ podman not found. Install it with: brew install podman" >&2
+        return 1
+    fi
     _claude_container_anthropic_env_build
     podman run --rm -it -v ~/experiments:/workspace:Z -v "$HOME/.config/claude-container:/claude" -v "$HOME/.config/gcloud:/home/node/.config/gcloud:ro" -e CLAUDE_CONFIG_DIR=/claude -e CLAUDE_CODE_USE_VERTEX -e ANTHROPIC_VERTEX_PROJECT_ID -e CLOUD_ML_REGION -e ANTHROPIC_VERTEX_BASE_URL "${_claude_container_anthropic_env_args[@]}" ghcr.io/kaovilai/claude-container:latest claude --enable-auto-mode --permission-mode auto
 }
 alias ced='cd ~/experiments/ && claude --dangerously-skip-permissions'
 cedcon() {
+    if ! command -v podman &>/dev/null; then
+        echo "❌ podman not found. Install it with: brew install podman" >&2
+        return 1
+    fi
     _claude_container_anthropic_env_build
     podman run --rm -it -v ~/experiments:/workspace:Z -v "$HOME/.config/claude-container:/claude" -v "$HOME/.config/gcloud:/home/node/.config/gcloud:ro" -e CLAUDE_CONFIG_DIR=/claude -e CLAUDE_CODE_USE_VERTEX -e ANTHROPIC_VERTEX_PROJECT_ID -e CLOUD_ML_REGION -e ANTHROPIC_VERTEX_BASE_URL "${_claude_container_anthropic_env_args[@]}" ghcr.io/kaovilai/claude-container:latest claude --enable-auto-mode --permission-mode auto --dangerously-skip-permissions
 }
 alias cedc='cedcon'   # backwards-compat after cedc→cedcon rename
 claude-container() {
+    if ! command -v podman &>/dev/null; then
+        echo "❌ podman not found. Install it with: brew install podman" >&2
+        return 1
+    fi
     _claude_container_anthropic_env_build
     podman run --rm -it -v "$PWD:/workspace:Z" -v "$HOME/.config/claude-container:/claude" -v "$HOME/.config/gcloud:/home/node/.config/gcloud:ro" -e CLAUDE_CONFIG_DIR=/claude -e CLAUDE_CODE_USE_VERTEX -e ANTHROPIC_VERTEX_PROJECT_ID -e CLOUD_ML_REGION -e ANTHROPIC_VERTEX_BASE_URL "${_claude_container_anthropic_env_args[@]}" ghcr.io/kaovilai/claude-container:latest claude --enable-auto-mode --permission-mode auto
 }
 claude-dangerously-container() {
+    if ! command -v podman &>/dev/null; then
+        echo "❌ podman not found. Install it with: brew install podman" >&2
+        return 1
+    fi
     _claude_container_anthropic_env_build
     podman run --rm -it -v "$PWD:/workspace:Z" -v "$HOME/.config/claude-container:/claude" -v "$HOME/.config/gcloud:/home/node/.config/gcloud:ro" -e CLAUDE_CONFIG_DIR=/claude -e CLAUDE_CODE_USE_VERTEX -e ANTHROPIC_VERTEX_PROJECT_ID -e CLOUD_ML_REGION -e ANTHROPIC_VERTEX_BASE_URL "${_claude_container_anthropic_env_args[@]}" ghcr.io/kaovilai/claude-container:latest claude --enable-auto-mode --permission-mode auto --dangerously-skip-permissions
 }
