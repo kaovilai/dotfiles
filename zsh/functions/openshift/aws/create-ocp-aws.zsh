@@ -49,10 +49,14 @@ create-ocp-aws() {
         echo "Flags (can be combined):"
         echo "  --force-new Force creation alongside existing clusters (skip prompt)"
         echo "  --ec        Automatically select Early Candidate release stream"
+        echo "  --kvm       Add a second compute pool with a bare-metal instance type"
+        echo "              (exposes /dev/kvm for OpenShift Virtualization/KubeVirt VMs)"
+        echo "  --kvm-spot  Same as --kvm, but request the metal node as a spot instance"
         echo ""
         echo "Examples:"
         echo "  create-ocp-aws-$ARCH_SUFFIX --force-new --ec"
         echo "  create-ocp-aws-$ARCH_SUFFIX no-delete --ec"
+        echo "  create-ocp-aws-$ARCH_SUFFIX --ec --kvm"
         echo ""
         echo "Prerequisites:"
         echo "  - AWS_REGION environment variable (defaults to us-east-1 if not set)"
@@ -60,6 +64,15 @@ create-ocp-aws() {
         echo "  - AWS credentials must be configured"
         echo "  - SSH key must be added to the agent (ssh-add ~/.ssh/id_rsa)"
         echo "  - Pull secret must exist at ~/pull-secret.txt"
+        echo ""
+        echo "KVM/metal notes:"
+        echo "  - Bare-metal instances only expose /dev/kvm on '.metal' EC2 types -- non-metal"
+        echo "    instances (even nested-virt-capable ones on some clouds) do NOT expose it on AWS."
+        echo "  - Default metal type: m6g.metal (arm64) / m5.metal (amd64). Override with"
+        echo "    OCP_KVM_INSTANCE_TYPE. Default zone: \${AWS_REGION}b. Override with OCP_KVM_ZONE"
+        echo "    (metal capacity varies by AZ -- retry with a different zone on InsufficientInstanceCapacity)."
+        echo "  - This adds ~1 extra large/expensive node -- delete-ocp-aws tears it down with the"
+        echo "    rest of the cluster; do not leave it running longer than needed."
         echo ""
         echo "Directory:"
         echo "  Installation files will be created in: $OCP_MANIFESTS_DIR/$TODAY-aws-$ARCH_SUFFIX"
@@ -148,7 +161,9 @@ create-ocp-aws() {
     # Parse command line flags
     local force_new=false
     local auto_ec=false
-    
+    local add_kvm_pool=false
+    local kvm_spot=false
+
     for arg in "$@"; do
         case "$arg" in
             --force-new)
@@ -156,6 +171,13 @@ create-ocp-aws() {
                 ;;
             --ec)
                 auto_ec=true
+                ;;
+            --kvm)
+                add_kvm_pool=true
+                ;;
+            --kvm-spot)
+                add_kvm_pool=true
+                kvm_spot=true
                 ;;
         esac
     done
@@ -218,7 +240,12 @@ create-ocp-aws() {
     export OPENSHIFT_INSTALL_RELEASE_IMAGE_OVERRIDE=$RELEASE_IMAGE
     echo "INFO: Exported OPENSHIFT_INSTALL_RELEASE_IMAGE_OVERRIDE=$RELEASE_IMAGE"
     mkdir -p $OCP_CREATE_DIR || return 1
-    
+
+    # Note: install-config's compute[].name only accepts "worker" or "edge" --
+    # you cannot add an arbitrary custom-named compute pool (e.g. "worker-kvm")
+    # at install time. So --kvm is handled post-install below by cloning a
+    # real worker MachineSet with a bare-metal instance type via the Machine
+    # API, once the cluster (and its kubeconfig) exists.
     {
         create-install-config-header
         echo "baseDomain: $AWS_BASEDOMAIN
@@ -264,18 +291,112 @@ publish: External"
         return 1
     fi
 
+    # Post-install: add a bare-metal worker MachineSet for /dev/kvm, if requested.
+    # Best-effort -- the cluster itself already succeeded above, so a failure
+    # or timeout here is a warning, not a hard failure of this function.
+    if [[ "$add_kvm_pool" == "true" ]]; then
+        local kvm_instance_type="${OCP_KVM_INSTANCE_TYPE:-}"
+        if [[ -z "$kvm_instance_type" ]]; then
+            if [[ "$ARCHITECTURE" == "arm64" ]]; then
+                kvm_instance_type="m6g.metal"
+            else
+                kvm_instance_type="m5.metal"
+            fi
+        fi
+        local kvm_zone="${OCP_KVM_ZONE:-${AWS_REGION}b}"
+        KUBECONFIG="$OCP_CREATE_DIR/auth/kubeconfig" add-kvm-machineset "$kvm_zone" "$kvm_instance_type" "$kvm_spot"
+    fi
+
     # Cleanup
     unset OPENSHIFT_INSTALL_RELEASE_IMAGE_OVERRIDE AUTO_SELECT_EC PROCEED_WITH_EXISTING_CLUSTERS
 }
 
+# Add a bare-metal worker MachineSet to an existing cluster so /dev/kvm is
+# exposed for OpenShift Virtualization/KubeVirt VMs. AWS only exposes /dev/kvm
+# on '.metal' instance types -- regular (non-metal) instances never expose it,
+# on any architecture, no matter how nested-virt-capable the hypervisor is.
+#
+# Usage: KUBECONFIG=/path/to/kubeconfig add-kvm-machineset <zone> <instance-type> [spot]
+#
+# Clones the existing worker MachineSet in the given zone (so subnet/AMI/IAM/
+# security-group config is already correct) rather than hand-building one --
+# only the instance type, spot market option, and identity fields change.
+add-kvm-machineset() {
+    local zone=$1
+    local instance_type=$2
+    local spot=${3:-false}
+
+    if [[ -z "$zone" || -z "$instance_type" ]]; then
+        echo "Usage: add-kvm-machineset <zone> <instance-type> [spot]" >&2
+        return 1
+    fi
+
+    echo "INFO: --kvm requested: cloning worker MachineSet in $zone as $instance_type (spot=$spot)"
+
+    local infra_id
+    infra_id=$(oc get infrastructure cluster -o jsonpath='{.status.infrastructureName}' 2>/dev/null)
+    if [[ -z "$infra_id" ]]; then
+        echo "WARN: --kvm: could not determine infrastructureName, skipping metal MachineSet" >&2
+        return 1
+    fi
+
+    local base_ms="${infra_id}-worker-${zone}"
+    local new_ms="${infra_id}-worker-metal-${zone}"
+
+    if ! oc get machineset "$base_ms" -n openshift-machine-api &>/dev/null; then
+        echo "WARN: --kvm: base MachineSet $base_ms not found (no worker in zone $zone?), skipping" >&2
+        return 1
+    fi
+
+    local jq_filter='
+        del(.metadata.resourceVersion, .metadata.uid, .metadata.creationTimestamp, .metadata.generation, .metadata.selfLink) |
+        del(.status) |
+        .metadata.name = $name |
+        .spec.replicas = 1 |
+        .spec.selector.matchLabels["machine.openshift.io/cluster-api-machineset"] = $name |
+        .spec.template.metadata.labels["machine.openshift.io/cluster-api-machineset"] = $name |
+        .spec.template.spec.providerSpec.value.instanceType = $itype
+    '
+    if [[ "$spot" == "true" ]]; then
+        jq_filter="${jq_filter} | .spec.template.spec.providerSpec.value.spotMarketOptions = {}"
+    fi
+
+    if ! oc get machineset "$base_ms" -n openshift-machine-api -o json \
+        | jq --arg name "$new_ms" --arg itype "$instance_type" "$jq_filter" \
+        | oc apply -f - ; then
+        echo "WARN: --kvm: failed to create metal MachineSet $new_ms" >&2
+        return 1
+    fi
+
+    echo "INFO: --kvm: waiting up to 15m for $new_ms's machine to become Running (best-effort)..."
+    local elapsed=0
+    while (( elapsed < 900 )); do
+        local phase
+        phase=$(oc get machine -n openshift-machine-api -l "machine.openshift.io/cluster-api-machineset=${new_ms}" -o jsonpath='{.items[0].status.phase}' 2>/dev/null)
+        if [[ "$phase" == "Running" ]]; then
+            echo "INFO: --kvm: metal machine is Running"
+            return 0
+        fi
+        sleep 15
+        (( elapsed += 15 ))
+    done
+
+    echo "WARN: --kvm: metal machine did not reach Running within 15m (phase=${phase:-unknown})." >&2
+    echo "      Check: oc get machine -n openshift-machine-api -l machine.openshift.io/cluster-api-machineset=${new_ms}" >&2
+    return 1
+}
+
 function create-ocp-aws-arm64() {
     # ARM64 wrapper function
-    create-ocp-aws "$1" "arm64"
+    # Note: $1 is the command/option (help, gather, delete, no-delete), $2 is
+    # always the architecture -- any additional flags (--force-new, --ec,
+    # --kvm, etc.) must come after, so we splice arm64 in ahead of them.
+    create-ocp-aws "$1" "arm64" "${@:2}"
 }
 
 function create-ocp-aws-amd64() {
     # AMD64 wrapper function
-    create-ocp-aws "$1" "amd64"
+    create-ocp-aws "$1" "amd64" "${@:2}"
 }
 
 trigger-create-ocp-aws() {
