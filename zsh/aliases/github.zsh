@@ -379,8 +379,10 @@ review-prs() {
 
     diff_file="$tmpdir/${repo//\//_}_${pr_num}.diff"
     echo "Fetching diff for $ref..."
-    gh pr diff "$pr_num" --repo "$repo" > "$diff_file" 2>/dev/null
-    code --wait "$diff_file" &
+    (
+      gh pr diff "$pr_num" --repo "$repo" > "$diff_file" 2>/dev/null
+      code --wait "$diff_file"
+    ) &
     pids+=($!)
   done
 
