@@ -76,8 +76,8 @@ check-for-existing-clusters() {
         while IFS= read -r dir; do
             if [[ -f "$dir/kubeconfig" ]]; then
                 local cluster_dir cluster_name
-                cluster_dir=$(dirname "$dir")
-                cluster_name=$(basename "$cluster_dir")
+                cluster_dir="${dir:h}"
+                cluster_name="${cluster_dir:t}"
                 
                 # Filter by provider if specified
                 if [[ "$provider" == "aws" && ! "$cluster_name" =~ "aws" ]]; then
@@ -113,7 +113,7 @@ check-for-existing-clusters() {
             while IFS= read -r dir; do
                 if [[ ! -f "$dir/auth/kubeconfig" && -f "$dir/cluster-admin.txt" ]]; then
                     local cluster_name
-                    cluster_name=$(basename "$dir")
+                    cluster_name="${dir:t}"
                     
                     # Apply pattern filter if provided
                     if [[ -z $pattern || $cluster_name == *$pattern* ]]; then
@@ -198,8 +198,8 @@ check-for-existing-clusters() {
         while IFS= read -r dir; do
             if [[ -f "$dir/kubeconfig" ]]; then
                 local cluster_dir cluster_name
-                cluster_dir=$(dirname "$dir")
-                cluster_name=$(basename "$cluster_dir")
+                cluster_dir="${dir:h}"
+                cluster_name="${cluster_dir:t}"
                 
                 # Apply pattern filter if provided
                 if [[ -z $pattern || $cluster_name == *$pattern* ]]; then
@@ -328,7 +328,8 @@ check-for-existing-clusters() {
                     continue
                 fi
                 
-                local dir_name=$(basename "$dir")
+                local dir_name
+                dir_name="${dir:t}"
                 if [[ "$dir" == "$OCP_MANIFESTS_DIR/-aws-arm64" ]]; then
                     echo "Destroying legacy AWS ARM64 cluster: $dir_name"
                     if [[ -d "$dir" ]]; then
