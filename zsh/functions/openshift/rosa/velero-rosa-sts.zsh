@@ -807,6 +807,7 @@ setup-velero-oadp-for-rosa-cluster() {
         echo "You can clone it with: git clone https://github.com/openshift/oadp-operator.git"
         echo ""
         echo "Would you like to continue anyway? (y/N)"
+        local response
         read -r response
         if [[ ! "$response" =~ ^[Yy]$ ]]; then
             echo "Aborting setup"
@@ -1014,6 +1015,7 @@ cleanup-velero-rosa-resources() {
     echo "  - OADP operator and resources"
     echo ""
     echo -n "Are you sure you want to continue? (yes/no): "
+    local response
     read -r response
     
     if [[ "$response" != "yes" ]]; then
@@ -1136,6 +1138,7 @@ cleanup-velero-rosa-resources() {
     echo "Step 6: Delete OADP operator?"
     echo "------------------------------"
     echo -n "Do you want to delete the OADP operator? (yes/no): "
+    local delete_operator
     read -r delete_operator
     
     if [[ "$delete_operator" == "yes" ]]; then
@@ -1153,6 +1156,7 @@ cleanup-velero-rosa-resources() {
         
         # Delete namespace
         echo -n "Delete the openshift-adp namespace? (yes/no): "
+        local delete_namespace
         read -r delete_namespace
         
         if [[ "$delete_namespace" == "yes" ]]; then
@@ -1162,6 +1166,7 @@ cleanup-velero-rosa-resources() {
         
         # Delete CRDs
         echo -n "Delete OADP CRDs? (yes/no): "
+        local delete_crds
         read -r delete_crds
         
         if [[ "$delete_crds" == "yes" ]]; then
