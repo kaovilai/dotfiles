@@ -41,6 +41,11 @@ install_packages_manually() {
         error "brew not found. Install Homebrew: https://brew.sh"
         return 1
     fi
+
+    # ⚡ Bolt: Cache installed packages into an array to avoid O(N) `brew list` subprocess calls.
+    # Impact: Reduces N+1 subprocess queries into a single query with fast O(1) in-memory lookups.
+    local -a installed_packages=($(brew list -1 2>/dev/null))
+
     progress "Installing essential tools..."
     local essential_tools=(
         "git"
@@ -56,7 +61,7 @@ install_packages_manually() {
     
     local tool
     for tool in "${essential_tools[@]}"; do
-        if brew list "$tool" &>/dev/null; then
+        if (( ${installed_packages[(Ie)$tool]} )); then
             echo "  ${GREEN}✓${NC} $tool already installed"
         else
             echo "  Installing $tool..."
@@ -73,7 +78,7 @@ install_packages_manually() {
     )
     
     for tool in "${dev_tools[@]}"; do
-        if brew list "$tool" &>/dev/null; then
+        if (( ${installed_packages[(Ie)$tool]} )); then
             echo "  ${GREEN}✓${NC} $tool already installed"
         else
             echo "  Installing $tool..."
