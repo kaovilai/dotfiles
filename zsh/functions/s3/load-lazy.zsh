@@ -7,7 +7,7 @@ _lazy_load_s3() {
     if [[ $S3_FUNCTIONS_LOADED -eq 0 ]]; then
         # Sourcing redefines all real functions by the same names, replacing these
         # wrappers via ZSH dynamic dispatch — no recursion on success.
-        source ~/git/dotfiles/zsh/functions/s3/load.zsh && S3_FUNCTIONS_LOADED=1
+        _safe_source ~/git/dotfiles/zsh/functions/s3/load.zsh && S3_FUNCTIONS_LOADED=1
     fi
 }
 
