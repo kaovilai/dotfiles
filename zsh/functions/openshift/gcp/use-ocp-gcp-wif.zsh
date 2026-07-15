@@ -38,7 +38,7 @@ use-ocp-gcp-wif(){
     fi
     
     # Create ~/.kube directory if it doesn't exist
-    mkdir -p ~/.kube
+    mkdir -p ~/.kube || { echo "✗ Failed to create ~/.kube directory" >&2; return 1; }
     
     # Backup existing kubeconfig if it exists
     if [[ -f ~/.kube/config ]]; then
@@ -96,7 +96,7 @@ use-ocp-gcp-wif-dir() {
     fi
     
     # Create ~/.kube directory if it doesn't exist
-    mkdir -p ~/.kube
+    mkdir -p ~/.kube || { echo "✗ Failed to create ~/.kube directory" >&2; return 1; }
     
     # Backup existing kubeconfig if it exists
     if [[ -f ~/.kube/config ]]; then
