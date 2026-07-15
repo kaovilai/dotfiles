@@ -115,13 +115,53 @@ prompt-release-stream() {
     fi
 }
 
+# Function to prompt for an OCP minor version to use with the raw nightly
+# release stream (stream=nightly in get-release-image). Reuses the same
+# accepted-ranges discovery as prompt-release-stream's step 1, since nightly
+# streams are per-minor-version only (no patch/z-stream selection -- "latest"
+# is already the newest accepted payload for that minor).
+# Usage: minor=$(prompt-nightly-minor-version)
+# Returns: minor version (e.g. "4.22") to stdout
+prompt-nightly-minor-version() {
+    local ranges
+    ranges=$(curl -sm 10 \
+        'https://amd64.ocp.releases.ci.openshift.org/api/v1/releasestreams/accepted' \
+        2>/dev/null \
+    | jq -r 'keys[] | select(test("^[0-9]+\\.[0-9]"))' \
+    | grep -oE '^[0-9]+\.[0-9]+' | sort -Vru)
+
+    if [[ -z "$ranges" ]]; then
+        echo "ERROR: Could not fetch version ranges for nightly stream selection" >&2
+        return 1
+    fi
+
+    local chosen_range
+    if command -v fzf >/dev/null 2>&1; then
+        chosen_range=$(echo "$ranges" | fzf --height 30% --reverse \
+            --header "Select minor version for nightly stream" \
+            --prompt "Nightly> ")
+    else
+        echo "Available minor versions:" >&2
+        echo "$ranges" | cat -n >&2
+        echo -n "Enter minor version (e.g. 4.22): " >&2
+        read -r chosen_range </dev/tty
+    fi
+
+    if [[ -z "$chosen_range" ]]; then
+        echo "ERROR: No minor version selected for nightly stream" >&2
+        return 1
+    fi
+    echo "$chosen_range"
+}
+
 # Function to get release image based on stream and architecture
 # Usage: image=$(get-release-image "stable" "amd64")
 #        image=$(get-release-image "dev-preview" "arm64")
 #        image=$(get-release-image "stable" "multi")
+#        image=$(OCP_NIGHTLY_MINOR=4.22 get-release-image "nightly" "arm64")
 # Description: Gets the appropriate release image URL for the given stream and architecture
 # Parameters:
-#   $1 - stream: "stable" or "dev-preview"
+#   $1 - stream: "stable", "dev-preview", or "nightly" (requires OCP_NIGHTLY_MINOR, e.g. "4.22")
 #   $2 - architecture: "amd64", "arm64", or "multi" (multi-arch)
 # Returns: Release image URL to stdout, exits with 1 on error
 get-release-image() {
@@ -144,7 +184,27 @@ get-release-image() {
         return 0
     fi
 
-    if [[ "$stream" == "stable" ]]; then
+    if [[ "$stream" == "nightly" ]]; then
+        if [[ -z "$OCP_NIGHTLY_MINOR" ]]; then
+            echo "ERROR: stream=nightly requires OCP_NIGHTLY_MINOR to be set (e.g. 4.22)" >&2
+            return 1
+        fi
+        case "$architecture" in
+            "amd64"|"x86_64")
+                get-ocp-release-image-nightly-amd64 "$OCP_NIGHTLY_MINOR"
+                ;;
+            "arm64"|"aarch64")
+                get-ocp-release-image-nightly-arm64 "$OCP_NIGHTLY_MINOR"
+                ;;
+            "multi")
+                get-ocp-release-image-nightly-multi "$OCP_NIGHTLY_MINOR"
+                ;;
+            *)
+                echo "ERROR: Unknown architecture: $architecture" >&2
+                return 1
+                ;;
+        esac
+    elif [[ "$stream" == "stable" ]]; then
         case "$architecture" in
             "amd64"|"x86_64")
                 get-ocp-release-image-stable-amd64
