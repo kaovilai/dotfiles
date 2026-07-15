@@ -7,7 +7,7 @@ typeset -g OPENSHIFT_FUNCTIONS_LOADED=0
 # Load real implementations on first use
 _lazy_load_openshift() {
     if [[ $OPENSHIFT_FUNCTIONS_LOADED -eq 0 ]]; then
-        source ~/git/dotfiles/zsh/functions/openshift/load.zsh && OPENSHIFT_FUNCTIONS_LOADED=1
+        _safe_source ~/git/dotfiles/zsh/functions/openshift/load.zsh && OPENSHIFT_FUNCTIONS_LOADED=1
     fi
 }
 
