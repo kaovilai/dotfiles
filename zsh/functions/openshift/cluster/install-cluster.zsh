@@ -12,7 +12,7 @@ install-cluster-openshift-install(){
     local OC_INSTALLER
     command -v openshift-install-official &>/dev/null && OC_INSTALLER=openshift-install-official || OC_INSTALLER=openshift-install
     echo "Using $OC_INSTALLER"
-    [ -f ~/install-config.yaml ] || {
+    [[ -f ~/install-config.yaml ]] || {
         echo "install-config.yaml not found in home dir"
         echo "Please create one using the ${RED}openshift-install create install-config${NC} command"
         return 1
