@@ -321,6 +321,28 @@ create-ocp-aws() {
     # Export the release image override
     export OPENSHIFT_INSTALL_RELEASE_IMAGE_OVERRIDE=$RELEASE_IMAGE
     echo "INFO: Exported OPENSHIFT_INSTALL_RELEASE_IMAGE_OVERRIDE=$RELEASE_IMAGE"
+
+    # get-openshift-install() (called before RELEASE_IMAGE was known) only
+    # picks from the latest cached EC/stable binaries -- if OCP_RELEASE_VERSION
+    # or --nightly pins something else (e.g. a new major version's EC, or a
+    # raw nightly), that binary can silently mismatch the release image by a
+    # wide margin. Installer/Terraform asset logic is version-specific, so a
+    # mismatch risks failing deep into provisioning rather than up front.
+    # Always re-resolve the exact matching binary now that RELEASE_IMAGE is
+    # known; fall back to the original binary (with a warning) only if
+    # extraction itself fails, so a transient registry/oc issue doesn't hard
+    # block the common case where the cached binary was already correct.
+    local exact_install_binary
+    exact_install_binary=$(get-openshift-install-for-release-image "$RELEASE_IMAGE")
+    if [[ -n "$exact_install_binary" ]]; then
+        OPENSHIFT_INSTALL="$exact_install_binary"
+        echo "INFO: Using exact-matching openshift-install binary: $OPENSHIFT_INSTALL"
+        $OPENSHIFT_INSTALL version
+    else
+        echo "WARN: Could not resolve an exact-matching openshift-install binary for $RELEASE_IMAGE" >&2
+        echo "      Falling back to $OPENSHIFT_INSTALL (may not match the release image version)." >&2
+    fi
+
     mkdir -p $OCP_CREATE_DIR || return 1
 
     # Note: install-config's compute[].name only accepts "worker" or "edge" --

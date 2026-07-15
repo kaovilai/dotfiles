@@ -239,6 +239,68 @@ get-release-image() {
     fi
 }
 
+# Extract (or reuse a cached) openshift-install binary matching an exact
+# release image pullspec. Needed for stream=nightly / raw nightly payloads:
+# get-openshift-install() only knows about the latest cached EC/stable
+# binaries, and installer/Terraform logic is version-specific, so pairing a
+# mismatched binary with a nightly payload risks subtle install failures.
+# Caches the extracted binary as /usr/local/bin/openshift-install-<version>
+# (same naming convention as the EC/stable binaries) so repeat runs against
+# the same nightly build skip re-extraction.
+# Usage: binary=$(get-openshift-install-for-release-image "registry.ci.openshift.org/ocp/release:4.22.0-0.nightly-...")
+get-openshift-install-for-release-image() {
+    local release_image=$1
+    if [[ -z "$release_image" ]]; then
+        echo "ERROR: get-openshift-install-for-release-image requires a release image pullspec" >&2
+        return 1
+    fi
+
+    echo "INFO: Resolving version for release image $release_image..." >&2
+    local version
+    version=$(oc adm release info "$release_image" --registry-config ~/pull-secret.txt -o jsonpath='{.metadata.version}' 2>/dev/null)
+    if [[ -z "$version" ]]; then
+        echo "ERROR: Failed to resolve version from release image $release_image" >&2
+        return 1
+    fi
+
+    # /opt/homebrew/bin (not /usr/local/bin) -- user-writable on Apple Silicon
+    # Homebrew installs, so this can run without sudo. Both are on PATH, so
+    # get-openshift-install()'s `command -v openshift-install-<version>`
+    # lookup finds binaries in either location.
+    local binary_path="/opt/homebrew/bin/openshift-install-${version}"
+    if [[ -x "$binary_path" ]] && "$binary_path" version &>/dev/null; then
+        echo "INFO: Using cached openshift-install binary for $version" >&2
+        echo "$binary_path"
+        return 0
+    fi
+
+    # --registry-config ~/pull-secret.txt is required, not optional: component
+    # images live under quay.io/openshift-release-dev/ocp-v*-art-dev, a private
+    # namespace gated on the openshift-release-dev+ service account token in
+    # the real pull-secret.txt (not personal quay.io credentials in podman/
+    # docker auth files). See kubevirt-datamover-controller project memory
+    # "oadp-install-pullsecret-bug" for the same failure mode elsewhere.
+    echo "INFO: Extracting openshift-install binary for $version from $release_image (this may take a minute)..." >&2
+    local tmp_extract_dir
+    tmp_extract_dir=$(mktemp -d)
+    if ! oc adm release extract --command=openshift-install --to="$tmp_extract_dir" --registry-config ~/pull-secret.txt "$release_image" &>/dev/null; then
+        echo "ERROR: Failed to extract openshift-install from $release_image" >&2
+        rm -rf "$tmp_extract_dir"
+        return 1
+    fi
+
+    if ! mv "$tmp_extract_dir/openshift-install" "$binary_path"; then
+        echo "ERROR: Failed to install extracted binary to $binary_path" >&2
+        rm -rf "$tmp_extract_dir"
+        return 1
+    fi
+    chmod +x "$binary_path"
+    rm -rf "$tmp_extract_dir"
+
+    echo "INFO: Extracted openshift-install to $binary_path" >&2
+    echo "$binary_path"
+}
+
 # Function to validate environment variables
 # Usage: validate-env-vars "aws" AWS_REGION AWS_PROFILE
 #        validate-env-vars "azure" AZURE_SUBSCRIPTION_ID AZURE_TENANT_ID
