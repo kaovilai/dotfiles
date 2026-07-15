@@ -32,6 +32,31 @@ on:
           - create
           - delete
         default: create
+      kvm_mode:
+        description: 'Bare-metal /dev/kvm strategy (create only)'
+        required: true
+        type: choice
+        options:
+          - none
+          - kvm
+          - kvm-spot
+          - kvm-all-workers
+        default: none
+      install_cnv:
+        description: 'Install OpenShift Virtualization (CNV/KubeVirt) (create only)'
+        required: true
+        type: boolean
+        default: false
+      kvm_instance_type:
+        description: 'Override default metal instance type (OCP_KVM_INSTANCE_TYPE, e.g. m5.metal). Leave empty for default.'
+        required: false
+        type: string
+        default: ''
+      kvm_zone:
+        description: 'Override AZ for --kvm/--kvm-spot (OCP_KVM_ZONE, e.g. us-east-1c). Leave empty for default (<region>b). Ignored by --kvm-all-workers.'
+        required: false
+        type: string
+        default: ''
 
 permissions:
   contents: read
@@ -78,6 +103,8 @@ jobs:
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           AWS_BASEDOMAIN: ${{ secrets.AWS_BASEDOMAIN }}
           AWS_REGION: us-east-1
+          OCP_KVM_INSTANCE_TYPE: ${{ inputs.kvm_instance_type }}
+          OCP_KVM_ZONE: ${{ inputs.kvm_zone }}
         run: |
           set -euo pipefail
 
@@ -108,7 +135,18 @@ jobs:
             FLAGS+=(--ec)
           fi
 
-          echo "::group::Creating OCP cluster (arch=$ARCH, stream=$STREAM, version=${VERSION:-latest})"
+          KVM_MODE="${{ inputs.kvm_mode }}"
+          case "$KVM_MODE" in
+            kvm) FLAGS+=(--kvm) ;;
+            kvm-spot) FLAGS+=(--kvm-spot) ;;
+            kvm-all-workers) FLAGS+=(--kvm-all-workers) ;;
+          esac
+
+          if [[ "${{ inputs.install_cnv }}" == "true" ]]; then
+            FLAGS+=(--install-cnv)
+          fi
+
+          echo "::group::Creating OCP cluster (arch=$ARCH, stream=$STREAM, version=${VERSION:-latest}, kvm=$KVM_MODE, cnv=${{ inputs.install_cnv }})"
           "create-ocp-aws-${ARCH}" "${FLAGS[@]}"
           echo "::endgroup::"
 
@@ -132,6 +170,8 @@ jobs:
                 `- **Provider:** AWS`,
                 `- **Architecture:** ${{ inputs.arch }}`,
                 `- **Stream:** ${{ inputs.stream }}`,
+                `- **KVM mode:** ${{ inputs.kvm_mode }}`,
+                `- **CNV installed:** ${{ inputs.install_cnv }}`,
                 `- **Created:** ${new Date().toISOString()}`,
                 `- **Run:** [${context.runId}](${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId})`,
                 ``,
