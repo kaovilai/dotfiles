@@ -94,7 +94,7 @@ check-for-existing-clusters() {
                 fi
                 
                 # Apply pattern filter if provided
-                if [[ -z $pattern || $cluster_name == *$pattern* ]]; then
+                if [[ -z $pattern || $cluster_name == *"$pattern"* ]]; then
                     # Validate that both directory and name are non-empty
                     if [[ -n "$cluster_dir" && -n "$cluster_name" ]]; then
                         debug "Adding cluster: $cluster_name at $cluster_dir"
@@ -116,7 +116,7 @@ check-for-existing-clusters() {
                     cluster_name="${dir:t}"
                     
                     # Apply pattern filter if provided
-                    if [[ -z $pattern || $cluster_name == *$pattern* ]]; then
+                    if [[ -z $pattern || $cluster_name == *"$pattern"* ]]; then
                         debug "Adding ROSA cluster: $cluster_name at $dir"
                         cluster_dirs+=("$dir")
                         cluster_names+=("$cluster_name (ROSA)")
@@ -202,7 +202,7 @@ check-for-existing-clusters() {
                 cluster_name="${cluster_dir:t}"
                 
                 # Apply pattern filter if provided
-                if [[ -z $pattern || $cluster_name == *$pattern* ]]; then
+                if [[ -z $pattern || $cluster_name == *"$pattern"* ]]; then
                     # Validate that both directory and name are non-empty
                     if [[ -n "$cluster_dir" && -n "$cluster_name" ]]; then
                         debug "Adding local cluster: $cluster_name at $cluster_dir"
