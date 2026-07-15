@@ -140,12 +140,44 @@ alias ce='cd ~/experiments/ && claude'
 # cec = copilot edition of ce (raw claude via copilot-api gateway; see claude-copilot.zsh)
 # NOTE: cec previously launched the podman claude-container — that is now cecon.
 alias cec='cd ~/experiments/ && claude-copilot'
-alias cecon='podman run --rm -it -v ~/experiments:/workspace:Z -v "$HOME/.config/claude-container:/claude" -v "$HOME/.config/gcloud:/home/node/.config/gcloud:ro" -e CLAUDE_CONFIG_DIR=/claude -e CLAUDE_CODE_USE_VERTEX -e ANTHROPIC_VERTEX_PROJECT_ID -e CLOUD_ML_REGION -e ANTHROPIC_VERTEX_BASE_URL ghcr.io/kaovilai/claude-container:latest claude --enable-auto-mode --permission-mode auto'
+# Builds -e flags to pass the host's active Anthropic/copilot-api gateway
+# config into a container. ANTHROPIC_BASE_URL's host is rewritten from
+# localhost/127.0.0.1 to host.containers.internal since the container's
+# network namespace can't resolve the host's own loopback back to the host.
+typeset -ga _claude_container_anthropic_env_args
+_claude_container_anthropic_env_build() {
+    _claude_container_anthropic_env_args=()
+    if [[ -n "$ANTHROPIC_BASE_URL" ]]; then
+        local url="$ANTHROPIC_BASE_URL"
+        url="${url/localhost/host.containers.internal}"
+        url="${url/127.0.0.1/host.containers.internal}"
+        _claude_container_anthropic_env_args+=(-e "ANTHROPIC_BASE_URL=${url}")
+    fi
+    [[ -n "$ANTHROPIC_AUTH_TOKEN" ]] && _claude_container_anthropic_env_args+=(-e ANTHROPIC_AUTH_TOKEN)
+    [[ -n "$ANTHROPIC_MODEL" ]] && _claude_container_anthropic_env_args+=(-e ANTHROPIC_MODEL)
+    [[ -n "$ANTHROPIC_DEFAULT_OPUS_MODEL" ]] && _claude_container_anthropic_env_args+=(-e ANTHROPIC_DEFAULT_OPUS_MODEL)
+    [[ -n "$ANTHROPIC_DEFAULT_SONNET_MODEL" ]] && _claude_container_anthropic_env_args+=(-e ANTHROPIC_DEFAULT_SONNET_MODEL)
+    [[ -n "$ANTHROPIC_DEFAULT_HAIKU_MODEL" ]] && _claude_container_anthropic_env_args+=(-e ANTHROPIC_DEFAULT_HAIKU_MODEL)
+}
+
+cecon() {
+    _claude_container_anthropic_env_build
+    podman run --rm -it -v ~/experiments:/workspace:Z -v "$HOME/.config/claude-container:/claude" -v "$HOME/.config/gcloud:/home/node/.config/gcloud:ro" -e CLAUDE_CONFIG_DIR=/claude -e CLAUDE_CODE_USE_VERTEX -e ANTHROPIC_VERTEX_PROJECT_ID -e CLOUD_ML_REGION -e ANTHROPIC_VERTEX_BASE_URL "${_claude_container_anthropic_env_args[@]}" ghcr.io/kaovilai/claude-container:latest claude --enable-auto-mode --permission-mode auto
+}
 alias ced='cd ~/experiments/ && claude --dangerously-skip-permissions'
-alias cedcon='podman run --rm -it -v ~/experiments:/workspace:Z -v "$HOME/.config/claude-container:/claude" -v "$HOME/.config/gcloud:/home/node/.config/gcloud:ro" -e CLAUDE_CONFIG_DIR=/claude -e CLAUDE_CODE_USE_VERTEX -e ANTHROPIC_VERTEX_PROJECT_ID -e CLOUD_ML_REGION -e ANTHROPIC_VERTEX_BASE_URL ghcr.io/kaovilai/claude-container:latest claude --enable-auto-mode --permission-mode auto --dangerously-skip-permissions'
+cedcon() {
+    _claude_container_anthropic_env_build
+    podman run --rm -it -v ~/experiments:/workspace:Z -v "$HOME/.config/claude-container:/claude" -v "$HOME/.config/gcloud:/home/node/.config/gcloud:ro" -e CLAUDE_CONFIG_DIR=/claude -e CLAUDE_CODE_USE_VERTEX -e ANTHROPIC_VERTEX_PROJECT_ID -e CLOUD_ML_REGION -e ANTHROPIC_VERTEX_BASE_URL "${_claude_container_anthropic_env_args[@]}" ghcr.io/kaovilai/claude-container:latest claude --enable-auto-mode --permission-mode auto --dangerously-skip-permissions
+}
 alias cedc='cedcon'   # backwards-compat after cedc→cedcon rename
-alias claude-container='podman run --rm -it -v "$PWD:/workspace:Z" -v "$HOME/.config/claude-container:/claude" -v "$HOME/.config/gcloud:/home/node/.config/gcloud:ro" -e CLAUDE_CONFIG_DIR=/claude -e CLAUDE_CODE_USE_VERTEX -e ANTHROPIC_VERTEX_PROJECT_ID -e CLOUD_ML_REGION -e ANTHROPIC_VERTEX_BASE_URL ghcr.io/kaovilai/claude-container:latest claude --enable-auto-mode --permission-mode auto'
-alias claude-dangerously-container='podman run --rm -it -v "$PWD:/workspace:Z" -v "$HOME/.config/claude-container:/claude" -v "$HOME/.config/gcloud:/home/node/.config/gcloud:ro" -e CLAUDE_CONFIG_DIR=/claude -e CLAUDE_CODE_USE_VERTEX -e ANTHROPIC_VERTEX_PROJECT_ID -e CLOUD_ML_REGION -e ANTHROPIC_VERTEX_BASE_URL ghcr.io/kaovilai/claude-container:latest claude --enable-auto-mode --permission-mode auto --dangerously-skip-permissions'
+claude-container() {
+    _claude_container_anthropic_env_build
+    podman run --rm -it -v "$PWD:/workspace:Z" -v "$HOME/.config/claude-container:/claude" -v "$HOME/.config/gcloud:/home/node/.config/gcloud:ro" -e CLAUDE_CONFIG_DIR=/claude -e CLAUDE_CODE_USE_VERTEX -e ANTHROPIC_VERTEX_PROJECT_ID -e CLOUD_ML_REGION -e ANTHROPIC_VERTEX_BASE_URL "${_claude_container_anthropic_env_args[@]}" ghcr.io/kaovilai/claude-container:latest claude --enable-auto-mode --permission-mode auto
+}
+claude-dangerously-container() {
+    _claude_container_anthropic_env_build
+    podman run --rm -it -v "$PWD:/workspace:Z" -v "$HOME/.config/claude-container:/claude" -v "$HOME/.config/gcloud:/home/node/.config/gcloud:ro" -e CLAUDE_CONFIG_DIR=/claude -e CLAUDE_CODE_USE_VERTEX -e ANTHROPIC_VERTEX_PROJECT_ID -e CLOUD_ML_REGION -e ANTHROPIC_VERTEX_BASE_URL "${_claude_container_anthropic_env_args[@]}" ghcr.io/kaovilai/claude-container:latest claude --enable-auto-mode --permission-mode auto --dangerously-skip-permissions
+}
 alias gcloud-token='gcloud auth print-access-token'
 alias claude-agents='~/.local/bin/claude agents'
 alias claude-install='~/.local/bin/claude install'
