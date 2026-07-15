@@ -70,7 +70,8 @@ dco() {
     git rebase "HEAD~$commit_count" --signoff
 }
 dco-push() {
-    local head_before=$(git rev-parse HEAD)
+    local head_before
+    head_before=$(git rev-parse HEAD) || return 1
     dco || return 1
     if [[ $(git rev-parse HEAD) != "$head_before" ]]; then
         git push --force
