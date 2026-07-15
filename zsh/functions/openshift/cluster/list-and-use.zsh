@@ -57,8 +57,8 @@ list-ocp-clusters() {
         # Find all directories with auth/kubeconfig files
         while IFS= read -r -d '' dir; do
             if [[ -f "$dir/kubeconfig" ]]; then
-                cluster_dir=$(dirname "$dir")
-                cluster_name=$(basename "$cluster_dir")
+                cluster_dir="${dir:h}"
+                cluster_name="${cluster_dir:t}"
                 
                 # Determine cluster type
                 cluster_type=""
@@ -87,7 +87,7 @@ list-ocp-clusters() {
         # Check for ROSA clusters that might not have kubeconfig files yet
         while IFS= read -r -d '' dir; do
             if [[ ! -f "$dir/auth/kubeconfig" && -f "$dir/cluster-admin.txt" ]]; then
-                cluster_name=$(basename "$dir")
+                cluster_name="${dir:t}"
                 count=$((count+1))
                 
                 if [[ "$show_full" == true ]]; then
@@ -112,8 +112,8 @@ list-ocp-clusters() {
         # Find all directories with auth/kubeconfig files
         while IFS= read -r -d '' dir; do
             if [[ -f "$dir/kubeconfig" ]]; then
-                cluster_dir=$(dirname "$dir")
-                cluster_name=$(basename "$cluster_dir")
+                cluster_dir="${dir:h}"
+                cluster_name="${cluster_dir:t}"
                 count=$((count+1))
                 
                 if [[ "$show_full" == true ]]; then
@@ -200,8 +200,8 @@ use-ocp-cluster() {
     if [[ -d "$OCP_MANIFESTS_DIR" ]]; then
         while IFS= read -r -d '' dir; do
             if [[ -f "$dir/kubeconfig" ]]; then
-                cluster_dir=$(dirname "$dir")
-                cluster_name=$(basename "$cluster_dir")
+                cluster_dir="${dir:h}"
+                cluster_name="${cluster_dir:t}"
                 
                 # Determine cluster type
                 cluster_type=""
@@ -228,7 +228,7 @@ use-ocp-cluster() {
         # Check for ROSA clusters that might not have kubeconfig files yet
         while IFS= read -r -d '' dir; do
             if [[ ! -f "$dir/auth/kubeconfig" && -f "$dir/cluster-admin.txt" ]]; then
-                cluster_name=$(basename "$dir")
+                cluster_name="${dir:t}"
                 
                 # Apply pattern filter if provided
                 if [[ -z $search_pattern || $cluster_name == *"$search_pattern"* ]]; then
@@ -244,8 +244,8 @@ use-ocp-cluster() {
     if [[ -d "$HOME/clusters" ]]; then
         while IFS= read -r -d '' dir; do
             if [[ -f "$dir/kubeconfig" ]]; then
-                cluster_dir=$(dirname "$dir")
-                cluster_name=$(basename "$cluster_dir")
+                cluster_dir="${dir:h}"
+                cluster_name="${cluster_dir:t}"
                 
                 # Apply pattern filter if provided
                 if [[ -z $search_pattern || $cluster_name == *"$search_pattern"* ]]; then
@@ -328,7 +328,7 @@ use-ocp-cluster() {
         echo "You need to use the use-rosa-sts function to connect."
         echo ""
         local rosa_dir="${selected_path#ROSA:}"
-        rosa_cluster_name=$(basename "$rosa_dir")
+        rosa_cluster_name="${rosa_dir:t}"
         
         # Extract architecture from directory name
         if [[ "$rosa_cluster_name" == *"-arm64" ]]; then
