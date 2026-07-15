@@ -147,7 +147,8 @@ if has_command claude || has_command happy; then
   local claude_completion_file="$ZSH_COMPLETION_CACHE_DIR/_claude"
   if [[ -f "$claude_completion_file" ]]; then
     cp "$claude_completion_file" "${fpath[1]}/_claude" &!
-    # Also register completions for happy (claude is aliased to happy)
+    # Also register completions for happy (claude is a shell function
+    # dispatching to happy or the claude binary; see claude-copilot.zsh)
     sed 's/^#compdef claude/#compdef claude happy/' "$claude_completion_file" > "${fpath[1]}/_happy" &!
   fi
   if has_command curl && completion_cache_expired "$claude_completion_file"; then  # 7 days

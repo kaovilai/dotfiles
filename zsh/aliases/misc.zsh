@@ -117,7 +117,7 @@ activepieces-restart() {
 }
 alias makelintv2oadp='git checkout linterv2 Makefile .golangci.yaml && make lint-fix && git restore --staged Makefile .golangci.yaml && git restore Makefile .golangci.yaml'
 alias term='open -Fna Terminal .'
-alias termc='osascript -e "tell app \"Terminal\" to do script \"cd $PWD && happy --enable-auto-mode --permission-mode auto\""'
+alias termc='osascript -e "tell app \"Terminal\" to do script \"cd $PWD && claude\""'
 alias audio-desk='SwitchAudioSource -t all -s "FiiO USB DAC K1" && SwitchAudioSource -t input -s "HD Pro Webcam C920"'
 alias audio-poly='SwitchAudioSource -t all -s "Poly V4320 Series"'
 alias restart-dock='killall Dock'
@@ -126,28 +126,33 @@ c() {
         echo "Error: c is only supported on macOS" >&2
         return 1
     fi
-    if ! command -v happy &>/dev/null; then
-        echo "❌ happy not found. Install Claude Code CLI." >&2
+    if ! command -v happy &>/dev/null && ! whence -p claude &>/dev/null; then
+        echo "❌ Neither happy nor claude binary found. Install Claude Code CLI." >&2
         return 1
     fi
     if [[ -n "$1" ]]; then
-        osascript -e "tell app \"Terminal\" to do script \"cd $HOME/experiments/ && happy --enable-auto-mode --permission-mode auto \\\"$1\\\"\""
+        osascript -e "tell app \"Terminal\" to do script \"cd $HOME/experiments/ && claude \\\"$1\\\"\""
     else
-        osascript -e "tell app \"Terminal\" to do script \"cd $HOME/experiments/ && happy --enable-auto-mode --permission-mode auto\""
+        osascript -e "tell app \"Terminal\" to do script \"cd $HOME/experiments/ && claude\""
     fi
 }
-alias ce='cd ~/experiments/ && happy --enable-auto-mode --permission-mode auto'
-alias cec='podman run --rm -it -v ~/experiments:/workspace:Z -v "$HOME/.config/claude-container:/claude" -v "$HOME/.config/gcloud:/home/node/.config/gcloud:ro" -e CLAUDE_CONFIG_DIR=/claude -e CLAUDE_CODE_USE_VERTEX -e ANTHROPIC_VERTEX_PROJECT_ID -e CLOUD_ML_REGION -e ANTHROPIC_VERTEX_BASE_URL ghcr.io/kaovilai/claude-container:latest claude --enable-auto-mode --permission-mode auto'
-alias ced='cd ~/experiments/ && happy --enable-auto-mode --permission-mode auto --dangerously-skip-permissions'
-alias cedc='podman run --rm -it -v ~/experiments:/workspace:Z -v "$HOME/.config/claude-container:/claude" -v "$HOME/.config/gcloud:/home/node/.config/gcloud:ro" -e CLAUDE_CONFIG_DIR=/claude -e CLAUDE_CODE_USE_VERTEX -e ANTHROPIC_VERTEX_PROJECT_ID -e CLOUD_ML_REGION -e ANTHROPIC_VERTEX_BASE_URL ghcr.io/kaovilai/claude-container:latest claude --enable-auto-mode --permission-mode auto --dangerously-skip-permissions'
+alias ce='cd ~/experiments/ && claude'
+# cec = copilot edition of ce (raw claude via copilot-api gateway; see claude-copilot.zsh)
+# NOTE: cec previously launched the podman claude-container — that is now cecon.
+alias cec='cd ~/experiments/ && claude-copilot'
+alias cecon='podman run --rm -it -v ~/experiments:/workspace:Z -v "$HOME/.config/claude-container:/claude" -v "$HOME/.config/gcloud:/home/node/.config/gcloud:ro" -e CLAUDE_CONFIG_DIR=/claude -e CLAUDE_CODE_USE_VERTEX -e ANTHROPIC_VERTEX_PROJECT_ID -e CLOUD_ML_REGION -e ANTHROPIC_VERTEX_BASE_URL ghcr.io/kaovilai/claude-container:latest claude --enable-auto-mode --permission-mode auto'
+alias ced='cd ~/experiments/ && claude --dangerously-skip-permissions'
+alias cedcon='podman run --rm -it -v ~/experiments:/workspace:Z -v "$HOME/.config/claude-container:/claude" -v "$HOME/.config/gcloud:/home/node/.config/gcloud:ro" -e CLAUDE_CONFIG_DIR=/claude -e CLAUDE_CODE_USE_VERTEX -e ANTHROPIC_VERTEX_PROJECT_ID -e CLOUD_ML_REGION -e ANTHROPIC_VERTEX_BASE_URL ghcr.io/kaovilai/claude-container:latest claude --enable-auto-mode --permission-mode auto --dangerously-skip-permissions'
+alias cedc='cedcon'   # backwards-compat after cedc→cedcon rename
 alias claude-container='podman run --rm -it -v "$PWD:/workspace:Z" -v "$HOME/.config/claude-container:/claude" -v "$HOME/.config/gcloud:/home/node/.config/gcloud:ro" -e CLAUDE_CONFIG_DIR=/claude -e CLAUDE_CODE_USE_VERTEX -e ANTHROPIC_VERTEX_PROJECT_ID -e CLOUD_ML_REGION -e ANTHROPIC_VERTEX_BASE_URL ghcr.io/kaovilai/claude-container:latest claude --enable-auto-mode --permission-mode auto'
 alias claude-dangerously-container='podman run --rm -it -v "$PWD:/workspace:Z" -v "$HOME/.config/claude-container:/claude" -v "$HOME/.config/gcloud:/home/node/.config/gcloud:ro" -e CLAUDE_CONFIG_DIR=/claude -e CLAUDE_CODE_USE_VERTEX -e ANTHROPIC_VERTEX_PROJECT_ID -e CLOUD_ML_REGION -e ANTHROPIC_VERTEX_BASE_URL ghcr.io/kaovilai/claude-container:latest claude --enable-auto-mode --permission-mode auto --dangerously-skip-permissions'
 alias gcloud-token='gcloud auth print-access-token'
 alias claude-agents='~/.local/bin/claude agents'
 alias claude-install='~/.local/bin/claude install'
 alias claude-local='~/.local/bin/claude'
-alias claude='happy --enable-auto-mode --permission-mode auto'
-alias claude-dangerously='happy --enable-auto-mode --permission-mode auto --dangerously-skip-permissions'
+# claude is a mode-dispatching function defined in claude-copilot.zsh (sourced
+# after this file); switch backends with claude-mode [copilot|default].
+alias claude-dangerously='claude --dangerously-skip-permissions'
 alias claude-sonnet='claude --model sonnet'
 alias claude-opus='claude --model opus'
 alias claude-worktree='claude --worktree'
@@ -161,11 +166,11 @@ claude-review() {
         echo "Usage: claude-review <topic>" >&2
         return 1
     fi
-    if ! command -v happy &>/dev/null; then
-        echo "❌ happy not found. Install Claude Code CLI." >&2
+    if ! command -v happy &>/dev/null && ! whence -p claude &>/dev/null; then
+        echo "❌ Neither happy nor claude binary found. Install Claude Code CLI." >&2
         return 1
     fi
-    osascript -e "tell app \"Terminal\" to do script \"cd $HOME/experiments/ && happy --enable-auto-mode --permission-mode auto \\\"/review $1\\\"\""
+    osascript -e "tell app \"Terminal\" to do script \"cd $HOME/experiments/ && claude \\\"/review $1\\\"\""
 }
 alias cr='claude-review'
 gemini-review() {
