@@ -15,6 +15,10 @@ wait-for-url() {
         echo "Usage: wait-for-url <url> [interval_seconds] [label]" >&2
         return 1
     fi
+    if ! command -v curl &>/dev/null; then
+        echo "❌ curl not found. Install it with: brew install curl" >&2
+        return 1
+    fi
 
     echo "Polling $label every ${interval}s until it responds..."
     echo "URL: $url"
