@@ -33,6 +33,29 @@ _claude_copilot_latest_model() {
     ' <<< "$models_json"
 }
 
+# Names only (no values) — used to clean up when switching back to `default`
+# mode so gateway config doesn't leak into happy/subscription auth.
+typeset -ga _claude_copilot_env_names=(
+    ANTHROPIC_BASE_URL
+    ANTHROPIC_AUTH_TOKEN
+    ANTHROPIC_MODEL
+    ANTHROPIC_DEFAULT_OPUS_MODEL
+    ANTHROPIC_DEFAULT_SONNET_MODEL
+    ANTHROPIC_DEFAULT_HAIKU_MODEL
+    CLAUDE_CODE_USE_VERTEX
+    CLAUDE_CODE_USE_BEDROCK
+    DISABLE_NON_ESSENTIAL_MODEL_CALLS
+    CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC
+    CLAUDE_CODE_ATTRIBUTION_HEADER
+    CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION
+    CLAUDE_CODE_DISABLE_TERMINAL_TITLE
+    CLAUDE_CODE_ENABLE_AWAY_SUMMARY
+)
+
+_claude_copilot_unset_env() {
+    unset "${_claude_copilot_env_names[@]}"
+}
+
 claude-copilot() {
     if ! command -v jq &>/dev/null; then
         echo "❌ jq not found. Install it with: brew install jq" >&2
@@ -107,10 +130,15 @@ claude-copilot() {
     [[ -n "$sonnet" ]] && envs+=(ANTHROPIC_DEFAULT_SONNET_MODEL="${sonnet}")
     [[ -n "$haiku" ]] && envs+=(ANTHROPIC_DEFAULT_HAIKU_MODEL="${haiku}")
 
-    # env(1) bypasses the claude shell function (functions are invisible to
-    # env; it execs the claude binary from PATH). Never replace with a bare
-    # `claude` call — claude() → claude-copilot → claude() would recurse.
-    env "${envs[@]}" claude "$@"
+    # `export` writes into the calling shell (not a subprocess-only scope) so
+    # any later child process — including Claude Code re-entering an agent
+    # shell via the left-arrow session view — inherits the gateway config
+    # instead of falling back to default subscription auth.
+    # `command` bypasses the claude() shell function without exec'ing a new
+    # process (unlike env), avoiding claude() → claude-copilot → claude()
+    # recursion while keeping the exported vars in this same shell.
+    export "${envs[@]}"
+    command claude "$@"
 }
 
 # ---------------------------------------------------------------------------
@@ -166,6 +194,7 @@ function claude {
     if [[ "$mode" == copilot ]]; then
         claude-copilot "$@"          # raw claude binary; NO happy-only flags
     else
+        _claude_copilot_unset_env
         happy --enable-auto-mode --permission-mode auto "$@"
     fi
 }
