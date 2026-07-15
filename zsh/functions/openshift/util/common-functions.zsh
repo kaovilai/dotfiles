@@ -350,12 +350,17 @@ handle-registry-login() {
             echo "Login URL opened in browser. Please copy the login command from the browser and paste it below:"
             local login_command
             read -r login_command
-            if [[ "$login_command" != podman\ login* && "$login_command" != oc\ login* && "$login_command" != docker\ login* ]]; then
+
+            # Securely parse the command into an array to avoid arbitrary code execution via eval
+            local -a cmd_args
+            cmd_args=("${(@Q)${(z)login_command}}")
+
+            if [[ "${cmd_args[1]}" != "podman" && "${cmd_args[1]}" != "oc" && "${cmd_args[1]}" != "docker" ]] || [[ "${cmd_args[2]}" != "login" ]]; then
                 echo "ERROR: Only 'podman login', 'oc login', or 'docker login' commands are accepted"
                 return 1
             fi
             echo "Executing login command..."
-            eval "$login_command"
+            "${cmd_args[@]}"
         else
             echo "Please login to $registry:"
             podman login "$registry"
