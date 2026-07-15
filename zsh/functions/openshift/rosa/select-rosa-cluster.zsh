@@ -64,6 +64,8 @@ select-rosa-cluster() {
         echo "Available ROSA clusters:"
         local i=1
         local cluster_array=()
+        local cluster
+        local choice
 
         while IFS= read -r cluster; do
             echo "  $i) $cluster"
