@@ -19,17 +19,21 @@
 # Highest-versioned Claude model for a family from /v1/models JSON.
 # Mirrors PR #2's getLatestModelForFamily: numeric major-then-minor compare,
 # handles claude-opus-4.8, claude-opus-4-5-20251101, claude-3-opus-... forms.
+# Outputs .claude_model_id (falls back to .id) so the 1M-context variant
+# (e.g. "claude-sonnet-5[1m]") is preferred over the plain default-context id
+# when the gateway advertises one for that model.
 _claude_copilot_latest_model() {
     local family="$1" models_json="$2"
     jq -r --arg fam "$family" '
-        [(.data // [])[] | .id? // empty | strings
-         | select(test("claude"; "i") and test($fam; "i"))]
-        | map({id: .,
-               v: ((try (capture("(?<maj>[0-9]+)(?:[.-](?<min>[0-9]+))?")) catch null) as $m
+        [(.data // [])[]
+         | select(((.id? // empty) | strings) as $i
+                  | ($i | test("claude"; "i")) and ($i | test($fam; "i")))]
+        | map({out: (.claude_model_id? // .id),
+               v: ((try (.id | capture("(?<maj>[0-9]+)(?:[.-](?<min>[0-9]+))?")) catch null) as $m
                    | if $m == null then 0
                      else (($m.maj | tonumber) * 1000) + (($m.min // "0") | tonumber)
                      end)})
-        | sort_by(.v) | last // {} | .id // empty
+        | sort_by(.v) | last // {} | .out // empty
     ' <<< "$models_json"
 }
 
