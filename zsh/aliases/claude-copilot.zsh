@@ -12,6 +12,9 @@
 #       no available model are omitted.
 # The gateway server itself runs from the published copilot-api package — the
 # PR fixes only affect the generated launch command, which is inlined here.
+#
+# Also defines the mode-dispatching `claude` function and the `claude-mode`
+# switcher (copilot ↔ default/happy) — see bottom of file.
 
 # Highest-versioned Claude model for a family from /v1/models JSON.
 # Mirrors PR #2's getLatestModelForFamily: numeric major-then-minor compare,
@@ -104,6 +107,65 @@ claude-copilot() {
     [[ -n "$sonnet" ]] && envs+=(ANTHROPIC_DEFAULT_SONNET_MODEL="${sonnet}")
     [[ -n "$haiku" ]] && envs+=(ANTHROPIC_DEFAULT_HAIKU_MODEL="${haiku}")
 
-    # env(1) bypasses the claude→happy alias: runs the claude binary directly
+    # env(1) bypasses the claude shell function (functions are invisible to
+    # env; it execs the claude binary from PATH). Never replace with a bare
+    # `claude` call — claude() → claude-copilot → claude() would recurse.
     env "${envs[@]}" claude "$@"
+}
+
+# ---------------------------------------------------------------------------
+# claude mode switching: `claude` dispatches to happy (default) or the raw
+# claude binary through the copilot-api gateway (copilot). Persisted in
+# ~/.config/claude-mode so the choice survives across shells.
+
+typeset -g _claude_mode_file="${XDG_CONFIG_HOME:-$HOME/.config}/claude-mode"
+
+_claude_mode_get() {
+    local mode=""
+    [[ -r "$_claude_mode_file" ]] && IFS= read -r mode < "$_claude_mode_file"
+    case "$mode" in
+        copilot) print -r -- copilot ;;
+        *)       print -r -- default ;;   # missing/unknown fails safe
+    esac
+}
+
+claude-mode() {
+    if (( $# > 1 )); then
+        echo "Usage: claude-mode [copilot|default]" >&2
+        return 1
+    fi
+    case "$1" in
+        copilot|default)
+            # >| overrides NO_CLOBBER; fail loudly if persistence fails
+            if ! mkdir -p "${_claude_mode_file:h}" ||
+               ! print -r -- "$1" >| "$_claude_mode_file"; then
+                echo "❌ Failed to persist claude mode in ${_claude_mode_file}" >&2
+                return 1
+            fi
+            echo "claude mode: $1"
+            ;;
+        "")
+            echo "claude mode: $(_claude_mode_get)"
+            echo "usage: claude-mode [copilot|default]"
+            ;;
+        *)
+            echo "Usage: claude-mode [copilot|default]" >&2
+            return 1
+            ;;
+    esac
+}
+
+# Guard for live shells still carrying the old claude→happy alias; `function`
+# keyword form: the name is never alias-expanded (at parse time or under
+# zcompile), so this definition is safe even if the guard misses.
+unalias claude 2>/dev/null || true   # tolerate missing alias under ERR_EXIT
+function claude {
+    local mode="$(_claude_mode_get)"
+    # stderr so piped/scripted output (e.g. claude -p) stays clean
+    echo "claude mode: ${mode} (switch: claude-mode copilot|default)" >&2
+    if [[ "$mode" == copilot ]]; then
+        claude-copilot "$@"          # raw claude binary; NO happy-only flags
+    else
+        happy --enable-auto-mode --permission-mode auto "$@"
+    fi
 }
