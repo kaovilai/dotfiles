@@ -49,14 +49,23 @@ create-ocp-aws() {
         echo "Flags (can be combined):"
         echo "  --force-new Force creation alongside existing clusters (skip prompt)"
         echo "  --ec        Automatically select Early Candidate release stream"
-        echo "  --kvm       Add a second compute pool with a bare-metal instance type"
+        echo "  --kvm       Add a second compute pool with a bare-metal instance type (day-2)"
         echo "              (exposes /dev/kvm for OpenShift Virtualization/KubeVirt VMs)"
         echo "  --kvm-spot  Same as --kvm, but request the metal node as a spot instance"
+        echo "  --kvm-all-workers"
+        echo "              Set the whole worker pool to a bare-metal instance type at install"
+        echo "              time (matches Red Hat's documented method). Mutually exclusive with"
+        echo "              --kvm/--kvm-spot."
+        echo "  --install-cnv"
+        echo "              Install OpenShift Virtualization (CNV/KubeVirt operator + a minimal"
+        echo "              HyperConverged CR). Can be combined with --kvm/--kvm-spot or"
+        echo "              --kvm-all-workers, or used alone."
         echo ""
         echo "Examples:"
         echo "  create-ocp-aws-$ARCH_SUFFIX --force-new --ec"
         echo "  create-ocp-aws-$ARCH_SUFFIX no-delete --ec"
         echo "  create-ocp-aws-$ARCH_SUFFIX --ec --kvm"
+        echo "  create-ocp-aws-$ARCH_SUFFIX --ec --kvm-all-workers --install-cnv"
         echo ""
         echo "Prerequisites:"
         echo "  - AWS_REGION environment variable (defaults to us-east-1 if not set)"
@@ -68,11 +77,28 @@ create-ocp-aws() {
         echo "KVM/metal notes:"
         echo "  - Bare-metal instances only expose /dev/kvm on '.metal' EC2 types -- non-metal"
         echo "    instances (even nested-virt-capable ones on some clouds) do NOT expose it on AWS."
+        echo "  - TODO: AWS announced (Feb 2026) nested-virt support for non-metal C8i/M8i/R8i"
+        echo "    families; re-check whether /dev/kvm eventually works without .metal types --"
+        echo "    RH's OpenShift Virtualization AWS docs still only list metal types as of now."
         echo "  - Default metal type: m6g.metal (arm64) / m5.metal (amd64). Override with"
         echo "    OCP_KVM_INSTANCE_TYPE. Default zone: \${AWS_REGION}b. Override with OCP_KVM_ZONE"
         echo "    (metal capacity varies by AZ -- retry with a different zone on InsufficientInstanceCapacity)."
+        echo "    OCP_KVM_ZONE is ignored by --kvm-all-workers (there's no single AZ to target when"
+        echo "    every worker is metal)."
         echo "  - This adds ~1 extra large/expensive node -- delete-ocp-aws tears it down with the"
         echo "    rest of the cluster; do not leave it running longer than needed."
+        echo ""
+        echo "CNV/virt notes:"
+        echo "  - --install-cnv installs the kubevirt-hyperconverged operator via OLM and waits"
+        echo "    up to 15m for its CSV to reach Succeeded, then creates a HyperConverged CR."
+        echo "  - If --kvm/--kvm-spot also ran and its metal node came up, the HyperConverged CR"
+        echo "    gets a nodePlacement toleration for that node's dedicated=kubevirt:NoSchedule"
+        echo "    taint (no nodeSelector, so KubeVirt components can use the node without forcing"
+        echo "    all VM workloads onto it)."
+        echo "  - With --kvm-all-workers or used alone, the HyperConverged CR has no nodePlacement"
+        echo "    override -- there's no dedicated/tainted node to tolerate."
+        echo "  - Best-effort: cluster creation has already succeeded by this point, so a failure"
+        echo "    or timeout installing CNV is a warning, not a hard failure of this function."
         echo ""
         echo "Directory:"
         echo "  Installation files will be created in: $OCP_MANIFESTS_DIR/$TODAY-aws-$ARCH_SUFFIX"
@@ -163,6 +189,8 @@ create-ocp-aws() {
     local auto_ec=false
     local add_kvm_pool=false
     local kvm_spot=false
+    local kvm_all_workers=false
+    local install_cnv=false
 
     for arg in "$@"; do
         case "$arg" in
@@ -179,9 +207,20 @@ create-ocp-aws() {
                 add_kvm_pool=true
                 kvm_spot=true
                 ;;
+            --kvm-all-workers)
+                kvm_all_workers=true
+                ;;
+            --install-cnv)
+                install_cnv=true
+                ;;
         esac
     done
-    
+
+    if [[ "$kvm_all_workers" == "true" && "$add_kvm_pool" == "true" ]]; then
+        echo "ERROR: --kvm-all-workers cannot be combined with --kvm or --kvm-spot (pick one metal strategy)" >&2
+        return 1
+    fi
+
     # Set environment variables based on flags
     if [[ "$force_new" == "true" ]]; then
         export FORCE_NEW_CLUSTER="true"
@@ -243,9 +282,20 @@ create-ocp-aws() {
 
     # Note: install-config's compute[].name only accepts "worker" or "edge" --
     # you cannot add an arbitrary custom-named compute pool (e.g. "worker-kvm")
-    # at install time. So --kvm is handled post-install below by cloning a
-    # real worker MachineSet with a bare-metal instance type via the Machine
-    # API, once the cluster (and its kubeconfig) exists.
+    # at install time. So --kvm/--kvm-spot are handled post-install below by
+    # cloning a real worker MachineSet with a bare-metal instance type via the
+    # Machine API, once the cluster (and its kubeconfig) exists. --kvm-all-workers
+    # is the exception: compute[].platform.aws.type IS settable at install time,
+    # so it sets the whole worker pool to a metal type directly here, matching
+    # Red Hat's documented install-time method for OpenShift Virtualization.
+    local compute_platform_yaml="  platform: {}"
+    if [[ "$kvm_all_workers" == "true" ]]; then
+        local metal_instance_type=$(resolve-kvm-instance-type "$ARCHITECTURE")
+        echo "INFO: --kvm-all-workers requested: all compute nodes will be $metal_instance_type"
+        compute_platform_yaml="  platform:
+    aws:
+      type: $metal_instance_type"
+    fi
     {
         create-install-config-header
         echo "baseDomain: $AWS_BASEDOMAIN
@@ -253,7 +303,7 @@ compute:
 - architecture: $ARCHITECTURE
   hyperthreading: Enabled
   name: worker
-  platform: {}
+$compute_platform_yaml
   replicas: 3
 controlPlane:
   architecture: $ARCHITECTURE
@@ -294,33 +344,57 @@ publish: External"
     # Post-install: add a bare-metal worker MachineSet for /dev/kvm, if requested.
     # Best-effort -- the cluster itself already succeeded above, so a failure
     # or timeout here is a warning, not a hard failure of this function.
+    local kvm_dedicated_node=false
     if [[ "$add_kvm_pool" == "true" ]]; then
-        local kvm_instance_type="${OCP_KVM_INSTANCE_TYPE:-}"
-        if [[ -z "$kvm_instance_type" ]]; then
-            if [[ "$ARCHITECTURE" == "arm64" ]]; then
-                kvm_instance_type="m6g.metal"
-            else
-                kvm_instance_type="m5.metal"
-            fi
-        fi
+        local kvm_instance_type=$(resolve-kvm-instance-type "$ARCHITECTURE")
         local kvm_zone="${OCP_KVM_ZONE:-${AWS_REGION}b}"
-        KUBECONFIG="$OCP_CREATE_DIR/auth/kubeconfig" add-kvm-machineset "$kvm_zone" "$kvm_instance_type" "$kvm_spot"
+        if KUBECONFIG="$OCP_CREATE_DIR/auth/kubeconfig" add-kvm-machineset "$kvm_zone" "$kvm_instance_type" "$kvm_spot"; then
+            kvm_dedicated_node=true
+        fi
+    fi
+
+    # Post-install: install OpenShift Virtualization (CNV/KubeVirt), if requested.
+    # Best-effort, same rationale as above.
+    if [[ "$install_cnv" == "true" ]]; then
+        KUBECONFIG="$OCP_CREATE_DIR/auth/kubeconfig" install-cnv-operator "$kvm_dedicated_node"
     fi
 
     # Cleanup
     unset OPENSHIFT_INSTALL_RELEASE_IMAGE_OVERRIDE AUTO_SELECT_EC PROCEED_WITH_EXISTING_CLUSTERS
 }
 
+# Resolve the default bare-metal EC2 instance type for /dev/kvm exposure,
+# honoring the OCP_KVM_INSTANCE_TYPE override. Shared by the install-time
+# (--kvm-all-workers) and day-2 (--kvm/--kvm-spot) metal-node paths.
+resolve-kvm-instance-type() {
+    local architecture=$1
+    local instance_type="${OCP_KVM_INSTANCE_TYPE:-}"
+    if [[ -z "$instance_type" ]]; then
+        if [[ "$architecture" == "arm64" ]]; then
+            instance_type="m6g.metal"
+        else
+            instance_type="m5.metal"
+        fi
+    fi
+    echo "$instance_type"
+}
+
 # Add a bare-metal worker MachineSet to an existing cluster so /dev/kvm is
 # exposed for OpenShift Virtualization/KubeVirt VMs. AWS only exposes /dev/kvm
 # on '.metal' instance types -- regular (non-metal) instances never expose it,
 # on any architecture, no matter how nested-virt-capable the hypervisor is.
+# TODO: AWS announced (Feb 2026) nested-virt support for non-metal C8i/M8i/R8i
+# families; re-check whether /dev/kvm eventually works without .metal types --
+# RH's OpenShift Virtualization AWS docs still only list metal types as of now.
 #
 # Usage: KUBECONFIG=/path/to/kubeconfig add-kvm-machineset <zone> <instance-type> [spot]
 #
 # Clones the existing worker MachineSet in the given zone (so subnet/AMI/IAM/
 # security-group config is already correct) rather than hand-building one --
 # only the instance type, spot market option, and identity fields change.
+# The cloned MachineSet's nodes are also tainted/labeled (dedicated=kubevirt)
+# so they're isolated from general workloads; pair with --install-cnv to wire
+# a matching toleration into the HyperConverged CR.
 add-kvm-machineset() {
     local zone=$1
     local instance_type=$2
@@ -355,7 +429,10 @@ add-kvm-machineset() {
         .spec.replicas = 1 |
         .spec.selector.matchLabels["machine.openshift.io/cluster-api-machineset"] = $name |
         .spec.template.metadata.labels["machine.openshift.io/cluster-api-machineset"] = $name |
-        .spec.template.spec.providerSpec.value.instanceType = $itype
+        .spec.template.spec.providerSpec.value.instanceType = $itype |
+        .spec.template.spec.taints = [{"key": "dedicated", "value": "kubevirt", "effect": "NoSchedule"}] |
+        .spec.template.spec.metadata.labels["dedicated"] = "kubevirt" |
+        .spec.template.spec.metadata.labels["node-role.kubernetes.io/kvm"] = ""
     '
     if [[ "$spot" == "true" ]]; then
         jq_filter="${jq_filter} | .spec.template.spec.providerSpec.value.spotMarketOptions = {}"
@@ -368,22 +445,132 @@ add-kvm-machineset() {
         return 1
     fi
 
-    echo "INFO: --kvm: waiting up to 15m for $new_ms's machine to become Running (best-effort)..."
+    # Wait for both Running phase AND the taint landing on the Node -- the
+    # Machine controller copies spec.template.spec.taints onto the Node
+    # asynchronously, so Running alone doesn't guarantee the taint is applied
+    # yet. Callers (e.g. install-cnv-operator's toleration wiring) rely on
+    # this return code to mean "the taint is actually present on the node".
+    echo "INFO: --kvm: waiting up to 15m for $new_ms's machine to become Running and tainted (best-effort)..."
     local elapsed=0
     while (( elapsed < 900 )); do
-        local phase
+        local phase node_name taint_value
         phase=$(oc get machine -n openshift-machine-api -l "machine.openshift.io/cluster-api-machineset=${new_ms}" -o jsonpath='{.items[0].status.phase}' 2>/dev/null)
         if [[ "$phase" == "Running" ]]; then
-            echo "INFO: --kvm: metal machine is Running"
-            return 0
+            node_name=$(oc get machine -n openshift-machine-api -l "machine.openshift.io/cluster-api-machineset=${new_ms}" -o jsonpath='{.items[0].status.nodeRef.name}' 2>/dev/null)
+            if [[ -n "$node_name" ]]; then
+                taint_value=$(oc get node "$node_name" -o jsonpath='{.spec.taints[?(@.key=="dedicated")].value}' 2>/dev/null)
+                if [[ "$taint_value" == "kubevirt" ]]; then
+                    echo "INFO: --kvm: metal machine is Running and node $node_name is tainted"
+                    return 0
+                fi
+            fi
         fi
         sleep 15
         (( elapsed += 15 ))
     done
 
-    echo "WARN: --kvm: metal machine did not reach Running within 15m (phase=${phase:-unknown})." >&2
+    echo "WARN: --kvm: metal machine did not reach Running+tainted within 15m (phase=${phase:-unknown})." >&2
     echo "      Check: oc get machine -n openshift-machine-api -l machine.openshift.io/cluster-api-machineset=${new_ms}" >&2
     return 1
+}
+
+# Install OpenShift Virtualization (CNV/KubeVirt) via OLM and wait for the
+# operator to reach Succeeded, then create a minimal HyperConverged CR.
+# Best-effort -- the cluster itself already succeeded, so a failure or
+# timeout here is a warning, not a hard failure of the caller.
+#
+# Usage: KUBECONFIG=/path/to/kubeconfig install-cnv-operator [tolerate-kvm-taint]
+#
+# When tolerate-kvm-taint is "true", the HyperConverged CR is created with a
+# nodePlacement toleration for the dedicated=kubevirt:NoSchedule taint added
+# by add-kvm-machineset (no nodeSelector, so KubeVirt components can use the
+# node without forcing all VM workloads onto it).
+install-cnv-operator() {
+    local tolerate_kvm_taint=${1:-false}
+
+    echo "INFO: --install-cnv requested: installing OpenShift Virtualization (best-effort)"
+
+    if ! oc apply -f - <<'EOF'
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: openshift-cnv
+  labels:
+    openshift.io/cluster-monitoring: "true"
+---
+apiVersion: operators.coreos.com/v1
+kind: OperatorGroup
+metadata:
+  name: kubevirt-hyperconverged-group
+  namespace: openshift-cnv
+spec:
+  targetNamespaces:
+  - openshift-cnv
+---
+apiVersion: operators.coreos.com/v1alpha1
+kind: Subscription
+metadata:
+  name: hco-operatorhub
+  namespace: openshift-cnv
+spec:
+  source: redhat-operators
+  sourceNamespace: openshift-marketplace
+  name: kubevirt-hyperconverged
+  channel: stable
+EOF
+    then
+        echo "WARN: --install-cnv: failed to apply namespace/OperatorGroup/Subscription" >&2
+        return 1
+    fi
+
+    echo "INFO: --install-cnv: waiting up to 15m for CSV to reach Succeeded (best-effort)..."
+    local elapsed=0 phase=""
+    while (( elapsed < 900 )); do
+        phase=$(oc get csv -n openshift-cnv -l operators.coreos.com/kubevirt-hyperconverged.openshift-cnv -o jsonpath='{.items[0].status.phase}' 2>/dev/null)
+        [[ "$phase" == "Succeeded" ]] && break
+        sleep 15
+        (( elapsed += 15 ))
+    done
+
+    if [[ "$phase" != "Succeeded" ]]; then
+        echo "WARN: --install-cnv: CSV did not reach Succeeded within 15m (phase=${phase:-unknown})." >&2
+        echo "      Check: oc get csv -n openshift-cnv" >&2
+        return 1
+    fi
+    echo "INFO: --install-cnv: CSV reached Succeeded"
+
+    echo "INFO: --install-cnv: creating HyperConverged CR"
+    local hco_manifest
+    if [[ "$tolerate_kvm_taint" == "true" ]]; then
+        hco_manifest='apiVersion: hco.kubevirt.io/v1beta1
+kind: HyperConverged
+metadata:
+  name: kubevirt-hyperconverged
+  namespace: openshift-cnv
+spec:
+  workloads:
+    nodePlacement:
+      tolerations:
+      - key: dedicated
+        operator: Equal
+        value: kubevirt
+        effect: NoSchedule'
+    else
+        hco_manifest='apiVersion: hco.kubevirt.io/v1beta1
+kind: HyperConverged
+metadata:
+  name: kubevirt-hyperconverged
+  namespace: openshift-cnv
+spec: {}'
+    fi
+
+    if ! echo "$hco_manifest" | oc apply -f -; then
+        echo "WARN: --install-cnv: failed to create HyperConverged CR" >&2
+        return 1
+    fi
+
+    echo "INFO: --install-cnv: HyperConverged CR created"
+    return 0
 }
 
 function create-ocp-aws-arm64() {
