@@ -110,7 +110,7 @@ delete-ocp-azure-sts-dir() {
     fi
     
     # Extract basename from the directory
-    local dir_basename; dir_basename=$(basename "$1")
+    local dir_basename="${1:t}"
     echo "DEBUG: Processing directory basename: $dir_basename"
     
     # Extract date from directory name

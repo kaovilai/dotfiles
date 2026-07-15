@@ -32,7 +32,7 @@ use-rosa-sts() {
             for dir in $OCP_MANIFESTS_DIR/*-rosa-sts-*/; do
                 if [[ -d "$dir" ]]; then
                     found_local=true
-                    local dir_name; dir_name=$(basename "$dir")
+                    local dir_name="${dir:t}"
                     echo "  - $dir_name (may be stale)"
                 fi
             done
@@ -126,7 +126,7 @@ use-rosa-sts() {
             for dir in $OCP_MANIFESTS_DIR/*-rosa-sts-*/; do
                 if [[ -d "$dir" ]]; then
                     found_local=true
-                    local dir_name; dir_name=$(basename "$dir")
+                    local dir_name="${dir:t}"
                     echo "  - $dir_name (may be stale)"
                 fi
             done

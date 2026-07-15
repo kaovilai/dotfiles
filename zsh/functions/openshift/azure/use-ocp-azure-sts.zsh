@@ -108,7 +108,7 @@ use-ocp-azure-sts-dir() {
     cp "$1/auth/kubeconfig" ~/.kube/config
     
     # Extract basename from the directory
-    local dir_basename; dir_basename=$(basename "$1")
+    local dir_basename="${1:t}"
     
     # Show success message
     echo "Successfully copied kubeconfig from $dir_basename to ~/.kube/config"
