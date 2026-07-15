@@ -13,6 +13,7 @@ _safe_source ~/git/dotfiles/zsh/aliases/code.zsh
 _safe_source ~/git/dotfiles/zsh/aliases/ibmcloud.zsh
 _safe_source ~/git/dotfiles/zsh/aliases/velero.zsh
 _safe_source ~/git/dotfiles/zsh/aliases/misc.zsh
+_safe_source ~/git/dotfiles/zsh/aliases/claude-copilot.zsh
 
 # Linux dev environments (lazy-loaded — ~756 lines only parsed when first used)
 typeset -g LINUX_DEV_LOADED=0
