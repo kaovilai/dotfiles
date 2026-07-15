@@ -102,7 +102,7 @@ delete-ocp-gcp-wif-dir() {
     fi
     
     # Extract basename from the directory
-    local dir_basename=$(basename "$1")
+    local dir_basename; dir_basename=$(basename "$1")
     echo "DEBUG: Processing directory basename: $dir_basename"
     
     # Extract date from directory name
@@ -152,7 +152,7 @@ delete-ocp-gcp-wif-dir() {
         echo "Using current date as fallback"
         
         # Use current date as fallback
-        local fallback_date=$(date +%Y%m%d)
+        local fallback_date; fallback_date=$(date +%Y%m%d)
         local original_today=$TODAY
         TODAY=$fallback_date
         
