@@ -49,7 +49,7 @@ delete-ocp-aws() {
         # Scan for AWS cluster directories matching today's date
         if [[ -d "$OCP_MANIFESTS_DIR" ]]; then
             for dir in "$OCP_MANIFESTS_DIR"/$TODAY-aws-*(/N); do
-                local dir_basename; dir_basename=$(basename "$dir")
+                local dir_basename="${dir:t}"
                 # Extract architecture from directory name
                 if [[ $dir_basename =~ ^[0-9]{6,8}-aws-(arm64|amd64)(-[0-9]+)?$ ]]; then
                     local arch=${match[1]}
@@ -179,7 +179,7 @@ delete-ocp-aws-dir() {
     fi
     
     # Extract basename from the directory
-    local dir_basename; dir_basename=$(basename "$1")
+    local dir_basename="${1:t}"
     echo "DEBUG: Processing directory basename: $dir_basename"
     
     # Extract date and architecture from directory name
