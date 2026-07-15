@@ -14,7 +14,7 @@ _gofmt_files() {
         echo "No modified .go files to format"
         return 0
     fi
-    go fmt ${(f)files}
+    go fmt "${(@f)files}"
 }
 gofmtgitdiff()       { _gofmt_files; }
 gofmtgitdiffmain()   { _gofmt_files upstream/main; }

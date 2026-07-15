@@ -99,7 +99,7 @@ activepieces-restart() {
         if [[ -n "$machine_ids" ]]; then
             echo "Found activepieces machines to clean up"
             local id
-            for id in ${(f)machine_ids}; do
+            for id in "${(@f)machine_ids}"; do
                 echo "Deleting Tailscale machine: $id"
                 curl -s --fail --connect-timeout 10 -X DELETE -H "Authorization: Bearer $TAILSCALE_API_KEY" \
                     "https://api.tailscale.com/api/v2/device/$id" || \
