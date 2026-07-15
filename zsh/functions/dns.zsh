@@ -118,7 +118,7 @@ set-dns-servers() {
         echo "Setting IPv6 DNS servers for $service: $ipv6_servers"
 
         # Convert space-separated string to array
-        local ipv6_array=($ipv6_servers)
+        local ipv6_array=(${=ipv6_servers})
 
         # Create the scutil commands
         local scutil_commands="open\n"
