@@ -152,16 +152,20 @@ if [[ "$TERM_PROGRAM" != "vscode" ]]; then
   {
     local stamp="$HOME/.zsh-command-cache/happy-update-check"
     [[ -d "${stamp:h}" ]] || mkdir -p "${stamp:h}"
-    local expired=1
+    local expired=0
     if [[ -f "$stamp" ]]; then
-      local mtime now
-      mtime=$(stat -f "%m" "$stamp" 2>/dev/null || stat -c "%Y" "$stamp" 2>/dev/null) || expired=0
-      now=$(date +%s)
-      (( now - mtime > 86400 )) && expired=0 || expired=1
+      () {
+        setopt local_options extended_glob
+        local -a expired_files
+        expired_files=("$stamp"(#qNms+86400))
+        if (( ${#expired_files} > 0 )); then
+          expired=1
+        fi
+      }
     else
-      expired=0
+      expired=1
     fi
-    if (( expired == 0 )); then
+    if (( expired == 1 )); then
       local outdated
       outdated=$(npm outdated -g happy 2>/dev/null)
       touch "$stamp"
