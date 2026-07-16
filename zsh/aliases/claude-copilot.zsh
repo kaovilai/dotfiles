@@ -198,6 +198,10 @@ function claude {
     if [[ "$mode" == copilot ]]; then
         claude-copilot "$@"          # raw claude binary; NO happy-only flags
     else
+        if ! command -v happy &>/dev/null && ! whence -p claude &>/dev/null; then
+            echo "❌ Neither happy nor claude binary found. Install Claude Code CLI." >&2
+            return 1
+        fi
         _claude_copilot_unset_env
         happy --enable-auto-mode --permission-mode auto "$@"
     fi
