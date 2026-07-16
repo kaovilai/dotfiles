@@ -115,13 +115,53 @@ prompt-release-stream() {
     fi
 }
 
+# Function to prompt for an OCP minor version to use with the raw nightly
+# release stream (stream=nightly in get-release-image). Reuses the same
+# accepted-ranges discovery as prompt-release-stream's step 1, since nightly
+# streams are per-minor-version only (no patch/z-stream selection -- "latest"
+# is already the newest accepted payload for that minor).
+# Usage: minor=$(prompt-nightly-minor-version)
+# Returns: minor version (e.g. "4.22") to stdout
+prompt-nightly-minor-version() {
+    local ranges
+    ranges=$(curl -sm 10 \
+        'https://amd64.ocp.releases.ci.openshift.org/api/v1/releasestreams/accepted' \
+        2>/dev/null \
+    | jq -r 'keys[] | select(test("^[0-9]+\\.[0-9]"))' \
+    | grep -oE '^[0-9]+\.[0-9]+' | sort -Vru)
+
+    if [[ -z "$ranges" ]]; then
+        echo "ERROR: Could not fetch version ranges for nightly stream selection" >&2
+        return 1
+    fi
+
+    local chosen_range
+    if command -v fzf >/dev/null 2>&1; then
+        chosen_range=$(echo "$ranges" | fzf --height 30% --reverse \
+            --header "Select minor version for nightly stream" \
+            --prompt "Nightly> ")
+    else
+        echo "Available minor versions:" >&2
+        echo "$ranges" | cat -n >&2
+        echo -n "Enter minor version (e.g. 4.22): " >&2
+        read -r chosen_range </dev/tty
+    fi
+
+    if [[ -z "$chosen_range" ]]; then
+        echo "ERROR: No minor version selected for nightly stream" >&2
+        return 1
+    fi
+    echo "$chosen_range"
+}
+
 # Function to get release image based on stream and architecture
 # Usage: image=$(get-release-image "stable" "amd64")
 #        image=$(get-release-image "dev-preview" "arm64")
 #        image=$(get-release-image "stable" "multi")
+#        image=$(OCP_NIGHTLY_MINOR=4.22 get-release-image "nightly" "arm64")
 # Description: Gets the appropriate release image URL for the given stream and architecture
 # Parameters:
-#   $1 - stream: "stable" or "dev-preview"
+#   $1 - stream: "stable", "dev-preview", or "nightly" (requires OCP_NIGHTLY_MINOR, e.g. "4.22")
 #   $2 - architecture: "amd64", "arm64", or "multi" (multi-arch)
 # Returns: Release image URL to stdout, exits with 1 on error
 get-release-image() {
@@ -144,7 +184,27 @@ get-release-image() {
         return 0
     fi
 
-    if [[ "$stream" == "stable" ]]; then
+    if [[ "$stream" == "nightly" ]]; then
+        if [[ -z "$OCP_NIGHTLY_MINOR" ]]; then
+            echo "ERROR: stream=nightly requires OCP_NIGHTLY_MINOR to be set (e.g. 4.22)" >&2
+            return 1
+        fi
+        case "$architecture" in
+            "amd64"|"x86_64")
+                get-ocp-release-image-nightly-amd64 "$OCP_NIGHTLY_MINOR"
+                ;;
+            "arm64"|"aarch64")
+                get-ocp-release-image-nightly-arm64 "$OCP_NIGHTLY_MINOR"
+                ;;
+            "multi")
+                get-ocp-release-image-nightly-multi "$OCP_NIGHTLY_MINOR"
+                ;;
+            *)
+                echo "ERROR: Unknown architecture: $architecture" >&2
+                return 1
+                ;;
+        esac
+    elif [[ "$stream" == "stable" ]]; then
         case "$architecture" in
             "amd64"|"x86_64")
                 get-ocp-release-image-stable-amd64
@@ -177,6 +237,68 @@ get-release-image() {
                 ;;
         esac
     fi
+}
+
+# Extract (or reuse a cached) openshift-install binary matching an exact
+# release image pullspec. Needed for stream=nightly / raw nightly payloads:
+# get-openshift-install() only knows about the latest cached EC/stable
+# binaries, and installer/Terraform logic is version-specific, so pairing a
+# mismatched binary with a nightly payload risks subtle install failures.
+# Caches the extracted binary as /usr/local/bin/openshift-install-<version>
+# (same naming convention as the EC/stable binaries) so repeat runs against
+# the same nightly build skip re-extraction.
+# Usage: binary=$(get-openshift-install-for-release-image "registry.ci.openshift.org/ocp/release:4.22.0-0.nightly-...")
+get-openshift-install-for-release-image() {
+    local release_image=$1
+    if [[ -z "$release_image" ]]; then
+        echo "ERROR: get-openshift-install-for-release-image requires a release image pullspec" >&2
+        return 1
+    fi
+
+    echo "INFO: Resolving version for release image $release_image..." >&2
+    local version
+    version=$(oc adm release info "$release_image" --registry-config ~/pull-secret.txt -o jsonpath='{.metadata.version}' 2>/dev/null)
+    if [[ -z "$version" ]]; then
+        echo "ERROR: Failed to resolve version from release image $release_image" >&2
+        return 1
+    fi
+
+    # /opt/homebrew/bin (not /usr/local/bin) -- user-writable on Apple Silicon
+    # Homebrew installs, so this can run without sudo. Both are on PATH, so
+    # get-openshift-install()'s `command -v openshift-install-<version>`
+    # lookup finds binaries in either location.
+    local binary_path="/opt/homebrew/bin/openshift-install-${version}"
+    if [[ -x "$binary_path" ]] && "$binary_path" version &>/dev/null; then
+        echo "INFO: Using cached openshift-install binary for $version" >&2
+        echo "$binary_path"
+        return 0
+    fi
+
+    # --registry-config ~/pull-secret.txt is required, not optional: component
+    # images live under quay.io/openshift-release-dev/ocp-v*-art-dev, a private
+    # namespace gated on the openshift-release-dev+ service account token in
+    # the real pull-secret.txt (not personal quay.io credentials in podman/
+    # docker auth files). See kubevirt-datamover-controller project memory
+    # "oadp-install-pullsecret-bug" for the same failure mode elsewhere.
+    echo "INFO: Extracting openshift-install binary for $version from $release_image (this may take a minute)..." >&2
+    local tmp_extract_dir
+    tmp_extract_dir=$(mktemp -d)
+    if ! oc adm release extract --command=openshift-install --to="$tmp_extract_dir" --registry-config ~/pull-secret.txt "$release_image" &>/dev/null; then
+        echo "ERROR: Failed to extract openshift-install from $release_image" >&2
+        rm -rf "$tmp_extract_dir"
+        return 1
+    fi
+
+    if ! mv "$tmp_extract_dir/openshift-install" "$binary_path"; then
+        echo "ERROR: Failed to install extracted binary to $binary_path" >&2
+        rm -rf "$tmp_extract_dir"
+        return 1
+    fi
+    chmod +x "$binary_path"
+    rm -rf "$tmp_extract_dir"
+
+    echo "INFO: Extracted openshift-install to $binary_path" >&2
+    echo "$binary_path"
 }
 
 # Function to validate environment variables
@@ -350,12 +472,17 @@ handle-registry-login() {
             echo "Login URL opened in browser. Please copy the login command from the browser and paste it below:"
             local login_command
             read -r login_command
-            if [[ "$login_command" != podman\ login* && "$login_command" != oc\ login* && "$login_command" != docker\ login* ]]; then
+
+            # Securely parse the command into an array to avoid arbitrary code execution via eval
+            local -a cmd_args
+            cmd_args=("${(@Q)${(z)login_command}}")
+
+            if [[ "${cmd_args[1]}" != "podman" && "${cmd_args[1]}" != "oc" && "${cmd_args[1]}" != "docker" ]] || [[ "${cmd_args[2]}" != "login" ]]; then
                 echo "ERROR: Only 'podman login', 'oc login', or 'docker login' commands are accepted"
                 return 1
             fi
             echo "Executing login command..."
-            eval "$login_command"
+            "${cmd_args[@]}"
         else
             echo "Please login to $registry:"
             podman login "$registry"
@@ -533,7 +660,7 @@ get-release-oc() {
     local release_image=$1
     [[ -z "$release_image" ]] && { echo "oc"; return; }
 
-    local version=$(echo "$release_image" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+-[a-z]+\.[0-9]+' | head -1)
+    local version; version=$(echo "$release_image" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+-[a-z]+\.[0-9]+' | head -1)
     [[ -z "$version" ]] && { echo "oc"; return; }
 
     local oc_dir="/tmp/oc-${version}"
@@ -575,7 +702,7 @@ cleanup-on-failure() {
             # Run destroy if metadata.json exists (installer can identify resources)
             if [[ -f "$cluster_dir/metadata.json" ]]; then
                 # Back up metadata.json so pre-create destroy works even if dir is removed
-                local backup_path="${OCP_MANIFESTS_DIR}/.metadata-backup-$(basename "$cluster_dir").json"
+                local backup_path="${OCP_MANIFESTS_DIR}/.metadata-backup-${cluster_dir:t}.json"
                 cp "$cluster_dir/metadata.json" "$backup_path" 2>/dev/null && \
                     echo "INFO: Backed up metadata.json to $backup_path"
                 echo "Running openshift-install destroy cluster..."
@@ -609,9 +736,9 @@ cleanup-orphaned-gcp-resources() {
     local found=false
 
     # Check if any orphaned compute resources exist
-    local backend_services=$(gcloud compute backend-services list --project="$project" \
+    local backend_services; backend_services=$(gcloud compute backend-services list --project="$project" \
         --filter="$filter" --format='value(name)' 2>/dev/null)
-    local instance_groups=$(gcloud compute instance-groups list --project="$project" \
+    local instance_groups; instance_groups=$(gcloud compute instance-groups list --project="$project" \
         --filter="$filter" --format='value(name,zone.basename())' 2>/dev/null)
 
     [[ -z "$backend_services" && -z "$instance_groups" ]] && return 0

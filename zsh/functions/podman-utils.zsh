@@ -107,16 +107,27 @@ kill-stuck-qemu() {
 
     # Format processes for selection
     local formatted_procs
-    formatted_procs=$(while IFS= read -r line; do
-        local pid ppid etime _col4 cmd arch
-        read -r pid ppid etime _col4 cmd <<< "$line"
+    formatted_procs=$(awk '{
+        pid = $1
+        etime = $3
+
+        # Reconstruct cmd (everything after 4th column)
+        cmd = ""
+        for (i=5; i<=NF; i++) {
+            cmd = cmd (i==5 ? "" : " ") $i
+        }
 
         # Extract architecture from qemu binary name
-        arch=$(grep -o 'qemu-[a-z0-9_]*-static' <<< "$cmd" | sed 's/qemu-//;s/-static//')
+        match(cmd, /qemu-[a-z0-9_]+-static/)
+        if (RSTART > 0) {
+            arch = substr(cmd, RSTART+5, RLENGTH-12)
+        } else {
+            arch = ""
+        }
 
         # Format: arch | PID | runtime | command snippet
-        printf "%-10s | PID: %-6s | %-10s | %s\n" "$arch" "$pid" "$etime" "$(cut -c1-80 <<< "$cmd")"
-    done <<< "$stuck_procs")
+        printf "%-10s | PID: %-6s | %-10s | %s\n", arch, pid, etime, substr(cmd, 1, 80)
+    }' <<< "$stuck_procs")
 
     echo
     echo "📋 Select processes to kill (↑/↓ to navigate, TAB to select, ENTER to confirm):"

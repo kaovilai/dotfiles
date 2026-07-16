@@ -3,9 +3,9 @@
 # Helper function to get ROSA cluster name from current context
 _get_rosa_cluster_name() {
     # Try method 1: Get from infrastructure name
-    local INFRA_ID=$(oc get infrastructure cluster -o jsonpath='{.status.infrastructureName}' 2>/dev/null)
+    local INFRA_ID; INFRA_ID=$(oc get infrastructure cluster -o jsonpath='{.status.infrastructureName}' 2>/dev/null)
     if [[ -n "$INFRA_ID" ]]; then
-        local CLUSTER_NAME=$(rosa list clusters -o json 2>/dev/null | jq -r ".[] | select(.infra_id == \"$INFRA_ID\") | .name" 2>/dev/null)
+        local CLUSTER_NAME; CLUSTER_NAME=$(rosa list clusters -o json 2>/dev/null | jq -r ".[] | select(.infra_id == \"$INFRA_ID\") | .name" 2>/dev/null)
         if [[ -n "$CLUSTER_NAME" ]] && [[ "$CLUSTER_NAME" != "null" ]]; then
             echo "$CLUSTER_NAME"
             return 0
@@ -13,9 +13,9 @@ _get_rosa_cluster_name() {
     fi
     
     # Try method 2: Match by API endpoint
-    local API_URL=$(oc whoami --show-server 2>/dev/null)
+    local API_URL; API_URL=$(oc whoami --show-server 2>/dev/null)
     if [[ -n "$API_URL" ]]; then
-        local API_DOMAIN=$(echo "$API_URL" | sed 's|https://api\.||' | sed 's|:.*||')
+        local API_DOMAIN; API_DOMAIN=$(echo "$API_URL" | sed 's|https://api\.||' | sed 's|:.*||')
         CLUSTER_NAME=$(rosa list clusters -o json 2>/dev/null | jq -r ".[] | select(.api.url | contains(\"$API_DOMAIN\")) | .name" 2>/dev/null)
         if [[ -n "$CLUSTER_NAME" ]] && [[ "$CLUSTER_NAME" != "null" ]]; then
             echo "$CLUSTER_NAME"
@@ -32,7 +32,7 @@ _get_rosa_cluster_name() {
 # Run this after ROSA cluster creation to get vars for velero install for OADP
 create-velero-identity-for-rosa-cluster() {
     # Get ROSA cluster name
-    local CLUSTER_NAME=$(_get_rosa_cluster_name)
+    local CLUSTER_NAME; CLUSTER_NAME=$(_get_rosa_cluster_name)
     
     if [[ -z "$CLUSTER_NAME" ]]; then
         return 1
@@ -47,11 +47,11 @@ create-velero-identity-for-rosa-cluster() {
     fi
     
     # Get cluster details
-    local ROSA_CLUSTER_ID=$(rosa describe cluster -c "$CLUSTER_NAME" --output json | jq -r .id)
-    local AWS_REGION=$(rosa describe cluster -c "$CLUSTER_NAME" --output json | jq -r .region.id)
-    local OIDC_ENDPOINT=$(oc get authentication.config.openshift.io cluster -o jsonpath='{.spec.serviceAccountIssuer}' | sed 's|^https://||')
-    local AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
-    local CLUSTER_VERSION=$(rosa describe cluster -c "$CLUSTER_NAME" -o json | jq -r .version.raw_id | cut -f -2 -d '.')
+    local ROSA_CLUSTER_ID; ROSA_CLUSTER_ID=$(rosa describe cluster -c "$CLUSTER_NAME" --output json | jq -r .id)
+    local AWS_REGION; AWS_REGION=$(rosa describe cluster -c "$CLUSTER_NAME" --output json | jq -r .region.id)
+    local OIDC_ENDPOINT; OIDC_ENDPOINT=$(oc get authentication.config.openshift.io cluster -o jsonpath='{.spec.serviceAccountIssuer}' | sed 's|^https://||')
+    local AWS_ACCOUNT_ID; AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+    local CLUSTER_VERSION; CLUSTER_VERSION=$(rosa describe cluster -c "$CLUSTER_NAME" -o json | jq -r .version.raw_id | cut -f -2 -d '.')
     
     echo "Using AWS Account: $AWS_ACCOUNT_ID"
     echo "Using Region: $AWS_REGION"
@@ -62,7 +62,7 @@ create-velero-identity-for-rosa-cluster() {
     local POLICY_NAME="${CLUSTER_NAME}-velero-policy"
     
     # Check if policy already exists
-    local POLICY_ARN=$(aws iam list-policies --query "Policies[?PolicyName=='${POLICY_NAME}'].{ARN:Arn}" --output text)
+    local POLICY_ARN; POLICY_ARN=$(aws iam list-policies --query "Policies[?PolicyName=='${POLICY_NAME}'].{ARN:Arn}" --output text)
     
     if [[ -z "$POLICY_ARN" ]]; then
         echo "Creating IAM policy: $POLICY_NAME"
@@ -123,7 +123,7 @@ EOF
     if aws iam get-role --role-name "$ROLE_NAME" &>/dev/null; then
         echo "IAM role $ROLE_NAME already exists"
         ROLE_EXISTS=true
-        local ROLE_ARN=$(aws iam get-role --role-name "$ROLE_NAME" --query Role.Arn --output text)
+        local ROLE_ARN; ROLE_ARN=$(aws iam get-role --role-name "$ROLE_NAME" --query Role.Arn --output text)
     else
         echo "Creating IAM role: $ROLE_NAME"
         
@@ -196,7 +196,7 @@ EOF
 # Function to create S3 bucket for Velero backups
 create-velero-container-for-rosa-cluster() {
     # Get ROSA cluster name
-    local CLUSTER_NAME=$(_get_rosa_cluster_name)
+    local CLUSTER_NAME; CLUSTER_NAME=$(_get_rosa_cluster_name)
     
     if [[ -z "$CLUSTER_NAME" ]]; then
         return 1
@@ -211,8 +211,8 @@ create-velero-container-for-rosa-cluster() {
     fi
     
     # Get AWS region and account
-    local AWS_REGION=$(rosa describe cluster -c "$CLUSTER_NAME" --output json | jq -r .region.id)
-    local AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+    local AWS_REGION; AWS_REGION=$(rosa describe cluster -c "$CLUSTER_NAME" --output json | jq -r .region.id)
+    local AWS_ACCOUNT_ID; AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
     
     echo "Using AWS Region: $AWS_REGION"
     echo "Using AWS Account: $AWS_ACCOUNT_ID"
@@ -323,7 +323,7 @@ EOF
 # Function to create BackupStorageLocation YAML for Velero with ROSA STS
 create-velero-bsl-for-rosa-cluster() {
     # Get ROSA cluster name
-    local CLUSTER_NAME=$(_get_rosa_cluster_name)
+    local CLUSTER_NAME; CLUSTER_NAME=$(_get_rosa_cluster_name)
     
     if [[ -z "$CLUSTER_NAME" ]]; then
         return 1
@@ -332,7 +332,7 @@ create-velero-bsl-for-rosa-cluster() {
     echo "Creating Velero BackupStorageLocation for cluster: $CLUSTER_NAME"
     
     # Get AWS details
-    local AWS_REGION=$(rosa describe cluster -c "$CLUSTER_NAME" --output json | jq -r .region.id)
+    local AWS_REGION; AWS_REGION=$(rosa describe cluster -c "$CLUSTER_NAME" --output json | jq -r .region.id)
     local BUCKET_NAME="${CLUSTER_NAME}-oadp"
     
     # Check if bucket exists
@@ -406,7 +406,7 @@ EOF
 # Function to create DataProtectionApplication YAML for OADP with ROSA STS
 create-velero-dpa-for-rosa-cluster() {
     # Get ROSA cluster name
-    local CLUSTER_NAME=$(_get_rosa_cluster_name)
+    local CLUSTER_NAME; CLUSTER_NAME=$(_get_rosa_cluster_name)
     
     if [[ -z "$CLUSTER_NAME" ]]; then
         return 1
@@ -415,7 +415,7 @@ create-velero-dpa-for-rosa-cluster() {
     echo "Creating DataProtectionApplication for cluster: $CLUSTER_NAME"
     
     # Get AWS details
-    local AWS_REGION=$(rosa describe cluster -c "$CLUSTER_NAME" --output json | jq -r .region.id)
+    local AWS_REGION; AWS_REGION=$(rosa describe cluster -c "$CLUSTER_NAME" --output json | jq -r .region.id)
     local BUCKET_NAME="${CLUSTER_NAME}-oadp"
     local ROLE_NAME="${CLUSTER_NAME}-openshift-oadp-aws-cloud-credentials"
     
@@ -426,7 +426,7 @@ create-velero-dpa-for-rosa-cluster() {
         return 1
     fi
     
-    local ROLE_ARN=$(aws iam get-role --role-name "$ROLE_NAME" --query Role.Arn --output text 2>/dev/null)
+    local ROLE_ARN; ROLE_ARN=$(aws iam get-role --role-name "$ROLE_NAME" --query Role.Arn --output text 2>/dev/null)
     if [[ -z "$ROLE_ARN" ]]; then
         echo "ERROR: IAM role $ROLE_NAME not found"
         echo "Please run 'create-velero-identity-for-rosa-cluster' first"
@@ -551,7 +551,7 @@ validate-velero-role-assignments-for-rosa-cluster() {
     fi
     
     # Get ROSA cluster name
-    local CLUSTER_NAME=$(_get_rosa_cluster_name)
+    local CLUSTER_NAME; CLUSTER_NAME=$(_get_rosa_cluster_name)
     
     if [[ -z "$CLUSTER_NAME" ]]; then
         return 1
@@ -561,8 +561,8 @@ validate-velero-role-assignments-for-rosa-cluster() {
     echo "================================================================"
     
     # Get AWS details
-    local AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
-    local AWS_REGION=$(rosa describe cluster -c "$CLUSTER_NAME" --output json 2>/dev/null | jq -r .region.id)
+    local AWS_ACCOUNT_ID; AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+    local AWS_REGION; AWS_REGION=$(rosa describe cluster -c "$CLUSTER_NAME" --output json 2>/dev/null | jq -r .region.id)
     
     if [[ -z "$AWS_REGION" ]]; then
         echo "ERROR: Could not get cluster region. Is this a ROSA cluster?"
@@ -583,21 +583,21 @@ validate-velero-role-assignments-for-rosa-cluster() {
         echo "✓ S3 bucket exists"
         
         # Check bucket configuration
-        local VERSIONING=$(aws s3api get-bucket-versioning --bucket "$BUCKET_NAME" --query Status --output text 2>/dev/null)
+        local VERSIONING; VERSIONING=$(aws s3api get-bucket-versioning --bucket "$BUCKET_NAME" --query Status --output text 2>/dev/null)
         if [[ "$VERSIONING" == "Enabled" ]]; then
             echo "✓ Versioning enabled"
         else
             echo "⚠️  Versioning not enabled"
         fi
         
-        local ENCRYPTION=$(aws s3api get-bucket-encryption --bucket "$BUCKET_NAME" 2>/dev/null)
+        local ENCRYPTION; ENCRYPTION=$(aws s3api get-bucket-encryption --bucket "$BUCKET_NAME" 2>/dev/null)
         if [[ -n "$ENCRYPTION" ]]; then
             echo "✓ Encryption enabled"
         else
             echo "⚠️  Encryption not configured"
         fi
         
-        local PUBLIC_BLOCK=$(aws s3api get-public-access-block --bucket "$BUCKET_NAME" 2>/dev/null)
+        local PUBLIC_BLOCK; PUBLIC_BLOCK=$(aws s3api get-public-access-block --bucket "$BUCKET_NAME" 2>/dev/null)
         if [[ -n "$PUBLIC_BLOCK" ]]; then
             echo "✓ Public access blocked"
         else
@@ -617,15 +617,15 @@ validate-velero-role-assignments-for-rosa-cluster() {
     echo "Checking IAM Role: $ROLE_NAME"
     echo "----------------------------------------"
     
-    local ROLE_INFO=$(aws iam get-role --role-name "$ROLE_NAME" 2>/dev/null)
+    local ROLE_INFO; ROLE_INFO=$(aws iam get-role --role-name "$ROLE_NAME" 2>/dev/null)
     if [[ -n "$ROLE_INFO" ]]; then
-        local ROLE_ARN=$(echo "$ROLE_INFO" | jq -r .Role.Arn)
+        local ROLE_ARN; ROLE_ARN=$(echo "$ROLE_INFO" | jq -r .Role.Arn)
         echo "✓ IAM role exists"
         echo "  Role ARN: $ROLE_ARN"
         
         # Check trust policy
-        local TRUST_POLICY=$(echo "$ROLE_INFO" | jq -r .Role.AssumeRolePolicyDocument)
-        local OIDC_ENDPOINT=$(oc get authentication.config.openshift.io cluster -o jsonpath='{.spec.serviceAccountIssuer}' | sed 's|^https://||')
+        local TRUST_POLICY; TRUST_POLICY=$(echo "$ROLE_INFO" | jq -r .Role.AssumeRolePolicyDocument)
+        local OIDC_ENDPOINT; OIDC_ENDPOINT=$(oc get authentication.config.openshift.io cluster -o jsonpath='{.spec.serviceAccountIssuer}' | sed 's|^https://||')
         
         if echo "$TRUST_POLICY" | grep -q "$OIDC_ENDPOINT"; then
             echo "✓ Trust policy includes cluster OIDC endpoint"
@@ -649,7 +649,7 @@ validate-velero-role-assignments-for-rosa-cluster() {
         # Check attached policies
         echo ""
         echo "Attached Policies:"
-        local ATTACHED_POLICIES=$(aws iam list-attached-role-policies --role-name "$ROLE_NAME" --query AttachedPolicies --output json)
+        local ATTACHED_POLICIES; ATTACHED_POLICIES=$(aws iam list-attached-role-policies --role-name "$ROLE_NAME" --query AttachedPolicies --output json)
         echo "$ATTACHED_POLICIES" | jq -r '.[] | "  - \(.PolicyName) (\(.PolicyArn))"'
         
         # Check if velero policy is attached
@@ -669,14 +669,14 @@ validate-velero-role-assignments-for-rosa-cluster() {
     echo "Checking IAM Policy: $POLICY_NAME"
     echo "----------------------------------------"
     
-    local POLICY_ARN=$(aws iam list-policies --query "Policies[?PolicyName=='${POLICY_NAME}'].{ARN:Arn}" --output text)
+    local POLICY_ARN; POLICY_ARN=$(aws iam list-policies --query "Policies[?PolicyName=='${POLICY_NAME}'].{ARN:Arn}" --output text)
     if [[ -n "$POLICY_ARN" ]]; then
         echo "✓ IAM policy exists"
         echo "  Policy ARN: $POLICY_ARN"
         
         # Get policy version
-        local DEFAULT_VERSION=$(aws iam get-policy --policy-arn "$POLICY_ARN" --query Policy.DefaultVersionId --output text)
-        local POLICY_DOC=$(aws iam get-policy-version --policy-arn "$POLICY_ARN" --version-id "$DEFAULT_VERSION" --query PolicyVersion.Document --output json)
+        local DEFAULT_VERSION; DEFAULT_VERSION=$(aws iam get-policy --policy-arn "$POLICY_ARN" --query Policy.DefaultVersionId --output text)
+        local POLICY_DOC; POLICY_DOC=$(aws iam get-policy-version --policy-arn "$POLICY_ARN" --version-id "$DEFAULT_VERSION" --query PolicyVersion.Document --output json)
         
         # Check for required permissions
         local REQUIRED_ACTIONS=("s3:CreateBucket" "s3:GetObject" "s3:PutObject" "ec2:CreateSnapshot" "ec2:DescribeSnapshots")
@@ -759,7 +759,7 @@ setup-velero-oadp-for-rosa-cluster() {
     fi
     
     # Get ROSA cluster name
-    local CLUSTER_NAME=$(_get_rosa_cluster_name)
+    local CLUSTER_NAME; CLUSTER_NAME=$(_get_rosa_cluster_name)
     
     if [[ -z "$CLUSTER_NAME" ]]; then
         return 1
@@ -792,7 +792,7 @@ setup-velero-oadp-for-rosa-cluster() {
     
     # Get IAM role ARN
     local ROLE_NAME="${CLUSTER_NAME}-openshift-oadp-aws-cloud-credentials"
-    local ROLE_ARN=$(aws iam get-role --role-name "$ROLE_NAME" --query Role.Arn --output text 2>/dev/null)
+    local ROLE_ARN; ROLE_ARN=$(aws iam get-role --role-name "$ROLE_NAME" --query Role.Arn --output text 2>/dev/null)
     
     if [[ -z "$ROLE_ARN" ]]; then
         echo "ERROR: Could not find IAM role ARN"
@@ -807,6 +807,7 @@ setup-velero-oadp-for-rosa-cluster() {
         echo "You can clone it with: git clone https://github.com/openshift/oadp-operator.git"
         echo ""
         echo "Would you like to continue anyway? (y/N)"
+        local response
         read -r response
         if [[ ! "$response" =~ ^[Yy]$ ]]; then
             echo "Aborting setup"
@@ -1000,7 +1001,7 @@ cleanup-velero-rosa-resources() {
     fi
     
     # Get ROSA cluster name
-    local CLUSTER_NAME=$(_get_rosa_cluster_name)
+    local CLUSTER_NAME; CLUSTER_NAME=$(_get_rosa_cluster_name)
     
     if [[ -z "$CLUSTER_NAME" ]]; then
         return 1
@@ -1014,6 +1015,7 @@ cleanup-velero-rosa-resources() {
     echo "  - OADP operator and resources"
     echo ""
     echo -n "Are you sure you want to continue? (yes/no): "
+    local response
     read -r response
     
     if [[ "$response" != "yes" ]]; then
@@ -1107,7 +1109,7 @@ cleanup-velero-rosa-resources() {
     local POLICY_NAME="${CLUSTER_NAME}-velero-policy"
     
     # Get policy ARN
-    local POLICY_ARN=$(aws iam list-policies --query "Policies[?PolicyName=='${POLICY_NAME}'].{ARN:Arn}" --output text)
+    local POLICY_ARN; POLICY_ARN=$(aws iam list-policies --query "Policies[?PolicyName=='${POLICY_NAME}'].{ARN:Arn}" --output text)
     
     # Detach policy from role
     if [[ -n "$POLICY_ARN" ]] && aws iam get-role --role-name "$ROLE_NAME" &>/dev/null; then
@@ -1136,6 +1138,7 @@ cleanup-velero-rosa-resources() {
     echo "Step 6: Delete OADP operator?"
     echo "------------------------------"
     echo -n "Do you want to delete the OADP operator? (yes/no): "
+    local delete_operator
     read -r delete_operator
     
     if [[ "$delete_operator" == "yes" ]]; then
@@ -1153,6 +1156,7 @@ cleanup-velero-rosa-resources() {
         
         # Delete namespace
         echo -n "Delete the openshift-adp namespace? (yes/no): "
+        local delete_namespace
         read -r delete_namespace
         
         if [[ "$delete_namespace" == "yes" ]]; then
@@ -1162,6 +1166,7 @@ cleanup-velero-rosa-resources() {
         
         # Delete CRDs
         echo -n "Delete OADP CRDs? (yes/no): "
+        local delete_crds
         read -r delete_crds
         
         if [[ "$delete_crds" == "yes" ]]; then

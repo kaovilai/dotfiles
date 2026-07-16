@@ -36,7 +36,7 @@ delete-rosa-sts() {
         echo "Found ROSA cluster: $CLUSTER_NAME"
         
         # Get cluster ID for cleanup
-        local cluster_id=$(rosa describe cluster --cluster "$CLUSTER_NAME" -o json | jq -r '.id // empty')
+        local cluster_id; cluster_id=$(rosa describe cluster --cluster "$CLUSTER_NAME" -o json | jq -r '.id // empty')
         
         # Delete the cluster
         echo "Deleting ROSA cluster: $CLUSTER_NAME"
@@ -99,7 +99,7 @@ delete-rosa-sts() {
     # Check for orphaned resources
     echo ""
     echo "Checking for orphaned account roles..."
-    local orphan_roles=$(rosa list account-roles | grep -v "Cluster ID" | grep -E "^\s*$" | wc -l)
+    local orphan_roles; orphan_roles=$(rosa list account-roles | grep -v "Cluster ID" | grep -E "^\s*$" | wc -l)
     if [[ $orphan_roles -gt 0 ]]; then
         echo "WARNING: Found orphaned account roles. You may want to review and clean them up:"
         echo "rosa list account-roles"

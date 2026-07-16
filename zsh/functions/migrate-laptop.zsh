@@ -41,6 +41,11 @@ install_packages_manually() {
         error "brew not found. Install Homebrew: https://brew.sh"
         return 1
     fi
+
+    # ⚡ Bolt: Cache installed packages into an array to avoid O(N) `brew list` subprocess calls.
+    # Impact: Reduces N+1 subprocess queries into a single query with fast O(1) in-memory lookups.
+    local -a installed_packages=($(brew list -1 2>/dev/null))
+
     progress "Installing essential tools..."
     local essential_tools=(
         "git"
@@ -56,7 +61,7 @@ install_packages_manually() {
     
     local tool
     for tool in "${essential_tools[@]}"; do
-        if brew list "$tool" &>/dev/null; then
+        if (( ${installed_packages[(Ie)$tool]} )); then
             echo "  ${GREEN}✓${NC} $tool already installed"
         else
             echo "  Installing $tool..."
@@ -73,7 +78,7 @@ install_packages_manually() {
     )
     
     for tool in "${dev_tools[@]}"; do
-        if brew list "$tool" &>/dev/null; then
+        if (( ${installed_packages[(Ie)$tool]} )); then
             echo "  ${GREEN}✓${NC} $tool already installed"
         else
             echo "  Installing $tool..."
@@ -522,11 +527,11 @@ list-wifi-networks() {
 
 _verify_check() {
     local name="$1"
-    local command="$2"
+    shift
 
     (( _verify_checks_total++ ))
 
-    if eval "$command" >/dev/null 2>&1; then
+    if "$@" >/dev/null 2>&1; then
         success "$name"
         (( _verify_checks_passed++ ))
     else
@@ -542,21 +547,25 @@ verify-migration() {
     local _verify_checks_passed=0
     local _verify_checks_total=0
     
+    _check_docker() { command_exists docker || command_exists podman; }
+    _check_ssh_key() { [[ -f ~/.ssh/id_ed25519 ]] || [[ -f ~/.ssh/id_rsa ]]; }
+    _check_dotfiles() { [[ -f ~/.zshrc ]] && grep -q 'dotfiles' ~/.zshrc; }
+
     # Run checks
-    _verify_check "Homebrew" "command_exists brew"
-    _verify_check "Git" "command_exists git"
-    _verify_check "GitHub CLI" "command_exists gh"
-    _verify_check "Docker/Podman" "command_exists docker || command_exists podman"
-    _verify_check "OpenShift CLI" "command_exists oc"
-    _verify_check "VS Code" "command_exists code"
-    _verify_check "GPG" "command_exists gpg"
-    _verify_check "SSH directory" "[[ -d ~/.ssh ]]"
-    _verify_check "SSH key exists" "[[ -f ~/.ssh/id_ed25519 ]] || [[ -f ~/.ssh/id_rsa ]]"
-    _verify_check "Dotfiles linked" "[[ -f ~/.zshrc ]] && grep -q 'dotfiles' ~/.zshrc"
-    _verify_check "Secrets file" "[[ -f ~/secrets.zsh ]]"
-    _verify_check "Go installed" "command_exists go"
-    _verify_check "Node installed" "command_exists node"
-    _verify_check "Python installed" "command_exists python3"
+    _verify_check "Homebrew" command_exists brew
+    _verify_check "Git" command_exists git
+    _verify_check "GitHub CLI" command_exists gh
+    _verify_check "Docker/Podman" _check_docker
+    _verify_check "OpenShift CLI" command_exists oc
+    _verify_check "VS Code" command_exists code
+    _verify_check "GPG" command_exists gpg
+    _verify_check "SSH directory" test -d "$HOME/.ssh"
+    _verify_check "SSH key exists" _check_ssh_key
+    _verify_check "Dotfiles linked" _check_dotfiles
+    _verify_check "Secrets file" test -f "$HOME/secrets.zsh"
+    _verify_check "Go installed" command_exists go
+    _verify_check "Node installed" command_exists node
+    _verify_check "Python installed" command_exists python3
     
     echo ""
     echo "Checks passed: $_verify_checks_passed/$_verify_checks_total"
