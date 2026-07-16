@@ -157,7 +157,7 @@ if [[ "$TERM_PROGRAM" != "vscode" ]]; then
       () {
         setopt local_options extended_glob
         local -a expired_files
-        expired_files=("$stamp"(#qN.ms+86400))
+        expired_files=("$stamp"(#qNms+86400))
         if (( ${#expired_files} > 0 )); then
           expired=1
         fi

@@ -23,10 +23,12 @@ cache-file-expired() {
   fi
 
   # Efficiently check file age using ZSH extended globbing
-  # (#qN.ms+max_age) matches the file if it was modified more than max_age seconds ago
+  # (#qNms+max_age) matches the file if it was modified more than max_age seconds ago.
+  # No "." qualifier (regular-files-only) so symlinked cache files still match,
+  # consistent with the -f test above following symlinks.
   setopt local_options extended_glob
   local -a expired_files
-  expired_files=("$file"(#qN.ms+${max_age}))
+  expired_files=("$file"(#qNms+${max_age}))
 
   if (( ${#expired_files} > 0 )); then
     return 0  # Cache expired
