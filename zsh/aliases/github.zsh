@@ -1,6 +1,32 @@
 # GitHub CLI related aliases
 alias gh-pr-view='gh pr view --web'
 
+# Set default gh remote for a freshly cloned dir: prefer the remote that
+# isn't the authenticated user's own (i.e. not "my fork"), else fall back
+# to the repo just cloned. Remote naming (origin/upstream/whatever) is not
+# trusted - resolution is based on comparing each remote's owner to $gh_user.
+_ghcc_set_default_remote() {
+  local dir="$1" fallback_repo="$2"
+  local gh_user remote_name url owner repo
+  gh_user=$(gh api user --jq .login 2>/dev/null)
+
+  local -a candidates=()
+  local best_repo=""
+  for remote_name in ${(f)"$(git -C "$dir" remote 2>/dev/null)"}; do
+    url=$(git -C "$dir" remote get-url "$remote_name" 2>/dev/null)
+    [[ "$url" =~ github\.com[:/]([^/]+)/([^/]+)$ ]] || continue
+    owner="${match[1]}"
+    repo="${match[2]%.git}"
+    candidates+=("$owner/$repo")
+    if [[ -n "$gh_user" && "$owner" != "$gh_user" ]]; then
+      best_repo="$owner/$repo"
+    fi
+  done
+  [[ -z "$best_repo" ]] && best_repo="${candidates[1]:-$fallback_repo}"
+
+  (cd "$dir" && gh repo set-default "$best_repo" &>/dev/null) && echo "Default remote: $best_repo"
+}
+
 # Clone repo to ~/git/<repo-name> and open in VS Code
 ghcc() {
   if ! command -v gh &>/dev/null; then
@@ -38,18 +64,19 @@ ghcc() {
 
   if [[ -d "$target_dir" ]]; then
     echo "Directory $target_dir already exists."
+  elif gh repo clone "$repo_spec" "$target_dir" 2>/dev/null; then
+    _ghcc_set_default_remote "$target_dir" "$repo_spec"
   else
-    if ! gh repo clone "$repo_spec" "$target_dir" 2>/dev/null; then
-      echo "Repository '$repo_spec' not found."
-      local confirm
-      read -r "confirm?Create private repo '$repo_name'? (y/N) "
-      if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
-        echo "Aborted."
-        return 1
-      fi
-      gh repo create "$repo_name" --private || return 1
-      gh repo clone "$repo_name" "$target_dir" || return 1
+    echo "Repository '$repo_spec' not found."
+    local confirm
+    read -r "confirm?Create private repo '$repo_name'? (y/N) "
+    if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
+      echo "Aborted."
+      return 1
     fi
+    gh repo create "$repo_name" --private || return 1
+    gh repo clone "$repo_name" "$target_dir" || return 1
+    _ghcc_set_default_remote "$target_dir" "$repo_name"
   fi
 
   if [[ -n "$pr_number" ]]; then
