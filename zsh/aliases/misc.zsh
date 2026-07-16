@@ -284,7 +284,13 @@ function ocr(){
     local ext="${input##*.}"
     local base="${input%.*}"
     local output="${base}-ocr.${ext}"
-    ocrmypdf --force-ocr "$input" "$output" && { [[ "$OSTYPE" == darwin* ]] && open "$output" || echo "Output saved to: $output"; }
+    ocrmypdf --force-ocr "$input" "$output" && {
+        if [[ "$OSTYPE" == darwin* ]]; then
+            open "$output"
+        else
+            echo "Output saved to: $output"
+        fi
+    }
 }
 function vid2gif(){
     local input="$1"
