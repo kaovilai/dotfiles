@@ -49,8 +49,9 @@ use-ocp-aws() {
     
     # Backup existing kubeconfig if it exists
     if [[ -f ~/.kube/config ]]; then
-        cp ~/.kube/config ~/.kube/config.backup.$(date +%Y%m%d%H%M%S)
-        echo "Backed up existing kubeconfig to ~/.kube/config.backup.$(date +%Y%m%d%H%M%S)"
+        local backup_ts; backup_ts=$(date +%Y%m%d%H%M%S)
+        cp ~/.kube/config ~/.kube/config.backup.${backup_ts}
+        echo "Backed up existing kubeconfig to ~/.kube/config.backup.${backup_ts}"
     fi
     
     # Copy the kubeconfig
@@ -119,8 +120,9 @@ use-ocp-aws-dir() {
     
     # Backup existing kubeconfig if it exists
     if [[ -f ~/.kube/config ]]; then
-        cp ~/.kube/config ~/.kube/config.backup.$(date +%Y%m%d%H%M%S)
-        echo "Backed up existing kubeconfig to ~/.kube/config.backup.$(date +%Y%m%d%H%M%S)"
+        local backup_ts; backup_ts=$(date +%Y%m%d%H%M%S)
+        cp ~/.kube/config ~/.kube/config.backup.${backup_ts}
+        echo "Backed up existing kubeconfig to ~/.kube/config.backup.${backup_ts}"
     fi
     
     # Copy the kubeconfig
