@@ -55,9 +55,26 @@ dco() {
         echo "❌ Could not determine commit count for this PR" >&2
         return 1
     fi
+    local unsigned
+    unsigned=$(git log --format='%H' --invert-grep --grep='^Signed-off-by:' "HEAD~${commit_count}..HEAD" | wc -l)
+    unsigned=$((unsigned))
+    if [[ $unsigned -eq 0 ]]; then
+        echo "✅ All $commit_count commits already signed off"
+        return 0
+    fi
+    echo "Signing off $unsigned of $commit_count commits..."
     git rebase "HEAD~$commit_count" --signoff
 }
-dco-push() { dco && git push --force; }
+dco-push() {
+    local head_before
+    head_before=$(git rev-parse HEAD) || return 1
+    dco || return 1
+    if [[ $(git rev-parse HEAD) != "$head_before" ]]; then
+        git push --force
+    else
+        echo "No changes, skipping push"
+    fi
+}
 
 # Opencommit aliases
 alias ococ='oco -y'
@@ -259,7 +276,8 @@ pr-me() {
     # Parse each line to extract PR number and title
     for line in "${pr_lines[@]}"; do
       pr_num="${${line%% *}#\#}"
-      pr_title=$(awk '{$1=""; $2=""; $3=""; $4=""; print $0}' <<< "$line" | sed 's/^[[:space:]]*//')
+      local words=(${=line})
+      pr_title="${words[*]:4}"
       pr_numbers+=("$pr_num")
       pr_display+=("PR #$pr_num: $pr_title")
     done

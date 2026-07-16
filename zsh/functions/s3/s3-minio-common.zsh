@@ -460,11 +460,11 @@ download-minio-certificate() {
     echo "${BLUE}INFO${NC}: Endpoint: $endpoint"
 
     # First check if HTTPS is responding
-    if ! curl -k -s --connect-timeout 10 --max-time 15 "https://${public_dns}:9000/minio/health/ready" &>/dev/null; then
+    if ! curl -s --connect-timeout 10 --max-time 15 "https://${public_dns}:9000/minio/health/ready" &>/dev/null; then
         echo "${RED}ERROR${NC}: MinIO HTTPS endpoint is not responding" >&2
         echo "${YELLOW}HINT${NC}: Make sure the MinIO deployment is running"
         echo "${YELLOW}HINT${NC}: For Docker deployments, MinIO may take 2-3 minutes to start"
-        echo "${YELLOW}HINT${NC}: You can check with: curl -k $endpoint/minio/health/ready"
+        echo "${YELLOW}HINT${NC}: You can check with: curl $endpoint/minio/health/ready"
         return 1
     fi
 
@@ -514,7 +514,7 @@ download-minio-certificate() {
 
     echo "${RED}ERROR${NC}: Failed to extract certificate from HTTPS connection" >&2
     echo "${YELLOW}HINT${NC}: Make sure MinIO is running with HTTPS enabled"
-    echo "${YELLOW}HINT${NC}: You can test the connection with: curl -k $endpoint/minio/health/ready"
+    echo "${YELLOW}HINT${NC}: You can test the connection with: curl $endpoint/minio/health/ready"
     return 1
 }
 
@@ -558,7 +558,7 @@ check-minio-docker-status() {
 
     # First try HTTPS health check
     echo "${BLUE}INFO${NC}: Checking HTTPS endpoint..."
-    if curl -k -s --connect-timeout 5 --max-time 10 "https://${public_dns}:9000/minio/health/ready" &>/dev/null; then
+    if curl -s --connect-timeout 5 --max-time 10 "https://${public_dns}:9000/minio/health/ready" &>/dev/null; then
         echo "${GREEN}SUCCESS${NC}: MinIO is responding on HTTPS"
         echo "${BLUE}INFO${NC}: Endpoint: $endpoint"
         echo "${BLUE}INFO${NC}: Console: https://${public_dns}:9001"

@@ -45,7 +45,7 @@ use-ocp-aws() {
     fi
     
     # Create ~/.kube directory if it doesn't exist
-    mkdir -p ~/.kube
+    mkdir -p ~/.kube || { echo "✗ Failed to create ~/.kube directory" >&2; return 1; }
     
     # Backup existing kubeconfig if it exists
     if [[ -f ~/.kube/config ]]; then
@@ -102,7 +102,7 @@ use-ocp-aws-dir() {
     fi
     
     # Check if directory exists
-    if [ ! -d "$1" ]; then
+    if [[ ! -d "$1" ]]; then
         echo "ERROR: Directory $1 does not exist"
         return 1
     fi
@@ -115,7 +115,7 @@ use-ocp-aws-dir() {
     fi
     
     # Create ~/.kube directory if it doesn't exist
-    mkdir -p ~/.kube
+    mkdir -p ~/.kube || { echo "✗ Failed to create ~/.kube directory" >&2; return 1; }
     
     # Backup existing kubeconfig if it exists
     if [[ -f ~/.kube/config ]]; then
@@ -127,7 +127,7 @@ use-ocp-aws-dir() {
     cp "$1/auth/kubeconfig" ~/.kube/config
     
     # Extract basename from the directory
-    local dir_basename=$(basename "$1")
+    local dir_basename="${1:t}"
     
     # Show success message
     echo "Successfully copied kubeconfig from $dir_basename to ~/.kube/config"

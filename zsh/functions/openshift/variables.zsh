@@ -129,6 +129,43 @@ get-ocp-release-image-stable-multi() {
     get_latest_stable_multi_release_image
 }
 
+# Nightly release stream functions -- raw per-minor-version CI payloads
+# (e.g. 4.22.0-0.nightly), NOT the "4-dev-preview" meta-stream of promoted
+# EC/RC builds used above. This matches what CI systems mean by
+# "stream: nightly" (e.g. OADP's virt e2e Prow job, which forces Community
+# HCO because productized CNV has no catalog build yet for an unreleased
+# nightly OCP payload -- see kubevirt-datamover-controller project memory
+# "oadp-virt-e2e-nightlies"). Unsigned and can be broken; use for reproducing
+# CI-specific behavior, not for anything you need to stay up.
+znap get_latest_nightly_release_image() {
+    local minor=$1
+    local stream_suffix=$2   # "" for amd64, "-arm64" for arm64, "-multi" for multi
+    local arch_subdomain=$3
+    if [[ -z "$minor" ]]; then
+        echo "ERROR: get_latest_nightly_release_image requires a minor version (e.g. 4.22)" >&2
+        return 1
+    fi
+    local pullSpec
+    pullSpec=$(curl -sm 10 "https://${arch_subdomain}.ocp.releases.ci.openshift.org/api/v1/releasestream/${minor}.0-0.nightly${stream_suffix}/latest" | jq -r '.pullSpec' 2>/dev/null)
+    if [[ -z "$pullSpec" || "$pullSpec" == "null" ]]; then
+        echo "ERROR: Failed to fetch latest ${minor}.0-0.nightly${stream_suffix} release image from OpenShift CI API" >&2
+        return 1
+    else
+        echo "$pullSpec"
+    fi
+}
+
+function get-ocp-release-image-nightly-amd64() {
+    get_latest_nightly_release_image "$1" "" "amd64"
+}
+
+function get-ocp-release-image-nightly-arm64() {
+    get_latest_nightly_release_image "$1" "-arm64" "arm64"
+}
+
+get-ocp-release-image-nightly-multi() {
+    get_latest_nightly_release_image "$1" "-multi" "multi"
+}
 
 # Directory containing the manifests for many clusters
 export OCP_MANIFESTS_DIR=~/OCP/manifests

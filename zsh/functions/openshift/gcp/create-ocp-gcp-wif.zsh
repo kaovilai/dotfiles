@@ -37,10 +37,17 @@ create-ocp-gcp-wif(){
         return 0
     fi
 
-    # Get openshift-install binary
+    # Get openshift-install binary for creation
     local OPENSHIFT_INSTALL=$(get-openshift-install)
     [[ -z "$OPENSHIFT_INSTALL" ]] && return 1
     $OPENSHIFT_INSTALL version
+    # TODO: remove OPENSHIFT_INSTALL_DESTROY override when openshift/installer#10586 merges
+    # Patched binary fixes GCP destroy dependency ordering but lacks embedded CoreOS data for create
+    local OPENSHIFT_INSTALL_DESTROY=$OPENSHIFT_INSTALL
+    if [[ -f /tmp/openshift-install-gcp-fix ]]; then
+        OPENSHIFT_INSTALL_DESTROY=/tmp/openshift-install-gcp-fix
+        echo "INFO: Using patched openshift-install for destroy operations (GCP destroy fix)"
+    fi
 
     # Verify ccoctl is available (needed for GCP WIF credential management)
     if ! command -v ccoctl &>/dev/null; then
@@ -80,17 +87,30 @@ create-ocp-gcp-wif(){
         return 0
     fi
     if [[ $1 != "no-delete" ]]; then
+        local metadata_backup="$OCP_MANIFESTS_DIR/.metadata-backup-$(basename $OCP_CREATE_DIR).json"
         if [[ -d "$OCP_CREATE_DIR" ]]; then
-            $OPENSHIFT_INSTALL destroy cluster --dir $OCP_CREATE_DIR || echo "no existing cluster"
-            $OPENSHIFT_INSTALL destroy bootstrap --dir $OCP_CREATE_DIR || echo "no existing bootstrap"
+            $OPENSHIFT_INSTALL_DESTROY destroy cluster --dir $OCP_CREATE_DIR || echo "no existing cluster"
+            $OPENSHIFT_INSTALL_DESTROY destroy bootstrap --dir $OCP_CREATE_DIR || echo "no existing bootstrap"
             (ccoctl gcp delete \
             --name $CLUSTER_NAME \
             --project $GCP_PROJECT_ID \
             --credentials-requests-dir $OCP_CREATE_DIR/credentials-requests && echo "cleaned up ccoctl gcp resources") || true
             ((rm -r $OCP_CREATE_DIR && echo "removed existing create dir") || (true && echo "no existing install dir")) || return 1
+            rm -f "$metadata_backup" 2>/dev/null
+        elif [[ -f "$metadata_backup" ]]; then
+            # Restore metadata.json from backup to run destroy on orphaned resources
+            echo "INFO: Restoring metadata.json from backup for destroy..."
+            mkdir -p "$OCP_CREATE_DIR"
+            cp "$metadata_backup" "$OCP_CREATE_DIR/metadata.json"
+            $OPENSHIFT_INSTALL_DESTROY destroy cluster --dir $OCP_CREATE_DIR || echo "no existing cluster"
+            rm -rf "$OCP_CREATE_DIR" "$metadata_backup"
         else
             echo "Directory $OCP_CREATE_DIR does not exist, nothing to delete"
         fi
+        # Fallback: clean up orphaned GCP compute resources by name pattern
+        # Handles cases where openshift-install destroy failed (missing metadata.json)
+        # or left resources due to dependency ordering issues
+        cleanup-orphaned-gcp-resources "$CLUSTER_NAME" "$GCP_PROJECT_ID"
     fi
     # if param is delete then stop here
     if [[ $1 == "delete" ]]; then
@@ -107,6 +127,8 @@ create-ocp-gcp-wif(){
     local force_new=false
     local auto_ec=false
     
+    local no_cleanup=false
+
     for arg in "$@"; do
         case "$arg" in
             --force-new)
@@ -114,6 +136,9 @@ create-ocp-gcp-wif(){
                 ;;
             --ec)
                 auto_ec=true
+                ;;
+            --no-cleanup)
+                no_cleanup=true
                 ;;
         esac
     done
@@ -211,9 +236,65 @@ credentialsMode: Manual # needed for WIF"
     export OPENSHIFT_INSTALL_RELEASE_IMAGE_OVERRIDE=$RELEASE_IMAGE
     echo "INFO: Exported OPENSHIFT_INSTALL_RELEASE_IMAGE_OVERRIDE=$RELEASE_IMAGE"
 
-    echo "extracting credential-requests" && oc adm release extract \
+    # Clean up existing GCP workload identity resources to avoid 409 conflicts
+    # GCP soft-deletes pools for ~30 days; ccoctl undeletes them but providers persist → alreadyExists
+    # Strategy: undelete pool, wait for provider to restore to ACTIVE, delete it, wait for DELETED
+    if gcloud iam workload-identity-pools describe "$CLUSTER_NAME" \
+        --location=global --project="$GCP_PROJECT_ID" &>/dev/null; then
+        echo "INFO: Found existing workload identity pool $CLUSTER_NAME, cleaning provider..."
+        # Undelete pool if it's in soft-deleted state (no-op if already active)
+        gcloud iam workload-identity-pools undelete "$CLUSTER_NAME" \
+            --location=global --project="$GCP_PROJECT_ID" --quiet 2>/dev/null || true
+        # Wait for provider to become ACTIVE (pool undelete restores providers async)
+        echo "INFO: Waiting for provider to be restored by pool undelete..."
+        local wait_retries=12
+        while (( wait_retries-- > 0 )); do
+            local provider_state=$(gcloud iam workload-identity-pools providers describe "$CLUSTER_NAME" \
+                --workload-identity-pool="$CLUSTER_NAME" \
+                --location=global --project="$GCP_PROJECT_ID" \
+                --format='value(state)' 2>/dev/null)
+            if [[ "$provider_state" == "ACTIVE" ]]; then
+                echo "INFO: Provider is ACTIVE, deleting..."
+                break
+            elif [[ -z "$provider_state" ]]; then
+                echo "INFO: No provider found, clean state"
+                break
+            fi
+            echo -n "."
+            sleep 5
+        done
+        # Now delete the ACTIVE provider so ccoctl creates fresh with new OIDC keys
+        if [[ "$provider_state" == "ACTIVE" ]]; then
+            gcloud iam workload-identity-pools providers delete "$CLUSTER_NAME" \
+                --workload-identity-pool="$CLUSTER_NAME" \
+                --location=global --project="$GCP_PROJECT_ID" --quiet 2>/dev/null || true
+            echo "INFO: Waiting for provider deletion to propagate..."
+            local purge_retries=24
+            while (( purge_retries-- > 0 )); do
+                provider_state=$(gcloud iam workload-identity-pools providers describe "$CLUSTER_NAME" \
+                    --workload-identity-pool="$CLUSTER_NAME" \
+                    --location=global --project="$GCP_PROJECT_ID" \
+                    --format='value(state)' 2>/dev/null)
+                if [[ -z "$provider_state" || "$provider_state" == "DELETED" ]]; then
+                    echo "INFO: Provider deleted, pool ready for ccoctl"
+                    break
+                fi
+                echo -n "."
+                sleep 5
+            done
+        fi
+        if (( purge_retries <= 0 )); then
+            echo ""
+            echo "WARNING: Provider still exists after timeout, ccoctl may hit 409 errors"
+        fi
+    fi
+
+    # Use version-matched oc for credential extraction (--cloud=gcp requires 4.22+)
+    local OC_BIN=$(get-release-oc "$RELEASE_IMAGE")
+    echo "extracting credential-requests" && $OC_BIN adm release extract \
       --from=$RELEASE_IMAGE \
       --credentials-requests \
+      --cloud=gcp \
       --included \
       --install-config=$OCP_CREATE_DIR/install-config.yaml \
       --to=$OCP_CREATE_DIR/credentials-requests || return 1
@@ -228,7 +309,14 @@ credentialsMode: Manual # needed for WIF"
     
     # Create the cluster with error handling
     if ! $OPENSHIFT_INSTALL create cluster --dir $OCP_CREATE_DIR --log-level=info; then
-        cleanup-on-failure "$OCP_CREATE_DIR" "$CLUSTER_NAME" "gcp"
+        if [[ "$no_cleanup" == "true" ]]; then
+            echo "WARNING: Cluster creation failed but --no-cleanup set, skipping destroy"
+            echo "  Cluster dir: $OCP_CREATE_DIR"
+            echo "  KUBECONFIG: $OCP_CREATE_DIR/auth/kubeconfig"
+            echo "  Apply ILB fix: bash ~/.claude/skills/create-ocp-gcp-wif/scripts/fix-bootstrap-ilb.sh $GCP_PROJECT_ID $GCP_REGION"
+        else
+            cleanup-on-failure "$OCP_CREATE_DIR" "$CLUSTER_NAME" "gcp"
+        fi
         unset OPENSHIFT_INSTALL_RELEASE_IMAGE_OVERRIDE AUTO_SELECT_EC PROCEED_WITH_EXISTING_CLUSTERS
         return 1
     fi

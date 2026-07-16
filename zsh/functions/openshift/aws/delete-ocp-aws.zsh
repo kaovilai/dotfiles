@@ -10,7 +10,7 @@ delete-ocp-aws() {
     fi
     
     # Use specified openshift-install or default to latest EC version
-    local EC_VERSION=$(get-ocp-latest-ec-version)
+    local EC_VERSION; EC_VERSION=$(get-ocp-latest-ec-version)
     local OPENSHIFT_INSTALL=${OPENSHIFT_INSTALL:-openshift-install-${EC_VERSION}}
     local ARCH_SUFFIX=$2
     
@@ -49,7 +49,7 @@ delete-ocp-aws() {
         # Scan for AWS cluster directories matching today's date
         if [[ -d "$OCP_MANIFESTS_DIR" ]]; then
             for dir in "$OCP_MANIFESTS_DIR"/$TODAY-aws-*(/N); do
-                local dir_basename=$(basename "$dir")
+                local dir_basename="${dir:t}"
                 # Extract architecture from directory name
                 if [[ $dir_basename =~ ^[0-9]{6,8}-aws-(arm64|amd64)(-[0-9]+)?$ ]]; then
                     local arch=${match[1]}
@@ -99,7 +99,7 @@ delete-ocp-aws() {
                 return 0
             fi
 
-            local choice=$(echo "$selected" | awk -F'.' '{print $1}')
+            local choice; choice=$(echo "$selected" | awk -F'.' '{print $1}')
             ARCH_SUFFIX="${found_archs[$choice]}"
             echo "Selected: ${found_clusters[$choice]} (${ARCH_SUFFIX})"
         fi
@@ -179,7 +179,7 @@ delete-ocp-aws-dir() {
     fi
     
     # Extract basename from the directory
-    local dir_basename=$(basename "$1")
+    local dir_basename="${1:t}"
     echo "DEBUG: Processing directory basename: $dir_basename"
     
     # Extract date and architecture from directory name
@@ -247,7 +247,7 @@ delete-ocp-aws-dir() {
         echo "Using current date and arm64 architecture as fallback"
         
         # Use current date and arm64 as fallback
-        local fallback_date=$(date +%Y%m%d)
+        local fallback_date; fallback_date=$(date +%Y%m%d)
         local fallback_arch="arm64"
         local original_today=$TODAY
         TODAY=$fallback_date

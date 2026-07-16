@@ -19,7 +19,7 @@ use-rosa-sts() {
         echo "Checking for available ROSA clusters..."
 
         # Get list of ROSA clusters sorted by name (which includes date)
-        local clusters=$(rosa list clusters --output json 2>/dev/null | jq -r '.[] | .name' 2>/dev/null | sort -r)
+        local clusters; clusters=$(rosa list clusters --output json 2>/dev/null | jq -r '.[] | .name' 2>/dev/null | sort -r)
 
         if [[ -z "$clusters" ]]; then
             echo "No ROSA clusters found in AWS"
@@ -32,7 +32,7 @@ use-rosa-sts() {
             for dir in $OCP_MANIFESTS_DIR/*-rosa-sts-*/; do
                 if [[ -d "$dir" ]]; then
                     found_local=true
-                    local dir_name=$(basename "$dir")
+                    local dir_name="${dir:t}"
                     echo "  - $dir_name (may be stale)"
                 fi
             done
@@ -47,7 +47,7 @@ use-rosa-sts() {
         CLUSTER_NAME=$(echo "$clusters" | head -n 1)
 
         # Count clusters
-        local cluster_count=$(echo "$clusters" | wc -l | tr -d ' ')
+        local cluster_count; cluster_count=$(echo "$clusters" | wc -l | tr -d ' ')
 
         if [[ $cluster_count -gt 1 ]]; then
             echo "Found $cluster_count ROSA clusters. Using most recent: $CLUSTER_NAME"
@@ -112,7 +112,7 @@ use-rosa-sts() {
         fi
 
         echo "Available ROSA clusters in AWS:"
-        local cluster_list=$(rosa list clusters --output json 2>/dev/null | jq -r '.[] | .name' 2>/dev/null)
+        local cluster_list; cluster_list=$(rosa list clusters --output json 2>/dev/null | jq -r '.[] | .name' 2>/dev/null)
 
         if [[ -z "$cluster_list" ]]; then
             echo "  No ROSA clusters found in AWS"
@@ -126,7 +126,7 @@ use-rosa-sts() {
             for dir in $OCP_MANIFESTS_DIR/*-rosa-sts-*/; do
                 if [[ -d "$dir" ]]; then
                     found_local=true
-                    local dir_name=$(basename "$dir")
+                    local dir_name="${dir:t}"
                     echo "  - $dir_name (may be stale)"
                 fi
             done
@@ -146,7 +146,7 @@ use-rosa-sts() {
     fi
     
     # Get cluster state
-    local cluster_state=$(rosa describe cluster --cluster "$CLUSTER_NAME" -o json | jq -r '.state // empty')
+    local cluster_state; cluster_state=$(rosa describe cluster --cluster "$CLUSTER_NAME" -o json | jq -r '.state // empty')
     
     if [[ "$cluster_state" != "ready" ]]; then
         echo "WARNING: Cluster '$CLUSTER_NAME' is in state: $cluster_state"
@@ -160,7 +160,7 @@ use-rosa-sts() {
     mkdir -p "$ROSA_DIR"
     
     # Get cluster API URL
-    local api_url=$(rosa describe cluster --cluster "$CLUSTER_NAME" -o json | jq -r '.api.url // empty')
+    local api_url; api_url=$(rosa describe cluster --cluster "$CLUSTER_NAME" -o json | jq -r '.api.url // empty')
     
     if [[ -z "$api_url" ]]; then
         echo "ERROR: Could not retrieve API URL for cluster '$CLUSTER_NAME'"
@@ -178,12 +178,12 @@ use-rosa-sts() {
             echo "Existing cluster-admin.txt contains no valid credentials"
             needs_new_admin=true
         else
-            local admin_password=$(grep "password:" "$ROSA_DIR/cluster-admin.txt" | awk '{print $2}')
+            local admin_password; admin_password=$(grep "password:" "$ROSA_DIR/cluster-admin.txt" | awk '{print $2}')
             local admin_user="cluster-admin"
             
             if [[ -n "$admin_password" ]]; then
                 echo "Logging in as cluster-admin..."
-                if oc login "$api_url" --username="$admin_user" --password="$admin_password" --insecure-skip-tls-verify=true; then
+                if oc login "$api_url" --username="$admin_user" --password="$admin_password"; then
                     echo "Successfully logged in"
                 else
                     echo "Login failed, credentials may be expired"
@@ -205,12 +205,12 @@ use-rosa-sts() {
         rosa create admin --cluster "$CLUSTER_NAME" | tee "$ROSA_DIR/cluster-admin.txt"
         
         # Extract and use the new credentials
-        local admin_password=$(grep "password:" "$ROSA_DIR/cluster-admin.txt" | awk '{print $2}')
+        local admin_password; admin_password=$(grep "password:" "$ROSA_DIR/cluster-admin.txt" | awk '{print $2}')
         local admin_user="cluster-admin"
         
         if [[ -n "$admin_password" ]]; then
             echo "Logging in with new cluster-admin credentials..."
-            oc login "$api_url" --username="$admin_user" --password="$admin_password" --insecure-skip-tls-verify=true
+            oc login "$api_url" --username="$admin_user" --password="$admin_password"
         else
             echo "ERROR: Failed to create cluster-admin user or extract credentials"
             return 1

@@ -173,6 +173,18 @@ Clusters are stored in `$OCP_MANIFESTS_DIR` with naming patterns:
 
 Note: ROSA clusters may not have traditional kubeconfig files. Use `use-rosa-sts` functions to connect.
 
+### OpenShift Version-Matched oc Binary
+
+When any OCP create function calls `oc adm release extract`, it **must** use a version-matched `oc` binary from the release image. The system `oc` may have stale filtering logic (see OCPBUGS-77845) that extracts wrong credential requests, causing cluster creation failures.
+
+Use the `get-release-oc` helper from `common-functions.zsh`:
+```bash
+local OC_BIN=$(get-release-oc "$RELEASE_IMAGE")
+$OC_BIN adm release extract --cloud=gcp ...
+```
+
+The helper extracts `oc` from the release image to `/tmp/oc-<version>/oc` and caches it. Always pass `--cloud=<provider>` (gcp, azure, aws) with `--included` and `--install-config` for credential extraction.
+
 ### Dependencies
 When adding features that require new tools, update the `Brewfile` with the necessary formulae or casks.
 
