@@ -71,7 +71,7 @@ retry-ccoctl-azure() {
             # Run destroy command
             echo "INFO: Running ccoctl azure destroy to clean up existing resources..."
             echo "DEBUG: Destroy command: ccoctl ${destroy_args[*]}"
-            local destroy_output=$(ccoctl "${destroy_args[@]}" 2>&1)
+            local destroy_output; destroy_output=$(ccoctl "${destroy_args[@]}" 2>&1)
             local destroy_exit_code=$?
             
             if [[ $destroy_exit_code -eq 0 ]]; then
@@ -126,7 +126,7 @@ retry-ccoctl-azure() {
                         echo "INFO: Storage account not found in expected resource group '$resource_group'"
                         # Try to find it in any resource group
                         echo "INFO: Searching for storage account across all resource groups..."
-                        local found_rg=$(az storage account list --query "[?name=='$storage_account'].resourceGroup | [0]" -o tsv 2>/dev/null)
+                        local found_rg; found_rg=$(az storage account list --query "[?name=='$storage_account'].resourceGroup | [0]" -o tsv 2>/dev/null)
                         if [[ -n "$found_rg" ]]; then
                             echo "INFO: Found storage account in resource group '$found_rg'"
                             resource_group="$found_rg"

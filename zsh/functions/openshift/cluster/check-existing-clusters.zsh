@@ -305,7 +305,7 @@ check-for-existing-clusters() {
 
     local choice
     if command -v fzf >/dev/null 2>&1; then
-        local selected=$(echo "$options" | fzf --height 40% --reverse --header "Select an action")
+        local selected; selected=$(echo "$options" | fzf --height 40% --reverse --header "Select an action")
         if [[ -z "$selected" ]]; then
             echo "Operation cancelled."
             return 1

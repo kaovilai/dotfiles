@@ -103,8 +103,8 @@ prompt-release-stream() {
         return 0
     fi
 
-    local version=$(echo "$selected" | awk '{print $2}')
-    local stream_tag=$(echo "$selected" | awk '{print $1}' | tr -d '[]')
+    local version; version=$(echo "$selected" | awk '{print $2}')
+    local stream_tag; stream_tag=$(echo "$selected" | awk '{print $1}' | tr -d '[]')
 
     echo "INFO: Selected version $version ($stream_tag)" >&2
 
@@ -354,7 +354,7 @@ _download-openshift-install() {
     esac
 
     local url="https://mirror.openshift.com/pub/openshift-v4/clients/ocp-dev-preview/${version}/openshift-install-${os}-${arch}.tar.gz"
-    local temp_dir=$(mktemp -d)
+    local temp_dir; temp_dir=$(mktemp -d)
 
     echo "Downloading from: $url" >&2
     if curl -sL "$url" -o "${temp_dir}/openshift-install.tar.gz"; then
@@ -391,8 +391,8 @@ _download-openshift-install() {
 #   [[ -z "$installer" ]] && return 1
 #   $installer version
 get-openshift-install() {
-    local ec_version=$(get-ocp-latest-ec-version)
-    local stable_version=$(get-ocp-latest-stable-version)
+    local ec_version; ec_version=$(get-ocp-latest-ec-version)
+    local stable_version; stable_version=$(get-ocp-latest-stable-version)
 
     # Detect host architecture
     local host_arch=""
@@ -694,7 +694,7 @@ cleanup-on-failure() {
 
     # Try to gather bootstrap logs first
     if [[ -d "$cluster_dir" ]]; then
-        local openshift_install=$(get-openshift-install)
+        local openshift_install; openshift_install=$(get-openshift-install)
         if [[ -n "$openshift_install" ]]; then
             echo "Attempting to gather bootstrap logs..."
             $openshift_install gather bootstrap --dir "$cluster_dir" || true
