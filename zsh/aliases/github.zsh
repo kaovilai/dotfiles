@@ -9,7 +9,7 @@ ghcc() {
   fi
   if [[ -z "$1" ]]; then
     echo "Usage: ghcc <repo>"
-    echo "Example: ghcc owner/repo or ghcc https://github.com/owner/repo"
+    echo "Example: ghcc owner/repo, ghcc https://github.com/owner/repo, or ghcc https://github.com/owner/repo/pull/123"
     return 1
   fi
   if ! command -v code &>/dev/null; then
@@ -19,35 +19,44 @@ ghcc() {
 
   local repo_spec="$1"
   local repo_name
+  local pr_number=""
 
-  # Handle full GitHub URLs
-  if [[ "$1" =~ ^https?://github\.com/(.+)$ ]]; then
+  # Handle GitHub PR URLs: extract owner/repo + PR number, ignore rest of path
+  if [[ "$1" =~ ^https?://github\.com/([^/]+/[^/]+)/pull/([0-9]+) ]]; then
     repo_spec="${match[1]}"
-    repo_spec="${repo_spec%/}"
-    repo_spec="${repo_spec%.git}"
+    pr_number="${match[2]}"
+  # Handle other full GitHub URLs (repo root, issues, tree, blob, etc.) - keep only owner/repo
+  elif [[ "$1" =~ ^https?://github\.com/([^/]+/[^/]+) ]]; then
+    repo_spec="${match[1]}"
   fi
+  repo_spec="${repo_spec%/}"
+  repo_spec="${repo_spec%.git}"
 
   # Extract just the repo name for the directory
   repo_name="${repo_spec:t}"
   local target_dir="$HOME/git/$repo_name"
 
   if [[ -d "$target_dir" ]]; then
-    echo "Directory $target_dir already exists, opening in VS Code..."
-    code "$target_dir"
-    return 0
+    echo "Directory $target_dir already exists."
+  else
+    if ! gh repo clone "$repo_spec" "$target_dir" 2>/dev/null; then
+      echo "Repository '$repo_spec' not found."
+      local confirm
+      read -r "confirm?Create private repo '$repo_name'? (y/N) "
+      if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
+        echo "Aborted."
+        return 1
+      fi
+      gh repo create "$repo_name" --private || return 1
+      gh repo clone "$repo_name" "$target_dir" || return 1
+    fi
   fi
 
-  if ! gh repo clone "$repo_spec" "$target_dir" 2>/dev/null; then
-    echo "Repository '$repo_spec' not found."
-    local confirm
-    read -r "confirm?Create private repo '$repo_name'? (y/N) "
-    if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
-      echo "Aborted."
-      return 1
-    fi
-    gh repo create "$repo_name" --private || return 1
-    gh repo clone "$repo_name" "$target_dir" || return 1
+  if [[ -n "$pr_number" ]]; then
+    echo "Checking out PR #$pr_number..."
+    (cd "$target_dir" && gh pr checkout "$pr_number") || echo "⚠️ Failed to checkout PR #$pr_number" >&2
   fi
+
   code "$target_dir"
 }
 alias ghclone='ghcc'
