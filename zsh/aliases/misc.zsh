@@ -126,8 +126,8 @@ c() {
         echo "Error: c is only supported on macOS" >&2
         return 1
     fi
-    if ! command -v happy &>/dev/null && ! whence -p claude &>/dev/null; then
-        echo "❌ Neither happy nor claude binary found. Install Claude Code CLI." >&2
+    if ! whence -p claude &>/dev/null; then
+        echo "❌ claude binary not found. Install Claude Code CLI." >&2
         return 1
     fi
     if [[ -n "$1" ]]; then
@@ -214,8 +214,8 @@ claude-review() {
         echo "Usage: claude-review <topic>" >&2
         return 1
     fi
-    if ! command -v happy &>/dev/null && ! whence -p claude &>/dev/null; then
-        echo "❌ Neither happy nor claude binary found. Install Claude Code CLI." >&2
+    if ! whence -p claude &>/dev/null; then
+        echo "❌ claude binary not found. Install Claude Code CLI." >&2
         return 1
     fi
     osascript -e "tell app \"Terminal\" to do script \"cd $HOME/experiments/ && claude \\\"/review $1\\\"\""

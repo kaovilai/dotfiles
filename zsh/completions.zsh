@@ -143,19 +143,15 @@ if [[ -f /usr/local/ibmcloud/autocomplete/zsh_autocomplete ]]; then
 fi
 
 # Claude Code CLI - download from community-maintained repo
-if has_command claude || has_command happy; then
+if has_command claude; then
   local claude_completion_file="$ZSH_COMPLETION_CACHE_DIR/_claude"
   if [[ -f "$claude_completion_file" ]]; then
     cp "$claude_completion_file" "${fpath[1]}/_claude" &!
-    # Also register completions for happy (claude is a shell function
-    # dispatching to happy or the claude binary; see claude-copilot.zsh)
-    sed 's/^#compdef claude/#compdef claude happy/' "$claude_completion_file" > "${fpath[1]}/_happy" &!
   fi
   if has_command curl && completion_cache_expired "$claude_completion_file"; then  # 7 days
     (curl -sLm 10 https://raw.githubusercontent.com/wbingli/zsh-claudecode-completion/main/_claude > "${claude_completion_file}.tmp" &&
     mv "${claude_completion_file}.tmp" "$claude_completion_file" &&
-    cp "$claude_completion_file" "${fpath[1]}/_claude" &&
-    sed 's/^#compdef claude/#compdef claude happy/' "$claude_completion_file" > "${fpath[1]}/_happy" ||
+    cp "$claude_completion_file" "${fpath[1]}/_claude" ||
     rm -f "${claude_completion_file}.tmp") &!
   fi
 fi

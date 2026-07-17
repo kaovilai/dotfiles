@@ -13,8 +13,11 @@
 # The gateway server itself runs from the published copilot-api package — the
 # PR fixes only affect the generated launch command, which is inlined here.
 #
-# Also defines the mode-dispatching `claude` function and the `claude-mode`
-# switcher (copilot ↔ default/happy) — see bottom of file.
+# Also defines claude-vertex (raw claude binary routed through Google Vertex
+# AI, using CLOUD_ML_REGION/ANTHROPIC_VERTEX_PROJECT_ID already exported in
+# the shell — same vars used by computer-use-claude/cecon elsewhere in this
+# repo), plus the mode-dispatching `claude` function and the `claude-mode`
+# switcher (copilot ↔ vertex, vertex is default) — see bottom of file.
 
 # Highest-versioned Claude model for a family from /v1/models JSON.
 # Mirrors PR #2's getLatestModelForFamily: numeric major-then-minor compare,
@@ -37,8 +40,8 @@ _claude_copilot_latest_model() {
     ' <<< "$models_json"
 }
 
-# Names only (no values) — used to clean up when switching back to `default`
-# mode so gateway config doesn't leak into happy/subscription auth.
+# Names only (no values) — used to clean up when switching to `vertex` mode
+# so gateway config doesn't leak across.
 typeset -ga _claude_copilot_env_names=(
     ANTHROPIC_BASE_URL
     ANTHROPIC_AUTH_TOKEN
@@ -146,9 +149,30 @@ claude-copilot() {
 }
 
 # ---------------------------------------------------------------------------
-# claude mode switching: `claude` dispatches to happy (default) or the raw
-# claude binary through the copilot-api gateway (copilot). Persisted in
-# ~/.config/claude-mode so the choice survives across shells.
+# claude-vertex: raw claude binary, routed through Google Vertex AI. Unlike
+# claude-copilot, no local gateway process is needed — Claude Code talks to
+# Vertex directly once CLAUDE_CODE_USE_VERTEX is set. Requires
+# CLOUD_ML_REGION and ANTHROPIC_VERTEX_PROJECT_ID already exported in the
+# shell (same vars computer-use-claude/cecon/claude-container use elsewhere
+# in this repo) and gcloud ADC set up (`gcloud auth application-default
+# login`).
+claude-vertex() {
+    if [[ -z "$CLOUD_ML_REGION" || -z "$ANTHROPIC_VERTEX_PROJECT_ID" ]]; then
+        echo "❌ CLOUD_ML_REGION and ANTHROPIC_VERTEX_PROJECT_ID must be exported to use Vertex AI." >&2
+        return 1
+    fi
+    _claude_copilot_unset_env
+    export CLAUDE_CODE_USE_VERTEX=1
+    export CLOUD_ML_REGION ANTHROPIC_VERTEX_PROJECT_ID
+    [[ -n "$ANTHROPIC_VERTEX_BASE_URL" ]] && export ANTHROPIC_VERTEX_BASE_URL
+    command claude "$@"
+}
+
+# ---------------------------------------------------------------------------
+# claude mode switching: `claude` dispatches to the raw claude binary through
+# either Google Vertex AI (vertex, default) or the copilot-api gateway
+# (copilot). Persisted in ~/.config/claude-mode so the choice survives
+# across shells.
 
 typeset -g _claude_mode_file="${XDG_CONFIG_HOME:-$HOME/.config}/claude-mode"
 
@@ -157,17 +181,17 @@ _claude_mode_get() {
     [[ -r "$_claude_mode_file" ]] && IFS= read -r mode < "$_claude_mode_file"
     case "$mode" in
         copilot) print -r -- copilot ;;
-        *)       print -r -- default ;;   # missing/unknown fails safe
+        *)       print -r -- vertex ;;   # missing/unknown fails safe to vertex
     esac
 }
 
 claude-mode() {
     if (( $# > 1 )); then
-        echo "Usage: claude-mode [copilot|default]" >&2
+        echo "Usage: claude-mode [copilot|vertex]" >&2
         return 1
     fi
     case "$1" in
-        copilot|default)
+        copilot|vertex)
             # >| overrides NO_CLOBBER; fail loudly if persistence fails
             if ! mkdir -p "${_claude_mode_file:h}" ||
                ! print -r -- "$1" >| "$_claude_mode_file"; then
@@ -178,27 +202,26 @@ claude-mode() {
             ;;
         "")
             echo "claude mode: $(_claude_mode_get)"
-            echo "usage: claude-mode [copilot|default]"
+            echo "usage: claude-mode [copilot|vertex]"
             ;;
         *)
-            echo "Usage: claude-mode [copilot|default]" >&2
+            echo "Usage: claude-mode [copilot|vertex]" >&2
             return 1
             ;;
     esac
 }
 
-# Guard for live shells still carrying the old claude→happy alias; `function`
+# Guard for live shells still carrying an old claude→happy alias; `function`
 # keyword form: the name is never alias-expanded (at parse time or under
 # zcompile), so this definition is safe even if the guard misses.
 unalias claude 2>/dev/null || true   # tolerate missing alias under ERR_EXIT
 function claude {
     local mode="$(_claude_mode_get)"
     # stderr so piped/scripted output (e.g. claude -p) stays clean
-    echo "claude mode: ${mode} (switch: claude-mode copilot|default)" >&2
+    echo "claude mode: ${mode} (switch: claude-mode copilot|vertex)" >&2
     if [[ "$mode" == copilot ]]; then
-        claude-copilot "$@"          # raw claude binary; NO happy-only flags
+        claude-copilot "$@"
     else
-        _claude_copilot_unset_env
-        happy --enable-auto-mode --permission-mode auto "$@"
+        claude-vertex "$@"
     fi
 }
