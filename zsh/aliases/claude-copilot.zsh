@@ -162,10 +162,14 @@ claude-vertex() {
         return 1
     fi
     _claude_copilot_unset_env
-    export CLAUDE_CODE_USE_VERTEX=1
-    export CLOUD_ML_REGION ANTHROPIC_VERTEX_PROJECT_ID
-    [[ -n "$ANTHROPIC_VERTEX_BASE_URL" ]] && export ANTHROPIC_VERTEX_BASE_URL
-    command claude "$@"
+    # Subshell scopes CLAUDE_CODE_USE_VERTEX (and the re-exports below) to this
+    # one invocation only — parent shell's env is untouched once claude exits.
+    (
+        export CLAUDE_CODE_USE_VERTEX=1
+        export CLOUD_ML_REGION ANTHROPIC_VERTEX_PROJECT_ID
+        [[ -n "$ANTHROPIC_VERTEX_BASE_URL" ]] && export ANTHROPIC_VERTEX_BASE_URL
+        command claude "$@"
+    )
 }
 
 # ---------------------------------------------------------------------------
