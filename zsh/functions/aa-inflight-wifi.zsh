@@ -45,7 +45,7 @@ aa-inflight-wifi() {
 
     # Function to randomize MAC and reconnect
     reconnect_wifi() {
-        echo "$(date '+%Y-%m-%d %H:%M:%S') - Randomizing MAC address..."
+        echo "${(%):-%D{%Y-%m-%d %H:%M:%S}} - Randomizing MAC address..."
 
         # Source the MAC randomization function if not already loaded
         if ! command -v randomize-mac-ifconfig &>/dev/null; then
@@ -140,7 +140,7 @@ aa-inflight-wifi() {
         # Perform the reconnection
         if reconnect_wifi; then
             # Success - wait 20 minutes before next cycle
-            echo "$(date '+%Y-%m-%d %H:%M:%S') - Waiting 20 minutes before next reconnection..."
+            echo "${(%):-%D{%Y-%m-%d %H:%M:%S}} - Waiting 20 minutes before next reconnection..."
             echo "Next reconnection at: $(date -v +${wait_time}S '+%Y-%m-%d %H:%M:%S')"
             sleep $wait_time
         else
