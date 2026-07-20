@@ -9,7 +9,7 @@ function symlink-to-sd() {
     local current_name="${current_dir:t}"
     local parent_dir="${current_dir:h}"
     local sd_target="/Volumes/SD$current_dir"
-    local sd_backup="/Volumes/SD$current_dir.backup.$(date +%Y%m%d%H%M%S)"
+    local sd_backup="/Volumes/SD$current_dir.backup.${(%):-%D{%Y%m%d%H%M%S}}"
     local file
 
     # Check if SD volume is mounted
