@@ -22,6 +22,8 @@ for func in \
     crc-start-version \
     create-install-config-header \
     create-ocp-aws \
+    create-ocp-aws-amd64 \
+    create-ocp-aws-arm64 \
     create-ocp-azure-sts \
     create-ocp-gcp-wif \
     create-rosa-sts \
@@ -38,6 +40,8 @@ for func in \
     create-velero-identity-for-gcp-cluster \
     create-velero-identity-for-rosa-cluster \
     delete-ocp-aws \
+    delete-ocp-aws-amd64 \
+    delete-ocp-aws-arm64 \
     delete-ocp-aws-dir \
     delete-ocp-azure-sts \
     delete-ocp-azure-sts-dir \
