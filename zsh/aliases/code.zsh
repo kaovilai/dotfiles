@@ -12,6 +12,7 @@ alias cvelero-ocp='code ~/git/openshift-velero-plugin/'
 alias cvelero-lvp='code ~/git/local-volume-provider/'
 alias clvp='code ~/git/local-volume-provider/'
 alias crelease='code ~/git/release'
+alias cclaude='code ~/.claude/'
 
 # Open directories from ~/git/ selected via fzf
 cg() {
