@@ -115,21 +115,26 @@ go-mod-upgrade-dirs() {
         echo "❌ gh not found. Install it with: brew install gh" >&2
         return 1
     fi
-    if [[ -z "$(find . -type d -maxdepth 1 -name "$1" -print -quit)" ]]; then
+    # ⚡ Bolt: Use native Zsh globbing to avoid `find` subprocess creation.
+    setopt local_options null_glob
+    local -a dirs=( $~1(N/) )
+    if (( ${#dirs} == 0 )); then
         echo "❌ No directories found matching pattern: $1" >&2
         return 1
     fi
-    find . -type d -maxdepth 1 -name "$1" -exec sh -c '
-        dir="$1" pkg="$2" extra_cmd="$3" prefix="$4"
-        cd "$dir" || { echo "Failed to cd into $dir" >&2; exit 1; }
-        pwd &&
-        git fetch upstream && (git checkout upstream/main || git checkout upstream/master || git checkout upstream/oadp-dev) &&
-        (git checkout -b "$pkg" || git checkout "$pkg") &&
-        go get "$pkg" && go mod tidy && git add go.mod go.sum &&
-        sh -c "$extra_cmd" &&
-        git commit -sm "${prefix}${pkg}" &&
-        gh pr create --web --title "${prefix}${pkg}"
-    ' _ {} "$2" "$3" "$4" \;
+    local dir pkg="$2" extra_cmd="$3" prefix="$4"
+    for dir in "${dirs[@]}"; do
+        (
+            cd "$dir" || { echo "Failed to cd into $dir" >&2; exit 1; }
+            pwd &&
+            git fetch upstream && (git checkout upstream/main || git checkout upstream/master || git checkout upstream/oadp-dev) &&
+            (git checkout -b "$pkg" || git checkout "$pkg") &&
+            go get "$pkg" && go mod tidy && git add go.mod go.sum &&
+            eval "$extra_cmd" &&
+            git commit -sm "${prefix}${pkg}" &&
+            gh pr create --web --title "${prefix}${pkg}"
+        )
+    done
 }
 
 # execute commands in dirs matched by find . -type d -maxdepth 1 -name "<$1>"
@@ -142,18 +147,23 @@ exec-dirs() {
         echo "Example: exec-dirs \"velero*\" my-branch \"go mod tidy\"" >&2
         return 1
     fi
-    if [[ -z "$(find . -type d -maxdepth 1 -name "$1" -print -quit)" ]]; then
+    # ⚡ Bolt: Use native Zsh globbing to avoid `find` subprocess creation.
+    setopt local_options null_glob
+    local -a dirs=( $~1(N/) )
+    if (( ${#dirs} == 0 )); then
         echo "❌ No directories found matching pattern: $1" >&2
         return 1
     fi
-    find . -type d -maxdepth 1 -name "$1" -exec sh -c '
-        dir="$1" branch="$2" cmd="$3"
-        cd "$dir" || { echo "Failed to cd into $dir" >&2; exit 1; }
-        pwd &&
-        git fetch upstream && (git checkout upstream/main || git checkout upstream/master || git checkout upstream/oadp-dev) &&
-        (git checkout -b "$branch" || git checkout "$branch") &&
-        sh -c "$cmd"
-    ' _ {} "$2" "$3" \;
+    local dir branch="$2" cmd="$3"
+    for dir in "${dirs[@]}"; do
+        (
+            cd "$dir" || { echo "Failed to cd into $dir" >&2; exit 1; }
+            pwd &&
+            git fetch upstream && (git checkout upstream/main || git checkout upstream/master || git checkout upstream/oadp-dev) &&
+            (git checkout -b "$branch" || git checkout "$branch") &&
+            eval "$cmd"
+        )
+    done
 }
 
 # Improved version of exec-dirs-ds and exec-dirs-ds-echo with better error handling,
@@ -187,13 +197,16 @@ exec-dirs-ds() {
     local cmd="$5"
     local dir
 
-    if [[ -z "$(find . -type d -maxdepth 1 -name "$pattern" -print -quit)" ]]; then
+    # ⚡ Bolt: Use native Zsh globbing to avoid `find` subprocess creation.
+    setopt local_options null_glob
+    local -a dirs=( $~pattern(N/) )
+    if (( ${#dirs} == 0 )); then
         echo "❌ No directories found matching pattern: $pattern" >&2
         return 1
     fi
 
-    # Use find to locate matching directories
-    find . -type d -maxdepth 1 -name "$pattern" | while read -r dir; do
+    # Use Zsh native globbing to locate matching directories
+    for dir in "${dirs[@]}"; do
         (
             print "\033[1;34mProcessing $dir...\033[0m"
             cd "$dir" || { print "\033[1;31mFailed to cd into $dir\033[0m" >&2; return 1; }
@@ -246,13 +259,16 @@ exec-dirs-ds-echo() {
     local cmd="$5"
     local dir
 
-    if [[ -z "$(find . -type d -maxdepth 1 -name "$pattern" -print -quit)" ]]; then
+    # ⚡ Bolt: Use native Zsh globbing to avoid `find` subprocess creation.
+    setopt local_options null_glob
+    local -a dirs=( $~pattern(N/) )
+    if (( ${#dirs} == 0 )); then
         echo "❌ No directories found matching pattern: $pattern" >&2
         return 1
     fi
 
     # Pass the same arguments but set a flag to only echo commands
-    find . -type d -maxdepth 1 -name "$pattern" | while read -r dir; do
+    for dir in "${dirs[@]}"; do
         print "\033[1;34mWould process $dir\033[0m"
         echo "  Would fetch $ds_name"
         echo "  Would checkout $ds_name/$base_branch"
@@ -279,11 +295,14 @@ code-dirs() {
         return 1
     fi
 
-    if [[ -z "$(find . -type d -maxdepth 1 -name "$1" -print -quit)" ]]; then
+    # ⚡ Bolt: Use native Zsh globbing to avoid `find` subprocess creation.
+    setopt local_options null_glob
+    local -a dirs=( $~1(N/) )
+    if (( ${#dirs} == 0 )); then
         echo "❌ No directories found matching pattern: $1" >&2
         return 1
     fi
-    find . -type d -maxdepth 1 -name "$1" | parallel code {}
+    print -l "${dirs[@]}" | parallel code {}
 }
 
 # open all dirs matching pattern in finder
@@ -303,11 +322,14 @@ finder-dirs() {
         return 1
     fi
 
-    if [[ -z "$(find . -type d -maxdepth 1 -name "$1" -print -quit)" ]]; then
+    # ⚡ Bolt: Use native Zsh globbing to avoid `find` subprocess creation.
+    setopt local_options null_glob
+    local -a dirs=( $~1(N/) )
+    if (( ${#dirs} == 0 )); then
         echo "❌ No directories found matching pattern: $1" >&2
         return 1
     fi
-    find . -type d -maxdepth 1 -name "$1" | parallel open -a Finder {}
+    print -l "${dirs[@]}" | parallel open -a Finder {}
 }
 
 # noglob aliases: allow unquoted glob patterns (e.g. exec-dirs velero* instead of exec-dirs "velero*")
