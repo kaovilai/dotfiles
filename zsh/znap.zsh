@@ -3,22 +3,9 @@ zstyle ':znap:*' repos-dir ~/.zsh-snap
 # Extend cache TTL to reduce network requests and speed up shell startup
 zstyle ':znap:*:*' ttl 604800  # Cache for 7 days (in seconds)
 
-autoload -Uz compinit
-# Run full compinit when:
-#   - the dump doesn't exist yet (first run), OR
-#   - the dump is older than 24h (mh+24 = modified more than 24h ago)
-# Otherwise use -C to skip the fpath security scan for faster startup.
-() {
-  # Optimization: Use native Zsh extended globbing qualifiers efficiently
-  setopt local_options extended_glob
-  local _zcompdump="${ZDOTDIR:-$HOME}/.zcompdump"
-  local -a stale_dump=($_zcompdump(#qN.mh+24))
-  if [[ ! -f $_zcompdump ]] || (( ${#stale_dump} > 0 )); then
-    compinit          # no dump or stale: rebuild and re-check fpath security
-  else
-    compinit -C       # dump is fresh: skip security scan for faster startup
-  fi
-}
+# Znap automatically handles compinit and comp dumps.
+# Manually calling compinit degrades shell startup performance
+# due to redundant execution and should be avoided.
 
 # Download Znap, if it's not there yet.
 [[ -f ~/git/zsh-snap/znap.zsh ]] ||
