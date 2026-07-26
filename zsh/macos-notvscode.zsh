@@ -121,7 +121,7 @@ if [[ "$TERM_PROGRAM" != "vscode" ]]; then
   # Detect WiFi interface dynamically (consistent with set-tf-proxy and other functions)
   _WIFI_IFACE=$(networksetup -listallhardwareports 2>/dev/null | awk '/Wi-Fi/{found=1} found && /Device:/{print $2; exit}')
   # Get WiFi name once and cache it
-  WIFI_NAME=$(networksetup -getairportnetwork "${_WIFI_IFACE:-en0}" 2>/dev/null | cut -d " " -f 4)
+  WIFI_NAME=${$(networksetup -getairportnetwork "${_WIFI_IFACE:-en0}" 2>/dev/null)#Current Wi-Fi Network: }
   unset _WIFI_IFACE
   
   # Run home setup check in background
