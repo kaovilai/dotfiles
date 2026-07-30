@@ -73,11 +73,17 @@ if [[ "$TERM_PROGRAM" != "vscode" ]]; then
             echo "Example: view-pr-dirs \"velero*\"" >&2
             return 1
         fi
-        if [[ -z "$(find . -type d -maxdepth 1 -name "$1" -print -quit)" ]]; then
+        local -a dirs=( $~1(N/) )
+        if (( ${#dirs} == 0 )); then
             echo "❌ No directories found matching pattern: $1" >&2
             return 1
         fi
-        find . -type d -maxdepth 1 -name "$1" -exec sh -c 'cd "$1" || { echo "Failed to cd into $1" >&2; exit 1; }; pwd && gh pr view --web' _ {} \;
+        # ⚡ Bolt Optimization:
+        # Replaced external `find` subprocess with native Zsh globbing array to avoid
+        # unnecessary subprocess creation and significantly speed up directory traversal.
+        for dir in "${dirs[@]}"; do
+            (cd "$dir" || { echo "Failed to cd into $dir" >&2; return 1; }; pwd && gh pr view --web)
+        done
     }
     alias view-pr-dirs='noglob view-pr-dirs'
 fi
