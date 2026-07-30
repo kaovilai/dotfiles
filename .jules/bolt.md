@@ -5,3 +5,6 @@
 ## 2024-11-20 - Use Zsh Native Extended Globbing for File Staleness
 **Learning:** Checking file age by spawning `stat` and `date` as subprocesses adds unnecessary overhead and degrades shell startup performance. In this codebase, avoiding subprocesses is a critical optimization pattern.
 **Action:** Use native Zsh extended globbing (e.g., `(#qN.ms+seconds)`) coupled with `setopt local_options extended_glob` to perform file age evaluations natively within the shell, bypassing process spawning altogether.
+## 2024-03-24 - ZSH Variable Scope in Subprocess Replacements
+**Learning:** When refactoring external subprocess loops (e.g., `find -exec sh -c '...'`) into native Zsh loops, variables created inside the former `sh -c` string will leak into the global interactive shell environment if not correctly scoped.
+**Action:** Always explicitly scope variables using the `local` keyword inside functions or wrap the loop body in a subshell `(...)` to encapsulate state changes and assignments when moving logic from external shells into native Zsh loops.
