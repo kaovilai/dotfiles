@@ -374,6 +374,17 @@ create-ocp-aws() {
     aws:
       type: $metal_instance_type"
     fi
+    # OCP_CONTROLPLANE_INSTANCE_TYPE: optional override for control-plane (master)
+    # instance size, e.g. when the default (installer's own AWS default, m6i.xlarge
+    # on amd64) is under-resourced for a given payload/bootstrap and masters need
+    # more headroom. Unset by default -- "platform: {}" lets the installer pick.
+    local controlplane_platform_yaml="  platform: {}"
+    if [[ -n "$OCP_CONTROLPLANE_INSTANCE_TYPE" ]]; then
+        echo "INFO: OCP_CONTROLPLANE_INSTANCE_TYPE set: control-plane nodes will be $OCP_CONTROLPLANE_INSTANCE_TYPE"
+        controlplane_platform_yaml="  platform:
+    aws:
+      type: $OCP_CONTROLPLANE_INSTANCE_TYPE"
+    fi
     {
         create-install-config-header
         echo "baseDomain: $AWS_BASEDOMAIN
@@ -387,7 +398,7 @@ controlPlane:
   architecture: $ARCHITECTURE
   hyperthreading: Enabled
   name: master
-  platform: {}
+$controlplane_platform_yaml
   replicas: 3
 metadata:
   creationTimestamp: null
