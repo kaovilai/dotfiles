@@ -57,6 +57,26 @@ on:
         required: false
         type: string
         default: ''
+      nightly_minor:
+        description: 'Use raw X.Y.0-0.nightly stream (--nightly=X.Y, e.g. 5.0). Overrides stream/version. Leave empty to disable.'
+        required: false
+        type: string
+        default: ''
+      community_hco:
+        description: 'Install Community HCO instead of productized CNV (--community-hco). Implies install_cnv.'
+        required: true
+        type: boolean
+        default: false
+      community_hco_tag:
+        description: 'Community HCO index tag (default 1.18.0 if left empty). Only used when community_hco is true.'
+        required: false
+        type: string
+        default: ''
+      controlplane_instance_type:
+        description: 'Override control-plane instance type (OCP_CONTROLPLANE_INSTANCE_TYPE, e.g. m6i.2xlarge). Leave empty for installer default.'
+        required: false
+        type: string
+        default: ''
 
 permissions:
   contents: read
@@ -105,6 +125,7 @@ jobs:
           AWS_REGION: us-east-1
           OCP_KVM_INSTANCE_TYPE: ${{ inputs.kvm_instance_type }}
           OCP_KVM_ZONE: ${{ inputs.kvm_zone }}
+          OCP_CONTROLPLANE_INSTANCE_TYPE: ${{ inputs.controlplane_instance_type }}
         run: |
           set -euo pipefail
 
@@ -123,6 +144,7 @@ jobs:
           STREAM="${{ inputs.stream }}"
           ARCH="${{ inputs.arch }}"
           VERSION="${{ inputs.version }}"
+          NIGHTLY_MINOR="${{ inputs.nightly_minor }}"
 
           # If specific version requested, set it for get-release-image
           if [[ -n "$VERSION" ]]; then
@@ -131,7 +153,9 @@ jobs:
           fi
 
           FLAGS=(--force-new)
-          if [[ "$STREAM" == "dev-preview" && -z "$VERSION" ]]; then
+          if [[ -n "$NIGHTLY_MINOR" ]]; then
+            FLAGS+=(--nightly=$NIGHTLY_MINOR)
+          elif [[ "$STREAM" == "dev-preview" && -z "$VERSION" ]]; then
             FLAGS+=(--ec)
           fi
 
@@ -146,7 +170,16 @@ jobs:
             FLAGS+=(--install-cnv)
           fi
 
-          echo "::group::Creating OCP cluster (arch=$ARCH, stream=$STREAM, version=${VERSION:-latest}, kvm=$KVM_MODE, cnv=${{ inputs.install_cnv }})"
+          COMMUNITY_HCO_TAG="${{ inputs.community_hco_tag }}"
+          if [[ "${{ inputs.community_hco }}" == "true" ]]; then
+            if [[ -n "$COMMUNITY_HCO_TAG" ]]; then
+              FLAGS+=(--community-hco=$COMMUNITY_HCO_TAG)
+            else
+              FLAGS+=(--community-hco)
+            fi
+          fi
+
+          echo "::group::Creating OCP cluster (arch=$ARCH, stream=${NIGHTLY_MINOR:+nightly-$NIGHTLY_MINOR}${NIGHTLY_MINOR:-$STREAM}, version=${VERSION:-latest}, kvm=$KVM_MODE, cnv=${{ inputs.install_cnv }}, community_hco=${{ inputs.community_hco }})"
           "create-ocp-aws-${ARCH}" "${FLAGS[@]}"
           echo "::endgroup::"
 
@@ -170,8 +203,10 @@ jobs:
                 `- **Provider:** AWS`,
                 `- **Architecture:** ${{ inputs.arch }}`,
                 `- **Stream:** ${{ inputs.stream }}`,
+                `- **Nightly minor:** ${{ inputs.nightly_minor || 'n/a' }}`,
                 `- **KVM mode:** ${{ inputs.kvm_mode }}`,
                 `- **CNV installed:** ${{ inputs.install_cnv }}`,
+                `- **Community HCO:** ${{ inputs.community_hco }}`,
                 `- **Created:** ${new Date().toISOString()}`,
                 `- **Run:** [${context.runId}](${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId})`,
                 ``,
