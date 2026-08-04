@@ -52,7 +52,7 @@ check-qemu-stuck() {
 
             # Get process state details
             state=$(podman machine ssh -- "cat /proc/$pid/status 2>/dev/null | grep -E '(State|Threads)'" 2>/dev/null)
-            echo "    State: $(tr '\n' ' ' <<< "$state")"
+            echo "    State: ${state//$'\n'/ }"
         done <<< "$stuck_procs"
         echo
         echo "💡 Known issue: QEMU user-mode emulation futex deadlock with Go builds"
