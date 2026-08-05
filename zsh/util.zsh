@@ -32,7 +32,7 @@ wait-for-url() {
 
         if [[ "$http_code" =~ ^[23] ]]; then
             echo ""
-            echo "$(date '+%H:%M:%S') - $label is UP (HTTP $http_code)"
+            echo "${(%):-%D{%H:%M:%S}} - $label is UP (HTTP $http_code)"
             if [[ "$(uname)" == "Darwin" ]]; then
                 say "${label} is back up" &
                 afplay /System/Library/Sounds/Glass.aiff 2>/dev/null &
@@ -42,7 +42,7 @@ wait-for-url() {
             return 0
         fi
 
-        printf "\r\033[K$(date '+%H:%M:%S') - attempt %d: HTTP %s - still down" "$attempt" "${http_code:-timeout}"
+        printf "\r\033[K${(%):-%D{%H:%M:%S}} - attempt %d: HTTP %s - still down" "$attempt" "${http_code:-timeout}"
         sleep "$interval"
     done
 }
