@@ -15,6 +15,14 @@ alias copilot-api="npx @jeffreycao/copilot-api@latest start --claude-code"
 # The gateway server itself runs from the published copilot-api package — the
 # PR fixes only affect the generated launch command, which is inlined here.
 #
+# By default, claude-copilot sets DISABLE_NON_ESSENTIAL_MODEL_CALLS=1 and
+# CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 to cut nonessential
+# traffic/telemetry through the gateway. Tradeoff: this also disables Claude
+# Code's Monitor tool (https://code.claude.com/docs/en/tools-reference#monitor-tool),
+# which breaks anything relying on it (e.g. inter-session plugin's push-based
+# messaging). Set CLAUDE_COPILOT_ENABLE_MONITOR=1 to opt back into Monitor
+# (e.g. `CLAUDE_COPILOT_ENABLE_MONITOR=1 claude-copilot` or `cec`).
+#
 # Also defines claude-vertex (raw claude binary routed through Google Vertex
 # AI, using CLOUD_ML_REGION/ANTHROPIC_VERTEX_PROJECT_ID already exported in
 # the shell — same vars used by computer-use-claude/cecon elsewhere in this
@@ -128,13 +136,17 @@ claude-copilot() {
         ANTHROPIC_MODEL="${main_model}"
         CLAUDE_CODE_USE_VERTEX=0
         CLAUDE_CODE_USE_BEDROCK=0
-        DISABLE_NON_ESSENTIAL_MODEL_CALLS=1
-        CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
         CLAUDE_CODE_ATTRIBUTION_HEADER=0
         CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false
         CLAUDE_CODE_DISABLE_TERMINAL_TITLE=true
         CLAUDE_CODE_ENABLE_AWAY_SUMMARY=0
     )
+    if [[ -z "$CLAUDE_COPILOT_ENABLE_MONITOR" || "$CLAUDE_COPILOT_ENABLE_MONITOR" == 0 ]]; then
+        envs+=(
+            DISABLE_NON_ESSENTIAL_MODEL_CALLS=1
+            CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
+        )
+    fi
     [[ -n "$opus" ]] && envs+=(ANTHROPIC_DEFAULT_OPUS_MODEL="${opus}")
     [[ -n "$sonnet" ]] && envs+=(ANTHROPIC_DEFAULT_SONNET_MODEL="${sonnet}")
     [[ -n "$haiku" ]] && envs+=(ANTHROPIC_DEFAULT_HAIKU_MODEL="${haiku}")
