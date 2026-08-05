@@ -335,6 +335,22 @@ create-ocp-aws() {
     export OPENSHIFT_INSTALL_RELEASE_IMAGE_OVERRIDE=$RELEASE_IMAGE
     echo "INFO: Exported OPENSHIFT_INSTALL_RELEASE_IMAGE_OVERRIDE=$RELEASE_IMAGE"
 
+    # Raw nightlies aren't signed the way quay.io/openshift-release-dev/ocp-release
+    # (and the ocp-v*-art-dev component images referenced by it) are for GA/production
+    # use. Since 4.21, standalone clusters ship an 'openshift' ClusterImagePolicy that
+    # requires Sigstore signatures on exactly those image scopes -- Red Hat's own
+    # internal nightly CI sets OPENSHIFT_INSTALL_EXPERIMENTAL_DISABLE_IMAGE_POLICY=true
+    # to bypass this for nightly testing, since it isn't testing signed content.
+    # Without it, crio's policy.json enforcement can block pulls for core payload
+    # images (etcd, kube-apiserver, etc.) during bootstrap -- this reproduced as a
+    # permanently-failed kubelet.service ("crio.service not found") and a CVO payload
+    # apply stuck at ~84-85% across 5 separate nightly attempts (4.22/4.23/5.0) before
+    # this override was added. See OCPBUGS-104571.
+    if [[ "$stream" == "nightly" ]]; then
+        export OPENSHIFT_INSTALL_EXPERIMENTAL_DISABLE_IMAGE_POLICY=true
+        echo "INFO: Nightly stream detected -- exported OPENSHIFT_INSTALL_EXPERIMENTAL_DISABLE_IMAGE_POLICY=true to bypass Sigstore signature enforcement"
+    fi
+
     # get-openshift-install() (called before RELEASE_IMAGE was known) only
     # picks from the latest cached EC/stable binaries -- if OCP_RELEASE_VERSION
     # or --nightly pins something else (e.g. a new major version's EC, or a
@@ -426,7 +442,7 @@ publish: External"
     # Create the cluster with error handling
     if ! $OPENSHIFT_INSTALL create cluster --dir $OCP_CREATE_DIR --log-level=info; then
         cleanup-on-failure "$OCP_CREATE_DIR" "$CLUSTER_NAME" "aws"
-        unset OPENSHIFT_INSTALL_RELEASE_IMAGE_OVERRIDE AUTO_SELECT_EC PROCEED_WITH_EXISTING_CLUSTERS OCP_NIGHTLY_MINOR
+        unset OPENSHIFT_INSTALL_RELEASE_IMAGE_OVERRIDE OPENSHIFT_INSTALL_EXPERIMENTAL_DISABLE_IMAGE_POLICY AUTO_SELECT_EC PROCEED_WITH_EXISTING_CLUSTERS OCP_NIGHTLY_MINOR
         return 1
     fi
 
@@ -451,7 +467,7 @@ publish: External"
     fi
 
     # Cleanup
-    unset OPENSHIFT_INSTALL_RELEASE_IMAGE_OVERRIDE AUTO_SELECT_EC PROCEED_WITH_EXISTING_CLUSTERS OCP_NIGHTLY_MINOR
+    unset OPENSHIFT_INSTALL_RELEASE_IMAGE_OVERRIDE OPENSHIFT_INSTALL_EXPERIMENTAL_DISABLE_IMAGE_POLICY AUTO_SELECT_EC PROCEED_WITH_EXISTING_CLUSTERS OCP_NIGHTLY_MINOR
 }
 
 # Resolve the default bare-metal EC2 instance type for /dev/kvm exposure,
