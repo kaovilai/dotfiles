@@ -1,4 +1,6 @@
-alias copilot-api="npx @jeffreycao/copilot-api@latest start --claude-code"
+# Run from the local origin/dev checkout, not the published (upstream) package.
+# alias copilot-api="npx @jeffreycao/copilot-api@latest start --claude-code"   # upstream/published, disabled
+alias copilot-api="NODE_USE_SYSTEM_CA=1 bun run --cwd \$HOME/git/copilot-api ./src/main.ts start --claude-code"
 
 # Claude Code via GitHub Copilot (copilot-api gateway)
 #
@@ -12,8 +14,10 @@ alias copilot-api="npx @jeffreycao/copilot-api@latest start --claude-code"
 #       family and exported as ANTHROPIC_DEFAULT_{OPUS,SONNET,HAIKU}_MODEL;
 #       ANTHROPIC_MODEL defaults to Sonnet, falling back to Opus; tiers with
 #       no available model are omitted.
-# The gateway server itself runs from the published copilot-api package — the
-# PR fixes only affect the generated launch command, which is inlined here.
+# The gateway server itself runs from the local ~/git/copilot-api checkout
+# (origin/dev fork), not the published npm package — see the runner block in
+# claude-copilot() below. Set COPILOT_API_DIR to point elsewhere, or unset/
+# rmdir that path to fall back to the commented-out bunx/npx upstream lines.
 #
 # By default, claude-copilot sets DISABLE_NON_ESSENTIAL_MODEL_CALLS=1 and
 # CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 to cut nonessential
@@ -86,10 +90,20 @@ claude-copilot() {
     # Start the gateway if nothing is serving yet
     if ! curl -sf --max-time 2 "${base}/v1/models" -o /dev/null; then
         local -a runner
-        if command -v bunx &>/dev/null; then
-            runner=(bunx copilot-api@latest)
+        local repo_dir="${COPILOT_API_DIR:-$HOME/git/copilot-api}"
+        if [[ -d "$repo_dir/.git" ]] && command -v bun &>/dev/null; then
+            # Local origin/dev checkout — bun runs the TS source directly, so
+            # uncommitted work-in-progress fixes are picked up with no build step.
+            runner=(env NODE_USE_SYSTEM_CA=1 bun run --cwd "$repo_dir" ./src/main.ts)
+        elif command -v bunx &>/dev/null; then
+            # upstream/published fallback, disabled by default (see above)
+            # runner=(bunx copilot-api@latest)
+            echo "❌ Local checkout not found at ${repo_dir}. Set COPILOT_API_DIR or uncomment the bunx/npx fallback." >&2
+            return 1
         elif command -v npx &>/dev/null; then
-            runner=(npx -y copilot-api@latest)
+            # runner=(npx -y copilot-api@latest)
+            echo "❌ Local checkout not found at ${repo_dir}. Set COPILOT_API_DIR or uncomment the bunx/npx fallback." >&2
+            return 1
         else
             echo "❌ Need bunx or npx to run copilot-api. Install bun or node." >&2
             return 1
