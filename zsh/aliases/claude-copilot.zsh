@@ -11,9 +11,11 @@ alias copilot-api="NODE_USE_SYSTEM_CA=1 bun run --cwd \$HOME/git/copilot-api ./s
 #       CLAUDE_CODE_USE_BEDROCK=0 so an environment already configured for
 #       Vertex AI/Bedrock routes to the gateway instead of erroring 403.
 #   PR #2 (kaovilai/copilot-api#2): latest available model auto-selected per
-#       family and exported as ANTHROPIC_DEFAULT_{OPUS,SONNET,HAIKU}_MODEL;
-#       ANTHROPIC_MODEL defaults to Sonnet, falling back to Opus; tiers with
-#       no available model are omitted.
+#       family; ANTHROPIC_MODEL defaults to Sonnet, falling back to Opus.
+#       Of the per-tier ANTHROPIC_DEFAULT_{OPUS,SONNET,HAIKU}_MODEL exports
+#       PR #2 generates, only Sonnet is kept here (pinned to the gateway's 1M
+#       id); Opus/Haiku are unset so the CLI picks its own — see the block in
+#       claude-copilot() below.
 # The gateway server itself runs from the local ~/git/copilot-api checkout
 # (origin/dev fork), not the published npm package — see the runner block in
 # claude-copilot() below. Set COPILOT_API_DIR to point elsewhere, or unset/
@@ -161,9 +163,21 @@ claude-copilot() {
             CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
         )
     fi
-    [[ -n "$opus" ]] && envs+=(ANTHROPIC_DEFAULT_OPUS_MODEL="${opus}")
-    [[ -n "$sonnet" ]] && envs+=(ANTHROPIC_DEFAULT_SONNET_MODEL="${sonnet}")
-    [[ -n "$haiku" ]] && envs+=(ANTHROPIC_DEFAULT_HAIKU_MODEL="${haiku}")
+    # Opus/Haiku tier defaults are deliberately NOT exported (diverging from
+    # PR #2), so the CLI's own built-in defaults apply and stay current as
+    # Claude Code ships newer models. They are unset rather than merely omitted
+    # because the shell may already export them for Vertex (see secrets.zsh) —
+    # a stale pin there would otherwise leak into gateway mode and pick an
+    # older model than the gateway offers.
+    unset ANTHROPIC_DEFAULT_OPUS_MODEL ANTHROPIC_DEFAULT_HAIKU_MODEL
+    # Sonnet is the exception: pin it to the gateway's detected id so the 1M-
+    # context variant (claude-sonnet-5[1m]) is used rather than the CLI's
+    # default-context Sonnet.
+    if [[ -n "$sonnet" ]]; then
+        envs+=(ANTHROPIC_DEFAULT_SONNET_MODEL="${sonnet}")
+    else
+        unset ANTHROPIC_DEFAULT_SONNET_MODEL
+    fi
 
     # `export` writes into the calling shell (not a subprocess-only scope) so
     # any later child process — including Claude Code re-entering an agent
