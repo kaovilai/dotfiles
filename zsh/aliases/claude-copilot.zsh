@@ -190,6 +190,28 @@ claude-copilot() {
     command claude "$@"
 }
 
+# copilot-api-kill: stop the detached gateway process started by
+# claude-copilot. There's no saved PID (it's launched via `(... &)` in a
+# subshell), so this finds whatever's listening on COPILOT_API_PORT
+# (default 4141) and kills it, escalating to SIGKILL if it won't die.
+copilot-api-kill() {
+    local port="${COPILOT_API_PORT:-4141}"
+    local -a pids
+    pids=("${(f)$(lsof -ti "tcp:${port}" 2>/dev/null)}")
+    if [[ -z "${pids[1]}" ]]; then
+        echo "No process listening on port ${port}."
+        return 1
+    fi
+    echo "Killing copilot-api on port ${port} (pid: ${pids[*]})..."
+    kill "${pids[@]}" 2>/dev/null
+    sleep 1
+    pids=("${(f)$(lsof -ti "tcp:${port}" 2>/dev/null)}")
+    if [[ -n "${pids[1]}" ]]; then
+        echo "Still alive, sending SIGKILL..."
+        kill -9 "${pids[@]}" 2>/dev/null
+    fi
+}
+
 # ---------------------------------------------------------------------------
 # claude-vertex: raw claude binary, routed through Google Vertex AI. Unlike
 # claude-copilot, no local gateway process is needed — Claude Code talks to
