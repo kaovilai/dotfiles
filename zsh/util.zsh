@@ -33,7 +33,7 @@ wait-for-url() {
         if [[ "$http_code" =~ ^[23] ]]; then
             echo ""
             echo "$(date '+%H:%M:%S') - $label is UP (HTTP $http_code)"
-            if [[ "$(uname)" == "Darwin" ]]; then
+            if [[ "$OSTYPE" == darwin* ]]; then
                 say "${label} is back up" &
                 afplay /System/Library/Sounds/Glass.aiff 2>/dev/null &
                 local escaped_label="${label//\"/\\\"}"
