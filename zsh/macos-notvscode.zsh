@@ -103,7 +103,7 @@ set-socks-proxy(){
         _net_type="android"
     else
         local _ssid
-        _ssid=$(networksetup -getairportnetwork "${_wifi_iface:-en0}" 2>/dev/null | sed 's/^Current Wi-Fi Network: //')
+        _ssid=${${$(networksetup -getairportnetwork "${_wifi_iface:-en0}" 2>/dev/null)}#Current Wi-Fi Network: }
         local _ssid_lower="${_ssid:l}"
         if [[ "$_ssid_lower" == *iphone* ]]; then
             _net_type="ios"
