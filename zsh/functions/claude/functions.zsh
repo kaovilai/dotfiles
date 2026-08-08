@@ -34,8 +34,9 @@ merge-claude-settings() {
     
     # Find new permissions not in global settings
     local new_permissions=()
+    local -a _global_allow_arr=("${(f)global_allow}")
     while IFS= read -r perm; do
-        if [[ -n "$perm" ]] && ! grep -Fxq -- "$perm" <<< "$global_allow"; then
+        if [[ -n "$perm" ]] && (( ! ${_global_allow_arr[(Ie)$perm]} )); then
             new_permissions+=("$perm")
         fi
     done <<< "$local_allow"
