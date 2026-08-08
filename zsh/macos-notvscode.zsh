@@ -40,7 +40,7 @@ set-tf-proxy(){
         return 1
     fi
     local _router_ip
-    _router_ip=$(networksetup -getinfo Wi-Fi | grep -e "^Router" | cut -d " " -f 2)
+    _router_ip=${${$(networksetup -getinfo Wi-Fi | grep -e "^Router")}##* }
     if [[ -z "$_router_ip" ]]; then
         echo "Error: Could not determine Wi-Fi router IP" >&2
         return 1
@@ -85,7 +85,7 @@ set-socks-proxy(){
         export SOCKS_ROUTER_IP="${_args[1]}"
     else
         local _router_ip
-        _router_ip=$(networksetup -getinfo Wi-Fi | grep -e "^Router" | cut -d " " -f 2)
+        _router_ip=${${$(networksetup -getinfo Wi-Fi | grep -e "^Router")}##* }
         if [[ -z "$_router_ip" ]]; then
             echo "Error: Could not determine Wi-Fi router IP" >&2
             return 1
@@ -212,7 +212,7 @@ get-socks-proxy(){
     fi
     local router_ip="${SOCKS_ROUTER_IP}"
     if [[ -z "$router_ip" ]]; then
-        router_ip=$(networksetup -getinfo Wi-Fi | grep -e "^Router" | cut -d " " -f 2)
+        router_ip=${${$(networksetup -getinfo Wi-Fi | grep -e "^Router")}##* }
     fi
     local proxy_port="${SOCKS_ROUTER_PROXY_PORT:-1888}"
 
