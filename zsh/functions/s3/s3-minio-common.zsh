@@ -207,10 +207,8 @@ IP.1 = 127.0.0.1
 EOF
     
     # If hostname looks like an EC2 public DNS, extract the IP
-    if [[ "$hostname" =~ ^ec2-[0-9-]+\..*\.compute\.amazonaws\.com$ ]]; then
-        local ip
-        ip=$(sed 's/ec2-\([0-9]\+\)-\([0-9]\+\)-\([0-9]\+\)-\([0-9]\+\)\..*/\1.\2.\3.\4/' <<< "$hostname")
-        echo "IP.2 = $ip" >> "$config_file"
+    if [[ "$hostname" =~ ^ec2-([0-9]+)-([0-9]+)-([0-9]+)-([0-9]+)\. ]]; then
+        echo "IP.2 = ${match[1]}.${match[2]}.${match[3]}.${match[4]}" >> "$config_file"
     fi
     
     echo "${BLUE}INFO${NC}: Generating self-signed certificate for $hostname" >&2
