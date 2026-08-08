@@ -166,9 +166,9 @@ git-worktree-remove() {
     return 1
   fi
 
-  # Skip the first line (main worktree)
+  # Skip the first line (main worktree) using ZSH array slicing — no tail fork
   local removable
-  removable=$(tail -n +2 <<< "$worktrees")
+  removable="${(j:\n:)_wt_all[2,-1]}"
 
   echo "Current worktrees:"
   echo "$worktrees"
