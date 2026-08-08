@@ -71,73 +71,71 @@ set-socks-proxy(){
         echo "Error: set-socks-proxy is only supported on macOS" >&2
         return 1
     fi
-    local _dry_run=0
+    local _dry_run=0 _adhoc=0 _wait=0
     local -a _args
+    local _arg
     for _arg in "$@"; do
-        if [[ "$_arg" == "--dry-run" || "$_arg" == "-n" ]]; then
-            _dry_run=1
-        else
-            _args+=("$_arg")
-        fi
+        case "$_arg" in
+            --dry-run|-n) _dry_run=1 ;;
+            --adhoc) _adhoc=1 ;;
+            --wait) _wait=1 ;;
+            *) _args+=("$_arg") ;;
+        esac
     done
     # Allow IP override via parameter, otherwise get from router
     if [[ -n "${_args[1]}" ]]; then
         export SOCKS_ROUTER_IP="${_args[1]}"
     else
+        if networksetup -getinfo Wi-Fi | grep -q "^Manual Configuration"; then
+            echo "Error: Wi-Fi is already in manual IPv4 config (likely from a previous --adhoc run). Run unset-socks-proxy first." >&2
+            return 1
+        fi
         local _router_ip
         _router_ip=$(networksetup -getinfo Wi-Fi | grep -e "^Router" | cut -d " " -f 2)
-        if [[ -z "$_router_ip" ]]; then
+        if [[ -z "$_router_ip" || "$_router_ip" == "none" ]]; then
             echo "Error: Could not determine Wi-Fi router IP" >&2
             return 1
         fi
         export SOCKS_ROUTER_IP="$_router_ip"
     fi
-    local _wifi_iface
-    _wifi_iface=$(networksetup -listallhardwareports 2>/dev/null | awk '/Wi-Fi/{found=1} found && /Device:/{print $2; exit}')
 
-    # Detect hotspot OS: iOS Personal Hotspot always uses 172.20.10.1; Android AOSP defaults to 192.168.43.1 (Samsung Z Fold7 uses 10.168.176.*)
-    local _net_type="unknown"
-    if [[ "$SOCKS_ROUTER_IP" == "172.20.10.1" ]]; then
-        _net_type="ios"
-    elif [[ "$SOCKS_ROUTER_IP" == "192.168.43.1" || "$SOCKS_ROUTER_IP" == 192.168.*.1 || "$SOCKS_ROUTER_IP" == 10.168.176.* ]]; then
-        _net_type="android"
-    else
-        local _ssid
-        _ssid=$(networksetup -getairportnetwork "${_wifi_iface:-en0}" 2>/dev/null | sed 's/^Current Wi-Fi Network: //')
-        local _ssid_lower="${_ssid:l}"
-        if [[ "$_ssid_lower" == *iphone* ]]; then
-            _net_type="ios"
-        elif [[ "$_ssid_lower" == *android* || "$_ssid_lower" == *pixel* || "$_ssid_lower" == *galaxy* || "$_ssid_lower" == *samsung* || "$_ssid_lower" == *motorola* ]]; then
-            _net_type="android"
+    # Don't bother detecting iOS vs Android: the two known SOCKS server ports
+    # (iOS-SOCKS-Server's 9876, Android's 1888) never overlap, so just probe both
+    # and act on whichever one answers.
+    local -a _ports_to_try=(9876 1888)
+    local _port _port_confirmed=0 _attempt=0
+    while true; do
+        _attempt=$((_attempt + 1))
+        _port_confirmed=0
+        for _port in "${_ports_to_try[@]}"; do
+            echo "Probing $SOCKS_ROUTER_IP:$_port ..."
+            if nc -z -w 1 "$SOCKS_ROUTER_IP" "$_port" 2>/dev/null; then
+                echo "  open"
+                export SOCKS_ROUTER_PROXY_PORT="$_port"
+                _port_confirmed=1
+                break
+            else
+                echo "  closed/unreachable"
+            fi
+        done
+        [[ "$_port_confirmed" -eq 1 ]] && break
+        if [[ "$_wait" -eq 0 ]]; then
+            echo "Error: no SOCKS proxy found on $SOCKS_ROUTER_IP (tried ports: ${_ports_to_try[*]})" >&2
+            unset SOCKS_ROUTER_PROXY_PORT
+            return 1
         fi
-    fi
-    echo "Detected hotspot: $_net_type (router $SOCKS_ROUTER_IP)"
-
-    # Only probe the iOS-SOCKS-Server port for iOS, the Android SOCKS server port for Android; try both if undetected
-    local -a _ports_to_try
-    case "$_net_type" in
-        ios) _ports_to_try=(9876) ;;
-        android) _ports_to_try=(1888) ;;
-        *) _ports_to_try=(9876 1888) ;;
-    esac
-
-    local _port
-    for _port in "${_ports_to_try[@]}"; do
-        echo "Probing $SOCKS_ROUTER_IP:$_port ..."
-        if nc -z -w 1 "$SOCKS_ROUTER_IP" "$_port" 2>/dev/null; then
-            echo "  open"
-            export SOCKS_ROUTER_PROXY_PORT="$_port"
-            break
-        else
-            echo "  closed/unreachable"
-        fi
+        echo "Attempt $_attempt: nothing open yet, retrying in 3s... (Ctrl-C to stop)"
+        sleep 3
     done
-    : "${SOCKS_ROUTER_PROXY_PORT:=1888}"
 
-    # iOS-SOCKS-Server needs a manual IPv4 (self as router+DNS) so macOS doesn't
-    # flag the hotspot interface as unreachable and drop the SOCKS route - see
+    # --adhoc: for ad-hoc/no-DHCP networks, macOS can flag the interface as
+    # unreachable and drop the SOCKS route - self-as-router+DNS works around it.
+    # Opt-in only: real Personal Hotspot / Android hotspot already get valid DHCP,
+    # so this isn't needed (or safe to assume) for those. See
     # https://github.com/nneonneo/iOS-SOCKS-Server/issues/1#issuecomment-583989079
-    if [[ "$_net_type" == "ios" ]]; then
+    if [[ "$_adhoc" -eq 1 ]]; then
+        local _wifi_iface
+        _wifi_iface=$(networksetup -listallhardwareports 2>/dev/null | awk '/Wi-Fi/{found=1} found && /Device:/{print $2; exit}')
         if [[ -z "$_wifi_iface" ]]; then
             echo "Error: could not find Wi-Fi interface for manual IPv4 override" >&2
             return 1
@@ -155,7 +153,7 @@ set-socks-proxy(){
             echo "Switching Wi-Fi IPv4 to manual: $_current_ip"
             sudo networksetup -setmanual Wi-Fi "$_current_ip" 255.255.0.0 "$_current_ip"
             sudo networksetup -setdnsservers Wi-Fi "$_current_ip"
-            export SOCKS_IOS_MANUAL_APPLIED=1
+            export SOCKS_ADHOC_APPLIED=1
         fi
     fi
 
@@ -197,11 +195,11 @@ unset-socks-proxy(){
         return 1
     fi
     networksetup -setsocksfirewallproxystate Wi-Fi off
-    if [[ "$SOCKS_IOS_MANUAL_APPLIED" == "1" ]]; then
+    if [[ "$SOCKS_ADHOC_APPLIED" == "1" ]] || networksetup -getinfo Wi-Fi | grep -q "^Manual Configuration"; then
         echo "Reverting Wi-Fi IPv4/DNS to DHCP"
         sudo networksetup -setdhcp Wi-Fi
         sudo networksetup -setdnsservers Wi-Fi "Empty"
-        unset SOCKS_IOS_MANUAL_APPLIED
+        unset SOCKS_ADHOC_APPLIED
     fi
 }
 
@@ -230,15 +228,15 @@ if [[ "$TERM_PROGRAM" != "vscode" ]]; then
   # Detect WiFi interface dynamically (consistent with set-tf-proxy and other functions)
   _WIFI_IFACE=$(networksetup -listallhardwareports 2>/dev/null | awk '/Wi-Fi/{found=1} found && /Device:/{print $2; exit}')
   # Get WiFi name once and cache it
-  WIFI_NAME=$(networksetup -getairportnetwork "${_WIFI_IFACE:-en0}" 2>/dev/null | cut -d " " -f 4)
+  WIFI_NAME=$(networksetup -getairportnetwork "${_WIFI_IFACE:-en0}" 2>/dev/null | sed 's/^Current Wi-Fi Network: //')
   unset _WIFI_IFACE
-  
+
   # Run home setup check in background
   (is-at-home && (is-displaylink-connected || restart-displaylink)) &!
-  
+
   # Handle proxy setup based on network
   if [[ "$WIFI_NAME" = "PASSAWIT's Z Fold7" ]]; then
-        (curl --silent --connect-timeout 5 --socks5 "$SOCKS_ROUTER_IP:$SOCKS_ROUTER_PROXY_PORT" http://www.google.com && set-socks-proxy) &!
+        set-socks-proxy &!
     else
         unset-socks-proxy &!
     fi
