@@ -1092,3 +1092,54 @@ download-ocp-gcp-wif-auth() {
     echo "Extracted auth/ directory"
     echo "export KUBECONFIG=$(pwd)/auth/kubeconfig"
 }
+
+trigger-destroy-ocp-gcp-wif() {
+    local metadata_path=$1
+    local repo="kaovilai/dotfiles"
+    local today=${TODAY:-$(date +%y%m%d)}
+
+    if [[ -z "$metadata_path" ]]; then
+        local live_dir="$OCP_MANIFESTS_DIR/$today-gcp-wif"
+        local backup_path="$OCP_MANIFESTS_DIR/.metadata-backup-$today-gcp-wif.json"
+        if [[ -f "$live_dir/metadata.json" ]]; then
+            metadata_path="$live_dir/metadata.json"
+        elif [[ -f "$backup_path" ]]; then
+            metadata_path="$backup_path"
+        else
+            echo "ERROR: no metadata.json found for $today-gcp-wif (checked $live_dir/metadata.json and $backup_path)"
+            echo "Usage: trigger-destroy-ocp-gcp-wif [path/to/metadata.json]"
+            return 1
+        fi
+    fi
+
+    if [[ ! -f "$metadata_path" ]]; then
+        echo "ERROR: metadata.json not found at $metadata_path"
+        return 1
+    fi
+
+    local cluster_name; cluster_name=$(jq -r '.clusterName' "$metadata_path" 2>/dev/null)
+    if [[ -z "$cluster_name" || "$cluster_name" == "null" ]]; then
+        echo "ERROR: could not read .clusterName from $metadata_path"
+        return 1
+    fi
+
+    echo "About to trigger REMOTE destroy of cluster '$cluster_name' via GitHub Actions."
+    echo "This deletes real GCP infrastructure and cannot be undone."
+    local confirm
+    read "confirm?Type the cluster name to confirm ($cluster_name): "
+    if [[ "$confirm" != "$cluster_name" ]]; then
+        echo "Confirmation did not match, aborting. Nothing was triggered."
+        return 1
+    fi
+
+    local encoded; encoded=$(base64 < "$metadata_path" | tr -d '\n')
+
+    gh workflow run create-ocp-gcp-wif.yml \
+        -f action="delete" \
+        -f metadata_json="$encoded" \
+        --repo "$repo"
+
+    echo "Triggered remote destroy for $cluster_name"
+    echo "Watch:  gh run watch --repo $repo"
+    echo "Safe to close the laptop now -- the runner finishes independently."
+}
