@@ -24,6 +24,11 @@ on:
           - create
           - delete
         default: create
+      metadata_json:
+        description: 'Base64-encoded metadata.json for action=delete (from trigger-destroy-ocp-gcp-wif). No credentials in this file -- just clusterName/clusterID/infraID. Leave empty to no-op (matches prior behavior).'
+        required: false
+        type: string
+        default: ''
 
 permissions:
   contents: read
@@ -267,6 +272,52 @@ jobs:
           source ./zsh/functions/openshift/gcp/delete-ocp-gcp-wif.zsh
           source ./zsh/functions/openshift/gcp/create-ocp-gcp-wif.zsh
 
+          METADATA_JSON="${{ inputs.metadata_json }}"
+
+          if [[ -n "$METADATA_JSON" ]]; then
+            DEST_DIR="$OCP_MANIFESTS_DIR/$TODAY-gcp-wif"
+            mkdir -p "$DEST_DIR"
+            echo "$METADATA_JSON" | base64 -d > "$DEST_DIR/metadata.json"
+            CLUSTER_NAME=$(jq -r .clusterName "$DEST_DIR/metadata.json")
+            echo "INFO: wrote metadata.json for $CLUSTER_NAME to $DEST_DIR"
+            echo "CLUSTER_NAME=$CLUSTER_NAME" >> "$GITHUB_ENV"
+          else
+            echo "WARN: no metadata_json input -- this run cannot find any real cluster to destroy"
+          fi
+
           echo "::group::Deleting OCP GCP-WIF cluster"
           create-ocp-gcp-wif delete
           echo "::endgroup::"
+
+      - name: Close tracking issue
+        if: success() && env.CLUSTER_NAME != ''
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const clusterName = process.env.CLUSTER_NAME;
+            const title = `Cluster: ${clusterName} (GCP-WIF)`;
+            const issues = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              labels: 'cluster,gcp-wif',
+            });
+            const match = issues.data.find(i => i.title === title);
+            if (match) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: match.number,
+                body: `Destroyed remotely via [run ${context.runId}](${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}).`,
+              });
+              await github.rest.issues.update({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: match.number,
+                state: 'closed',
+                state_reason: 'completed',
+              });
+              console.log(`Closed tracking issue #${match.number}`);
+            } else {
+              console.log(`No open tracking issue found titled "${title}"`);
+            }
