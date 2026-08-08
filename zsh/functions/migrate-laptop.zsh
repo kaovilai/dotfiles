@@ -470,7 +470,7 @@ EOF
     local create_archive
     read -r "create_archive?Create compressed archive? (y/n): "
     if [[ "$create_archive" == "y" ]]; then
-        local archive_name="wifi-export-$(date +%Y%m%d-%H%M%S).tar.gz"
+        local archive_name="wifi-export-${(%):-%D{%Y%m%d-%H%M%S}}.tar.gz"
         tar -czf "$HOME/$archive_name" -C "$export_dir" . || { warning "Failed to create archive $HOME/$archive_name"; return 1; }
         success "Created archive: $HOME/$archive_name"
         echo "Transfer this file to your new laptop"
@@ -579,7 +579,7 @@ verify-migration() {
 
 # Function to backup current laptop before migration
 backup-before-migration() {
-    local backup_dir="$HOME/laptop-migration-backup-$(date +%Y%m%d-%H%M%S)"
+    local backup_dir="$HOME/laptop-migration-backup-${(%):-%D{%Y%m%d-%H%M%S}}"
     
     progress "Creating backup at $backup_dir..."
     mkdir -p "$backup_dir" || { error "Failed to create backup directory $backup_dir"; return 1; }
