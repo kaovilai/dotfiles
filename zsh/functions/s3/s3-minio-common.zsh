@@ -655,7 +655,7 @@ create-velero-dpa-for-minio() {
         return 1
     fi
 
-    local cluster_name="${1:-$(oc config current-context 2>/dev/null | cut -d'/' -f2 | cut -d':' -f1)}"
+    local cluster_name="${1:-${${$(oc config current-context 2>/dev/null)#*/}%%:*}}"
     local bucket_name="${2:-velero}"
     local namespace="${3:-openshift-adp}"
     local apply="${4:-false}"  # Set to 'true' to apply directly to cluster
