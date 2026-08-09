@@ -66,12 +66,76 @@ unset-tf-proxy(){
     unset https_proxy
 }
 
+# Usage: set-socks-proxy [--dry-run|-n] [--adhoc] [--wait] [--no-prompt] [<ip>]
+# Description: Routes Mac traffic through a phone's WiFi hotspot via SOCKS5, to get
+#   around carrier tethering restrictions. Sets macOS's system-wide SOCKS proxy
+#   (networksetup -setsocksfirewallproxy) - covers Safari/Mail/CFNetwork apps; CLI
+#   tools like curl/git/ssh do NOT honor it (see get-socks-proxy for those).
+#
+#   Primarily used with:
+#     - iOS: kaovilai/iOS-SOCKS-Server (Pythonista fork) - port 9876.
+#       https://github.com/kaovilai/iOS-SOCKS-Server
+#     - Android: "Proxy Server" app (cn.adonet.proxy.server.pro) - port 1888.
+#       https://play.google.com/store/apps/details?id=cn.adonet.proxy.server.pro
+#
+#   iPhone Personal Hotspot has two distinct addressing modes seen in the wild:
+#     - Classic: gateway 172.20.10.1, /28 subnet (255.255.255.240), DHCP pool .2-.14.
+#       The phone's own WiFi bridge interface lives here; iOS-SOCKS-Server binds to it.
+#     - CLAT/464XLAT: gateway 192.0.0.1, client gets 192.0.0.2. 192.0.0.0/29 is RFC
+#       7335's reserved, explicitly NON-ROUTED "IPv4 Service Continuity Prefix" - seen
+#       when the phone's own cellular backhaul is IPv6-only and it runs 464XLAT
+#       (RFC 6877) to translate local IPv4 to the carrier's NAT64. DHCP never hands
+#       out a route to 172.20.10.0/28 in this mode, so the SOCKS server is physically
+#       on the same WiFi radio but unreachable via IPv4 without manual intervention.
+#       Confirmed on at least one device+carrier combo that this happens on EVERY
+#       WiFi hotspot connection, independent of VPN state - so the Y/n fallback prompt
+#       below firing every time is expected, not a bug or a one-off glitch.
+#       The phone DOES advertise IPv6 to WiFi hotspot clients - confirmed by an
+#       Android device getting a working IPv6 address on this exact same hotspot,
+#       concurrently with the Mac showing 192.0.0.x. So when the Mac itself shows no
+#       IPv6 (networksetup -getinfo Wi-Fi: "IPv6 Router: none"), that's a macOS-side
+#       problem (VPN suppressing it, RA not being processed, etc.), not a carrier/
+#       phone-side limitation - worth ruling out a VPN client and forcing a fresh
+#       SLAAC solicit (toggle Wi-Fi power off/on) before assuming IPv6 isn't offered.
+#
+#   Recovers from the CLAT case in order of increasing invasiveness:
+#     1. Probe the DHCP-given router IP on ports 9876 and 1888.
+#     2. If DHCP also handed out an IPv6 router, probe that too, zone-scoped via the
+#        local WiFi interface (e.g. "<addr>%en0") - same idea as the Android app's
+#        "<iphone-ipv6>%wlan0" host field, just the local side instead of the
+#        remote's. Free, read-only, no sudo - IPv6 link-local doesn't need routing
+#        within one L2 segment, so it works regardless of which IPv4 addressing mode
+#        is active.
+#     3. Last resort: ask (Y/n) to manually pin the Mac's WiFi IPv4 into
+#        172.20.10.0/28 (172.20.10.5, router 172.20.10.1) so it can actually reach the
+#        phone's bridge interface. Needs sudo. Waits up to ~30s for the SOCKS port to
+#        come up; reverts to DHCP automatically on timeout unless --wait is given, in
+#        which case it keeps polling 172.20.10.1 indefinitely instead of flapping
+#        manual<->DHCP every round.
+#
+#   Flags:
+#     --dry-run/-n  Print what would happen (including probes, which are read-only),
+#                   make no network config changes.
+#     --adhoc       Also apply the self-as-router+DNS trick for true ad-hoc/169.254.x
+#                   networks with no DHCP at all - a different scenario from the CLAT
+#                   fallback above (see the --adhoc block below for the upstream issue
+#                   this works around).
+#     --wait        Keep retrying indefinitely (Ctrl-C to stop) instead of erroring
+#                   out once nothing is found.
+#     --no-prompt   Skip the Y/n prompt and decline the manual-IPv4 fallback
+#                   automatically - REQUIRED for any backgrounded/non-interactive
+#                   invocation. `read -q` reads /dev/tty directly (not fd 0), so
+#                   `[[ -t 0 ]]` alone does NOT detect a backgrounded `&!` job in an
+#                   interactive shell - it'll still see a real tty and silently hang
+#                   (SIGTTIN). The auto-invoke block below always passes this.
+#     <ip>          Explicit SOCKS server IP, skipping router auto-detection and the
+#                   IPv6/CLAT fallback logic entirely.
 set-socks-proxy(){
     if [[ "$OSTYPE" != darwin* ]]; then
         echo "Error: set-socks-proxy is only supported on macOS" >&2
         return 1
     fi
-    local _dry_run=0 _adhoc=0 _wait=0
+    local _dry_run=0 _adhoc=0 _wait=0 _no_prompt=0
     local -a _args
     local _arg
     for _arg in "$@"; do
@@ -79,6 +143,8 @@ set-socks-proxy(){
             --dry-run|-n) _dry_run=1 ;;
             --adhoc) _adhoc=1 ;;
             --wait) _wait=1 ;;
+            --no-prompt) _no_prompt=1 ;;
+            -*) echo "Error: unknown option: $_arg" >&2; return 1 ;;
             *) _args+=("$_arg") ;;
         esac
     done
@@ -86,24 +152,59 @@ set-socks-proxy(){
     if [[ -n "${_args[1]}" ]]; then
         export SOCKS_ROUTER_IP="${_args[1]}"
     else
-        if networksetup -getinfo Wi-Fi | grep -q "^Manual Configuration"; then
-            echo "Error: Wi-Fi is already in manual IPv4 config (likely from a previous --adhoc run). Run unset-socks-proxy first." >&2
-            return 1
+        local _wifi_info
+        _wifi_info=$(networksetup -getinfo Wi-Fi)
+        if grep -q "^Manual Configuration" <<< "$_wifi_info"; then
+            local _manual_router_ip
+            _manual_router_ip=$(grep -e "^Router" <<< "$_wifi_info" | cut -d " " -f 2)
+            if [[ "$_manual_router_ip" == "172.20.10.1" ]]; then
+                echo "Wi-Fi already manually configured for the 172.20.10.1 iOS hotspot fallback; reusing it"
+                export SOCKS_ROUTER_IP="172.20.10.1"
+                export SOCKS_ADHOC_APPLIED=1
+            else
+                echo "Error: Wi-Fi is already in manual IPv4 config (likely from a previous --adhoc run). Run unset-socks-proxy first." >&2
+                return 1
+            fi
+        else
+            local _router_ip
+            _router_ip=$(grep -e "^Router" <<< "$_wifi_info" | cut -d " " -f 2)
+            if [[ -z "$_router_ip" || "$_router_ip" == "none" ]]; then
+                echo "Error: Could not determine Wi-Fi router IP" >&2
+                return 1
+            fi
+            export SOCKS_ROUTER_IP="$_router_ip"
         fi
-        local _router_ip
-        _router_ip=$(networksetup -getinfo Wi-Fi | grep -e "^Router" | cut -d " " -f 2)
-        if [[ -z "$_router_ip" || "$_router_ip" == "none" ]]; then
-            echo "Error: Could not determine Wi-Fi router IP" >&2
-            return 1
-        fi
-        export SOCKS_ROUTER_IP="$_router_ip"
     fi
 
-    # Don't bother detecting iOS vs Android: the two known SOCKS server ports
+    # If we have IPv6 connectivity to the phone, prefer it over the disruptive manual
+    # IPv4 fallback below: link-local IPv6 is reachable directly over the same WiFi L2
+    # segment regardless of whatever IPv4 subnet DHCP handed out (e.g. the 192.0.0.x
+    # CLAT case above). Same idea as Android's "<addr>%wlan0" host field, just the
+    # local side - `ndp -rn`'s router entries already come pre-zoned (e.g.
+    # "fe80::...%en0"), so no manual zone-suffixing needed here.
+    #
+    # NOTE: `networksetup -getinfo Wi-Fi`'s "IPv6 Router" field is unreliable - it can
+    # report "none" even when the interface has full working global IPv6 (SLAAC/autoconf
+    # addresses, even a macOS-native CLAT46 address) and a live default router. Verified
+    # on-device: `ifconfig en0` showed real 2607:... autoconf addresses and `ndp -rn`
+    # showed a live default router on en0 while networksetup insisted "IPv6 Router:
+    # none". `ndp -rn` is the actual source of truth here, not networksetup.
+    local _socks_router_ipv6=""
+    if [[ -z "${_args[1]}" ]]; then
+        local _ipv6_zone_iface
+        _ipv6_zone_iface=$(networksetup -listallhardwareports 2>/dev/null | awk '/Wi-Fi/{found=1} found && /Device:/{print $2; exit}')
+        if [[ -n "$_ipv6_zone_iface" ]]; then
+            _socks_router_ipv6=$(ndp -rn 2>/dev/null | awk -v want="if=${_ipv6_zone_iface}," '$0 ~ want {print $1; exit}')
+        fi
+    fi
+
+    # Don't bother detecting iOS vs Android up front: the two known SOCKS server ports
     # (iOS-SOCKS-Server's 9876, Android's 1888) never overlap, so just probe both
     # and act on whichever one answers.
     local -a _ports_to_try=(9876 1888)
     local _port _port_confirmed=0 _attempt=0
+    local _clat_attempted=0 _clat_declined=0 _clat_consented=0
+    local _original_router_ip="$SOCKS_ROUTER_IP"
     while true; do
         _attempt=$((_attempt + 1))
         _port_confirmed=0
@@ -119,6 +220,96 @@ set-socks-proxy(){
             fi
         done
         [[ "$_port_confirmed" -eq 1 ]] && break
+
+        # Try the IPv6 router candidate next, if DHCP gave us one - still free/read-only,
+        # no sudo or state mutation needed, unlike the manual-IPv4 fallback below.
+        if [[ -n "$_socks_router_ipv6" ]]; then
+            for _port in "${_ports_to_try[@]}"; do
+                echo "Probing [$_socks_router_ipv6]:$_port ..."
+                if nc -z -w 1 "$_socks_router_ipv6" "$_port" 2>/dev/null; then
+                    echo "  open"
+                    export SOCKS_ROUTER_IP="$_socks_router_ipv6"
+                    export SOCKS_ROUTER_PROXY_PORT="$_port"
+                    _port_confirmed=1
+                    break
+                else
+                    echo "  closed/unreachable"
+                fi
+            done
+        fi
+        [[ "$_port_confirmed" -eq 1 ]] && break
+
+        # Fallback: iOS hotspots sometimes hand the Mac a synthesized NAT64/CLAT
+        # gateway (e.g. 192.0.0.1) via DHCP while the actual iOS-SOCKS-Server is only
+        # reachable at the real Personal Hotspot gateway, 172.20.10.1, in a subnet the
+        # Mac isn't in yet. Ask before reconfiguring Wi-Fi - this needs sudo.
+        # NOTE: `read -q` reads /dev/tty directly, not fd 0, so `[[ -t 0 ]]` alone does
+        # NOT detect a backgrounded `&!` job in an interactive shell - zsh job control
+        # still sees a real tty there and `read -q` will hang (SIGTTIN, silently, since
+        # `&!` disowns the job). --no-prompt is the real guard; the auto-invoke block
+        # below always passes it. Ask at most once per invocation, either way.
+        if [[ "$_clat_attempted" -eq 0 && "$SOCKS_ROUTER_IP" != "172.20.10.1" ]]; then
+            _clat_attempted=1
+            if [[ "$_dry_run" -eq 1 ]]; then
+                echo "[dry-run] Would prompt: Switch Wi-Fi to manual 172.20.10.0/28 to try the iOS hotspot fallback (172.20.10.1)? [y/N]"
+                echo "[dry-run] Would run: sudo networksetup -setmanual Wi-Fi 172.20.10.5 255.255.255.240 172.20.10.1"
+                echo "[dry-run] Would run: sudo networksetup -setdnsservers Wi-Fi 172.20.10.1"
+                echo "[dry-run] Would probe 172.20.10.1 for up to 30s, reverting to DHCP if nothing answers"
+            elif [[ "$_no_prompt" -eq 1 || ! -t 0 ]]; then
+                echo "Prompting disabled - skipping iOS hotspot manual-IP fallback (run set-socks-proxy directly in a terminal to use it)"
+                _clat_declined=1
+            elif read -q "?Switch Wi-Fi to manual 172.20.10.0/28 to try the iOS hotspot fallback (172.20.10.1)? [y/N] "; then
+                echo
+                _clat_consented=1
+            else
+                echo
+                _clat_declined=1
+            fi
+        fi
+
+        # Retried every --wait round once consented - no re-prompting, since the user
+        # already said yes once. Only actually switch once (guarded by
+        # SOCKS_ADHOC_APPLIED); after that the outer loop's own probe above keeps
+        # hitting 172.20.10.1 directly every round, so no repeated sudo/flapping.
+        if [[ "$_clat_consented" -eq 1 && "$_clat_declined" -eq 0 && "$SOCKS_ADHOC_APPLIED" != "1" ]]; then
+            echo "Switching Wi-Fi IPv4 to manual: 172.20.10.5 (router 172.20.10.1)"
+            sudo networksetup -setmanual Wi-Fi 172.20.10.5 255.255.255.240 172.20.10.1
+            sudo networksetup -setdnsservers Wi-Fi 172.20.10.1
+            export SOCKS_ROUTER_IP="172.20.10.1"
+            export SOCKS_ADHOC_APPLIED=1
+
+            local _clat_try
+            for _clat_try in {1..10}; do
+                for _port in "${_ports_to_try[@]}"; do
+                    echo "Probing $SOCKS_ROUTER_IP:$_port ..."
+                    if nc -z -w 1 "$SOCKS_ROUTER_IP" "$_port" 2>/dev/null; then
+                        echo "  open"
+                        export SOCKS_ROUTER_PROXY_PORT="$_port"
+                        _port_confirmed=1
+                        break
+                    else
+                        echo "  closed/unreachable"
+                    fi
+                done
+                [[ "$_port_confirmed" -eq 1 ]] && break
+                echo "Waiting for SOCKS proxy at 172.20.10.1 ($_clat_try/10, retrying in 3s)..."
+                sleep 3
+            done
+
+            # --wait means keep polling indefinitely rather than flap manual->DHCP->manual
+            # every ~35s (each -setdhcp/-setmanual round trip re-triggers a DHCP renewal
+            # and eventually exhausts the sudo timestamp mid-loop). Without --wait, this
+            # is the one shot, so revert on timeout as before.
+            if [[ "$_port_confirmed" -ne 1 && "$_wait" -eq 0 ]]; then
+                echo "Timed out waiting for SOCKS proxy at 172.20.10.1 - reverting to DHCP" >&2
+                sudo networksetup -setdhcp Wi-Fi
+                sudo networksetup -setdnsservers Wi-Fi "Empty"
+                unset SOCKS_ADHOC_APPLIED
+                export SOCKS_ROUTER_IP="$_original_router_ip"
+            fi
+        fi
+
+        [[ "$_port_confirmed" -eq 1 ]] && break
         if [[ "$_wait" -eq 0 ]]; then
             echo "Error: no SOCKS proxy found on $SOCKS_ROUTER_IP (tried ports: ${_ports_to_try[*]})" >&2
             unset SOCKS_ROUTER_PROXY_PORT
@@ -133,7 +324,7 @@ set-socks-proxy(){
     # Opt-in only: real Personal Hotspot / Android hotspot already get valid DHCP,
     # so this isn't needed (or safe to assume) for those. See
     # https://github.com/nneonneo/iOS-SOCKS-Server/issues/1#issuecomment-583989079
-    if [[ "$_adhoc" -eq 1 ]]; then
+    if [[ "$_adhoc" -eq 1 && "$SOCKS_ADHOC_APPLIED" != "1" ]]; then
         local _wifi_iface
         _wifi_iface=$(networksetup -listallhardwareports 2>/dev/null | awk '/Wi-Fi/{found=1} found && /Device:/{print $2; exit}')
         if [[ -z "$_wifi_iface" ]]; then
@@ -166,8 +357,17 @@ set-socks-proxy(){
     echo "Using SOCKS proxy $SOCKS_ROUTER_IP:$SOCKS_ROUTER_PROXY_PORT"
     networksetup -setsocksfirewallproxy Wi-Fi "$SOCKS_ROUTER_IP" "$SOCKS_ROUTER_PROXY_PORT" off
     networksetup -setsocksfirewallproxystate Wi-Fi on
+    if [[ "$SOCKS_ADHOC_APPLIED" == "1" ]]; then
+        echo "Note: Wi-Fi IPv4 is manually pinned for this hotspot - run unset-socks-proxy before joining another network"
+    fi
 }
 
+# Usage: test-socks-proxy [<ip>] [<port>]
+# Description: Verify the SOCKS proxy is actually reachable and proxying, via a real
+#   curl request through it (not just a port probe). Defaults to $SOCKS_ROUTER_IP /
+#   $SOCKS_ROUTER_PROXY_PORT as set by set-socks-proxy. Brackets IPv6 addresses (with
+#   or without a %zone) since curl's host:port syntax would otherwise collide with
+#   the address's own colons.
 test-socks-proxy(){
     if [[ "$OSTYPE" != darwin* ]]; then
         echo "Error: test-socks-proxy is only supported on macOS" >&2
@@ -180,7 +380,11 @@ test-socks-proxy(){
         return 1
     fi
     echo "Testing SOCKS proxy $_ip:$_port ..."
-    if curl --silent --show-error --connect-timeout 5 --socks5 "$_ip:$_port" http://www.google.com -o /dev/null; then
+    local _socks5_target="$_ip:$_port"
+    # IPv6 (with or without a %zone) needs bracketing so curl doesn't mistake its
+    # colons for the host:port separator.
+    [[ "$_ip" == *:* ]] && _socks5_target="[$_ip]:$_port"
+    if curl --silent --show-error --connect-timeout 5 --socks5 "$_socks5_target" http://www.google.com -o /dev/null; then
         echo "  OK: $_ip:$_port reachable and proxying"
         return 0
     else
@@ -189,13 +393,28 @@ test-socks-proxy(){
     fi
 }
 
+# Usage: unset-socks-proxy
+# Description: Turns off the SOCKS proxy set by set-socks-proxy. Also reverts the
+#   manual IPv4/DNS config from the 172.20.10.1 CLAT fallback (or --adhoc) back to
+#   DHCP - checked both via the SOCKS_ADHOC_APPLIED env flag (same shell) and the
+#   actual interface state (router == 172.20.10.1, so it also works from a fresh
+#   terminal after the flag's gone) without touching an unrelated static-IP config
+#   you may have set up yourself on some other network.
 unset-socks-proxy(){
     if [[ "$OSTYPE" != darwin* ]]; then
         echo "Error: unset-socks-proxy is only supported on macOS" >&2
         return 1
     fi
     networksetup -setsocksfirewallproxystate Wi-Fi off
-    if [[ "$SOCKS_ADHOC_APPLIED" == "1" ]] || networksetup -getinfo Wi-Fi | grep -q "^Manual Configuration"; then
+    # Only auto-revert manual IPv4 config recognized as our own (router 172.20.10.1,
+    # the CLAT fallback's signature) - don't blindly wipe a user's own unrelated
+    # static IP config on some other network just because Wi-Fi happens to be manual.
+    local _wifi_info _manual_router
+    _wifi_info=$(networksetup -getinfo Wi-Fi)
+    if grep -q "^Manual Configuration" <<< "$_wifi_info"; then
+        _manual_router=$(grep -e "^Router" <<< "$_wifi_info" | cut -d " " -f 2)
+    fi
+    if [[ "$SOCKS_ADHOC_APPLIED" == "1" || "$_manual_router" == "172.20.10.1" ]]; then
         echo "Reverting Wi-Fi IPv4/DNS to DHCP"
         sudo networksetup -setdhcp Wi-Fi
         sudo networksetup -setdnsservers Wi-Fi "Empty"
@@ -203,6 +422,11 @@ unset-socks-proxy(){
     fi
 }
 
+# Usage: get-socks-proxy
+# Description: Prints the currently configured SOCKS proxy address/port plus example
+#   invocations for curl/ssh/git/ALL_PROXY. Useful because the macOS system-wide SOCKS
+#   proxy set-socks-proxy configures only covers CFNetwork-based apps (Safari, Mail,
+#   ...) - CLI tools ignore it entirely, so this is what to paste manually for those.
 get-socks-proxy(){
     if [[ "$OSTYPE" != darwin* ]]; then
         echo "Error: get-socks-proxy is only supported on macOS" >&2
@@ -236,7 +460,7 @@ if [[ "$TERM_PROGRAM" != "vscode" ]]; then
 
   # Handle proxy setup based on network
   if [[ "$WIFI_NAME" = "PASSAWIT's Z Fold7" ]]; then
-        set-socks-proxy &!
+        set-socks-proxy --no-prompt &!
     else
         unset-socks-proxy &!
     fi
