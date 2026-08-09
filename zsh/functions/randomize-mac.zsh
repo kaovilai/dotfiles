@@ -46,7 +46,7 @@ randomize-mac-ifconfig() {
 
     # Detect WiFi interface if not specified
     if [[ -z "$wifi_interface" ]]; then
-        wifi_interface=$(networksetup -listallhardwareports | grep -A 1 "Wi-Fi" | grep "Device:" | awk '{print $2}')
+        wifi_interface=$(networksetup -listallhardwareports | awk '/Wi-Fi/{found=1} found && /Device:/{print $2; exit}')
         if [[ -z "$wifi_interface" ]]; then
             echo "Error: Could not detect WiFi interface" >&2
             echo "Try specifying it manually with --interface" >&2
@@ -67,7 +67,7 @@ randomize-mac-ifconfig() {
 
     # Get current MAC address
     local current_mac
-    current_mac=$(ifconfig "$wifi_interface" | grep ether | awk '{print $2}')
+    current_mac=$(ifconfig "$wifi_interface" | awk '/ether/{print $2; exit}')
     if [[ -z "$current_mac" ]]; then
         echo "Error: Could not read current MAC address" >&2
         return 1
@@ -100,7 +100,7 @@ randomize-mac-ifconfig() {
 
     # Verify the change
     local actual_mac
-    actual_mac=$(ifconfig "$wifi_interface" | grep ether | awk '{print $2}')
+    actual_mac=$(ifconfig "$wifi_interface" | awk '/ether/{print $2; exit}')
 
     if [[ "$actual_mac" == "$new_mac" ]]; then
         [[ "$quiet" == false ]] && echo "✓ MAC randomized successfully"
