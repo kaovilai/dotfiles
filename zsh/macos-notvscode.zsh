@@ -130,6 +130,107 @@ unset-tf-proxy(){
 #                   (SIGTTIN). The auto-invoke block below always passes this.
 #     <ip>          Explicit SOCKS server IP, skipping router auto-detection and the
 #                   IPv6/CLAT fallback logic entirely.
+#
+#   Alternate proxy app note (2026-08-10): SocksBypass
+#   (github.com/Nanako0129/SocksBypass) also defaults to port 9876, so it
+#   hits the same probing logic above. Its iOS upstream is "device default
+#   route" (not forced-cellular like its own Android side), so an
+#   iPhone-side VPN (e.g. Cloudflare WARP) applies to it like any other app
+#   as long as the phone's default route includes the VPN tunnel.
+#
+#   Working configuration found, NOT fully root-caused: initial reports had
+#   it working from an Android client (the "Super Proxy" app) but not from
+#   the Mac. Got both working by pointing the client at the phone's IPv6
+#   link-local address with an explicit zone (fe80::...%<adapter>) instead
+#   of any IPv4 address - exactly the _socks_router_ipv6 candidate this
+#   function already probes automatically. Confirmed (2026-08-10, live
+#   hotspot test): the auto-probe above does select this IPv6 candidate on
+#   its own - no need to pass the zone-scoped address explicitly as <ip>.
+#   So on this phone/carrier, `ndp -rn` did have a router entry (the phone
+#   sends RA on this link) - the "empty router table" failure mode below
+#   remains a real possibility on other phones/carriers, just not what
+#   happened here. Still open, not yet confirmed:
+#     - Whether the Mac's IPv4-broken / IPv6-working state and the working
+#       zone-scoped test were even captured in the same live session - that
+#       was never verified simultaneously. Next time this is tested on the
+#       actual hotspot, capture `ipconfig getsummary en0`, `ifconfig en0`,
+#       `ndp -rn`, `ndp -an`, and `netstat -rn -f inet` together in one
+#       pass - that settles more than another round of secondhand research.
+#     - CONFIRMED (2026-08-10, live hotspot test): `networksetup
+#       -setsocksfirewallproxy` a few lines below (this function's actual
+#       output, not just the nc port-probe above) does accept a zone-scoped
+#       IPv6 literal, and a real CFNetwork app (Safari/Mail) successfully
+#       browsed through it - not just a port-probe or curl round-trip. So
+#       the whole path (auto-probe or explicit <ip> -> set-socks-proxy ->
+#       system SOCKS proxy -> CFNetwork app) works end-to-end for
+#       SocksBypass on at least one live run.
+#   Confirmed separately (2026-08-10, empirically, not just per spec) for
+#   get-socks-proxy's plain curl/ALL_PROXY/git output: bracketing a
+#   zone-scoped IPv6 address is required - curl refuses to even parse it
+#   unbracketed ("Unsupported proxy syntax") - but RFC 6874's %25-escaped
+#   zone is NOT actually required for curl in practice, a raw %zone inside
+#   brackets parses identically. Separately: plain `nc <host> <port>` DOES
+#   handle a zone-scoped IPv6 literal fine (confirmed - it reaches a real
+#   connect attempt, "Connection refused"/timeout, not a parse error), so
+#   the earlier claim that nc can't do zone IDs at all was wrong. What
+#   actually fails is nc's `-x proxy:port` flag specifically - it can't
+#   parse ANY IPv6 address combined into one host:port string, zone-scoped
+#   or not (confirmed: even a bare bracketed, non-zone `::1` fails
+#   identically via -x) - so get-socks-proxy's SSH ProxyCommand line will
+#   not work for a
+#   link-local address; get-socks-proxy now says so when it prints one.
+#
+#   This file disagreed with itself on where the CLAT 192.0.0.x address
+#   actually comes from, and that's still unresolved, not settled:
+#     - Line 84 above: DHCP hands out the synthetic address; no route to
+#       the real 172.20.10.0/28 bridge subnet exists in this mode.
+#     - Lines 282-283 below (the CLAT fallback prompt): "iOS hotspots
+#       sometimes hand the Mac a synthesized NAT64/CLAT gateway... via
+#       DHCP."
+#     - This note (an earlier revision of it): "not something the iPhone
+#       hands out via DHCP - macOS self-assigns it" as its own on-device
+#       CLAT client.
+#   These aren't the same mechanism, and only one command actually
+#   discriminates them, run live on the hotspot: `ipconfig getsummary en0`.
+#   No DHCPv4 lease section at all means macOS's own CLAT (this note's
+#   model) - reported (not Apple-confirmed) to reuse the literal address
+#   192.0.0.2 on every interface running CLAT, per a comment on an IETF
+#   v6ops draft issue (github.com/furry13/v6ops-464xlat-enable/issues/37),
+#   which also means seeing 192.0.0.2 alone never tells you which interface
+#   is the hotspot if more than one is CLAT-active. A real lease (yiaddr in
+#   172.20.10.0/28) while the interface still shows 192.0.0.2 means a third,
+#   dual-stack model neither passage above describes - a real DHCPv4 lease
+#   coexisting with macOS engaging
+#   CLAT anyway. Whichever it is doesn't change the recommendation below,
+#   but don't read any of the three passages as confirmed until checked.
+#
+#   On the actual question asked - does forcing the Mac to IPv6-only
+#   (`networksetup -setv4off Wi-Fi`) fix this, the same way the Android
+#   client apparently avoided getting a 192.0.0.x address:
+#     - Directionally, probably no: pushing the Mac further into "no native
+#       IPv4" would, if CLAT's trigger really is "v6-only path + NAT64
+#       signal present," make CLAT engage more reliably, not less. But that
+#       trigger condition is inferred from secondhand sources, not
+#       confirmed from Apple - "probably no" is different from "confirmed
+#       won't help," and `-setv4off` has never actually been tried here.
+#     - The Android side has NOT been shown to lack CLAT for any specific
+#       reason - nobody checked its own IPv4 config. The simplest
+#       explanation is that "Super Proxy" was also pointed at a link-local
+#       literal, sidestepping IPv4/CLAT the same way the Mac fix did. The
+#       premise "the Android client didn't get a 192.0.0.x" was taken at
+#       face value, not verified.
+#     - None of this needs resolving right now: the zone-scoped IPv6
+#       literal already reaches SocksBypass on both platforms today, so no
+#       IPv4/IPv6 toggle is needed regardless of which model above is true.
+#       Revisit only if the IPv6 path itself stops working.
+#     - If it ever does need revisiting: the phone's link-local address is
+#       not stable long-term - iOS Private Wi-Fi Address rotates the MAC
+#       the interface ID derives from, so a literal captured today should
+#       be rediscovered per hotspot session, never hardcoded or cached
+#       across runs. A device-side kill-switch VPN with a block-all-
+#       non-tunnel filter could also drop link-local traffic despite it
+#       being interface-scoped - worth ruling out if the IPv6 path ever
+#       fails intermittently rather than consistently.
 set-socks-proxy(){
     if [[ "$OSTYPE" != darwin* ]]; then
         echo "Error: set-socks-proxy is only supported on macOS" >&2
@@ -438,13 +539,45 @@ get-socks-proxy(){
     fi
     local proxy_port="${SOCKS_ROUTER_PROXY_PORT:-1888}"
 
-    echo "SOCKS Proxy: ${router_ip}:${proxy_port}"
+    # IPv6 (with or without a %zone) needs bracketing anywhere it's followed by a
+    # port - same collision test-socks-proxy already guards against for its curl
+    # call. Verified empirically (see git blame / commit adding this comment): curl
+    # refuses to even parse an unbracketed zone-scoped address ("Unsupported proxy
+    # syntax"), but once bracketed it accepts a raw %zone just fine - RFC 6874's
+    # %25-escaped form is not required in practice for curl, only for strict URI
+    # parsers that don't share curl's leniency.
+    local _bracketed_ip="$router_ip"
+    [[ "$router_ip" == *:* ]] && _bracketed_ip="[$router_ip]"
+
+    # curl does not error on a bad/stale %zone - an invalid zone id fails
+    # identically to a dead proxy (same "Failed to connect... Couldn't
+    # connect to server" either way, confirmed empirically), so a literal
+    # left over from a rotated Private Wi-Fi Address (see set-socks-proxy's
+    # comments) would just look like the SOCKS server is down, not like a
+    # stale address. Catch the distinguishable case - zone names a live
+    # interface at all - before printing copy-paste commands built on it.
+    if [[ "$router_ip" == *%* ]]; then
+        local _zone="${router_ip##*%}"
+        if ! ifconfig -l 2>/dev/null | tr ' ' '\n' | grep -qx "$_zone"; then
+            echo "Warning: zone '%${_zone}' in $router_ip is not a current interface -" >&2
+            echo "  likely stale (rotated Private Wi-Fi Address?). Re-run set-socks-proxy" >&2
+            echo "  to rediscover the address before using the commands below." >&2
+        fi
+    fi
+
+    echo "SOCKS Proxy: ${_bracketed_ip}:${proxy_port}"
     echo ""
     echo "Usage in other applications:"
-    echo "  curl:        curl --socks5 ${router_ip}:${proxy_port} https://example.com"
-    echo "  SSH config:  ProxyCommand nc -X 5 -x ${router_ip}:${proxy_port} %h %p"
-    echo "  Environment: export ALL_PROXY=socks5://${router_ip}:${proxy_port}"
-    echo "  Git:         git config --global http.proxy socks5://${router_ip}:${proxy_port}"
+    echo "  curl:        curl --socks5 ${_bracketed_ip}:${proxy_port} https://example.com"
+    echo "  SSH config:  ProxyCommand nc -X 5 -x ${_bracketed_ip}:${proxy_port} %h %p"
+    if [[ "$router_ip" == *:* ]]; then
+        echo "               (macOS nc's -x flag can't take an IPv6 address in this"
+        echo "               combined host:port form at all - confirmed even a plain"
+        echo "               bracketed, non-zone address fails identically - this"
+        echo "               ProxyCommand will NOT work for any IPv6 proxy address)"
+    fi
+    echo "  Environment: export ALL_PROXY=socks5://${_bracketed_ip}:${proxy_port}"
+    echo "  Git:         git config --global http.proxy socks5://${_bracketed_ip}:${proxy_port}"
 }
 
 # Wi-Fi and network-related setup - cache network name
