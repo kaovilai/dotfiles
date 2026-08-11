@@ -461,6 +461,69 @@ set-socks-proxy(){
     if [[ "$SOCKS_ADHOC_APPLIED" == "1" ]]; then
         echo "Note: Wi-Fi IPv4 is manually pinned for this hotspot - run unset-socks-proxy before joining another network"
     fi
+
+    # Replace any previous watchdog - unless we ARE the watchdog (this call
+    # came from _socks-proxy-watchdog's own recovery loop re-applying the
+    # proxy; it keeps polling in its existing loop, no nested poller needed,
+    # and SOCKS_WATCHDOG_PID here would equal our own $$, so killing it would
+    # kill ourselves mid-recovery).
+    if [[ "$SOCKS_WATCHDOG_PID" != "$$" ]]; then
+        if [[ -n "$SOCKS_WATCHDOG_PID" ]] && kill -0 "$SOCKS_WATCHDOG_PID" 2>/dev/null; then
+            kill "$SOCKS_WATCHDOG_PID" 2>/dev/null
+        fi
+        local _watchdog_iface _watchdog_ssid
+        _watchdog_iface=$(networksetup -listallhardwareports 2>/dev/null | awk '/Wi-Fi/{found=1} found && /Device:/{print $2; exit}')
+        _watchdog_ssid=$(networksetup -getairportnetwork "${_watchdog_iface:-en0}" 2>/dev/null | sed 's/^Current Wi-Fi Network: //')
+        _socks-proxy-watchdog "$_watchdog_ssid" "$SOCKS_ROUTER_IP" "$SOCKS_ROUTER_PROXY_PORT" "${_watchdog_iface:-en0}" &!
+        export SOCKS_WATCHDOG_PID=$!
+    fi
+}
+
+# Internal: background poller spawned by set-socks-proxy. The system SOCKS
+# proxy setting is treated as semi-permanent - a bare outage (phone app
+# relaunching, hotspot hiccup) shouldn't tear it down, so the system proxy
+# state is left untouched for up to 60s (12 x 5s) while the SAME ip:port is
+# re-probed; only if it never comes back is unset-socks-proxy actually called.
+# A confirmed SSID change is different - that means we're provably on another
+# network already, so it unsets immediately, no grace period. Runs in a
+# forked subshell (&!) - real OS state (networksetup calls inside
+# unset-socks-proxy) is what actually reverts; shell-var changes made in here
+# don't propagate back to the parent shell that spawned it.
+_socks-proxy-watchdog(){
+    local _ssid="$1" _ip="$2" _port="$3" _iface="$4"
+    local _cur_ssid
+    while true; do
+        sleep 5
+        _cur_ssid=$(networksetup -getairportnetwork "$_iface" 2>/dev/null | sed 's/^Current Wi-Fi Network: //')
+        if [[ "$_cur_ssid" != "$_ssid" ]]; then
+            echo "socks-proxy-watchdog: Wi-Fi changed ($_ssid -> $_cur_ssid), unsetting SOCKS proxy" >&2
+            unset-socks-proxy
+            return 0
+        fi
+        nc -z -w 2 "$_ip" "$_port" 2>/dev/null && continue
+
+        echo "socks-proxy-watchdog: SOCKS proxy $_ip:$_port unreachable, tolerating outage up to 60s (leaving proxy setting on)" >&2
+        local _recovered=0 _try
+        for ((_try = 1; _try <= 12; _try++)); do
+            sleep 5
+            _cur_ssid=$(networksetup -getairportnetwork "$_iface" 2>/dev/null | sed 's/^Current Wi-Fi Network: //')
+            if [[ "$_cur_ssid" != "$_ssid" ]]; then
+                echo "socks-proxy-watchdog: Wi-Fi changed ($_ssid -> $_cur_ssid), unsetting SOCKS proxy" >&2
+                unset-socks-proxy
+                return 0
+            fi
+            if nc -z -w 2 "$_ip" "$_port" 2>/dev/null; then
+                echo "socks-proxy-watchdog: $_ip:$_port back, resuming normal monitoring" >&2
+                _recovered=1
+                break
+            fi
+        done
+        if [[ "$_recovered" -eq 0 ]]; then
+            echo "socks-proxy-watchdog: $_ip:$_port still unreachable after 60s, unsetting SOCKS proxy" >&2
+            unset-socks-proxy
+            return 0
+        fi
+    done
 }
 
 # Usage: test-socks-proxy [<ip>] [<port>]
@@ -505,6 +568,13 @@ unset-socks-proxy(){
     if [[ "$OSTYPE" != darwin* ]]; then
         echo "Error: unset-socks-proxy is only supported on macOS" >&2
         return 1
+    fi
+    # Stop the watchdog too, unless we ARE the watchdog (it calls this function
+    # directly, not via a new fork, so its own PID equals SOCKS_WATCHDOG_PID -
+    # killing "ourselves" here would abort this function before it finishes).
+    if [[ -n "$SOCKS_WATCHDOG_PID" && "$SOCKS_WATCHDOG_PID" != "$$" ]] && kill -0 "$SOCKS_WATCHDOG_PID" 2>/dev/null; then
+        kill "$SOCKS_WATCHDOG_PID" 2>/dev/null
+        unset SOCKS_WATCHDOG_PID
     fi
     networksetup -setsocksfirewallproxystate Wi-Fi off
     # Only auto-revert manual IPv4 config recognized as our own (router 172.20.10.1,
