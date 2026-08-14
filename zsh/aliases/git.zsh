@@ -5,8 +5,17 @@ alias gcan='git commit --amend --no-edit'
 alias gca='git commit --amend'
 alias gcas='git commit --amend --no-edit --signoff'
 alias gcasf='git commit --amend --no-edit --signoff && git push --force'
-alias gcu='(git checkout upstream/main || git checkout upstream/master || git checkout upstream/oadp-dev)'
-alias gcu_nb='(git checkout upstream/main || git checkout upstream/master || git checkout upstream/oadp-dev) && git checkout -b'
+gcu() {
+  git checkout upstream/main 2>/dev/null || git checkout upstream/master 2>/dev/null || git checkout upstream/oadp-dev
+}
+gcu_nb() {
+  if git checkout upstream/main 2>/dev/null || git checkout upstream/master 2>/dev/null || git checkout upstream/oadp-dev; then
+    git checkout -b "$@"
+  else
+    echo "Error: no upstream/main, upstream/master, or upstream/oadp-dev found" >&2
+    return 1
+  fi
+}
 alias gcu_master='git checkout upstream/master'
 alias gcu_master_nb='git checkout upstream/master && git checkout -b'
 alias gcu_main='git checkout upstream/main'

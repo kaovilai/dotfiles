@@ -184,4 +184,4 @@ fi
   if [[ "$TERM_PROGRAM" != "vscode" ]]; then
     source ~/git/dotfiles/zsh/completions.zsh
   fi
-} &
+} &!
