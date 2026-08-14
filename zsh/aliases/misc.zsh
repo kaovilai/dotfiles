@@ -140,6 +140,8 @@ alias ce='cd ~/experiments/ && claude'
 # cec = copilot edition of ce (raw claude via copilot-api gateway; see claude-copilot.zsh)
 # NOTE: cec previously launched the podman claude-container — that is now cecon.
 alias cec='cd ~/experiments/ && claude-copilot'
+# ce-vertex = vertex edition of ce (raw claude routed through Google Vertex AI; see claude-copilot.zsh)
+alias ce-vertex='cd ~/experiments/ && claude-vertex'
 # Builds -e flags to pass the host's active Anthropic/copilot-api gateway
 # config into a container. ANTHROPIC_BASE_URL's host is rewritten from
 # localhost/127.0.0.1 to host.containers.internal since the container's
