@@ -131,6 +131,12 @@ delete-ocp-aws() {
                 ARCH_SUFFIX=${match[2]}
             fi
             OCP_CREATE_DIR=$OCP_MANIFESTS_DIR/${match[1]}-aws-${match[2]}${match[3]}
+        elif [[ $1 != "cleanup-legacy" ]]; then
+            # $1 doesn't match the expected name format and isn't the
+            # cleanup-legacy keyword either -- OCP_CREATE_DIR silently stays
+            # at today's default above, which for a destructive operation
+            # is worth calling out rather than acting on quietly.
+            echo "WARNING: cluster name '$1' does not match tkaovila-<date>-<arch>[-N]; falling back to today's directory $OCP_CREATE_DIR"
         fi
     fi
     
