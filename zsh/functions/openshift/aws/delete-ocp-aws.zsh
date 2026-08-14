@@ -133,10 +133,14 @@ delete-ocp-aws() {
             OCP_CREATE_DIR=$OCP_MANIFESTS_DIR/${match[1]}-aws-${match[2]}${match[3]}
         elif [[ $1 != "cleanup-legacy" ]]; then
             # $1 doesn't match the expected name format and isn't the
-            # cleanup-legacy keyword either -- OCP_CREATE_DIR silently stays
-            # at today's default above, which for a destructive operation
-            # is worth calling out rather than acting on quietly.
-            echo "WARNING: cluster name '$1' does not match tkaovila-<date>-<arch>[-N]; falling back to today's directory $OCP_CREATE_DIR"
+            # cleanup-legacy keyword either. Falling back to today's
+            # directory would destroy a different cluster than the one
+            # named (an escalation from an earlier warn-and-continue: a
+            # warning here is too easy to miss for a destructive op), so
+            # refuse instead.
+            echo "ERROR: cluster name '$1' does not match tkaovila-<date>-<arch>[-N]" >&2
+            echo "       Use delete-ocp-aws-dir for an explicit directory." >&2
+            return 1
         fi
     fi
     
@@ -223,7 +227,12 @@ delete-ocp-aws-dir() {
         if [[ -z "$extracted_date" ]]; then
             echo "ERROR: Failed to extract date from directory name: $dir_basename"
             echo "Using current date as fallback"
-            extracted_date=$(date +%Y%m%d)
+            # %y%m%d (6-digit) matches the CURRENT format used elsewhere
+            # (line ~40, TODAY's own default) -- %Y%m%d is the "legacy"
+            # format per this function's own error message just below, so
+            # using it here would build a path that doesn't match today's
+            # actual directory.
+            extracted_date=$(date +%y%m%d)
         fi
         
         # Safety check - ensure extracted_arch is not empty
@@ -274,7 +283,9 @@ delete-ocp-aws-dir() {
         echo "Using current date and arm64 architecture as fallback"
         
         # Use current date and arm64 as fallback
-        local fallback_date; fallback_date=$(date +%Y%m%d)
+        # %y%m%d (6-digit) -- see the same fallback above for why, not
+        # %Y%m%d which this function's own message just above calls legacy.
+        local fallback_date; fallback_date=$(date +%y%m%d)
         local fallback_arch="arm64"
         local original_today=$TODAY
         TODAY=$fallback_date
