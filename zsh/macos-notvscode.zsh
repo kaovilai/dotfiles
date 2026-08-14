@@ -473,7 +473,7 @@ set-socks-proxy(){
         fi
         local _watchdog_iface _watchdog_ssid
         _watchdog_iface=$(networksetup -listallhardwareports 2>/dev/null | awk '/Wi-Fi/{found=1} found && /Device:/{print $2; exit}')
-        _watchdog_ssid=$(networksetup -getairportnetwork "${_watchdog_iface:-en0}" 2>/dev/null | sed 's/^Current Wi-Fi Network: //')
+        _watchdog_ssid=${$(networksetup -getairportnetwork "${_watchdog_iface:-en0}" 2>/dev/null)#Current Wi-Fi Network: }
         _socks-proxy-watchdog "$_watchdog_ssid" "$SOCKS_ROUTER_IP" "$SOCKS_ROUTER_PROXY_PORT" "${_watchdog_iface:-en0}" &!
         export SOCKS_WATCHDOG_PID=$!
     fi
@@ -494,7 +494,7 @@ _socks-proxy-watchdog(){
     local _cur_ssid
     while true; do
         sleep 5
-        _cur_ssid=$(networksetup -getairportnetwork "$_iface" 2>/dev/null | sed 's/^Current Wi-Fi Network: //')
+        _cur_ssid=${$(networksetup -getairportnetwork "$_iface" 2>/dev/null)#Current Wi-Fi Network: }
         if [[ "$_cur_ssid" != "$_ssid" ]]; then
             echo "socks-proxy-watchdog: Wi-Fi changed ($_ssid -> $_cur_ssid), unsetting SOCKS proxy" >&2
             unset-socks-proxy
@@ -506,7 +506,7 @@ _socks-proxy-watchdog(){
         local _recovered=0 _try
         for ((_try = 1; _try <= 12; _try++)); do
             sleep 5
-            _cur_ssid=$(networksetup -getairportnetwork "$_iface" 2>/dev/null | sed 's/^Current Wi-Fi Network: //')
+            _cur_ssid=${$(networksetup -getairportnetwork "$_iface" 2>/dev/null)#Current Wi-Fi Network: }
             if [[ "$_cur_ssid" != "$_ssid" ]]; then
                 echo "socks-proxy-watchdog: Wi-Fi changed ($_ssid -> $_cur_ssid), unsetting SOCKS proxy" >&2
                 unset-socks-proxy
@@ -655,7 +655,7 @@ if [[ "$TERM_PROGRAM" != "vscode" ]]; then
   # Detect WiFi interface dynamically (consistent with set-tf-proxy and other functions)
   _WIFI_IFACE=$(networksetup -listallhardwareports 2>/dev/null | awk '/Wi-Fi/{found=1} found && /Device:/{print $2; exit}')
   # Get WiFi name once and cache it
-  WIFI_NAME=$(networksetup -getairportnetwork "${_WIFI_IFACE:-en0}" 2>/dev/null | sed 's/^Current Wi-Fi Network: //')
+  WIFI_NAME=${$(networksetup -getairportnetwork "${_WIFI_IFACE:-en0}" 2>/dev/null)#Current Wi-Fi Network: }
   unset _WIFI_IFACE
 
   # Run home setup check in background
