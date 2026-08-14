@@ -108,9 +108,16 @@ delete-ocp-aws() {
     
     OCP_CREATE_DIR=$OCP_MANIFESTS_DIR/$TODAY-aws-$ARCH_SUFFIX
     CLUSTER_NAME=tkaovila-$TODAY-$ARCH_SUFFIX
-    
+
     if [[ -n $1 ]]; then
         CLUSTER_NAME=$1
+        # If an explicit CLUSTER_NAME was given (format: tkaovila-<date>-<arch>[-suffix]),
+        # resolve the install directory from IT instead of blindly using today's date --
+        # otherwise destroying an older cluster by name silently no-ops against an
+        # empty/nonexistent today-dated directory.
+        if [[ $1 =~ ^tkaovila-([0-9]{6,8})-(arm64|amd64)(-[0-9]+)?$ ]]; then
+            OCP_CREATE_DIR=$OCP_MANIFESTS_DIR/${match[1]}-aws-${match[2]}${match[3]}
+        fi
     fi
     
     # Check if we need to clean up a cluster created with empty TODAY variable
@@ -185,7 +192,7 @@ delete-ocp-aws-dir() {
     # Extract date and architecture from directory name
     # Assuming format like 20250410-aws-arm64 or 20250410-aws-amd64
     # Also handle numbered suffixes like 20250410-aws-arm64-1
-    if [[ $dir_basename =~ ^([0-9]{8})-aws-(arm64|amd64)(-[0-9]+)?$ ]]; then
+    if [[ $dir_basename =~ ^([0-9]{6,8})-aws-(arm64|amd64)(-[0-9]+)?$ ]]; then
         local extracted_date=${match[1]}
         local extracted_arch=${match[2]}
         local extracted_suffix=${match[3]}
