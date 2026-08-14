@@ -35,8 +35,9 @@ alias copilot-api="NODE_USE_SYSTEM_CA=1 bun run --cwd \$HOME/git/copilot-api ./s
 # repo), claude-vertex-dashboard (opens that project's GCP console dashboard
 # via the comet skill), claude-ollama (raw claude binary routed through a
 # local Ollama server on :11434 for fully offline use, auto-selecting a
-# gemma4 model per opus/sonnet/haiku tier — see claude-ollama-models to
-# force a re-pick, ollama-serve-kill to stop the auto-started server), plus
+# gemma4 model per opus/sonnet/haiku tier, with a memory pre-flight check
+# before loading each one — see claude-ollama-models to force a re-pick,
+# ollama-serve-kill to stop the auto-started server), plus
 # the mode-dispatching `claude` function and the `claude-mode` switcher
 # (copilot ↔ vertex ↔ ollama, vertex is default) — see bottom of file.
 
@@ -301,6 +302,109 @@ _claude_ollama_default_model() {
     esac
 }
 
+# Estimate a model's memory footprint in bytes for the resource pre-flight
+# check below.
+#   $1 = tag, $2 = tags_json (from /api/tags, may be empty)
+# Prefers the real on-disk size from tags_json (already pulled). Falls back
+# to parsing a trailing parameter-count suffix like "31b"/"1.5b" from the
+# tag name (matches our own gemma4 defaults and most Ollama naming
+# conventions) at ~0.6 bytes/param, a rough figure for typical Q4_K_M
+# quantization. Prints nothing and fails if neither source yields a number
+# — callers must treat that as "can't estimate, skip the check" rather than
+# guessing.
+_claude_ollama_model_size_bytes() {
+    local tag="$1" tags_json="$2"
+    zmodload zsh/mathfunc 2>/dev/null   # for int() below
+    if [[ -n "$tags_json" ]] && command -v jq &>/dev/null; then
+        local size
+        size=$(jq -r --arg n "$tag" '(.models // [])[] | select(.name == $n) | .size // empty' <<< "$tags_json" 2>/dev/null | head -1)
+        if [[ -n "$size" && "$size" != "null" ]]; then
+            print -r -- "$size"
+            return 0
+        fi
+    fi
+    local suffix="${tag##*:}"
+    if [[ "$suffix" =~ '^([0-9]+(\.[0-9]+)?)[bB]$' ]]; then
+        print -r -- $(( int(${match[1]} * 1000000000 * 0.6) ))
+        return 0
+    fi
+    return 1
+}
+
+# Pre-flight resource gate: warn (and, when possible, ask) before loading a
+# model this machine may not have the memory for, rather than finding out
+# via a mid-session OOM/crash. Dotfiles travel across machines (see
+# migrate-to-new-laptop) so this runs on every resolve, not just the first
+# — a tier persisted from a 48GB machine could be wrong on a smaller one.
+# Set CLAUDE_OLLAMA_SKIP_RESOURCE_CHECK=1 to bypass entirely.
+#
+#   $1 = tier, $2 = tag, $3 = tags_json, $4 = count of locally-pulled
+#        models available as alternatives (0 disables the "pick a
+#        different model" option — nothing to pick from yet)
+#
+# CPU core count is advisory only (affects speed, not whether a model can
+# load at all) and never blocks.
+#
+# Returns: 0 = proceed, 1 = abort, 2 = caller should re-resolve this tier
+# (interactive "pick a different model" choice) — see the recursive
+# `_claude_ollama_resolve_model "$tier" force` call sites below.
+_claude_ollama_check_resources() {
+    local tier="$1" tag="$2" tags_json="$3" alternatives="${4:-0}"
+    [[ -n "$CLAUDE_OLLAMA_SKIP_RESOURCE_CHECK" ]] && return 0
+
+    local total_mem cores
+    if [[ "$(uname)" == "Darwin" ]]; then
+        total_mem=$(sysctl -n hw.memsize 2>/dev/null)
+        cores=$(sysctl -n hw.ncpu 2>/dev/null)
+    elif [[ -r /proc/meminfo ]]; then
+        total_mem=$(awk '/^MemTotal:/ { print $2 * 1024; exit }' /proc/meminfo 2>/dev/null)
+        cores=$(getconf _NPROCESSORS_ONLN 2>/dev/null)
+    fi
+    [[ -z "$total_mem" ]] && return 0   # can't check -> don't block
+
+    if [[ -n "$cores" ]] && (( cores > 0 && cores < 4 )); then
+        echo "⚠️  Only ${cores} CPU cores available — local inference will be slow." >&2
+    fi
+
+    local size_bytes
+    size_bytes=$(_claude_ollama_model_size_bytes "$tag" "$tags_json") || return 0  # can't estimate -> don't block
+
+    # 1.5x on-disk size for context/runtime overhead vs. a 75%-of-total
+    # safety budget (leaves headroom for the OS, Claude Code itself, and
+    # everything else running) — both rough rules of thumb, not exact.
+    local needed budget needed_gb total_gb
+    needed=$(( size_bytes * 3 / 2 ))
+    budget=$(( total_mem * 3 / 4 ))
+    (( needed <= budget )) && return 0
+
+    needed_gb=$(( needed / 1073741824 ))
+    total_gb=$(( total_mem / 1073741824 ))
+    echo "⚠️  '${tag}' (${tier} tier) needs an estimated ${needed_gb}GB; this machine has ${total_gb}GB total." >&2
+
+    if [[ -t 0 ]]; then
+        local -a opts=("Proceed anyway" "Abort")
+        (( alternatives > 0 )) && opts=("Proceed anyway" "Pick a different model for '${tier}'" "Abort")
+        local pick
+        if command -v fzf &>/dev/null; then
+            pick=$(print -l -- "${opts[@]}" | fzf --height 40% --reverse --header "Not enough memory for '${tag}' — what now?")
+        else
+            echo "Not enough memory for '${tag}' — what now?" >&2
+            select pick in "${opts[@]}"; do
+                [[ -n "$pick" ]] && break
+            done
+        fi
+        case "$pick" in
+            "Proceed anyway")   echo "Proceeding anyway — may be slow or fail to load." >&2; return 0 ;;
+            "Pick a different model for '${tier}'") return 2 ;;
+            *)                  echo "Aborted." >&2; return 1 ;;
+        esac
+    else
+        echo "❌ Refusing to proceed non-interactively. Pick a smaller model: claude-ollama-models ${tier}" >&2
+        echo "   Or override: CLAUDE_OLLAMA_SKIP_RESOURCE_CHECK=1" >&2
+        return 1
+    fi
+}
+
 # Ensure a local Ollama server is reachable, auto-starting one if not.
 # Shared by claude-ollama() and _claude_ollama_resolve_model() (so
 # claude-ollama-models also works standalone, without claude-ollama having
@@ -319,8 +423,13 @@ _claude_ollama_ensure_server() {
 
     echo "Starting ollama serve on ${base} (log: ${log})..."
     (ollama serve >> "${log}" 2>&1 &)
-    local i
-    for i in {1..60}; do
+    # Wall-clock deadline, not an iteration count: each curl can itself take
+    # up to --max-time (2s), so 60 iterations of curl+sleep could overrun the
+    # "after 60s" message below by up to 2x in the worst case. `local
+    # SECONDS=0` localizes zsh's elapsed-seconds special var to this
+    # function's scope.
+    local SECONDS=0
+    while (( SECONDS < 60 )); do
         curl -sf --max-time 2 "${base}/api/tags" -o /dev/null && return 0
         sleep 1
     done
@@ -341,6 +450,9 @@ _claude_ollama_ensure_server() {
 #      no interactive answer (non-interactive shell, fzf/select unavailable,
 #      empty selection, or Ctrl+C), so this never hangs on a prompt nothing
 #      is there to answer.
+# Every candidate tag is checked via _claude_ollama_check_resources before
+# it's persisted/pulled; a "pick a different model" response recurses into
+# this same function with force set, re-entering the interactive picker.
 # Prints the resolved tag on stdout; persists it as TIER=model in
 # $_claude_ollama_models_file. Returns 1 (nothing printed) on hard failure.
 _claude_ollama_resolve_model() {
@@ -350,15 +462,6 @@ _claude_ollama_resolve_model() {
     local default
     default=$(_claude_ollama_default_model "$tier") || return 1
 
-    if [[ -z "$force" && -r "$_claude_ollama_models_file" ]]; then
-        local existing
-        existing=$(awk -F= -v t="${(U)tier}" '$1 == t {print $2; exit}' "$_claude_ollama_models_file" 2>/dev/null)
-        if [[ -n "$existing" ]]; then
-            print -r -- "$existing"
-            return 0
-        fi
-    fi
-
     _claude_ollama_ensure_server || return 1
 
     local -a local_models
@@ -366,6 +469,36 @@ _claude_ollama_resolve_model() {
     tags_json=$(curl -sf --max-time 5 "${base}/api/tags" 2>/dev/null)
     if [[ -n "$tags_json" ]] && command -v jq &>/dev/null; then
         local_models=("${(@f)$(jq -r '.models[].name' <<< "$tags_json" 2>/dev/null)}")
+    fi
+
+    if [[ -z "$force" && -r "$_claude_ollama_models_file" ]]; then
+        local existing
+        existing=$(awk -F= -v t="${(U)tier}" '$1 == t {print $2; exit}' "$_claude_ollama_models_file" 2>/dev/null)
+        if [[ -n "$existing" ]]; then
+            _claude_ollama_check_resources "$tier" "$existing" "$tags_json" "${#local_models[@]}"
+            case $? in
+                0)
+                    # The persisted tag may no longer be pulled (e.g. `ollama
+                    # rm`'d, or pruned for space) since it was recorded —
+                    # (Ie) is the same exact-match index-lookup used above,
+                    # 0 means absent. Re-pull the exact persisted tag rather
+                    # than silently falling through to re-pick, since the
+                    # user's prior choice is still what they asked for, just
+                    # missing locally.
+                    if (( ${local_models[(Ie)$existing]} == 0 )); then
+                        echo "Persisted ${tier} model '${existing}' is no longer pulled locally — re-pulling..." >&2
+                        if ! ollama pull "$existing"; then
+                            echo "❌ 'ollama pull ${existing}' failed. Check your connection, or pick a different model: claude-ollama-models ${tier}" >&2
+                            return 1
+                        fi
+                    fi
+                    print -r -- "$existing"
+                    return 0
+                    ;;
+                2) _claude_ollama_resolve_model "$tier" force; return $? ;;
+                *) return 1 ;;
+            esac
+        fi
     fi
 
     local chosen=""
@@ -389,14 +522,28 @@ _claude_ollama_resolve_model() {
         fi
     fi
 
-    if [[ -z "$chosen" ]]; then
+    if [[ -n "$chosen" ]]; then
+        _claude_ollama_check_resources "$tier" "$chosen" "$tags_json" "${#local_models[@]}"
+        case $? in
+            0) ;;
+            2) _claude_ollama_resolve_model "$tier" force; return $? ;;
+            *) return 1 ;;
+        esac
+    else
         chosen="$default"
         echo "No selection for '${tier}' tier — autopicking ${chosen}." >&2
         # (Ie) = exact-match index lookup (0 if absent) — avoids treating
         # $chosen as a glob pattern (a tag could contain glob-special chars)
         # and, unlike the array-slice-based ${(M)arr:#pat} filter, actually
         # works without also requiring the array (@) flag.
-        if (( ${local_models[(Ie)$chosen]} == 0 )); then
+        local not_yet_pulled=$(( ${local_models[(Ie)$chosen]} == 0 ))
+        _claude_ollama_check_resources "$tier" "$chosen" "$tags_json" "${#local_models[@]}"
+        case $? in
+            0) ;;
+            2) _claude_ollama_resolve_model "$tier" force; return $? ;;
+            *) return 1 ;;
+        esac
+        if (( not_yet_pulled )); then
             echo "Pulling ${chosen} (first run only; needs internet access, can take several minutes for larger tags)..." >&2
             if ! ollama pull "$chosen"; then
                 echo "❌ 'ollama pull ${chosen}' failed. Check your connection and retry, or pick an already-pulled tag via: claude-ollama-models ${tier}" >&2
