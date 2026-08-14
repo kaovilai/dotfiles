@@ -315,7 +315,6 @@ _claude_ollama_default_model() {
 # guessing.
 _claude_ollama_model_size_bytes() {
     local tag="$1" tags_json="$2"
-    zmodload zsh/mathfunc 2>/dev/null   # for int() below
     if [[ -n "$tags_json" ]] && command -v jq &>/dev/null; then
         local size
         size=$(jq -r --arg n "$tag" '(.models // [])[] | select(.name == $n) | .size // empty' <<< "$tags_json" 2>/dev/null | head -1)
@@ -326,7 +325,11 @@ _claude_ollama_model_size_bytes() {
     fi
     local suffix="${tag##*:}"
     if [[ "$suffix" =~ '^([0-9]+(\.[0-9]+)?)[bB]$' ]]; then
-        print -r -- $(( int(${match[1]} * 1000000000 * 0.6) ))
+        # printf '%.0f' truncates the float arithmetic to an integer byte
+        # count without depending on zsh/mathfunc's int() (a module that,
+        # if it ever failed to load, would make the arithmetic below error
+        # instead of just falling through cleanly).
+        printf '%.0f\n' $(( ${match[1]} * 1000000000 * 0.6 ))
         return 0
     fi
     return 1
@@ -406,13 +409,26 @@ _claude_ollama_check_resources() {
     fi
 }
 
+# Ollama's own host:port override (its docs use OLLAMA_HOST=host:port, no
+# scheme). Computed fresh each call rather than a `typeset -g` set once at
+# source time, so a later `export OLLAMA_HOST=...` within the same shell
+# session is picked up. Single source of truth for the base URL and the
+# kill-target port, replacing four separate hardcoded localhost:11434s.
+_claude_ollama_base() {
+    print -r -- "http://${OLLAMA_HOST:-localhost:11434}"
+}
+_claude_ollama_port() {
+    local h="${OLLAMA_HOST:-localhost:11434}"
+    print -r -- "${h##*:}"
+}
+
 # Ensure a local Ollama server is reachable, auto-starting one if not.
 # Shared by claude-ollama() and _claude_ollama_resolve_model() (so
 # claude-ollama-models also works standalone, without claude-ollama having
 # run first). Mirrors claude-copilot's detached-subshell + up-to-60s
 # poll-loop pattern exactly, including the log-file-under-TMPDIR idiom.
 _claude_ollama_ensure_server() {
-    local base="http://localhost:11434"
+    local base="$(_claude_ollama_base)"
     local log="${TMPDIR:-/tmp}/ollama-serve.log"
 
     curl -sf --max-time 2 "${base}/api/tags" -o /dev/null && return 0
@@ -468,7 +484,7 @@ _claude_ollama_ensure_server() {
 # $_claude_ollama_models_file. Returns 1 (nothing printed) on hard failure.
 _claude_ollama_resolve_model() {
     local tier="$1" force="$2"
-    local base="http://localhost:11434"
+    local base="$(_claude_ollama_base)"
 
     local default
     default=$(_claude_ollama_default_model "$tier") || return 1
@@ -615,7 +631,7 @@ claude-ollama() {
     # because it does NOT call that unset helper first.
     local -a envs
     envs=(
-        ANTHROPIC_BASE_URL="http://localhost:11434"
+        ANTHROPIC_BASE_URL="$(_claude_ollama_base)"
         ANTHROPIC_AUTH_TOKEN="ollama"
         # Explicitly blanked, not just left to _claude_copilot_unset_env's
         # prior unset: a real key exported elsewhere in the shell (e.g. for
@@ -629,6 +645,17 @@ claude-ollama() {
         ANTHROPIC_DEFAULT_SONNET_MODEL="${sonnet}"
         ANTHROPIC_DEFAULT_HAIKU_MODEL="${haiku}"
     )
+    # Same opt-out as claude-copilot above (CLAUDE_COPILOT_ENABLE_MONITOR=1
+    # to keep Monitor working): suppressing these matters even more here,
+    # since "fully offline" shouldn't still be phoning api.anthropic.com for
+    # telemetry/update checks in the background regardless of the routing
+    # backend.
+    if [[ -z "$CLAUDE_COPILOT_ENABLE_MONITOR" || "$CLAUDE_COPILOT_ENABLE_MONITOR" == 0 ]]; then
+        envs+=(
+            DISABLE_NON_ESSENTIAL_MODEL_CALLS=1
+            CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
+        )
+    fi
 
     # `export` (not a subshell) so descendant Claude Code sessions — e.g. an
     # agent sub-shell re-entering `claude` — inherit the Ollama routing, same
@@ -644,7 +671,7 @@ claude-ollama() {
 # `(... &)` in a subshell), so this finds whatever's listening on 11434 and
 # kills it, escalating to SIGKILL if it won't die.
 ollama-serve-kill() {
-    local port=11434
+    local port="$(_claude_ollama_port)"
     local -a pids
     # -sTCP:LISTEN: without it, lsof also matches processes with an
     # established/in-flight connection TO this port (e.g. our own curl
