@@ -280,10 +280,10 @@ check-for-existing-clusters() {
     
     for i in $(seq 1 ${#cluster_names[@]}); do
         # Additional validation to ensure array indices are valid
-        if [[ -n "${cluster_names[$i-1]}" && -n "${cluster_dirs[$i-1]}" ]]; then
-            echo "$i. ${cluster_names[$i-1]} ($([ -f "${cluster_dirs[$i-1]}/metadata.json" ] && jq -r '.status // "unknown"' "${cluster_dirs[$i-1]}/metadata.json" || echo "unknown")) [Install Dir: ${cluster_dirs[$i-1]}]"
+        if [[ -n "${cluster_names[$i]}" && -n "${cluster_dirs[$i]}" ]]; then
+            echo "$i. ${cluster_names[$i]} ($([ -f "${cluster_dirs[$i]}/metadata.json" ] && jq -r '.status // "unknown"' "${cluster_dirs[$i]}/metadata.json" || echo "unknown")) [Install Dir: ${cluster_dirs[$i]}]"
         else
-            echo "$i. WARNING: Invalid cluster entry at index $((i-1))"
+            echo "$i. WARNING: Invalid cluster entry at index $i"
         fi
     done
     
