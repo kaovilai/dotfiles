@@ -33,9 +33,12 @@ alias copilot-api="NODE_USE_SYSTEM_CA=1 bun run --cwd \$HOME/git/copilot-api ./s
 # AI, using CLOUD_ML_REGION/ANTHROPIC_VERTEX_PROJECT_ID already exported in
 # the shell — same vars used by computer-use-claude/cecon elsewhere in this
 # repo), claude-vertex-dashboard (opens that project's GCP console dashboard
-# via the comet skill), plus the mode-dispatching `claude` function and the
-# `claude-mode` switcher (copilot ↔ vertex, vertex is default) — see bottom
-# of file.
+# via the comet skill), claude-ollama (raw claude binary routed through a
+# local Ollama server on :11434 for fully offline use, auto-selecting a
+# gemma4 model per opus/sonnet/haiku tier — see claude-ollama-models to
+# force a re-pick, ollama-serve-kill to stop the auto-started server), plus
+# the mode-dispatching `claude` function and the `claude-mode` switcher
+# (copilot ↔ vertex ↔ ollama, vertex is default) — see bottom of file.
 
 # Highest-versioned Claude model for a family from /v1/models JSON.
 # Mirrors PR #2's getLatestModelForFamily: numeric major-then-minor compare,
@@ -257,10 +260,261 @@ claude-vertex-dashboard() {
 }
 
 # ---------------------------------------------------------------------------
+# claude-ollama: raw claude binary, routed through a local Ollama server
+# (http://localhost:11434) so Claude Code can run fully offline against
+# local models. Mirrors claude-copilot's shape — local HTTP server → same
+# ANTHROPIC_BASE_URL/ANTHROPIC_AUTH_TOKEN/ANTHROPIC_DEFAULT_*_MODEL exports,
+# same detached-subshell auto-start + poll-loop, same `export` (not a
+# subshell) so descendant Claude Code sessions inherit the routing — but
+# Ollama has no /v1/models-style family+version metadata to auto-rank, so
+# each of the three model tiers (opus/sonnet/haiku) is resolved once via
+# _claude_ollama_resolve_model and persisted to $_claude_ollama_models_file;
+# see claude-ollama-models below to force a re-pick. ANTHROPIC_AUTH_TOKEN is
+# a dummy value: Ollama's OpenAI-compatible endpoint doesn't check it, but
+# Claude Code requires the env var to be non-empty.
+
+typeset -g _claude_ollama_models_file="${XDG_CONFIG_HOME:-$HOME/.config}/claude-ollama-models"
+
+# Hardcoded fallback model tag for a Claude Code tier, used only when
+# _claude_ollama_resolve_model has no persisted choice AND gets no
+# interactive answer. Override per-tier via env, e.g.
+# CLAUDE_OLLAMA_HAIKU_MODEL=llama3.2:3b claude-ollama-models haiku.
+#
+# Defaults below are hardware-matched to this machine (Apple M4 Pro, 48GB
+# unified memory, 14 cores), verified-real ollama.com tags as of Aug 2026:
+#   haiku  -> gemma4:12b (~8GB Q4)  fast/cheap
+#   sonnet -> gemma4:26b (~16GB Q4) default daily driver
+#   opus   -> gemma4:31b (~20GB Q4) flagship, still leaves headroom in 48GB
+# gemma4 ships same-family/different-size tags (e2b/e4b/12b/26b/31b), tagged
+# tools+thinking, explicitly designed for "frontier-level performance at
+# each size" — the closest available mirror of the opus/sonnet/haiku size
+# ladder.
+_claude_ollama_default_model() {
+    case "$1" in
+        opus)   print -r -- "${CLAUDE_OLLAMA_OPUS_MODEL:-gemma4:31b}" ;;
+        sonnet) print -r -- "${CLAUDE_OLLAMA_SONNET_MODEL:-gemma4:26b}" ;;
+        haiku)  print -r -- "${CLAUDE_OLLAMA_HAIKU_MODEL:-gemma4:12b}" ;;
+        *)
+            echo "❌ Unknown tier: $1 (expected opus, sonnet, or haiku)" >&2
+            return 1
+            ;;
+    esac
+}
+
+# Ensure a local Ollama server is reachable, auto-starting one if not.
+# Shared by claude-ollama() and _claude_ollama_resolve_model() (so
+# claude-ollama-models also works standalone, without claude-ollama having
+# run first). Mirrors claude-copilot's detached-subshell + up-to-60s
+# poll-loop pattern exactly, including the log-file-under-TMPDIR idiom.
+_claude_ollama_ensure_server() {
+    local base="http://localhost:11434"
+    local log="${TMPDIR:-/tmp}/ollama-serve.log"
+
+    curl -sf --max-time 2 "${base}/api/tags" -o /dev/null && return 0
+
+    if ! command -v ollama &>/dev/null; then
+        echo "❌ ollama not found. Install it with: brew install ollama" >&2
+        return 1
+    fi
+
+    echo "Starting ollama serve on ${base} (log: ${log})..."
+    (ollama serve >> "${log}" 2>&1 &)
+    local i
+    for i in {1..60}; do
+        curl -sf --max-time 2 "${base}/api/tags" -o /dev/null && return 0
+        sleep 1
+    done
+    echo "❌ ollama serve not ready on ${base} after 60s." >&2
+    echo "   Check the log: tail -f ${log}" >&2
+    echo "   Or run interactively once: ollama serve" >&2
+    return 1
+}
+
+# Resolve (and persist) the Ollama model tag for one Claude Code tier.
+#   $1 = tier: opus | sonnet | haiku
+#   $2 = "force" to bypass the persisted choice and re-prompt/re-autopick
+# Resolution order:
+#   1. Already persisted in $_claude_ollama_models_file (skipped if $2==force)
+#   2. Interactive pick from locally-pulled models: fzf, else `select` builtin
+#   3. Autopick _claude_ollama_default_model's tag for that tier, `ollama
+#      pull`-ing it if not already present locally — reached whenever there's
+#      no interactive answer (non-interactive shell, fzf/select unavailable,
+#      empty selection, or Ctrl+C), so this never hangs on a prompt nothing
+#      is there to answer.
+# Prints the resolved tag on stdout; persists it as TIER=model in
+# $_claude_ollama_models_file. Returns 1 (nothing printed) on hard failure.
+_claude_ollama_resolve_model() {
+    local tier="$1" force="$2"
+    local base="http://localhost:11434"
+
+    local default
+    default=$(_claude_ollama_default_model "$tier") || return 1
+
+    if [[ -z "$force" && -r "$_claude_ollama_models_file" ]]; then
+        local existing
+        existing=$(awk -F= -v t="${(U)tier}" '$1 == t {print $2; exit}' "$_claude_ollama_models_file" 2>/dev/null)
+        if [[ -n "$existing" ]]; then
+            print -r -- "$existing"
+            return 0
+        fi
+    fi
+
+    _claude_ollama_ensure_server || return 1
+
+    local -a local_models
+    local tags_json
+    tags_json=$(curl -sf --max-time 5 "${base}/api/tags" 2>/dev/null)
+    if [[ -n "$tags_json" ]] && command -v jq &>/dev/null; then
+        local_models=("${(@f)$(jq -r '.models[].name' <<< "$tags_json" 2>/dev/null)}")
+    fi
+
+    local chosen=""
+    # -t 0: stdin is a tty. fzf reopens /dev/tty internally for keypresses
+    # regardless of this process's own stdin, so it won't fail fast on a
+    # redirected/non-interactive stdin the way most commands do — it just
+    # hangs waiting on a keypress that will never come. Gating on -t 0 here
+    # is what makes the "no interactive answer" -> autopick fallback (see
+    # function comment above) actually reachable from a non-interactive
+    # shell/script instead of hanging.
+    if [[ -t 0 && ${#local_models[@]} -gt 0 ]]; then
+        if command -v fzf &>/dev/null; then
+            chosen=$(print -l -- "${local_models[@]}" \
+                | fzf --height 40% --reverse \
+                      --header "Select an Ollama model for the '${tier}' tier (Ctrl+C to autopick ${default})")
+        else
+            echo "Select an Ollama model for the '${tier}' tier (Ctrl+C to autopick ${default}):" >&2
+            select chosen in "${local_models[@]}"; do
+                [[ -n "$chosen" ]] && break
+            done
+        fi
+    fi
+
+    if [[ -z "$chosen" ]]; then
+        chosen="$default"
+        echo "No selection for '${tier}' tier — autopicking ${chosen}." >&2
+        # (Ie) = exact-match index lookup (0 if absent) — avoids treating
+        # $chosen as a glob pattern (a tag could contain glob-special chars)
+        # and, unlike the array-slice-based ${(M)arr:#pat} filter, actually
+        # works without also requiring the array (@) flag.
+        if (( ${local_models[(Ie)$chosen]} == 0 )); then
+            echo "Pulling ${chosen} (first run only; needs internet access, can take several minutes for larger tags)..." >&2
+            if ! ollama pull "$chosen"; then
+                echo "❌ 'ollama pull ${chosen}' failed. Check your connection and retry, or pick an already-pulled tag via: claude-ollama-models ${tier}" >&2
+                return 1
+            fi
+        fi
+    fi
+
+    # Sequential per-tier resolution (opus, then sonnet, then haiku — see
+    # claude-ollama below) means each rewrite of the persistence file sees
+    # the previous tier's write already on disk; no concurrent writers, so
+    # no lock/race handling is needed here.
+    mkdir -p "${_claude_ollama_models_file:h}"
+    local -a kept=()
+    [[ -r "$_claude_ollama_models_file" ]] && kept=("${(f)$(grep -v "^${(U)tier}=" "$_claude_ollama_models_file")}")
+    { [[ ${#kept[@]} -gt 0 ]] && print -l -- "${kept[@]}"; print -r -- "${(U)tier}=${chosen}"; } >| "$_claude_ollama_models_file"
+    print -r -- "$chosen"
+}
+
+claude-ollama() {
+    _claude_ollama_ensure_server || return 1
+
+    local opus sonnet haiku
+    opus=$(_claude_ollama_resolve_model opus) || return 1
+    sonnet=$(_claude_ollama_resolve_model sonnet) || return 1
+    haiku=$(_claude_ollama_resolve_model haiku) || return 1
+
+    echo "claude-ollama → opus: ${opus}, sonnet: ${sonnet}, haiku: ${haiku}"
+
+    # Scrub any stale gateway/Vertex config before routing to Ollama — reuses
+    # claude-vertex's helper/array rather than adding a new one:
+    # _claude_copilot_env_names already names every var Ollama also sets
+    # (ANTHROPIC_BASE_URL/AUTH_TOKEN/MODEL/DEFAULT_*_MODEL,
+    # CLAUDE_CODE_USE_VERTEX/BEDROCK), so this alone is enough to make
+    # switching in from any other mode leak-free.
+    _claude_copilot_unset_env
+
+    # Unlike claude-copilot (which leaves Opus/Haiku unset so the CLI's own
+    # built-in default applies), all three tiers are pinned unconditionally
+    # below: the CLI's built-in defaults are Anthropic-hosted model names
+    # that don't exist on a local Ollama server, so every tier needs an
+    # explicit, locally-pulled tag or Claude Code has nothing valid to
+    # request.
+    local -a envs
+    envs=(
+        ANTHROPIC_BASE_URL="http://localhost:11434"
+        ANTHROPIC_AUTH_TOKEN="ollama"
+        ANTHROPIC_MODEL="${sonnet}"
+        ANTHROPIC_DEFAULT_OPUS_MODEL="${opus}"
+        ANTHROPIC_DEFAULT_SONNET_MODEL="${sonnet}"
+        ANTHROPIC_DEFAULT_HAIKU_MODEL="${haiku}"
+        CLAUDE_CODE_USE_VERTEX=0
+        CLAUDE_CODE_USE_BEDROCK=0
+    )
+
+    # `export` (not a subshell) so descendant Claude Code sessions — e.g. an
+    # agent sub-shell re-entering `claude` — inherit the Ollama routing, same
+    # rationale as claude-copilot above: this is also a local-server backend.
+    # `command` bypasses the claude() dispatcher without exec'ing a new
+    # process, avoiding claude() -> claude-ollama -> claude() recursion.
+    export "${envs[@]}"
+    command claude "$@"
+}
+
+# ollama-serve-kill: stop the detached `ollama serve` process started by
+# claude-ollama. Mirrors copilot-api-kill above — no saved PID (launched via
+# `(... &)` in a subshell), so this finds whatever's listening on 11434 and
+# kills it, escalating to SIGKILL if it won't die.
+ollama-serve-kill() {
+    local port=11434
+    local -a pids
+    pids=("${(f)$(lsof -ti "tcp:${port}" 2>/dev/null)}")
+    if [[ -z "${pids[1]}" ]]; then
+        echo "No process listening on port ${port}."
+        return 1
+    fi
+    echo "Killing ollama serve on port ${port} (pid: ${pids[*]})..."
+    kill "${pids[@]}" 2>/dev/null
+    sleep 1
+    pids=("${(f)$(lsof -ti "tcp:${port}" 2>/dev/null)}")
+    if [[ -n "${pids[1]}" ]]; then
+        echo "Still alive, sending SIGKILL..."
+        kill -9 "${pids[@]}" 2>/dev/null
+    fi
+}
+
+# claude-ollama-models: force re-selection of one (or all) model tiers used
+# by claude-ollama, bypassing the persisted choice in
+# $_claude_ollama_models_file. Structurally mirrors claude-mode's
+# arg-count-validated case-statement shape (below), though semantically the
+# no-arg case here re-resolves all three tiers rather than merely printing
+# the current ones — claude-mode's no-arg prints without changing anything.
+claude-ollama-models() {
+    if (( $# > 1 )); then
+        echo "Usage: claude-ollama-models [opus|sonnet|haiku]" >&2
+        return 1
+    fi
+    local -a tiers
+    case "$1" in
+        opus|sonnet|haiku) tiers=("$1") ;;
+        "")                tiers=(opus sonnet haiku) ;;
+        *)
+            echo "Usage: claude-ollama-models [opus|sonnet|haiku]" >&2
+            return 1
+            ;;
+    esac
+    local tier chosen
+    for tier in "${tiers[@]}"; do
+        chosen=$(_claude_ollama_resolve_model "$tier" force) || return 1
+        echo "${tier}: ${chosen}"
+    done
+}
+
+# ---------------------------------------------------------------------------
 # claude mode switching: `claude` dispatches to the raw claude binary through
-# either Google Vertex AI (vertex, default) or the copilot-api gateway
-# (copilot). Persisted in ~/.config/claude-mode so the choice survives
-# across shells.
+# Google Vertex AI (vertex, default), the copilot-api gateway (copilot), or a
+# local Ollama server (ollama). Persisted in ~/.config/claude-mode so the
+# choice survives across shells.
 
 typeset -g _claude_mode_file="${XDG_CONFIG_HOME:-$HOME/.config}/claude-mode"
 
@@ -269,17 +523,18 @@ _claude_mode_get() {
     [[ -r "$_claude_mode_file" ]] && IFS= read -r mode < "$_claude_mode_file"
     case "$mode" in
         copilot) print -r -- copilot ;;
+        ollama)  print -r -- ollama ;;
         *)       print -r -- vertex ;;   # missing/unknown fails safe to vertex
     esac
 }
 
 claude-mode() {
     if (( $# > 1 )); then
-        echo "Usage: claude-mode [copilot|vertex]" >&2
+        echo "Usage: claude-mode [copilot|vertex|ollama]" >&2
         return 1
     fi
     case "$1" in
-        copilot|vertex)
+        copilot|vertex|ollama)
             # >| overrides NO_CLOBBER; fail loudly if persistence fails
             if ! mkdir -p "${_claude_mode_file:h}" ||
                ! print -r -- "$1" >| "$_claude_mode_file"; then
@@ -290,10 +545,10 @@ claude-mode() {
             ;;
         "")
             echo "claude mode: $(_claude_mode_get)"
-            echo "usage: claude-mode [copilot|vertex]"
+            echo "usage: claude-mode [copilot|vertex|ollama]"
             ;;
         *)
-            echo "Usage: claude-mode [copilot|vertex]" >&2
+            echo "Usage: claude-mode [copilot|vertex|ollama]" >&2
             return 1
             ;;
     esac
@@ -306,10 +561,10 @@ unalias claude 2>/dev/null || true   # tolerate missing alias under ERR_EXIT
 function claude {
     local mode="$(_claude_mode_get)"
     # stderr so piped/scripted output (e.g. claude -p) stays clean
-    echo "claude mode: ${mode} (switch: claude-mode copilot|vertex)" >&2
-    if [[ "$mode" == copilot ]]; then
-        claude-copilot "$@"
-    else
-        claude-vertex "$@"
-    fi
+    echo "claude mode: ${mode} (switch: claude-mode copilot|vertex|ollama)" >&2
+    case "$mode" in
+        copilot) claude-copilot "$@" ;;
+        ollama)  claude-ollama "$@" ;;
+        *)       claude-vertex "$@" ;;
+    esac
 }

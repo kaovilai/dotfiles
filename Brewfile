@@ -74,6 +74,7 @@ brew "cfssl"                 # CloudFlare SSL toolkit
 # AI tools
 brew "gptme"                 # GPT terminal assistant
 brew "nvidia/openshell/openshell" # NVIDIA OpenShell
+brew "ollama"                # Local LLM runtime (claude-ollama offline mode)
 
 # Misc tools
 brew "cliclick"              # macOS mouse/keyboard automation

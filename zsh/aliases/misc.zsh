@@ -142,6 +142,8 @@ alias ce='cd ~/experiments/ && claude'
 alias cec='cd ~/experiments/ && claude-copilot'
 # ce-vertex = vertex edition of ce (raw claude routed through Google Vertex AI; see claude-copilot.zsh)
 alias ce-vertex='cd ~/experiments/ && claude-vertex'
+# ce-ollama = ollama edition of ce (raw claude routed through a local Ollama server; see claude-copilot.zsh)
+alias ce-ollama='cd ~/experiments/ && claude-ollama'
 # Builds -e flags to pass the host's active Anthropic/copilot-api gateway
 # config into a container. ANTHROPIC_BASE_URL's host is rewritten from
 # localhost/127.0.0.1 to host.containers.internal since the container's
