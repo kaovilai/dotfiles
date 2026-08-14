@@ -67,6 +67,7 @@ _claude_copilot_latest_model() {
 typeset -ga _claude_copilot_env_names=(
     ANTHROPIC_BASE_URL
     ANTHROPIC_AUTH_TOKEN
+    ANTHROPIC_API_KEY
     ANTHROPIC_MODEL
     ANTHROPIC_DEFAULT_OPUS_MODEL
     ANTHROPIC_DEFAULT_SONNET_MODEL
@@ -616,6 +617,13 @@ claude-ollama() {
     envs=(
         ANTHROPIC_BASE_URL="http://localhost:11434"
         ANTHROPIC_AUTH_TOKEN="ollama"
+        # Explicitly blanked, not just left to _claude_copilot_unset_env's
+        # prior unset: a real key exported elsewhere in the shell (e.g. for
+        # direct Anthropic API use) could otherwise take precedence over
+        # ANTHROPIC_AUTH_TOKEN and route away from the local Ollama server
+        # entirely -- silently defeating offline mode. Matches Ollama's own
+        # documented manual-setup instructions.
+        ANTHROPIC_API_KEY=""
         ANTHROPIC_MODEL="${sonnet}"
         ANTHROPIC_DEFAULT_OPUS_MODEL="${opus}"
         ANTHROPIC_DEFAULT_SONNET_MODEL="${sonnet}"
