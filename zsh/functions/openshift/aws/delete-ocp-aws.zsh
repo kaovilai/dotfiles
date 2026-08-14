@@ -41,6 +41,13 @@ delete-ocp-aws() {
     fi
 
     # Auto-detect architecture if not provided
+    if [[ -z "$ARCH_SUFFIX" && -n $1 && $1 =~ ^tkaovila-([0-9]{6,8})-(arm64|amd64)(-[0-9]+)?$ ]]; then
+        # Resolve ARCH_SUFFIX from an explicit CLUSTER_NAME before the
+        # today-based scan below runs -- otherwise deleting an older
+        # cluster by name hits "no clusters found for today" and returns
+        # before the explicit-name parsing further down is ever reached.
+        ARCH_SUFFIX=${match[2]}
+    fi
     if [[ -z "$ARCH_SUFFIX" ]]; then
         echo "Auto-detecting AWS cluster architecture..."
         local found_clusters=()
