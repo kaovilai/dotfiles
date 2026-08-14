@@ -32,8 +32,10 @@ alias copilot-api="NODE_USE_SYSTEM_CA=1 bun run --cwd \$HOME/git/copilot-api ./s
 # Also defines claude-vertex (raw claude binary routed through Google Vertex
 # AI, using CLOUD_ML_REGION/ANTHROPIC_VERTEX_PROJECT_ID already exported in
 # the shell — same vars used by computer-use-claude/cecon elsewhere in this
-# repo), plus the mode-dispatching `claude` function and the `claude-mode`
-# switcher (copilot ↔ vertex, vertex is default) — see bottom of file.
+# repo), claude-vertex-dashboard (opens that project's GCP console dashboard
+# via the comet skill), plus the mode-dispatching `claude` function and the
+# `claude-mode` switcher (copilot ↔ vertex, vertex is default) — see bottom
+# of file.
 
 # Highest-versioned Claude model for a family from /v1/models JSON.
 # Mirrors PR #2's getLatestModelForFamily: numeric major-then-minor compare,
@@ -234,6 +236,24 @@ claude-vertex() {
         [[ -n "$ANTHROPIC_VERTEX_BASE_URL" ]] && export ANTHROPIC_VERTEX_BASE_URL
         command claude "$@"
     )
+}
+
+# ---------------------------------------------------------------------------
+# claude-vertex-dashboard: open the Google Cloud console dashboard for the
+# Vertex AI project Claude Code routes through (ANTHROPIC_VERTEX_PROJECT_ID —
+# same var claude-vertex requires above), via the comet skill's opener script
+# so it's a single call instead of manually building/opening the URL.
+claude-vertex-dashboard() {
+    if [[ -z "$ANTHROPIC_VERTEX_PROJECT_ID" ]]; then
+        echo "❌ ANTHROPIC_VERTEX_PROJECT_ID must be exported to open its dashboard." >&2
+        return 1
+    fi
+    local script="$HOME/.claude/skills/comet/scripts/comet.sh"
+    if [[ ! -x "$script" ]]; then
+        echo "❌ comet skill script not found or not executable at ${script}." >&2
+        return 1
+    fi
+    "$script" "https://console.cloud.google.com/home/dashboard?project=${ANTHROPIC_VERTEX_PROJECT_ID}"
 }
 
 # ---------------------------------------------------------------------------
