@@ -171,7 +171,7 @@ get-ocp-release-image-nightly-multi() {
 export OCP_MANIFESTS_DIR=~/OCP/manifests
 
 # Current date in YYMMDD format (6 digits to keep cluster names under 21 chars)
-export TODAY=${TODAY:-$(date +%y%m%d)}
+export TODAY=${TODAY:-${(%):-%D{%y%m%d}}}
 
 # Set client OS and architecture (used for downloading clients)
 if command -v sw_vers &>/dev/null; then
