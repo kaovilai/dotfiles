@@ -645,11 +645,13 @@ claude-ollama() {
         ANTHROPIC_DEFAULT_SONNET_MODEL="${sonnet}"
         ANTHROPIC_DEFAULT_HAIKU_MODEL="${haiku}"
     )
-    # Same opt-out as claude-copilot above (CLAUDE_COPILOT_ENABLE_MONITOR=1
-    # to keep Monitor working): suppressing these matters even more here,
-    # since "fully offline" shouldn't still be phoning api.anthropic.com for
-    # telemetry/update checks in the background regardless of the routing
-    # backend.
+    # Same default as claude-copilot above, same opt-out
+    # (CLAUDE_COPILOT_ENABLE_MONITOR=1): these two vars gate whether Claude
+    # Code makes the background nonessential calls the Monitor tool depends
+    # on, not general Anthropic telemetry — set to 1, they disable Monitor
+    # (breaking anything relying on it, e.g. inter-session's push-based
+    # messaging), which is why the escape hatch exists. Left on by default
+    # here too, matching claude-copilot's own tradeoff.
     if [[ -z "$CLAUDE_COPILOT_ENABLE_MONITOR" || "$CLAUDE_COPILOT_ENABLE_MONITOR" == 0 ]]; then
         envs+=(
             DISABLE_NON_ESSENTIAL_MODEL_CALLS=1
