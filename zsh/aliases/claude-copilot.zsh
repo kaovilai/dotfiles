@@ -421,8 +421,18 @@ _claude_ollama_ensure_server() {
         return 1
     fi
 
-    echo "Starting ollama serve on ${base} (log: ${log})..."
-    (ollama serve >> "${log}" 2>&1 &)
+    echo "Starting ollama serve on ${base} (log: ${log})..." >&2
+    # This function's stdout is captured via $(...) by every caller (either
+    # directly, or transitively — _claude_ollama_resolve_model, which calls
+    # this, is itself captured in claude-ollama()), so anything not sent to
+    # stderr here corrupts the resolved model tag those callers parse.
+    #
+    # OLLAMA_CONTEXT_LENGTH only takes effect for a server WE start here —
+    # Ollama docs recommend 64k+ for larger repos; default below is
+    # overridable, but if a server is already running (started outside our
+    # control) we have no way to change its context length short of
+    # restarting it, which isn't attempted.
+    (OLLAMA_CONTEXT_LENGTH="${CLAUDE_OLLAMA_CONTEXT_LENGTH:-65536}" ollama serve >> "${log}" 2>&1 &)
     # Wall-clock deadline, not an iteration count: each curl can itself take
     # up to --max-time (2s), so 60 iterations of curl+sleep could overrun the
     # "after 60s" message below by up to 2x in the worst case. `local
@@ -469,6 +479,13 @@ _claude_ollama_resolve_model() {
     tags_json=$(curl -sf --max-time 5 "${base}/api/tags" 2>/dev/null)
     if [[ -n "$tags_json" ]] && command -v jq &>/dev/null; then
         local_models=("${(@f)$(jq -r '.models[].name' <<< "$tags_json" 2>/dev/null)}")
+        # zsh quirk: splitting genuinely-empty command substitution output
+        # (e.g. .models is []) via ${(@f)...} yields a 1-element array
+        # holding one empty string, not a 0-length array — this filters
+        # that back out so an empty local store doesn't falsely look like
+        # one pullable "alternative" to _claude_ollama_check_resources or
+        # the interactive picker below.
+        local_models=("${(@)local_models:#}")
     fi
 
     if [[ -z "$force" && -r "$_claude_ollama_models_file" ]]; then
@@ -559,6 +576,11 @@ _claude_ollama_resolve_model() {
     mkdir -p "${_claude_ollama_models_file:h}"
     local -a kept=()
     [[ -r "$_claude_ollama_models_file" ]] && kept=("${(f)$(grep -v "^${(U)tier}=" "$_claude_ollama_models_file")}")
+    # Same empty-array quirk as local_models above: if grep -v matched
+    # nothing (e.g. this is the first tier ever persisted), kept would
+    # otherwise be a 1-element array holding an empty string, writing a
+    # spurious blank line ahead of the real TIER=model line.
+    kept=("${(@)kept:#}")
     { [[ ${#kept[@]} -gt 0 ]] && print -l -- "${kept[@]}"; print -r -- "${(U)tier}=${chosen}"; } >| "$_claude_ollama_models_file"
     print -r -- "$chosen"
 }
@@ -586,7 +608,10 @@ claude-ollama() {
     # below: the CLI's built-in defaults are Anthropic-hosted model names
     # that don't exist on a local Ollama server, so every tier needs an
     # explicit, locally-pulled tag or Claude Code has nothing valid to
-    # request.
+    # request. CLAUDE_CODE_USE_VERTEX/BEDROCK aren't re-set here (unlike
+    # claude-copilot's envs block) — _claude_copilot_unset_env just above
+    # already unset them, and claude-copilot only sets them explicitly
+    # because it does NOT call that unset helper first.
     local -a envs
     envs=(
         ANTHROPIC_BASE_URL="http://localhost:11434"
@@ -595,8 +620,6 @@ claude-ollama() {
         ANTHROPIC_DEFAULT_OPUS_MODEL="${opus}"
         ANTHROPIC_DEFAULT_SONNET_MODEL="${sonnet}"
         ANTHROPIC_DEFAULT_HAIKU_MODEL="${haiku}"
-        CLAUDE_CODE_USE_VERTEX=0
-        CLAUDE_CODE_USE_BEDROCK=0
     )
 
     # `export` (not a subshell) so descendant Claude Code sessions — e.g. an
