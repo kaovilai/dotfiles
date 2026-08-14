@@ -123,6 +123,13 @@ delete-ocp-aws() {
         # otherwise destroying an older cluster by name silently no-ops against an
         # empty/nonexistent today-dated directory.
         if [[ $1 =~ ^tkaovila-([0-9]{6,8})-(arm64|amd64)(-[0-9]+)?$ ]]; then
+            if [[ -n "$ARCH_SUFFIX" && "$ARCH_SUFFIX" != "${match[2]}" ]]; then
+                # e.g. delete-ocp-aws-amd64 called against an arm64-named
+                # older cluster -- the name is the more specific/explicit
+                # signal, so it wins, but this is very likely a mistake.
+                echo "WARNING: cluster name '$1' encodes arch ${match[2]}, but ${ARCH_SUFFIX} was requested -- using ${match[2]}"
+                ARCH_SUFFIX=${match[2]}
+            fi
             OCP_CREATE_DIR=$OCP_MANIFESTS_DIR/${match[1]}-aws-${match[2]}${match[3]}
         fi
     fi
