@@ -638,7 +638,10 @@ claude-ollama() {
 ollama-serve-kill() {
     local port=11434
     local -a pids
-    pids=("${(f)$(lsof -ti "tcp:${port}" 2>/dev/null)}")
+    # -sTCP:LISTEN: without it, lsof also matches processes with an
+    # established/in-flight connection TO this port (e.g. our own curl
+    # health-checks mid-request) -- narrow to the actual listening server.
+    pids=("${(f)$(lsof -ti "tcp:${port}" -sTCP:LISTEN 2>/dev/null)}")
     if [[ -z "${pids[1]}" ]]; then
         echo "No process listening on port ${port}."
         return 1
@@ -646,7 +649,7 @@ ollama-serve-kill() {
     echo "Killing ollama serve on port ${port} (pid: ${pids[*]})..."
     kill "${pids[@]}" 2>/dev/null
     sleep 1
-    pids=("${(f)$(lsof -ti "tcp:${port}" 2>/dev/null)}")
+    pids=("${(f)$(lsof -ti "tcp:${port}" -sTCP:LISTEN 2>/dev/null)}")
     if [[ -n "${pids[1]}" ]]; then
         echo "Still alive, sending SIGKILL..."
         kill -9 "${pids[@]}" 2>/dev/null
