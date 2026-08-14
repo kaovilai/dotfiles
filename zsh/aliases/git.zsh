@@ -56,8 +56,7 @@ dco() {
         return 1
     fi
     local unsigned
-    unsigned=$(git log --format='%H' --invert-grep --grep='^Signed-off-by:' "HEAD~${commit_count}..HEAD" | wc -l)
-    unsigned=$((unsigned))
+    unsigned=$(git rev-list --count --invert-grep --grep='^Signed-off-by:' "HEAD~${commit_count}..HEAD")
     if [[ $unsigned -eq 0 ]]; then
         echo "✅ All $commit_count commits already signed off"
         return 0
