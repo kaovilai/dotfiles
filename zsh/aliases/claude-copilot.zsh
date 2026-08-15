@@ -278,33 +278,47 @@ claude-vertex-dashboard() {
 typeset -g _claude_ollama_models_file="${XDG_CONFIG_HOME:-$HOME/.config}/claude-ollama-models"
 
 # Real-world memory budget for a model to fit ALONGSIDE what's already
-# running on this specific machine right now -- not just total system RAM.
-# Subtracts a running podman machine's reserved memory (podman reserves it
-# up front, even idle -- e.g. ~8.4GB for podman-machine-default on this
-# laptop) and a fixed OS/browser/IDE overhead margin (override via
-# CLAUDE_OLLAMA_OS_OVERHEAD_GB, default 8). This is what makes the
-# candidate selection below actually dynamic: re-run on a different or
-# upgraded machine, or with podman stopped, and the same script computes a
-# different, still-appropriate number with no code change.
+# running on this machine RIGHT NOW -- not total system RAM, and not a
+# static "subtract known reservations" estimate either. A running podman
+# machine reserves memory up front (e.g. ~8.4GB configured for
+# podman-machine-default), but that's a ceiling, not a floor: macOS can
+# reclaim/compress/page out whatever of it (or anything else) isn't
+# actually in active use, so treating the full reservation as permanently
+# unavailable is both wrong in general and, in practice on this laptop,
+# not even the binding constraint -- other things (browser, IDE, this
+# very shell) routinely eat more live headroom than podman's idle VM
+# does. So: measure live availability directly instead of modeling every
+# possible consumer.
+#   macOS: vm_stat's free + inactive + speculative + purgeable pages --
+#     the standard "reclaimable without hitting swap" definition (active
+#     and wired pages are currently in real use and excluded).
+#   Linux: /proc/meminfo's MemAvailable, the kernel's own equivalent
+#     estimate -- no need to hand-roll the macOS heuristic there.
+# A safety margin on top (override via CLAUDE_OLLAMA_OS_OVERHEAD_GB,
+# default 4) accounts for usage growing somewhat during the tens of
+# seconds a big model takes to load, not for a guessed static reservation.
+# This is what makes the candidate selection below actually dynamic: rerun
+# this same script a minute later, on a different or upgraded machine, or
+# with podman stopped, and it computes a different, still currently
+# accurate number with no code change.
 _claude_ollama_available_budget_bytes() {
-    local total_mem
+    local avail
     if [[ "$(uname)" == "Darwin" ]]; then
-        total_mem=$(sysctl -n hw.memsize 2>/dev/null)
+        avail=$(vm_stat 2>/dev/null | awk '
+            /page size of/ { match($0, /[0-9]+/); page_size = substr($0, RSTART, RLENGTH) }
+            /^Pages free/       { gsub(/\./, "", $3); free = $3 }
+            /^Pages inactive/   { gsub(/\./, "", $3); inactive = $3 }
+            /^Pages speculative/{ gsub(/\./, "", $3); spec = $3 }
+            /^Pages purgeable/  { gsub(/\./, "", $3); purg = $3 }
+            END { if (page_size > 0) print (free + inactive + spec + purg) * page_size }
+        ')
     elif [[ -r /proc/meminfo ]]; then
-        total_mem=$(awk '/^MemTotal:/ { print $2 * 1024; exit }' /proc/meminfo 2>/dev/null)
+        avail=$(awk '/^MemAvailable:/ { print $2 * 1024; exit }' /proc/meminfo 2>/dev/null)
     fi
-    [[ -z "$total_mem" ]] && return 1
+    [[ -z "$avail" ]] && return 1
 
-    local podman_reserved=0
-    if command -v podman &>/dev/null && command -v jq &>/dev/null; then
-        local pr
-        pr=$(podman machine list --format json 2>/dev/null \
-            | jq -r '[.[] | select(.Running==true) | (.Memory|tonumber)] | add // 0' 2>/dev/null)
-        [[ -n "$pr" && "$pr" != "null" ]] && podman_reserved="$pr"
-    fi
-
-    local overhead=$(( ${CLAUDE_OLLAMA_OS_OVERHEAD_GB:-8} * 1073741824 ))
-    local budget=$(( total_mem - podman_reserved - overhead ))
+    local overhead=$(( ${CLAUDE_OLLAMA_OS_OVERHEAD_GB:-4} * 1073741824 ))
+    local budget=$(( avail - overhead ))
     (( budget < 0 )) && budget=0
     print -r -- "$budget"
 }
@@ -473,18 +487,17 @@ _claude_ollama_check_resources() {
     local size_bytes
     size_bytes=$(_claude_ollama_model_size_bytes "$tag" "$tags_json") || return 0  # can't estimate -> don't block
 
-    # 1.5x on-disk size for context/runtime overhead vs. the real available
-    # budget (already nets out a running podman VM + OS overhead — see
-    # _claude_ollama_available_budget_bytes) — a rough rule of thumb, not
-    # exact, but shared with the autopick logic above rather than a second
-    # separate formula.
+    # 1.5x on-disk size for context/runtime overhead vs. the real,
+    # live-measured available budget (see _claude_ollama_available_budget_bytes)
+    # — a rough rule of thumb, not exact, but shared with the autopick
+    # logic above rather than a second separate formula.
     local needed=$(( size_bytes * 3 / 2 ))
     (( needed <= budget )) && return 0
 
     local needed_gb budget_gb
     needed_gb=$(( needed / 1073741824 ))
     budget_gb=$(( budget / 1073741824 ))
-    echo "⚠️  '${tag}' (${tier} tier) needs an estimated ${needed_gb}GB; only ~${budget_gb}GB available right now (after podman/OS overhead)." >&2
+    echo "⚠️  '${tag}' (${tier} tier) needs an estimated ${needed_gb}GB; only ~${budget_gb}GB available right now." >&2
 
     if [[ -t 0 ]]; then
         local -a opts=("Proceed anyway" "Abort")
