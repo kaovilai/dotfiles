@@ -26,7 +26,7 @@ check-qemu-stuck() {
         return 1
     }
     local qemu_procs
-    qemu_procs=$(grep 'qemu-.*-static' <<< "$all_procs" | grep -v grep) || true
+    qemu_procs=$(grep 'qemu-.*-static' <<< "$all_procs") || true
 
     if [[ -z "$qemu_procs" ]]; then
         echo "✅ No QEMU emulation processes found"
@@ -92,7 +92,7 @@ kill-stuck-qemu() {
         return 1
     }
     local stuck_procs
-    stuck_procs=$(grep 'futex_wait_queue' <<< "$ssh_out" | grep 'qemu-.*-static' | grep -v grep) || true
+    stuck_procs=$(grep 'futex_wait_queue' <<< "$ssh_out" | grep 'qemu-.*-static') || true
 
     if [[ -z "$stuck_procs" ]]; then
         echo "✅ No stuck QEMU processes found"
