@@ -277,14 +277,82 @@ claude-vertex-dashboard() {
 
 typeset -g _claude_ollama_models_file="${XDG_CONFIG_HOME:-$HOME/.config}/claude-ollama-models"
 
+# Real-world memory budget for a model to fit ALONGSIDE what's already
+# running on this specific machine right now -- not just total system RAM.
+# Subtracts a running podman machine's reserved memory (podman reserves it
+# up front, even idle -- e.g. ~8.4GB for podman-machine-default on this
+# laptop) and a fixed OS/browser/IDE overhead margin (override via
+# CLAUDE_OLLAMA_OS_OVERHEAD_GB, default 8). This is what makes the
+# candidate selection below actually dynamic: re-run on a different or
+# upgraded machine, or with podman stopped, and the same script computes a
+# different, still-appropriate number with no code change.
+_claude_ollama_available_budget_bytes() {
+    local total_mem
+    if [[ "$(uname)" == "Darwin" ]]; then
+        total_mem=$(sysctl -n hw.memsize 2>/dev/null)
+    elif [[ -r /proc/meminfo ]]; then
+        total_mem=$(awk '/^MemTotal:/ { print $2 * 1024; exit }' /proc/meminfo 2>/dev/null)
+    fi
+    [[ -z "$total_mem" ]] && return 1
+
+    local podman_reserved=0
+    if command -v podman &>/dev/null && command -v jq &>/dev/null; then
+        local pr
+        pr=$(podman machine list --format json 2>/dev/null \
+            | jq -r '[.[] | select(.Running==true) | (.Memory|tonumber)] | add // 0' 2>/dev/null)
+        [[ -n "$pr" && "$pr" != "null" ]] && podman_reserved="$pr"
+    fi
+
+    local overhead=$(( ${CLAUDE_OLLAMA_OS_OVERHEAD_GB:-8} * 1073741824 ))
+    local budget=$(( total_mem - podman_reserved - overhead ))
+    (( budget < 0 )) && budget=0
+    print -r -- "$budget"
+}
+
+# Curated fallback candidates for _claude_ollama_autopick_default_model,
+# ordered by preference (not pure size) -- the largest/best-fitting one
+# whose 1.5x-on-disk-size estimate still fits the real available budget
+# above wins. Sizes are real (ollama.com/library), not the parse-heuristic
+# _claude_ollama_model_size_bytes uses for arbitrary tags:
+#   muse-glimmer:30b (18GB) -- Meta, Aug 2026, built for agentic/tool-use
+#     workflows specifically. Verified (benchlm.ai) ahead of gemma4:31b on
+#     both Agentic (51.8 vs 25.5) and Coding (52.0 vs 47.0) category
+#     scores -- the "high quality" pick.
+#   gemma4:12b (7.6GB) -- much smaller/faster "fast" pick, and the safety
+#     net for a machine without room for the 18GB option (a smaller/older
+#     laptop, or this one with more competing for memory than just podman).
+typeset -ga _claude_ollama_candidates=(muse-glimmer:30b gemma4:12b)
+typeset -gA _claude_ollama_candidate_sizes=(
+    muse-glimmer:30b 19327352832
+    gemma4:12b        8160437862
+)
+
+_claude_ollama_autopick_default_model() {
+    local budget
+    budget=$(_claude_ollama_available_budget_bytes)
+
+    local tag size needed
+    for tag in "${_claude_ollama_candidates[@]}"; do
+        size="${_claude_ollama_candidate_sizes[$tag]}"
+        if [[ -n "$budget" ]]; then
+            needed=$(( size * 3 / 2 ))
+            (( needed > budget )) && continue
+        fi
+        print -r -- "$tag"
+        return 0
+    done
+    # Nothing fit (or budget couldn't be determined) -- fall back to the
+    # smallest candidate rather than returning nothing.
+    print -r -- "${_claude_ollama_candidates[-1]}"
+}
+
 # Hardcoded fallback model tag for a Claude Code tier, used only when
 # _claude_ollama_resolve_model has no persisted choice AND gets no
 # interactive answer. Override per-tier via env, e.g.
 # CLAUDE_OLLAMA_HAIKU_MODEL=llama3.2:3b claude-ollama-models haiku, or
 # override the shared default for all three via CLAUDE_OLLAMA_MODEL.
 #
-# All three tiers default to the SAME model (gemma3:12b, already pulled on
-# this machine, ~8GB, tool-capable) rather than differently-sized
+# All three tiers default to the SAME model rather than differently-sized
 # opus/sonnet/haiku models. That tiering is an Anthropic-API-cloud pattern
 # (three separate always-warm services, free to switch between) that
 # doesn't transfer to local inference: Ollama's default keep-alive is 5
@@ -293,13 +361,14 @@ typeset -g _claude_ollama_models_file="${XDG_CONFIG_HOME:-$HOME/.config}/claude-
 # quick background calls while sonnet/opus handles the interactive
 # session) would then either serialize on repeated evict+reload swaps
 # (the background tier ends up slower than no tiering at all) or require
-# all three resident simultaneously — e.g. gemma4 12b+26b+31b is ~44GB,
-# leaving ~4GB of this machine's 48GB for everything else. One warm model
-# avoids both failure modes; see CLAUDE_OLLAMA_MODEL to change it in one
-# place, or the per-tier vars above to reintroduce differentiated tiers
-# if a given workflow benefits from it.
+# all three resident simultaneously. One warm model avoids both failure
+# modes; see CLAUDE_OLLAMA_MODEL to change it in one place, or the
+# per-tier vars above to reintroduce differentiated tiers if a given
+# workflow benefits from it. Absent an explicit CLAUDE_OLLAMA_MODEL, the
+# shared default comes from _claude_ollama_autopick_default_model above
+# rather than a single machine's hardcoded tag.
 _claude_ollama_default_model() {
-    local shared="${CLAUDE_OLLAMA_MODEL:-gemma3:12b}"
+    local shared="${CLAUDE_OLLAMA_MODEL:-$(_claude_ollama_autopick_default_model)}"
     case "$1" in
         opus)   print -r -- "${CLAUDE_OLLAMA_OPUS_MODEL:-$shared}" ;;
         sonnet) print -r -- "${CLAUDE_OLLAMA_SONNET_MODEL:-$shared}" ;;
@@ -364,34 +433,34 @@ _claude_ollama_check_resources() {
     local tier="$1" tag="$2" tags_json="$3" alternatives="${4:-0}"
     [[ -n "$CLAUDE_OLLAMA_SKIP_RESOURCE_CHECK" ]] && return 0
 
-    local total_mem cores
+    local cores
     if [[ "$(uname)" == "Darwin" ]]; then
-        total_mem=$(sysctl -n hw.memsize 2>/dev/null)
         cores=$(sysctl -n hw.ncpu 2>/dev/null)
-    elif [[ -r /proc/meminfo ]]; then
-        total_mem=$(awk '/^MemTotal:/ { print $2 * 1024; exit }' /proc/meminfo 2>/dev/null)
+    else
         cores=$(getconf _NPROCESSORS_ONLN 2>/dev/null)
     fi
-    [[ -z "$total_mem" ]] && return 0   # can't check -> don't block
-
     if [[ -n "$cores" ]] && (( cores > 0 && cores < 4 )); then
         echo "⚠️  Only ${cores} CPU cores available — local inference will be slow." >&2
     fi
 
+    local budget
+    budget=$(_claude_ollama_available_budget_bytes) || return 0   # can't check -> don't block
+
     local size_bytes
     size_bytes=$(_claude_ollama_model_size_bytes "$tag" "$tags_json") || return 0  # can't estimate -> don't block
 
-    # 1.5x on-disk size for context/runtime overhead vs. a 75%-of-total
-    # safety budget (leaves headroom for the OS, Claude Code itself, and
-    # everything else running) — both rough rules of thumb, not exact.
-    local needed budget needed_gb total_gb
-    needed=$(( size_bytes * 3 / 2 ))
-    budget=$(( total_mem * 3 / 4 ))
+    # 1.5x on-disk size for context/runtime overhead vs. the real available
+    # budget (already nets out a running podman VM + OS overhead — see
+    # _claude_ollama_available_budget_bytes) — a rough rule of thumb, not
+    # exact, but shared with the autopick logic above rather than a second
+    # separate formula.
+    local needed=$(( size_bytes * 3 / 2 ))
     (( needed <= budget )) && return 0
 
+    local needed_gb budget_gb
     needed_gb=$(( needed / 1073741824 ))
-    total_gb=$(( total_mem / 1073741824 ))
-    echo "⚠️  '${tag}' (${tier} tier) needs an estimated ${needed_gb}GB; this machine has ${total_gb}GB total." >&2
+    budget_gb=$(( budget / 1073741824 ))
+    echo "⚠️  '${tag}' (${tier} tier) needs an estimated ${needed_gb}GB; only ~${budget_gb}GB available right now (after podman/OS overhead)." >&2
 
     if [[ -t 0 ]]; then
         local -a opts=("Proceed anyway" "Abort")
@@ -544,6 +613,15 @@ _claude_ollama_resolve_model() {
     fi
 
     local chosen=""
+    # Merge what's already pulled with the curated candidates (see
+    # _claude_ollama_candidates above) so the picker below always offers
+    # at least the two curated recommendations, even on a completely fresh
+    # Ollama install with nothing pulled yet — not just whatever happens
+    # to already be on disk. (u) dedupes, keeping first occurrence (so an
+    # already-pulled curated tag isn't listed twice).
+    local -a pickable
+    pickable=("${(u)local_models[@]}" "${(u)_claude_ollama_candidates[@]}")
+    pickable=("${(u)pickable[@]}")
     # -t 0: stdin is a tty. fzf reopens /dev/tty internally for keypresses
     # regardless of this process's own stdin, so it won't fail fast on a
     # redirected/non-interactive stdin the way most commands do — it just
@@ -551,46 +629,43 @@ _claude_ollama_resolve_model() {
     # is what makes the "no interactive answer" -> autopick fallback (see
     # function comment above) actually reachable from a non-interactive
     # shell/script instead of hanging.
-    if [[ -t 0 && ${#local_models[@]} -gt 0 ]]; then
+    if [[ -t 0 && ${#pickable[@]} -gt 0 ]]; then
         if command -v fzf &>/dev/null; then
-            chosen=$(print -l -- "${local_models[@]}" \
+            chosen=$(print -l -- "${pickable[@]}" \
                 | fzf --height 40% --reverse \
                       --header "Select an Ollama model for the '${tier}' tier (Ctrl+C to autopick ${default})")
         else
             echo "Select an Ollama model for the '${tier}' tier (Ctrl+C to autopick ${default}):" >&2
-            select chosen in "${local_models[@]}"; do
+            select chosen in "${pickable[@]}"; do
                 [[ -n "$chosen" ]] && break
             done
         fi
     fi
 
-    if [[ -n "$chosen" ]]; then
-        _claude_ollama_check_resources "$tier" "$chosen" "$tags_json" "${#local_models[@]}"
-        case $? in
-            0) ;;
-            2) _claude_ollama_resolve_model "$tier" force; return $? ;;
-            *) return 1 ;;
-        esac
-    else
+    if [[ -z "$chosen" ]]; then
         chosen="$default"
         echo "No selection for '${tier}' tier — autopicking ${chosen}." >&2
-        # (Ie) = exact-match index lookup (0 if absent) — avoids treating
-        # $chosen as a glob pattern (a tag could contain glob-special chars)
-        # and, unlike the array-slice-based ${(M)arr:#pat} filter, actually
-        # works without also requiring the array (@) flag.
-        local not_yet_pulled=$(( ${local_models[(Ie)$chosen]} == 0 ))
-        _claude_ollama_check_resources "$tier" "$chosen" "$tags_json" "${#local_models[@]}"
-        case $? in
-            0) ;;
-            2) _claude_ollama_resolve_model "$tier" force; return $? ;;
-            *) return 1 ;;
-        esac
-        if (( not_yet_pulled )); then
-            echo "Pulling ${chosen} (first run only; needs internet access, can take several minutes for larger tags)..." >&2
-            if ! ollama pull "$chosen"; then
-                echo "❌ 'ollama pull ${chosen}' failed. Check your connection and retry, or pick an already-pulled tag via: claude-ollama-models ${tier}" >&2
-                return 1
-            fi
+    fi
+
+    _claude_ollama_check_resources "$tier" "$chosen" "$tags_json" "${#local_models[@]}"
+    case $? in
+        0) ;;
+        2) _claude_ollama_resolve_model "$tier" force; return $? ;;
+        *) return 1 ;;
+    esac
+
+    # (Ie) = exact-match index lookup (0 if absent) — avoids treating
+    # $chosen as a glob pattern (a tag could contain glob-special chars)
+    # and, unlike the array-slice-based ${(M)arr:#pat} filter, actually
+    # works without also requiring the array (@) flag. Applies whether
+    # $chosen came from autopick or an interactive pick of a curated
+    # candidate that isn't pulled yet — either way, it needs pulling
+    # before claude-ollama can actually use it.
+    if (( ${local_models[(Ie)$chosen]} == 0 )); then
+        echo "Pulling ${chosen} (first run only; needs internet access, can take several minutes for larger tags)..." >&2
+        if ! ollama pull "$chosen"; then
+            echo "❌ 'ollama pull ${chosen}' failed. Check your connection and retry, or pick an already-pulled tag via: claude-ollama-models ${tier}" >&2
+            return 1
         fi
     fi
 
