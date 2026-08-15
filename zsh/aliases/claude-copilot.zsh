@@ -280,22 +280,30 @@ typeset -g _claude_ollama_models_file="${XDG_CONFIG_HOME:-$HOME/.config}/claude-
 # Hardcoded fallback model tag for a Claude Code tier, used only when
 # _claude_ollama_resolve_model has no persisted choice AND gets no
 # interactive answer. Override per-tier via env, e.g.
-# CLAUDE_OLLAMA_HAIKU_MODEL=llama3.2:3b claude-ollama-models haiku.
+# CLAUDE_OLLAMA_HAIKU_MODEL=llama3.2:3b claude-ollama-models haiku, or
+# override the shared default for all three via CLAUDE_OLLAMA_MODEL.
 #
-# Defaults below are hardware-matched to this machine (Apple M4 Pro, 48GB
-# unified memory, 14 cores), verified-real ollama.com tags as of Aug 2026:
-#   haiku  -> gemma4:12b (~8GB Q4)  fast/cheap
-#   sonnet -> gemma4:26b (~16GB Q4) default daily driver
-#   opus   -> gemma4:31b (~20GB Q4) flagship, still leaves headroom in 48GB
-# gemma4 ships same-family/different-size tags (e2b/e4b/12b/26b/31b), tagged
-# tools+thinking, explicitly designed for "frontier-level performance at
-# each size" — the closest available mirror of the opus/sonnet/haiku size
-# ladder.
+# All three tiers default to the SAME model (gemma3:12b, already pulled on
+# this machine, ~8GB, tool-capable) rather than differently-sized
+# opus/sonnet/haiku models. That tiering is an Anthropic-API-cloud pattern
+# (three separate always-warm services, free to switch between) that
+# doesn't transfer to local inference: Ollama's default keep-alive is 5
+# minutes, and switching to a *different* model evicts and cold-reloads it
+# from disk. Claude Code's async foreground/background split (haiku for
+# quick background calls while sonnet/opus handles the interactive
+# session) would then either serialize on repeated evict+reload swaps
+# (the background tier ends up slower than no tiering at all) or require
+# all three resident simultaneously — e.g. gemma4 12b+26b+31b is ~44GB,
+# leaving ~4GB of this machine's 48GB for everything else. One warm model
+# avoids both failure modes; see CLAUDE_OLLAMA_MODEL to change it in one
+# place, or the per-tier vars above to reintroduce differentiated tiers
+# if a given workflow benefits from it.
 _claude_ollama_default_model() {
+    local shared="${CLAUDE_OLLAMA_MODEL:-gemma3:12b}"
     case "$1" in
-        opus)   print -r -- "${CLAUDE_OLLAMA_OPUS_MODEL:-gemma4:31b}" ;;
-        sonnet) print -r -- "${CLAUDE_OLLAMA_SONNET_MODEL:-gemma4:26b}" ;;
-        haiku)  print -r -- "${CLAUDE_OLLAMA_HAIKU_MODEL:-gemma4:12b}" ;;
+        opus)   print -r -- "${CLAUDE_OLLAMA_OPUS_MODEL:-$shared}" ;;
+        sonnet) print -r -- "${CLAUDE_OLLAMA_SONNET_MODEL:-$shared}" ;;
+        haiku)  print -r -- "${CLAUDE_OLLAMA_HAIKU_MODEL:-$shared}" ;;
         *)
             echo "❌ Unknown tier: $1 (expected opus, sonnet, or haiku)" >&2
             return 1
@@ -667,6 +675,7 @@ claude-ollama() {
     export "${envs[@]}"
     command claude "$@"
 }
+alias claude-offline='claude-ollama'
 
 # ollama-serve-kill: stop the detached `ollama serve` process started by
 # claude-ollama. Mirrors copilot-api-kill above — no saved PID (launched via
