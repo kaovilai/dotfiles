@@ -49,6 +49,13 @@ create-ocp-aws() {
         echo "Flags (can be combined):"
         echo "  --force-new Force creation alongside existing clusters (skip prompt)"
         echo "  --ec        Automatically select Early Candidate release stream"
+        echo "  --verify-all-signatures"
+        echo "              With --ec, check every image in the release payload for a"
+        echo "              published signature instead of just rhel-coreos (slower, ~10-20s)"
+        echo "  --allow-unsigned"
+        echo "              With --ec, if the signature preflight check finds a missing"
+        echo "              signature, auto-disable ClusterImagePolicy enforcement (same as"
+        echo "              --nightly) and continue instead of prompting/aborting"
         echo "  --kvm       Add a second compute pool with a bare-metal instance type (day-2)"
         echo "              (exposes /dev/kvm for OpenShift Virtualization/KubeVirt VMs)"
         echo "  --kvm-spot  Same as --kvm, but request the metal node as a spot instance"
@@ -223,6 +230,8 @@ create-ocp-aws() {
     local community_hco_tag="1.18.0"
     local use_nightly=false
     local nightly_minor=""
+    local verify_all_signatures=false
+    local allow_unsigned=false
 
     for arg in "$@"; do
         case "$arg" in
@@ -231,6 +240,12 @@ create-ocp-aws() {
                 ;;
             --ec)
                 auto_ec=true
+                ;;
+            --verify-all-signatures)
+                verify_all_signatures=true
+                ;;
+            --allow-unsigned)
+                allow_unsigned=true
                 ;;
             --kvm)
                 add_kvm_pool=true
@@ -334,6 +349,12 @@ create-ocp-aws() {
     # Export the release image override
     export OPENSHIFT_INSTALL_RELEASE_IMAGE_OVERRIDE=$RELEASE_IMAGE
     echo "INFO: Exported OPENSHIFT_INSTALL_RELEASE_IMAGE_OVERRIDE=$RELEASE_IMAGE"
+
+    # Preflight-check that this build's images actually have a published
+    # signature before committing to a ~45min bootstrap that will otherwise
+    # hang forever on a missing one. See enforce-release-signature-check()
+    # in common-functions.zsh for the full story; no-op for stream != dev-preview.
+    enforce-release-signature-check "$RELEASE_IMAGE" "$stream" "$verify_all_signatures" "$allow_unsigned" || return 1
 
     # Raw nightlies aren't signed the way quay.io/openshift-release-dev/ocp-release
     # (and the ocp-v*-art-dev component images referenced by it) are for GA/production
