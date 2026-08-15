@@ -12,10 +12,10 @@ alias copilot-api="NODE_USE_SYSTEM_CA=1 bun run --cwd \$HOME/git/copilot-api ./s
 #       Vertex AI/Bedrock routes to the gateway instead of erroring 403.
 #   PR #2 (kaovilai/copilot-api#2): latest available model auto-selected per
 #       family; ANTHROPIC_MODEL defaults to Sonnet, falling back to Opus.
-#       Of the per-tier ANTHROPIC_DEFAULT_{OPUS,SONNET,HAIKU}_MODEL exports
-#       PR #2 generates, only Sonnet is kept here (pinned to the gateway's 1M
-#       id); Opus/Haiku are unset so the CLI picks its own — see the block in
-#       claude-copilot() below.
+#       All three per-tier ANTHROPIC_DEFAULT_{OPUS,SONNET,HAIKU}_MODEL
+#       exports PR #2 generates are kept here, each pinned to the gateway's
+#       detected id (its 1M-context variant when one's offered) — see the
+#       block in claude-copilot() below.
 # The gateway server itself runs from the local ~/git/copilot-api checkout
 # (origin/dev fork), not the published npm package — see the runner block in
 # claude-copilot() below. Set COPILOT_API_DIR to point elsewhere, or unset/
@@ -72,6 +72,7 @@ typeset -ga _claude_copilot_env_names=(
     ANTHROPIC_DEFAULT_OPUS_MODEL
     ANTHROPIC_DEFAULT_SONNET_MODEL
     ANTHROPIC_DEFAULT_HAIKU_MODEL
+    ANTHROPIC_DEFAULT_FABLE_MODEL
     CLAUDE_CODE_USE_VERTEX
     CLAUDE_CODE_USE_BEDROCK
     DISABLE_NON_ESSENTIAL_MODEL_CALLS
@@ -138,10 +139,11 @@ claude-copilot() {
         return 1
     }
 
-    local opus sonnet haiku
+    local opus sonnet haiku fable
     opus=$(_claude_copilot_latest_model opus "$models_json")
     sonnet=$(_claude_copilot_latest_model sonnet "$models_json")
     haiku=$(_claude_copilot_latest_model haiku "$models_json")
+    fable=$(_claude_copilot_latest_model fable "$models_json")
 
     local main_model="${sonnet:-$opus}"
     if [[ -z "$main_model" ]]; then
@@ -149,7 +151,7 @@ claude-copilot() {
         return 1
     fi
 
-    echo "claude-copilot → opus: ${opus:-n/a}, sonnet: ${sonnet:-n/a}, haiku: ${haiku:-n/a}"
+    echo "claude-copilot → opus: ${opus:-n/a}, sonnet: ${sonnet:-n/a}, haiku: ${haiku:-n/a}, fable: ${fable:-n/a}"
 
     # Env block mirrors the --claude-code generated command + PR #1/#2 fixes.
     local -a envs
@@ -170,21 +172,27 @@ claude-copilot() {
             CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
         )
     fi
-    # Opus/Haiku tier defaults are deliberately NOT exported (diverging from
-    # PR #2), so the CLI's own built-in defaults apply and stay current as
-    # Claude Code ships newer models. They are unset rather than merely omitted
-    # because the shell may already export them for Vertex (see secrets.zsh) —
-    # a stale pin there would otherwise leak into gateway mode and pick an
-    # older model than the gateway offers.
-    unset ANTHROPIC_DEFAULT_OPUS_MODEL ANTHROPIC_DEFAULT_HAIKU_MODEL
-    # Sonnet is the exception: pin it to the gateway's detected id so the 1M-
-    # context variant (claude-sonnet-5[1m]) is used rather than the CLI's
-    # default-context Sonnet.
-    if [[ -n "$sonnet" ]]; then
-        envs+=(ANTHROPIC_DEFAULT_SONNET_MODEL="${sonnet}")
-    else
-        unset ANTHROPIC_DEFAULT_SONNET_MODEL
-    fi
+    # All three tiers are pinned to the gateway's detected id (via
+    # _claude_copilot_latest_model, which always finds whichever version is
+    # currently latest — no hardcoded version number to go stale) so each
+    # tier's [1m]-suffixed variant is used when the gateway offers one,
+    # rather than the CLI's own built-in default falling back to a
+    # default-context id when a tier isn't pinned. Previously Opus/Haiku
+    # were deliberately left unpinned (diverging from PR #2) specifically
+    # so the CLI's built-in default would "stay current" -- but
+    # _claude_copilot_latest_model already re-resolves the latest version
+    # on every claude-copilot call, so pinning it stays just as current
+    # while also actually getting the 1M-context variant when available
+    # (verified: the gateway currently offers claude-opus-5[1m], but an
+    # unpinned Opus tier was silently using the CLI's plain 200K default
+    # instead). Still unset first, not merely omitted, in case the shell
+    # already exports these for Vertex (see secrets.zsh) -- a stale pin
+    # there would otherwise leak into gateway mode.
+    unset ANTHROPIC_DEFAULT_OPUS_MODEL ANTHROPIC_DEFAULT_HAIKU_MODEL ANTHROPIC_DEFAULT_SONNET_MODEL ANTHROPIC_DEFAULT_FABLE_MODEL
+    [[ -n "$opus" ]]   && envs+=(ANTHROPIC_DEFAULT_OPUS_MODEL="${opus}")
+    [[ -n "$sonnet" ]] && envs+=(ANTHROPIC_DEFAULT_SONNET_MODEL="${sonnet}")
+    [[ -n "$haiku" ]]  && envs+=(ANTHROPIC_DEFAULT_HAIKU_MODEL="${haiku}")
+    [[ -n "$fable" ]]  && envs+=(ANTHROPIC_DEFAULT_FABLE_MODEL="${fable}")
 
     # `export` writes into the calling shell (not a subprocess-only scope) so
     # any later child process — including Claude Code re-entering an agent
