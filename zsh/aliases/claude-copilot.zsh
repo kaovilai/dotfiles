@@ -309,22 +309,46 @@ _claude_ollama_available_budget_bytes() {
     print -r -- "$budget"
 }
 
-# Curated fallback candidates for _claude_ollama_autopick_default_model,
-# ordered by preference (not pure size) -- the largest/best-fitting one
-# whose 1.5x-on-disk-size estimate still fits the real available budget
-# above wins. Sizes are real (ollama.com/library), not the parse-heuristic
-# _claude_ollama_model_size_bytes uses for arbitrary tags:
-#   muse-glimmer:30b (18GB) -- Meta, Aug 2026, built for agentic/tool-use
-#     workflows specifically. Verified (benchlm.ai) ahead of gemma4:31b on
-#     both Agentic (51.8 vs 25.5) and Coding (52.0 vs 47.0) category
-#     scores -- the "high quality" pick.
-#   gemma4:12b (7.6GB) -- much smaller/faster "fast" pick, and the safety
-#     net for a machine without room for the 18GB option (a smaller/older
+# Curated fallback candidates for _claude_ollama_autopick_default_model AND
+# the interactive picker in _claude_ollama_resolve_model (each gets a short
+# "-- description" label there so the choice reads as quality vs. speed vs.
+# small/fast, not just three bare tags). Ordered by preference (not pure
+# size) -- the earliest one whose 1.5x-on-disk-size estimate still fits the
+# real available budget above wins the autopick. Sizes are real
+# (ollama.com/library), not the parse-heuristic _claude_ollama_model_size_bytes
+# uses for arbitrary tags:
+#   muse-glimmer:30b (18GB) -- QUALITY pick. Meta, Aug 2026, built for
+#     agentic/tool-use workflows specifically. Verified (benchlm.ai) ahead
+#     of gemma4:31b on both Agentic (51.8 vs 25.5) and Coding (52.0 vs
+#     47.0) category scores, and ahead of Qwen3.6-27B on Agentic
+#     specifically (51.8 vs 31.9) despite Qwen edging it on raw SWE-bench
+#     numbers -- Agentic is the more relevant category for how Claude Code
+#     actually uses a model (tool calls, multi-turn, file edits), not just
+#     code-completion benchmarks.
+#   nemotron-3.5-lightning:30b (25GB) -- SPEED pick. NVIDIA, MoE with only
+#     3B active params -- their own claim is ~4x throughput / 30% faster
+#     task completion vs. similarly-sized dense models. Bigger on disk
+#     than muse-glimmer despite being faster to run (MoE still stores
+#     every expert), so it needs MORE memory, not less -- it will rarely
+#     if ever win the autopick fallback below (if muse-glimmer's smaller
+#     18GB doesn't fit the budget, 25GB definitely won't either); its
+#     real value is as an explicit interactive/CLAUDE_OLLAMA_MODEL choice
+#     on a machine with room to spare, when raw speed matters more than
+#     the (currently unverified — too new for independent benchmarks yet)
+#     quality tradeoff.
+#   gemma4:12b (7.6GB) -- SMALL/FAST fallback, and the safety net for a
+#     machine without room for either 18GB+ option (a smaller/older
 #     laptop, or this one with more competing for memory than just podman).
-typeset -ga _claude_ollama_candidates=(muse-glimmer:30b gemma4:12b)
+typeset -ga _claude_ollama_candidates=(muse-glimmer:30b nemotron-3.5-lightning:30b gemma4:12b)
 typeset -gA _claude_ollama_candidate_sizes=(
-    muse-glimmer:30b 19327352832
-    gemma4:12b        8160437862
+    muse-glimmer:30b               19327352832
+    nemotron-3.5-lightning:30b     26843545600
+    gemma4:12b                      8160437862
+)
+typeset -gA _claude_ollama_candidate_desc=(
+    muse-glimmer:30b               "quality (agentic-tuned, 18GB)"
+    nemotron-3.5-lightning:30b     "speed (MoE 3B-active, ~4x throughput, 25GB)"
+    gemma4:12b                     "small/fast fallback (7.6GB)"
 )
 
 _claude_ollama_autopick_default_model() {
@@ -613,15 +637,22 @@ _claude_ollama_resolve_model() {
     fi
 
     local chosen=""
-    # Merge what's already pulled with the curated candidates (see
-    # _claude_ollama_candidates above) so the picker below always offers
-    # at least the two curated recommendations, even on a completely fresh
-    # Ollama install with nothing pulled yet — not just whatever happens
-    # to already be on disk. (u) dedupes, keeping first occurrence (so an
-    # already-pulled curated tag isn't listed twice).
-    local -a pickable
-    pickable=("${(u)local_models[@]}" "${(u)_claude_ollama_candidates[@]}")
-    pickable=("${(u)pickable[@]}")
+    # Merge the curated candidates (labeled "tag -- description" so the
+    # choice reads as quality vs. speed vs. small/fast, not just bare tags
+    # — see _claude_ollama_candidate_desc above) with whatever's already
+    # pulled that isn't already one of them, so the picker below always
+    # offers the curated recommendations, even on a completely fresh
+    # Ollama install with nothing pulled yet, without listing a curated
+    # tag twice if it also happens to already be pulled.
+    local -a pickable=()
+    local c
+    for c in "${_claude_ollama_candidates[@]}"; do
+        pickable+=("${c} -- ${_claude_ollama_candidate_desc[$c]}")
+    done
+    local m
+    for m in "${local_models[@]}"; do
+        (( ${_claude_ollama_candidates[(Ie)$m]} == 0 )) && pickable+=("$m")
+    done
     # -t 0: stdin is a tty. fzf reopens /dev/tty internally for keypresses
     # regardless of this process's own stdin, so it won't fail fast on a
     # redirected/non-interactive stdin the way most commands do — it just
@@ -640,6 +671,10 @@ _claude_ollama_resolve_model() {
                 [[ -n "$chosen" ]] && break
             done
         fi
+        # Strip the " -- description" suffix (fixed, multi-char delimiter
+        # that can't collide with a real tag) so $chosen is back to a bare
+        # tag for persistence, the pull check, and ollama pull itself.
+        chosen="${chosen%% -- *}"
     fi
 
     if [[ -z "$chosen" ]]; then
