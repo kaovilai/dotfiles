@@ -73,11 +73,16 @@ if [[ "$TERM_PROGRAM" != "vscode" ]]; then
             echo "Example: view-pr-dirs \"velero*\"" >&2
             return 1
         fi
-        if [[ -z "$(find . -type d -maxdepth 1 -name "$1" -print -quit)" ]]; then
+        local -a _match_dirs=( ./${~1}(N/) )
+        if (( ${#_match_dirs} == 0 )); then
             echo "❌ No directories found matching pattern: $1" >&2
             return 1
         fi
-        find . -type d -maxdepth 1 -name "$1" -exec sh -c 'cd "$1" || { echo "Failed to cd into $1" >&2; exit 1; }; pwd && gh pr view --web' _ {} \;
+        local _dir
+        for _dir in "${_match_dirs[@]}"; do
+            (cd "$_dir" || { echo "Failed to cd into $_dir" >&2; exit 1; }
+             pwd && gh pr view --web)
+        done
     }
     alias view-pr-dirs='noglob view-pr-dirs'
 fi
