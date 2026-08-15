@@ -583,8 +583,17 @@ _claude_ollama_ensure_server() {
 # Resolve (and persist) the Ollama model tag for one Claude Code tier.
 #   $1 = tier: opus | sonnet | haiku
 #   $2 = "force" to bypass the persisted choice and re-prompt/re-autopick
+#   $3 = write_key override (internal use — see the "pick a different
+#        model" recursion below); normally computed from $2
 # Resolution order:
-#   1. Already persisted in $_claude_ollama_models_file (skipped if $2==force)
+#   1. This tier's own persisted override (skipped if $2==force)
+#   2. The shared persisted choice (skipped if $2==force) -- claude-ollama
+#      calls this function once per tier, and without this fallback each
+#      tier would independently fall through to its own interactive
+#      pick/autopick below, prompting 3 separate times on a fresh install
+#      for what's supposed to be one shared model (see claude-ollama's own
+#      one-model design above). The first tier resolved writes SHARED=;
+#      the other two find it here and reuse it silently.
 #   2. Interactive pick from locally-pulled models: fzf, else `select` builtin
 #   3. Autopick _claude_ollama_default_model's tag for that tier, `ollama
 #      pull`-ing it if not already present locally — reached whenever there's
@@ -593,11 +602,23 @@ _claude_ollama_ensure_server() {
 #      is there to answer.
 # Every candidate tag is checked via _claude_ollama_check_resources before
 # it's persisted/pulled; a "pick a different model" response recurses into
-# this same function with force set, re-entering the interactive picker.
-# Prints the resolved tag on stdout; persists it as TIER=model in
-# $_claude_ollama_models_file. Returns 1 (nothing printed) on hard failure.
+# this same function with force set, re-entering the interactive picker,
+# passing write_key through explicitly so the recursion still writes to
+# the same key (SHARED vs. this tier's own) the original top-level call
+# would have used, however many times it recurses.
+# Prints the resolved tag on stdout; persists it as SHARED=model (normal
+# claude-ollama flow) or TIER=model (explicit per-tier override via
+# `claude-ollama-models <tier>`) in $_claude_ollama_models_file. Returns 1
+# (nothing printed) on hard failure.
 _claude_ollama_resolve_model() {
     local tier="$1" force="$2"
+    local write_key="$3"
+    # Computed from force only when not explicitly passed by a recursive
+    # "pick a different model" call (see the case 2 branches below) --
+    # force alone would otherwise conflate "skip persisted lookups for
+    # this attempt" with "this was an explicit per-tier override", which
+    # matters once we're several recursions deep.
+    [[ -z "$write_key" ]] && { write_key="${(U)tier}"; [[ -z "$force" ]] && write_key="SHARED"; }
     local base="$(_claude_ollama_base)"
 
     local default
@@ -622,6 +643,12 @@ _claude_ollama_resolve_model() {
     if [[ -z "$force" && -r "$_claude_ollama_models_file" ]]; then
         local existing
         existing=$(awk -F= -v t="${(U)tier}" '$1 == t {print $2; exit}' "$_claude_ollama_models_file" 2>/dev/null)
+        # Fall back to the shared persisted choice if this tier has no
+        # override of its own -- see the function comment above: this is
+        # what lets sonnet/haiku silently reuse whatever opus (the first
+        # tier claude-ollama resolves) just picked, instead of each tier
+        # prompting separately.
+        [[ -z "$existing" ]] && existing=$(awk -F= '$1 == "SHARED" {print $2; exit}' "$_claude_ollama_models_file" 2>/dev/null)
         if [[ -n "$existing" ]]; then
             _claude_ollama_check_resources "$tier" "$existing" "$tags_json" "${#local_models[@]}"
             case $? in
@@ -643,7 +670,7 @@ _claude_ollama_resolve_model() {
                     print -r -- "$existing"
                     return 0
                     ;;
-                2) _claude_ollama_resolve_model "$tier" force; return $? ;;
+                2) _claude_ollama_resolve_model "$tier" force "$write_key"; return $? ;;
                 *) return 1 ;;
             esac
         fi
@@ -698,7 +725,7 @@ _claude_ollama_resolve_model() {
     _claude_ollama_check_resources "$tier" "$chosen" "$tags_json" "${#local_models[@]}"
     case $? in
         0) ;;
-        2) _claude_ollama_resolve_model "$tier" force; return $? ;;
+        2) _claude_ollama_resolve_model "$tier" force "$write_key"; return $? ;;
         *) return 1 ;;
     esac
 
@@ -720,16 +747,18 @@ _claude_ollama_resolve_model() {
     # Sequential per-tier resolution (opus, then sonnet, then haiku — see
     # claude-ollama below) means each rewrite of the persistence file sees
     # the previous tier's write already on disk; no concurrent writers, so
-    # no lock/race handling is needed here.
+    # no lock/race handling is needed here. Writes to $write_key (SHARED,
+    # or this tier's own key for an explicit per-tier override — see the
+    # function comment above), not unconditionally to this tier's key.
     mkdir -p "${_claude_ollama_models_file:h}"
     local -a kept=()
-    [[ -r "$_claude_ollama_models_file" ]] && kept=("${(f)$(grep -v "^${(U)tier}=" "$_claude_ollama_models_file")}")
+    [[ -r "$_claude_ollama_models_file" ]] && kept=("${(f)$(grep -v "^${write_key}=" "$_claude_ollama_models_file")}")
     # Same empty-array quirk as local_models above: if grep -v matched
     # nothing (e.g. this is the first tier ever persisted), kept would
     # otherwise be a 1-element array holding an empty string, writing a
     # spurious blank line ahead of the real TIER=model line.
     kept=("${(@)kept:#}")
-    { [[ ${#kept[@]} -gt 0 ]] && print -l -- "${kept[@]}"; print -r -- "${(U)tier}=${chosen}"; } >| "$_claude_ollama_models_file"
+    { [[ ${#kept[@]} -gt 0 ]] && print -l -- "${kept[@]}"; print -r -- "${write_key}=${chosen}"; } >| "$_claude_ollama_models_file"
     print -r -- "$chosen"
 }
 
@@ -825,31 +854,44 @@ ollama-serve-kill() {
     fi
 }
 
-# claude-ollama-models: force re-selection of one (or all) model tiers used
-# by claude-ollama, bypassing the persisted choice in
-# $_claude_ollama_models_file. Structurally mirrors claude-mode's
-# arg-count-validated case-statement shape (below), though semantically the
-# no-arg case here re-resolves all three tiers rather than merely printing
-# the current ones — claude-mode's no-arg prints without changing anything.
+# claude-ollama-models: force re-selection of the shared model (no arg) or
+# one specific tier's override (opus|sonnet|haiku), bypassing whatever's
+# persisted in $_claude_ollama_models_file. Structurally mirrors
+# claude-mode's arg-count-validated case-statement shape, though
+# semantically this actively re-resolves rather than merely printing —
+# claude-mode's no-arg prints without changing anything.
+#   claude-ollama-models          -- reconfigure the ONE shared model used
+#     by all three tiers (matches claude-ollama's one-model default): wipes
+#     any existing SHARED/per-tier entries, then resolves opus first (a
+#     fresh interactive pick/autopick, persisted as SHARED=) and lets
+#     sonnet/haiku silently reuse it (see _claude_ollama_resolve_model) --
+#     one prompt, not three.
+#   claude-ollama-models <tier>   -- override just that one tier, leaving
+#     the shared default (and the other two tiers) untouched.
 claude-ollama-models() {
     if (( $# > 1 )); then
         echo "Usage: claude-ollama-models [opus|sonnet|haiku]" >&2
         return 1
     fi
-    local -a tiers
     case "$1" in
-        opus|sonnet|haiku) tiers=("$1") ;;
-        "")                tiers=(opus sonnet haiku) ;;
+        opus|sonnet|haiku)
+            local chosen
+            chosen=$(_claude_ollama_resolve_model "$1" force) || return 1
+            echo "$1: ${chosen}"
+            ;;
+        "")
+            rm -f "$_claude_ollama_models_file"
+            local tier chosen
+            for tier in opus sonnet haiku; do
+                chosen=$(_claude_ollama_resolve_model "$tier") || return 1
+                echo "${tier}: ${chosen}"
+            done
+            ;;
         *)
             echo "Usage: claude-ollama-models [opus|sonnet|haiku]" >&2
             return 1
             ;;
     esac
-    local tier chosen
-    for tier in "${tiers[@]}"; do
-        chosen=$(_claude_ollama_resolve_model "$tier" force) || return 1
-        echo "${tier}: ${chosen}"
-    done
 }
 
 # ---------------------------------------------------------------------------
