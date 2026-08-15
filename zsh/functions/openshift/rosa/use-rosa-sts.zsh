@@ -47,7 +47,7 @@ use-rosa-sts() {
         CLUSTER_NAME=$(echo "$clusters" | head -n 1)
 
         # Count clusters
-        local cluster_count; cluster_count=$(echo "$clusters" | wc -l | tr -d ' ')
+        local cluster_count=${#${(f)clusters}}
 
         if [[ $cluster_count -gt 1 ]]; then
             echo "Found $cluster_count ROSA clusters. Using most recent: $CLUSTER_NAME"
