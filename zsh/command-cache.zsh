@@ -62,7 +62,7 @@ cached-exec() {
   else
     # Generate cache key from command
     local cache_key
-    cache_key=$(printf '%s' "$*" | md5 2>/dev/null || printf '%s' "$*" | md5sum 2>/dev/null | awk '{print $1}')
+    cache_key=${$(printf '%s' "$*" | md5 2>/dev/null || printf '%s' "$*" | md5sum 2>/dev/null)%% *}
   fi
 
   local cache_file="$ZSH_COMMAND_CACHE_DIR/${cache_key}"
@@ -113,8 +113,8 @@ command-cache-status() {
     for file in "$ZSH_COMMAND_CACHE_DIR"/*(N); do
       if [[ -f "$file" ]]; then
         local modified size
-        modified=$(stat -f "%Sm" -t "%Y-%m-%d %H:%M:%S" "$file" 2>/dev/null || stat -c "%y" "$file" 2>/dev/null | cut -d'.' -f1)
-        size=$(du -h "$file" | cut -f1)
+        modified=${$(stat -f "%Sm" -t "%Y-%m-%d %H:%M:%S" "$file" 2>/dev/null || stat -c "%y" "$file" 2>/dev/null)%%.*}
+        size=${$(du -h "$file")%%$'\t'*}
         local name="${file:t}"
         echo "  $name ($size) - Last updated: $modified"
       fi
