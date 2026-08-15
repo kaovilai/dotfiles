@@ -303,7 +303,7 @@ typeset -g _claude_ollama_models_file="${XDG_CONFIG_HOME:-$HOME/.config}/claude-
 # accurate number with no code change.
 _claude_ollama_available_budget_bytes() {
     local avail
-    if [[ "$(uname)" == "Darwin" ]]; then
+    if [[ "$OSTYPE" == darwin* ]]; then
         avail=$(vm_stat 2>/dev/null | awk '
             /page size of/ { match($0, /[0-9]+/); page_size = substr($0, RSTART, RLENGTH) }
             /^Pages free/       { gsub(/\./, "", $3); free = $3 }
@@ -472,7 +472,7 @@ _claude_ollama_check_resources() {
     [[ -n "$CLAUDE_OLLAMA_SKIP_RESOURCE_CHECK" ]] && return 0
 
     local cores
-    if [[ "$(uname)" == "Darwin" ]]; then
+    if [[ "$OSTYPE" == darwin* ]]; then
         cores=$(sysctl -n hw.ncpu 2>/dev/null)
     else
         cores=$(getconf _NPROCESSORS_ONLN 2>/dev/null)
