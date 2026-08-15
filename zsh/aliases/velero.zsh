@@ -60,7 +60,7 @@ set-velero-pr-review-users() {
   # Fetch current maintainers from GitHub
   local maintainers_url="https://raw.githubusercontent.com/vmware-tanzu/velero/main/MAINTAINERS.md"
   local maintainers
-  maintainers=$(curl -s --fail --connect-timeout 10 "$maintainers_url" | grep -E '@[a-zA-Z0-9_-]+' | grep -v -i 'emeritus' | sed -E 's/.*@([a-zA-Z0-9_-]+).*/\1/' | sort -u | tr '\n' ' ')
+  maintainers=${(j: :)${(@f)$(curl -s --fail --connect-timeout 10 "$maintainers_url" | grep -E '@[a-zA-Z0-9_-]+' | grep -v -i 'emeritus' | sed -E 's/.*@([a-zA-Z0-9_-]+).*/\1/' | sort -u)}}
   
   if [[ -z "$maintainers" ]]; then
     echo "Error: Could not fetch Velero maintainers" >&2
@@ -85,7 +85,7 @@ set-oadp-pr-review-users() {
   # Fetch current owners from GitHub OWNERS file
   local owners_url="https://raw.githubusercontent.com/openshift/oadp-operator/master/OWNERS"
   local owners
-  owners=$(curl -s --fail --connect-timeout 10 "$owners_url" | grep -E '^\s*-\s+[a-zA-Z0-9_-]+\s*$' | sed -E 's/^\s*-\s+([a-zA-Z0-9_-]+)\s*$/\1/' | sort -u | tr '\n' ' ')
+  owners=${(j: :)${(@f)$(curl -s --fail --connect-timeout 10 "$owners_url" | grep -E '^\s*-\s+[a-zA-Z0-9_-]+\s*$' | sed -E 's/^\s*-\s+([a-zA-Z0-9_-]+)\s*$/\1/' | sort -u)}}
   
   if [[ -z "$owners" ]]; then
     echo "Error: Could not fetch OADP owners" >&2
