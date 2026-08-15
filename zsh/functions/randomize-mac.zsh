@@ -81,12 +81,14 @@ randomize-mac-ifconfig() {
     # Generate new MAC by changing the last digit randomly
     # This ensures we're only making a minimal change which is less likely to be rejected
     local last_digit
-    last_digit=$(printf '%x' $((RANDOM % 16)))
+    last_digit=$(( [##16] (RANDOM % 16) ))
+    last_digit=${last_digit:l}
     local new_mac="${current_mac%?}$last_digit"
 
     # Ensure we're not setting it to the same MAC
     while [[ "$new_mac" == "$current_mac" ]]; do
-        last_digit=$(printf '%x' $((RANDOM % 16)))
+        last_digit=$(( [##16] (RANDOM % 16) ))
+        last_digit=${last_digit:l}
         new_mac="${current_mac%?}$last_digit"
     done
 
