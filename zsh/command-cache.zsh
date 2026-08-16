@@ -55,8 +55,11 @@ cached-exec() {
     local cache_time=3600  # Default: 1 hour
   fi
 
-  # Check if second argument doesn't start with a dash (cache key)
-  if [[ "$1" && "$1" != -* ]]; then
+  # Check if second argument doesn't start with a dash (cache key).
+  # Only consume it as a key when a command actually follows: otherwise
+  # `cached-exec 60 date` eats `date` as the key, runs the empty "$@", caches a
+  # zero-byte file under it and still returns 0.
+  if [[ "$1" && "$1" != -* && $# -gt 1 ]]; then
     local cache_key="$1"
     shift
   else
@@ -127,7 +130,7 @@ command-cache-status() {
 # Function to clear command cache
 command-cache-clear() {
   echo "Clearing command cache..."
-  rm -rf "$ZSH_COMMAND_CACHE_DIR"/*
+  rm -rf "$ZSH_COMMAND_CACHE_DIR"/*(N)
   mkdir -p "$ZSH_COMMAND_CACHE_DIR"
   echo "Command cache cleared"
 }
