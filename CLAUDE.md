@@ -128,7 +128,7 @@ No formal test suite exists. Changes should be manually tested by:
 
 ### Key Design Patterns
 1. **Modular Aliases**: Aliases are organized by category in separate files under `zsh/aliases/`
-2. **Function Organization**: Complex functions use `znap function` for lazy loading
+2. **Function Organization**: Functions are defined plainly as `name() { ... }`. Never prefix a definition with `znap` (i.e. `znap name() { ... }` or `znap function name() { ... }`) — zsh reads `word name() { ... }` as a multi-name function definition, which silently redefines `znap` itself with that body and breaks the plugin manager for the rest of the session.
 3. **OpenShift Functions**: Hierarchically organized by cloud provider and functionality
 4. **Environment Detection**: Special handling for VS Code terminal vs regular terminal
 5. **Command Caching**: Uses completion file caching for performance
