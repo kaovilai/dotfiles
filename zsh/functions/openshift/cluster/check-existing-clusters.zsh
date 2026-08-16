@@ -75,7 +75,7 @@ check-for-existing-clusters() {
     if [[ -d "$OCP_MANIFESTS_DIR" ]]; then
         while IFS= read -r dir; do
             if [[ -f "$dir/kubeconfig" ]]; then
-                local cluster_dir cluster_name
+                local cluster_dir="" cluster_name=""
                 cluster_dir="${dir:h}"
                 cluster_name="${cluster_dir:t}"
                 
@@ -112,7 +112,7 @@ check-for-existing-clusters() {
         if [[ "$provider" == "all" || "$provider" == "rosa" ]]; then
             while IFS= read -r dir; do
                 if [[ ! -f "$dir/auth/kubeconfig" && -f "$dir/cluster-admin.txt" ]]; then
-                    local cluster_name
+                    local cluster_name=""
                     cluster_name="${dir:t}"
                     
                     # Apply pattern filter if provided
@@ -197,7 +197,7 @@ check-for-existing-clusters() {
     if [[ -d "$HOME/clusters" ]]; then
         while IFS= read -r dir; do
             if [[ -f "$dir/kubeconfig" ]]; then
-                local cluster_dir cluster_name
+                local cluster_dir="" cluster_name=""
                 cluster_dir="${dir:h}"
                 cluster_name="${cluster_dir:t}"
                 
@@ -229,7 +229,7 @@ check-for-existing-clusters() {
     # Dump array contents for debugging
     if [[ "$debug_mode" == "true" ]]; then
         echo "DEBUG: Dumping array contents before cleanup:"
-        for ((i=0; i<${#cluster_dirs[@]}; i++)); do
+        for ((i=1; i<=${#cluster_dirs[@]}; i++)); do
             echo "DEBUG: cluster_dirs[$i]='${cluster_dirs[$i]}', cluster_names[$i]='${cluster_names[$i]}'"
         done
     fi
@@ -239,7 +239,7 @@ check-for-existing-clusters() {
     local valid_count=0
     
     # Only keep entries where both directory and name are non-empty
-    for ((i=0; i<${#cluster_dirs[@]}; i++)); do
+    for ((i=1; i<=${#cluster_dirs[@]}; i++)); do
         if [[ -n "${cluster_dirs[$i]}" && -n "${cluster_names[$i]}" ]]; then
             # Additional validation: ensure directory exists
             if [[ -d "${cluster_dirs[$i]}" ]]; then
@@ -264,7 +264,7 @@ check-for-existing-clusters() {
     # Dump array contents after cleanup for debugging
     if [[ "$debug_mode" == "true" ]]; then
         echo "DEBUG: Dumping array contents after cleanup:"
-        for ((i=0; i<${#cluster_dirs[@]}; i++)); do
+        for ((i=1; i<=${#cluster_dirs[@]}; i++)); do
             echo "DEBUG: cluster_dirs[$i]='${cluster_dirs[$i]}', cluster_names[$i]='${cluster_names[$i]}'"
         done
     fi
@@ -280,10 +280,10 @@ check-for-existing-clusters() {
     
     for i in $(seq 1 ${#cluster_names[@]}); do
         # Additional validation to ensure array indices are valid
-        if [[ -n "${cluster_names[$i-1]}" && -n "${cluster_dirs[$i-1]}" ]]; then
-            echo "$i. ${cluster_names[$i-1]} ($([ -f "${cluster_dirs[$i-1]}/metadata.json" ] && jq -r '.status // "unknown"' "${cluster_dirs[$i-1]}/metadata.json" || echo "unknown")) [Install Dir: ${cluster_dirs[$i-1]}]"
+        if [[ -n "${cluster_names[$i]}" && -n "${cluster_dirs[$i]}" ]]; then
+            echo "$i. ${cluster_names[$i]} ($([ -f "${cluster_dirs[$i]}/metadata.json" ] && jq -r '.status // "unknown"' "${cluster_dirs[$i]}/metadata.json" || echo "unknown")) [Install Dir: ${cluster_dirs[$i]}]"
         else
-            echo "$i. WARNING: Invalid cluster entry at index $((i-1))"
+            echo "$i. WARNING: Invalid cluster entry at index $i"
         fi
     done
     
@@ -328,7 +328,7 @@ check-for-existing-clusters() {
                     continue
                 fi
                 
-                local dir_name
+                local dir_name=""
                 dir_name="${dir:t}"
                 if [[ "$dir" == "$OCP_MANIFESTS_DIR/-aws-arm64" ]]; then
                     echo "Destroying legacy AWS ARM64 cluster: $dir_name"
@@ -399,7 +399,7 @@ check-for-existing-clusters() {
                     fi
                 else
                     echo "Unknown cluster type, using generic destroy: $dir_name"
-                    local EC_VERSION; EC_VERSION=$(get-ocp-latest-ec-version)
+                    local EC_VERSION=""; EC_VERSION=$(get-ocp-latest-ec-version)
                     local OPENSHIFT_INSTALL=${OPENSHIFT_INSTALL:-openshift-install-${EC_VERSION}}
                     $OPENSHIFT_INSTALL destroy cluster --dir "$dir" || echo "Failed to destroy cluster: $dir_name"
                 fi
