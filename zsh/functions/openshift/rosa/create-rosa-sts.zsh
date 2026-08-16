@@ -204,7 +204,11 @@ create-rosa-sts() {
     echo "Creating ROSA STS cluster: $CLUSTER_NAME"
     echo "This process may take 30-45 minutes..."
     
-    if ! eval "$rosa_cmd" 2>&1 | tee "$ROSA_CREATE_DIR/rosa-create.log"; then
+    # NOTE: the status of `cmd | tee` is tee's, so read rosa's own status out
+    # of $pipestatus on the very next line (any other command resets it).
+    eval "$rosa_cmd" 2>&1 | tee "$ROSA_CREATE_DIR/rosa-create.log"
+    local rosa_status=${pipestatus[1]}
+    if (( rosa_status != 0 )); then
         echo "ERROR: Failed to create ROSA cluster"
         echo "Check logs at: $ROSA_CREATE_DIR/rosa-create.log"
         cleanup-on-failure "$ROSA_CREATE_DIR" "$CLUSTER_NAME" "rosa-sts"
@@ -246,10 +250,12 @@ create-rosa-sts() {
 
 function create-rosa-sts-arm64() {
     # ARM64 wrapper function
-    create-rosa-sts "$1" "arm64"
+    # $1 stays the command and $2 the architecture; forward the remaining
+    # arguments so documented flags (--force-new/--multi-az/--private) survive.
+    create-rosa-sts "$1" "arm64" "${@:2}"
 }
 
 function create-rosa-sts-amd64() {
     # AMD64 wrapper function
-    create-rosa-sts "$1" "amd64"
+    create-rosa-sts "$1" "amd64" "${@:2}"
 }

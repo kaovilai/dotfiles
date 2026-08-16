@@ -873,6 +873,10 @@ setup-velero-oadp-for-rosa-cluster() {
     echo "----------------------------------------"
     
     local BUCKET_NAME="${CLUSTER_NAME}-oadp"
+    # AWS_REGION is not set in this function: the copy exported by
+    # create-velero-identity-for-rosa-cluster is a function-local and does not
+    # outlive that function, so look the cluster's region up here.
+    local AWS_REGION; AWS_REGION=$(rosa describe cluster -c "$CLUSTER_NAME" --output json 2>/dev/null | jq -r .region.id)
     
     cat << EOF | oc apply -f -
 apiVersion: oadp.openshift.io/v1alpha1
@@ -1189,7 +1193,7 @@ cleanup-velero-rosa-resources() {
     local files_to_delete=(
         "velero-bsl-${CLUSTER_NAME}.yaml"
         "velero-dpa-${CLUSTER_NAME}.yaml"
-        "velero-credentials-${CLUSTER_NAME}"
+        "velero-credentials-${CLUSTER_NAME}-reference.txt"
     )
     
     for file in "${files_to_delete[@]}"; do

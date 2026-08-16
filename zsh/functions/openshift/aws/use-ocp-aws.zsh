@@ -50,20 +50,29 @@ use-ocp-aws() {
     # Backup existing kubeconfig if it exists
     if [[ -f ~/.kube/config ]]; then
         local backup_ts; backup_ts=$(date +%Y%m%d%H%M%S)
-        cp ~/.kube/config ~/.kube/config.backup.${backup_ts}
-        echo "Backed up existing kubeconfig to ~/.kube/config.backup.${backup_ts}"
+        if cp ~/.kube/config ~/.kube/config.backup.${backup_ts}; then
+            echo "Backed up existing kubeconfig to ~/.kube/config.backup.${backup_ts}"
+        else
+            echo "ERROR: Failed to back up ~/.kube/config; refusing to overwrite it" >&2
+            return 1
+        fi
     fi
     
     # Copy the kubeconfig
-    cp "$OCP_CREATE_DIR/auth/kubeconfig" ~/.kube/config
+    cp "$OCP_CREATE_DIR/auth/kubeconfig" ~/.kube/config || {
+        echo "ERROR: Failed to copy kubeconfig to ~/.kube/config" >&2
+        return 1
+    }
     
     # Show success message with cluster details
     echo "Successfully copied kubeconfig to ~/.kube/config"
     
-    # Test the connection
+    # Test the connection. Pin KUBECONFIG to the file we just wrote -- a
+    # KUBECONFIG exported earlier (e.g. by use-ocp-cluster) otherwise wins
+    # over ~/.kube/config and we would report a different cluster's identity.
     echo "Testing connection to the cluster..."
-    oc whoami
-    oc cluster-info
+    KUBECONFIG=~/.kube/config oc whoami
+    KUBECONFIG=~/.kube/config oc cluster-info
     
     return 0
 }
@@ -121,12 +130,19 @@ use-ocp-aws-dir() {
     # Backup existing kubeconfig if it exists
     if [[ -f ~/.kube/config ]]; then
         local backup_ts; backup_ts=$(date +%Y%m%d%H%M%S)
-        cp ~/.kube/config ~/.kube/config.backup.${backup_ts}
-        echo "Backed up existing kubeconfig to ~/.kube/config.backup.${backup_ts}"
+        if cp ~/.kube/config ~/.kube/config.backup.${backup_ts}; then
+            echo "Backed up existing kubeconfig to ~/.kube/config.backup.${backup_ts}"
+        else
+            echo "ERROR: Failed to back up ~/.kube/config; refusing to overwrite it" >&2
+            return 1
+        fi
     fi
     
     # Copy the kubeconfig
-    cp "$1/auth/kubeconfig" ~/.kube/config
+    cp "$1/auth/kubeconfig" ~/.kube/config || {
+        echo "ERROR: Failed to copy kubeconfig to ~/.kube/config" >&2
+        return 1
+    }
     
     # Extract basename from the directory
     local dir_basename="${1:t}"
@@ -134,10 +150,12 @@ use-ocp-aws-dir() {
     # Show success message
     echo "Successfully copied kubeconfig from $dir_basename to ~/.kube/config"
     
-    # Test the connection
+    # Test the connection. Pin KUBECONFIG to the file we just wrote -- a
+    # KUBECONFIG exported earlier (e.g. by use-ocp-cluster) otherwise wins
+    # over ~/.kube/config and we would report a different cluster's identity.
     echo "Testing connection to the cluster..."
-    oc whoami
-    oc cluster-info
+    KUBECONFIG=~/.kube/config oc whoami
+    KUBECONFIG=~/.kube/config oc cluster-info
     
     return 0
 }

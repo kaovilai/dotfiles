@@ -146,21 +146,22 @@ delete-ocp-aws() {
     
     # Check if we need to clean up a cluster created with empty TODAY variable
     local EMPTY_TODAY_DIR="$OCP_MANIFESTS_DIR/-aws-$ARCH_SUFFIX"
-    if [[ -d "$EMPTY_TODAY_DIR" && "$1" == "cleanup-legacy" ]]; then
-        echo "INFO: Cleaning up legacy $ARCH_SUFFIX cluster with empty TODAY variable at $EMPTY_TODAY_DIR"
-        local LEGACY_CLUSTER_NAME="tkaovila--$ARCH_SUFFIX"
-        
-        echo "Destroying AWS cluster in legacy directory: $EMPTY_TODAY_DIR"
-        $OPENSHIFT_INSTALL destroy cluster --dir $EMPTY_TODAY_DIR || echo "no existing cluster in legacy directory"
-        echo "Destroying AWS bootstrap in legacy directory: $EMPTY_TODAY_DIR"
-        $OPENSHIFT_INSTALL destroy bootstrap --dir $EMPTY_TODAY_DIR || echo "no existing bootstrap in legacy directory"
-        
-        ((rm -r $EMPTY_TODAY_DIR && echo "removed legacy create dir") || (true && echo "no legacy install dir")) || true
-        
-        # If we're only cleaning up legacy clusters, return here
-        if [[ "$1" == "cleanup-legacy" ]]; then
-            return 0
+    if [[ "$1" == "cleanup-legacy" ]]; then
+        if [[ -d "$EMPTY_TODAY_DIR" ]]; then
+            echo "INFO: Cleaning up legacy $ARCH_SUFFIX cluster with empty TODAY variable at $EMPTY_TODAY_DIR"
+            local LEGACY_CLUSTER_NAME="tkaovila--$ARCH_SUFFIX"
+
+            echo "Destroying AWS cluster in legacy directory: $EMPTY_TODAY_DIR"
+            $OPENSHIFT_INSTALL destroy cluster --dir $EMPTY_TODAY_DIR || echo "no existing cluster in legacy directory"
+            echo "Destroying AWS bootstrap in legacy directory: $EMPTY_TODAY_DIR"
+            $OPENSHIFT_INSTALL destroy bootstrap --dir $EMPTY_TODAY_DIR || echo "no existing bootstrap in legacy directory"
+
+            ((rm -r $EMPTY_TODAY_DIR && echo "removed legacy create dir") || (true && echo "no legacy install dir")) || true
+        else
+            echo "INFO: No legacy $ARCH_SUFFIX cluster directory at $EMPTY_TODAY_DIR, nothing to clean up"
         fi
+        # cleanup-legacy must NEVER fall through to destroying today's cluster.
+        return 0
     fi
     
     echo "Destroying AWS cluster in directory: $OCP_CREATE_DIR"
