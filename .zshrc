@@ -15,9 +15,10 @@ if [[ "$OSTYPE" == darwin* ]]; then
 fi
 # Custom user completions
 FPATH="$HOME/.zsh/completions:${FPATH}"
-source ~/git/dotfiles/zsh/znap.zsh
+# Bootstrap must come BEFORE the source, otherwise the source has already failed.
 [[ -f ~/git/dotfiles/zsh/znap.zsh ]] || sh -c "mkdir -p ~/git && git clone --depth 1 -- \
     git@github.com:kaovilai/dotfiles.git ~/git/dotfiles"
+source ~/git/dotfiles/zsh/znap.zsh
 function timezsh() {
   local shell=${1-$SHELL}
   local i
@@ -140,12 +141,12 @@ if [[ "$TERM_PROGRAM" != "vscode" ]]; then
   # Git status check (background to avoid blocking startup)
   {
     if command -v gtimeout &>/dev/null; then
-      if gtimeout 2 git -C ~/git/dotfiles status --porcelain 2>/dev/null | grep -q "M"; then
+      if gtimeout 2 git -C ~/git/dotfiles status --porcelain 2>/dev/null | grep -qE '^(M.|.M)'; then
         print "dotfiles repo has uncommitted changes, run ${RED}edit-dotfiles${NC} to review"
       fi
     else
       print -P "%F{yellow}[dotfiles] Install coreutils for git timeout support: brew install coreutils%f" >&2
-      if git -C ~/git/dotfiles status --porcelain 2>/dev/null | grep -q "M"; then
+      if git -C ~/git/dotfiles status --porcelain 2>/dev/null | grep -qE '^(M.|.M)'; then
         print "dotfiles repo has uncommitted changes, run ${RED}edit-dotfiles${NC} to review"
       fi
     fi

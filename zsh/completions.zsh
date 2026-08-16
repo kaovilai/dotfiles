@@ -45,7 +45,7 @@ if has_command docker; then
   # Update check and download in the background
   if [[ "$TERM_PROGRAM" != "vscode" ]] && has_command curl; then
     if completion_cache_expired "$docker_completion_file" $CACHE_TTL_STABLE; then  # 30 days for stable tools
-      (curl -sLm 10 https://raw.githubusercontent.com/docker/docker-ce/master/components/cli/contrib/completion/zsh/_docker > "${docker_completion_file}.tmp" && 
+      (curl -fsLm 10 https://raw.githubusercontent.com/docker/docker-ce/master/components/cli/contrib/completion/zsh/_docker > "${docker_completion_file}.tmp" && 
       mv "${docker_completion_file}.tmp" "$docker_completion_file" || 
       rm -f "${docker_completion_file}.tmp") &!
     fi
@@ -87,7 +87,7 @@ if has_command podman; then
   # Update check and download in the background
   if [[ "$TERM_PROGRAM" != "vscode" ]] && has_command curl; then
     if completion_cache_expired "$podman_completion_file" $CACHE_TTL_STABLE; then  # 30 days for stable tools
-      (curl -sLm 10 https://raw.githubusercontent.com/containers/podman/main/completions/zsh/_podman > "${podman_completion_file}.tmp" && 
+      (curl -fsLm 10 https://raw.githubusercontent.com/containers/podman/main/completions/zsh/_podman > "${podman_completion_file}.tmp" && 
       mv "${podman_completion_file}.tmp" "$podman_completion_file" || 
       rm -f "${podman_completion_file}.tmp") &!
     fi
@@ -149,7 +149,7 @@ if has_command claude; then
     cp "$claude_completion_file" "${fpath[1]}/_claude" &!
   fi
   if has_command curl && completion_cache_expired "$claude_completion_file"; then  # 7 days
-    (curl -sLm 10 https://raw.githubusercontent.com/wbingli/zsh-claudecode-completion/main/_claude > "${claude_completion_file}.tmp" &&
+    (curl -fsLm 10 https://raw.githubusercontent.com/wbingli/zsh-claudecode-completion/main/_claude > "${claude_completion_file}.tmp" &&
     mv "${claude_completion_file}.tmp" "$claude_completion_file" &&
     cp "$claude_completion_file" "${fpath[1]}/_claude" ||
     rm -f "${claude_completion_file}.tmp") &!
@@ -194,7 +194,7 @@ zsh_completion_cache_status() { zsh-completion-cache-status "$@"; }
 # Command to clear the completion cache
 zsh-completion-cache-clear() {
   echo "Clearing ZSH completion cache..."
-  rm -f "$ZSH_COMPLETION_CACHE_DIR"/_*
+  rm -f "$ZSH_COMPLETION_CACHE_DIR"/_*(N)
   echo "Cache cleared. Restart your shell to regenerate completions."
 }
 zsh_completion_cache_clear() { zsh-completion-cache-clear "$@"; }
