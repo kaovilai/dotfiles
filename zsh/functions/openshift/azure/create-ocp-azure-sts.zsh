@@ -18,6 +18,13 @@ create-ocp-azure-sts(){
         echo "  no-delete   Skip deletion of existing cluster before creation"
         echo "  --force-new Force creation alongside existing clusters (skip prompt)"
         echo "  --ec        Automatically select Early Candidate release stream"
+        echo "  --verify-all-signatures"
+        echo "              With --ec, check every image in the release payload for a"
+        echo "              published signature instead of just rhel-coreos (slower, ~10-20s)"
+        echo "  --allow-unsigned"
+        echo "              With --ec, if the signature preflight check finds a missing"
+        echo "              signature, auto-disable ClusterImagePolicy enforcement (same as"
+        echo "              --nightly) and continue instead of prompting/aborting"
         echo ""
         echo "Prerequisites:"
         echo "  - AZURE_SUBSCRIPTION_ID environment variable must be set"
@@ -366,7 +373,9 @@ create-ocp-azure-sts(){
     # Parse command line flags
     local force_new=false
     local auto_ec=false
-    
+    local verify_all_signatures=false
+    local allow_unsigned=false
+
     for arg in "$@"; do
         case "$arg" in
             --force-new)
@@ -374,6 +383,12 @@ create-ocp-azure-sts(){
                 ;;
             --ec)
                 auto_ec=true
+                ;;
+            --verify-all-signatures)
+                verify_all_signatures=true
+                ;;
+            --allow-unsigned)
+                allow_unsigned=true
                 ;;
         esac
     done
@@ -417,6 +432,12 @@ create-ocp-azure-sts(){
     fi
     local RELEASE_IMAGE=$(get-release-image "$stream" "multi")
     [[ -z "$RELEASE_IMAGE" ]] && return 1
+
+    # Preflight-check that this build's images actually have a published
+    # signature before committing to a ~45min bootstrap that will otherwise
+    # hang forever on a missing one. See enforce-release-signature-check()
+    # in common-functions.zsh for the full story; no-op for stream != dev-preview.
+    enforce-release-signature-check "$RELEASE_IMAGE" "$stream" "$verify_all_signatures" "$allow_unsigned" || return 1
 
     echo "INFO: Using release image: $RELEASE_IMAGE"
     local BASE_RELEASE_IMAGE_REGISTRY=$(echo $RELEASE_IMAGE | awk -F/ '{print $1}')

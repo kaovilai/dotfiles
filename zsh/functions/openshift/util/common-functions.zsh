@@ -301,6 +301,158 @@ get-openshift-install-for-release-image() {
     echo "$binary_path"
 }
 
+# Preflight-check that a release image's referenced component image(s) have
+# a published Sigstore signature, to fail fast before starting a ~45min
+# cluster bootstrap that will otherwise hang forever pulling an unsigned one.
+#
+# Root cause this catches: standalone 4.21+ clusters ship an 'openshift'
+# ClusterImagePolicy requiring Sigstore signatures on quay.io/openshift-
+# release-dev/ocp-v*-art-dev images. A freshly-cut EC/dev-preview build can
+# get promoted to quay before its signature finishes propagating -- when
+# that happens, every master's machine-config-daemon-pull.service hits "A
+# signature was required, but no signature exists" pulling the RHCOS
+# (rhel-coreos) image during firstboot, and retries forever with no
+# backoff-induced failure state, so bootstrap just times out.
+#
+# mode=fast (default) only checks the rhel-coreos image -- the earliest one
+# pulled (blocks 100% of masters at firstboot, before anything else in the
+# payload gets pulled), and the exact one confirmed missing a signature in
+# practice. mode=full checks every image referenced by the release payload
+# (~150-200, checked in parallel) for extra confidence.
+#
+# NOTE: must use `skopeo inspect --raw`, not plain `skopeo inspect` --
+# non-raw inspect populates RepoTags by paginating the *entire* tag list of
+# the repo, and ocp-v*-art-dev repos are shared ART repos with tens of
+# thousands of tags spanning every OCP version ever built. That hangs for
+# minutes per image; --raw fetches only the requested manifest.
+#
+# Usage: check-release-signatures "$RELEASE_IMAGE" [fast|full]
+# Returns: 0 if the checked image(s) are signed, 1 if any are missing a
+#   signature (prints the unsigned image ref(s) to stderr), 2 if the check
+#   itself couldn't run (missing tool, oc adm release info failure, no
+#   image refs found) -- callers should warn and proceed, not hard-block,
+#   on a 2 since that's a broken preflight, not a confirmed problem.
+check-release-signatures() {
+    local release_image=$1
+    local mode=${2:-fast}
+
+    if [[ -z "$release_image" ]]; then
+        echo "ERROR: check-release-signatures requires a release image pullspec" >&2
+        return 2
+    fi
+
+    if ! command -v skopeo >/dev/null 2>&1; then
+        echo "WARN: skopeo not found, skipping signature preflight check" >&2
+        return 2
+    fi
+
+    echo "INFO: Checking Sigstore signature availability for $release_image (mode=$mode)..." >&2
+
+    local refs_json
+    refs_json=$(oc adm release info --registry-config ~/pull-secret.txt -o json "$release_image" 2>/dev/null)
+    if [[ -z "$refs_json" ]]; then
+        echo "WARN: Could not fetch release image references, skipping signature preflight check" >&2
+        return 2
+    fi
+
+    local image_refs
+    if [[ "$mode" == "full" ]]; then
+        image_refs=$(echo "$refs_json" | jq -r '.references.spec.tags[].from.name' | sort -u)
+    else
+        image_refs=$(echo "$refs_json" | jq -r '.references.spec.tags[] | select(.name=="rhel-coreos") | .from.name')
+    fi
+
+    if [[ -z "$image_refs" ]]; then
+        echo "WARN: No image references found (mode=$mode), skipping signature preflight check" >&2
+        return 2
+    fi
+
+    local unsigned
+    # NOTE: -n1 (each ref passed as $1, not substituted via -I{}) is required, not
+    # cosmetic -- BSD/macOS xargs' -I replacement mode has a small internal command-
+    # buffer limit unrelated to ARG_MAX, and hits "command line cannot be assembled,
+    # too long" once the templated script text has more than a couple lines in it
+    # (confirmed live: identical script raising the error under -I{}, passing under
+    # -n1). This silently causes NO images to be checked at all -- a bare `|| echo` on
+    # a xargs whose command never ran won't emit anything either -- so this is a false
+    # "all signed" pass, not a visible failure. Since we can't tell fast from full mode
+    # by argument count alone, use the safe -n1 form unconditionally.
+    unsigned=$(echo "$image_refs" | xargs -P 20 -n1 zsh -c '
+        ref=$1
+        repo=${ref%@*}
+        digest=${ref#*@sha256:}
+        skopeo inspect --raw --retry-times 1 --authfile ~/pull-secret.txt "docker://${repo}:sha256-${digest}.sig" >/dev/null 2>&1 || echo "$ref"
+    ' _)
+
+    if [[ -n "$unsigned" ]]; then
+        echo "ERROR: Missing Sigstore signature for the following image(s):" >&2
+        echo "$unsigned" >&2
+        return 1
+    fi
+
+    echo "INFO: Signature check passed (mode=$mode)" >&2
+    return 0
+}
+
+# Wraps check-release-signatures() with what to do about a confirmed-missing
+# signature: offer the same OPENSHIFT_INSTALL_EXPERIMENTAL_DISABLE_IMAGE_POLICY=true
+# bypass the --nightly path already uses unconditionally (see the nightly
+# handling in the calling scripts), instead of only aborting. EC images are
+# supposed to be signed, so this bypass is only offered once a missing
+# signature is actually confirmed -- not applied unconditionally like nightly.
+#
+# No-op (returns 0 immediately) unless $stream matches *dev-preview* --
+# nightly already disables the policy unconditionally, and stable/GA images
+# are verified-signed as part of release promotion, so there's nothing to
+# check for those callers.
+#
+# Usage: enforce-release-signature-check "$RELEASE_IMAGE" "$stream" "$verify_all" "$allow_unsigned"
+#   verify_all: "true" to check every payload image (mode=full), else just rhel-coreos
+#   allow_unsigned: "true" to auto-bypass on a confirmed-missing signature without prompting
+# Returns: 0 to proceed (exporting the bypass var if one was needed), 1 to abort
+enforce-release-signature-check() {
+    local release_image=$1
+    local stream=$2
+    local verify_all=$3
+    local allow_unsigned=$4
+
+    [[ "$stream" == *dev-preview* ]] || return 0
+
+    local check_mode="fast"
+    [[ "$verify_all" == "true" ]] && check_mode="full"
+
+    check-release-signatures "$release_image" "$check_mode"
+    local rc=$?
+
+    if [[ $rc -eq 0 ]]; then
+        return 0
+    elif [[ $rc -eq 2 ]]; then
+        echo "WARN: Signature preflight check could not run -- proceeding without it" >&2
+        return 0
+    fi
+
+    echo "" >&2
+    echo "WARN: This build's signature may not have finished propagating yet (publishing lag)," >&2
+    echo "      or another problem. Options: retry later, fall back to --nightly=X.Y, or bypass" >&2
+    echo "      with --allow-unsigned (disables ClusterImagePolicy enforcement, same as --nightly)." >&2
+
+    if [[ "$allow_unsigned" != "true" ]]; then
+        local reply
+        echo -n "Disable ClusterImagePolicy and continue anyway? [y/N] " >&2
+        { read -r reply </dev/tty; } 2>/dev/null
+        [[ "$reply" =~ ^[Yy]$ ]] && allow_unsigned=true
+    fi
+
+    if [[ "$allow_unsigned" == "true" ]]; then
+        echo "INFO: Disabling ClusterImagePolicy enforcement (same as --nightly) and continuing" >&2
+        export OPENSHIFT_INSTALL_EXPERIMENTAL_DISABLE_IMAGE_POLICY=true
+        return 0
+    fi
+
+    echo "ERROR: Aborting -- missing signature not bypassed" >&2
+    return 1
+}
+
 # Function to validate environment variables
 # Usage: validate-env-vars "aws" AWS_REGION AWS_PROFILE
 #        validate-env-vars "azure" AZURE_SUBSCRIPTION_ID AZURE_TENANT_ID

@@ -18,6 +18,13 @@ create-ocp-gcp-wif(){
         echo "  no-delete   Skip deletion of existing cluster before creation"
         echo "  --force-new Force creation alongside existing clusters (skip prompt)"
         echo "  --ec        Automatically select Early Candidate release stream"
+        echo "  --verify-all-signatures"
+        echo "              With --ec, check every image in the release payload for a"
+        echo "              published signature instead of just rhel-coreos (slower, ~10-20s)"
+        echo "  --allow-unsigned"
+        echo "              With --ec, if the signature preflight check finds a missing"
+        echo "              signature, auto-disable ClusterImagePolicy enforcement (same as"
+        echo "              --nightly) and continue instead of prompting/aborting"
         echo ""
         echo "Prerequisites:"
         echo "  - GCP_PROJECT_ID environment variable must be set"
@@ -126,7 +133,9 @@ create-ocp-gcp-wif(){
     # Parse command line flags
     local force_new=false
     local auto_ec=false
-    
+    local verify_all_signatures=false
+    local allow_unsigned=false
+
     local no_cleanup=false
 
     for arg in "$@"; do
@@ -136,6 +145,12 @@ create-ocp-gcp-wif(){
                 ;;
             --ec)
                 auto_ec=true
+                ;;
+            --verify-all-signatures)
+                verify_all_signatures=true
+                ;;
+            --allow-unsigned)
+                allow_unsigned=true
                 ;;
             --no-cleanup)
                 no_cleanup=true
@@ -182,7 +197,13 @@ create-ocp-gcp-wif(){
     fi
     local RELEASE_IMAGE=$(get-release-image "$stream" "multi")
     [[ -z "$RELEASE_IMAGE" ]] && return 1
-    
+
+    # Preflight-check that this build's images actually have a published
+    # signature before committing to a ~45min bootstrap that will otherwise
+    # hang forever on a missing one. See enforce-release-signature-check()
+    # in common-functions.zsh for the full story; no-op for stream != dev-preview.
+    enforce-release-signature-check "$RELEASE_IMAGE" "$stream" "$verify_all_signatures" "$allow_unsigned" || return 1
+
     echo "INFO: Using release image: $RELEASE_IMAGE"
     # RELEASE_IMAGE=$($OPENSHIFT_INSTALL version | awk '/release image/ {print $3}')
     # make sure logged into registry since cco steps requires it.
