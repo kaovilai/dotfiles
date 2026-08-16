@@ -494,7 +494,17 @@ _socks-proxy-watchdog(){
     local _cur_ssid
     while true; do
         sleep 5
-        _cur_ssid=$(networksetup -getairportnetwork "$_iface" 2>/dev/null | sed 's/^Current Wi-Fi Network: //')
+        # networksetup prints its own failures on STDOUT and exits non-zero ("en0 is not a
+        # Wi-Fi interface.", "You are not associated with an AirPort network."), and the
+        # pipeline threw that status away - so an unreadable reading compared unequal and
+        # tripped the no-grace-period teardown below. Unreadable is not a *confirmed* move
+        # to another network: treat it as unchanged and let the port probe decide.
+        _cur_ssid=$(networksetup -getairportnetwork "$_iface" 2>/dev/null)
+        if [[ "$_cur_ssid" == "Current Wi-Fi Network: "* ]]; then
+            _cur_ssid="${_cur_ssid#Current Wi-Fi Network: }"
+        else
+            _cur_ssid="$_ssid"
+        fi
         if [[ "$_cur_ssid" != "$_ssid" ]]; then
             echo "socks-proxy-watchdog: Wi-Fi changed ($_ssid -> $_cur_ssid), unsetting SOCKS proxy" >&2
             unset-socks-proxy
@@ -506,7 +516,17 @@ _socks-proxy-watchdog(){
         local _recovered=0 _try
         for ((_try = 1; _try <= 12; _try++)); do
             sleep 5
-            _cur_ssid=$(networksetup -getairportnetwork "$_iface" 2>/dev/null | sed 's/^Current Wi-Fi Network: //')
+            # networksetup prints its own failures on STDOUT and exits non-zero ("en0 is not a
+            # Wi-Fi interface.", "You are not associated with an AirPort network."), and the
+            # pipeline threw that status away - so an unreadable reading compared unequal and
+            # tripped the no-grace-period teardown below. Unreadable is not a *confirmed* move
+            # to another network: treat it as unchanged and let the port probe decide.
+            _cur_ssid=$(networksetup -getairportnetwork "$_iface" 2>/dev/null)
+            if [[ "$_cur_ssid" == "Current Wi-Fi Network: "* ]]; then
+                _cur_ssid="${_cur_ssid#Current Wi-Fi Network: }"
+            else
+                _cur_ssid="$_ssid"
+            fi
             if [[ "$_cur_ssid" != "$_ssid" ]]; then
                 echo "socks-proxy-watchdog: Wi-Fi changed ($_ssid -> $_cur_ssid), unsetting SOCKS proxy" >&2
                 unset-socks-proxy
@@ -604,10 +624,28 @@ get-socks-proxy(){
         return 1
     fi
     local router_ip="${SOCKS_ROUTER_IP}"
+    local proxy_port="${SOCKS_ROUTER_PROXY_PORT}"
+    # SOCKS_ROUTER_IP/PORT only exist in the shell that ran set-socks-proxy, and the
+    # auto-invoke block below runs it under `&!` - so its exports die with that forked
+    # subshell and a fresh terminal has neither. Read what is actually configured on
+    # the interface before falling back to guessing the Wi-Fi router, which is wrong
+    # whenever the proxy is the IPv6 candidate or on a non-1888 port.
+    if [[ -z "$router_ip" ]]; then
+        local _configured _reported_port
+        _configured=$(networksetup -getsocksfirewallproxy Wi-Fi 2>/dev/null)
+        router_ip=$(awk '/^Server: /{print $2; exit}' <<< "$_configured")
+        # Only trust the reported port when a server came with it: an unconfigured
+        # proxy reports "Server: " plus "Port: 0", and 0 would otherwise stick (it is
+        # non-empty, so the :=1888 default below would not replace it).
+        if [[ -n "$router_ip" && -z "$proxy_port" ]]; then
+            _reported_port=$(awk '/^Port: /{print $2; exit}' <<< "$_configured")
+            [[ "$_reported_port" != 0 ]] && proxy_port="$_reported_port"
+        fi
+    fi
     if [[ -z "$router_ip" ]]; then
         router_ip=$(networksetup -getinfo Wi-Fi | grep -e "^Router" | cut -d " " -f 2)
     fi
-    local proxy_port="${SOCKS_ROUTER_PROXY_PORT:-1888}"
+    : "${proxy_port:=1888}"
 
     # IPv6 (with or without a %zone) needs bracketing anywhere it's followed by a
     # port - same collision test-socks-proxy already guards against for its curl

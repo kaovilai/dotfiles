@@ -28,9 +28,16 @@ function wifi-standard() {
     local channel_info
     channel_info=$(grep -A 20 "Current Network Information:" <<< "$wifi_info" | grep -i "Channel:" | head -1)
 
-    # Map PHY mode to user-friendly WiFi standard names
+    # Map PHY mode to user-friendly WiFi standard names.
+    # macOS reports either a single mode ("802.11ax") or a combined list
+    # ("802.11a/n/ac/ax"), so the mode token is not always glued to "802.11".
+    # Match the token separately and test newest-first so the combined form
+    # reports the highest standard the link actually negotiated.
     case "$phy_mode" in
-        *802.11ax*)
+        *802.11*be*)
+            echo "Wi-Fi 7 (802.11be)"
+            ;;
+        *802.11*ax*)
             # Check for 6 GHz band which would indicate Wi-Fi 6E
             if [[ "$channel_info" =~ "6GHz" || "$channel_info" =~ "6 GHz" ]]; then
                 echo "Wi-Fi 6E (802.11ax, 6 GHz)"
@@ -38,22 +45,19 @@ function wifi-standard() {
                 echo "Wi-Fi 6 (802.11ax)"
             fi
             ;;
-        *802.11be*)
-            echo "Wi-Fi 7 (802.11be)"
-            ;;
-        *802.11ac*)
+        *802.11*ac*)
             echo "Wi-Fi 5 (802.11ac)"
             ;;
-        *802.11n*)
+        *802.11*n*)
             echo "Wi-Fi 4 (802.11n)"
             ;;
-        *802.11a*)
-            echo "Wi-Fi 2 (802.11a)"
-            ;;
-        *802.11g*)
+        *802.11*g*)
             echo "Wi-Fi 3 (802.11g)"
             ;;
-        *802.11b*)
+        *802.11*a*)
+            echo "Wi-Fi 2 (802.11a)"
+            ;;
+        *802.11*b*)
             echo "Wi-Fi 1 (802.11b)"
             ;;
         *)
