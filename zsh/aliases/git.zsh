@@ -64,6 +64,10 @@ dco() {
         echo "❌ Could not determine commit count for this PR" >&2
         return 1
     fi
+    if ! git rev-parse --verify --quiet "HEAD~${commit_count}" >/dev/null 2>&1; then
+        echo "❌ HEAD~$commit_count does not resolve (shallow clone, or HEAD is not the PR branch)" >&2
+        return 1
+    fi
     local unsigned
     unsigned=$(git log --format='%H' --invert-grep --grep='^Signed-off-by:' "HEAD~${commit_count}..HEAD" | wc -l)
     unsigned=$((unsigned))
@@ -203,9 +207,23 @@ git-worktree-remove() {
   fi
 
   local wt_paths=("${(@f)selected}")
-  local wt_path entry
+  # Resolve each display line back to its exact worktree path: splitting on the
+  # first space truncates any path containing a space, so match against the exact
+  # paths reported by --porcelain instead.
+  local -a wt_real
+  wt_real=("${(@f)$(git worktree list --porcelain | sed -n 's/^worktree //p')}")
+  local wt_path entry cand
   for entry in "${wt_paths[@]}"; do
-    wt_path="${entry%% *}"
+    wt_path=""
+    for cand in "${wt_real[@]}"; do
+      # The longest registered path matching this line wins, so "wt" cannot shadow
+      # "wt with spaces": match either the whole line or a path followed by the
+      # column padding, and keep the longest match rather than the first.
+      if [[ ( "$entry" == "$cand" || "$entry" == "$cand "* ) && ${#cand} -gt ${#wt_path} ]]; then
+        wt_path="$cand"
+      fi
+    done
+    [[ -n "$wt_path" ]] || wt_path="${entry%% *}"
     echo "Removing worktree: $wt_path"
 
     if ! git worktree remove "$wt_path"; then
@@ -253,7 +271,11 @@ pr-me() {
     
     # Extract PR number from selection (first column)
     if [[ -n "$selected" ]]; then
-      pr_number="${${selected%% *}#\#}"
+      # Captured `gh pr list` output is TAB-separated with no leading '#',
+      # so %% * kept "<num><TAB><first title word>" and this check always
+      # failed. Take the leading digits, tolerating an optional '#'.
+      pr_number=""
+      [[ "$selected" =~ '^#?([0-9]+)' ]] && pr_number="${match[1]}"
       if [[ ! "$pr_number" =~ ^[0-9]+$ ]]; then
         echo "Error: Could not extract valid PR number from selection" >&2
         return 1
@@ -269,8 +291,8 @@ pr-me() {
     
     # Parse PR list into an array
     pr_lines=("${(@f)pr_list}")
-    # Skip the header line
-    shift pr_lines
+    # No header to skip: gh only prints one when stdout is a tty, and
+    # $pr_list is a command substitution -- shifting dropped a real PR.
     
     # If there are no PRs after removing the header, exit
     if [[ ${#pr_lines[@]} -eq 0 ]]; then
@@ -284,7 +306,8 @@ pr-me() {
     
     # Parse each line to extract PR number and title
     for line in "${pr_lines[@]}"; do
-      pr_num="${${line%% *}#\#}"
+      pr_num=""
+      [[ "$line" =~ '^#?([0-9]+)' ]] && pr_num="${match[1]}"
       local words=(${=line})
       pr_title="${words[*]:4}"
       pr_numbers+=("$pr_num")

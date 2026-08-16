@@ -94,7 +94,7 @@ go-mod-upgrade() {
     go get "$1" && go mod tidy && git add go.mod go.sum && git commit -sm "go-mod-upgrade: $1"
 }
 
-# run go mod upgrade for each dir matched by find . -type d -maxdepth 1 -name "<$1>"
+# run go mod upgrade for each dir matched by find . -mindepth 1 -maxdepth 1 -type d -name "<$1>"
 # $1 is dir pattern
 # $2 is go mod to upgrade
 # $3 is additional commands to execute such as "gsed -i \"s/golang:1.22-bookworm/golang:1.23-bookworm/g\" Dockerfile && git add Dockerfile"
@@ -115,11 +115,11 @@ go-mod-upgrade-dirs() {
         echo "❌ gh not found. Install it with: brew install gh" >&2
         return 1
     fi
-    if [[ -z "$(find . -type d -maxdepth 1 -name "$1" -print -quit)" ]]; then
+    if [[ -z "$(find . -mindepth 1 -maxdepth 1 -type d -name "$1" -print -quit)" ]]; then
         echo "❌ No directories found matching pattern: $1" >&2
         return 1
     fi
-    find . -type d -maxdepth 1 -name "$1" -exec sh -c '
+    find . -mindepth 1 -maxdepth 1 -type d -name "$1" -exec sh -c '
         dir="$1" pkg="$2" extra_cmd="$3" prefix="$4"
         cd "$dir" || { echo "Failed to cd into $dir" >&2; exit 1; }
         pwd &&
@@ -132,7 +132,7 @@ go-mod-upgrade-dirs() {
     ' _ {} "$2" "$3" "$4" \;
 }
 
-# execute commands in dirs matched by find . -type d -maxdepth 1 -name "<$1>"
+# execute commands in dirs matched by find . -mindepth 1 -maxdepth 1 -type d -name "<$1>"
 # Examples: exec-dirs "velero*" branch-name "command"
 # Examples: exec-dirs "velero*" golang.org/x/oauth2@v0.27.0 "pwd && pwd"
 # Examples: exec-dirs "velero*" golang.org/x/oauth2@v0.27.0 "snyk test"
@@ -142,11 +142,11 @@ exec-dirs() {
         echo "Example: exec-dirs \"velero*\" my-branch \"go mod tidy\"" >&2
         return 1
     fi
-    if [[ -z "$(find . -type d -maxdepth 1 -name "$1" -print -quit)" ]]; then
+    if [[ -z "$(find . -mindepth 1 -maxdepth 1 -type d -name "$1" -print -quit)" ]]; then
         echo "❌ No directories found matching pattern: $1" >&2
         return 1
     fi
-    find . -type d -maxdepth 1 -name "$1" -exec sh -c '
+    find . -mindepth 1 -maxdepth 1 -type d -name "$1" -exec sh -c '
         dir="$1" branch="$2" cmd="$3"
         cd "$dir" || { echo "Failed to cd into $dir" >&2; exit 1; }
         pwd &&
@@ -187,13 +187,13 @@ exec-dirs-ds() {
     local cmd="$5"
     local dir
 
-    if [[ -z "$(find . -type d -maxdepth 1 -name "$pattern" -print -quit)" ]]; then
+    if [[ -z "$(find . -mindepth 1 -maxdepth 1 -type d -name "$pattern" -print -quit)" ]]; then
         echo "❌ No directories found matching pattern: $pattern" >&2
         return 1
     fi
 
     # Use find to locate matching directories
-    find . -type d -maxdepth 1 -name "$pattern" | while read -r dir; do
+    find . -mindepth 1 -maxdepth 1 -type d -name "$pattern" | while read -r dir; do
         (
             print "\033[1;34mProcessing $dir...\033[0m"
             cd "$dir" || { print "\033[1;31mFailed to cd into $dir\033[0m" >&2; return 1; }
@@ -246,13 +246,13 @@ exec-dirs-ds-echo() {
     local cmd="$5"
     local dir
 
-    if [[ -z "$(find . -type d -maxdepth 1 -name "$pattern" -print -quit)" ]]; then
+    if [[ -z "$(find . -mindepth 1 -maxdepth 1 -type d -name "$pattern" -print -quit)" ]]; then
         echo "❌ No directories found matching pattern: $pattern" >&2
         return 1
     fi
 
     # Pass the same arguments but set a flag to only echo commands
-    find . -type d -maxdepth 1 -name "$pattern" | while read -r dir; do
+    find . -mindepth 1 -maxdepth 1 -type d -name "$pattern" | while read -r dir; do
         print "\033[1;34mWould process $dir\033[0m"
         echo "  Would fetch $ds_name"
         echo "  Would checkout $ds_name/$base_branch"
@@ -279,11 +279,11 @@ code-dirs() {
         return 1
     fi
 
-    if [[ -z "$(find . -type d -maxdepth 1 -name "$1" -print -quit)" ]]; then
+    if [[ -z "$(find . -mindepth 1 -maxdepth 1 -type d -name "$1" -print -quit)" ]]; then
         echo "❌ No directories found matching pattern: $1" >&2
         return 1
     fi
-    find . -type d -maxdepth 1 -name "$1" | parallel code {}
+    find . -mindepth 1 -maxdepth 1 -type d -name "$1" | parallel code {}
 }
 
 # open all dirs matching pattern in finder
@@ -303,11 +303,11 @@ finder-dirs() {
         return 1
     fi
 
-    if [[ -z "$(find . -type d -maxdepth 1 -name "$1" -print -quit)" ]]; then
+    if [[ -z "$(find . -mindepth 1 -maxdepth 1 -type d -name "$1" -print -quit)" ]]; then
         echo "❌ No directories found matching pattern: $1" >&2
         return 1
     fi
-    find . -type d -maxdepth 1 -name "$1" | parallel open -a Finder {}
+    find . -mindepth 1 -maxdepth 1 -type d -name "$1" | parallel open -a Finder {}
 }
 
 # noglob aliases: allow unquoted glob patterns (e.g. exec-dirs velero* instead of exec-dirs "velero*")
