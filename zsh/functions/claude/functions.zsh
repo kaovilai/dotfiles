@@ -69,7 +69,7 @@ merge-claude-settings() {
                 | .permissions.allow |= unique
             ' "$global_settings" > "$temp_file"; then
                 mv "$temp_file" "$global_settings"
-                ((permissions_added++))
+                ((++permissions_added))
                 echo "  ✓ Added"
             else
                 echo "  ✗ Failed to add permission" >&2

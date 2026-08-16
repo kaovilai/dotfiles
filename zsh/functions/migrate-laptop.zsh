@@ -156,11 +156,18 @@ migrate-to-new-laptop() {
     
     # Step 5: Setup dotfiles
     progress "Setting up dotfiles..."
-    if [[ ! -f ~/.zshrc ]] || ! grep -q "source ~/git/dotfiles/.zshrc" ~/.zshrc; then
+    # ~/.zshrc is commonly a symlink to ~/git/dotfiles/.zshrc (see CLAUDE.md), and
+    # that file does not contain the literal "source ~/git/dotfiles/.zshrc" line.
+    # Writing with > would follow the symlink and truncate the tracked repo file,
+    # so only ever create ~/.zshrc when nothing is there.
+    if [[ -L ~/.zshrc ]] || { [[ -f ~/.zshrc ]] && grep -q "git/dotfiles/.zshrc" ~/.zshrc; }; then
+        success "~/.zshrc already configured"
+    elif [[ ! -e ~/.zshrc ]]; then
         echo "source ~/git/dotfiles/.zshrc" > ~/.zshrc
         success "Created ~/.zshrc"
     else
-        success "~/.zshrc already configured"
+        warning "~/.zshrc exists but does not reference the dotfiles; leaving it untouched"
+        warning "Add it manually: echo 'source ~/git/dotfiles/.zshrc' >> ~/.zshrc"
     fi
     
     # Step 6: Create necessary directories

@@ -206,11 +206,14 @@ DNS.2 = localhost
 IP.1 = 127.0.0.1
 EOF
     
-    # If hostname looks like an EC2 public DNS, extract the IP
-    if [[ "$hostname" =~ ^ec2-[0-9-]+\..*\.compute\.amazonaws\.com$ ]]; then
-        local ip
-        ip=$(sed 's/ec2-\([0-9]\+\)-\([0-9]\+\)-\([0-9]\+\)-\([0-9]\+\)\..*/\1.\2.\3.\4/' <<< "$hostname")
-        echo "IP.2 = $ip" >> "$config_file"
+    # If hostname looks like an EC2 public DNS, extract the IP.
+    # Use zsh =~ captures instead of sed: BSD/macOS sed treats \+ as a literal (it is a GNU
+    # extension), so the old substitution silently no-opped and wrote the raw hostname as
+    # "IP.2 = ec2-...", which makes openssl abort with "bad ip address" and emit no cert.
+    # The alternation also covers us-east-1's ec2-N-N-N-N.compute-1.amazonaws.com form,
+    # which the old .compute.amazonaws.com anchor never matched (IP SAN silently dropped).
+    if [[ "$hostname" =~ ^ec2-([0-9]+)-([0-9]+)-([0-9]+)-([0-9]+)\.(compute-1|[a-z0-9-]+\.compute)\.amazonaws\.com$ ]]; then
+        echo "IP.2 = ${match[1]}.${match[2]}.${match[3]}.${match[4]}" >> "$config_file"
     fi
     
     echo "${BLUE}INFO${NC}: Generating self-signed certificate for $hostname" >&2
@@ -325,6 +328,11 @@ test-minio-connection() {
     secret_key=$(jq -r '.secret_key' <<< "$config")
     cert_file=$(jq -r '.cert_file // ""' <<< "$config")
     
+    # Remember whatever AWS credentials the caller already had exported, so the
+    # cleanup below restores them instead of wiping the user's real credentials.
+    local _had_id=${+AWS_ACCESS_KEY_ID} _had_secret=${+AWS_SECRET_ACCESS_KEY}
+    local _prev_id=${AWS_ACCESS_KEY_ID-} _prev_secret=${AWS_SECRET_ACCESS_KEY-}
+
     # Set AWS credentials for this test
     export AWS_ACCESS_KEY_ID="$access_key"
     export AWS_SECRET_ACCESS_KEY="$secret_key"
@@ -345,7 +353,8 @@ test-minio-connection() {
     fi
 
     # Clean up environment (always, even on failure)
-    unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY
+    if (( _had_id )); then export AWS_ACCESS_KEY_ID="$_prev_id"; else unset AWS_ACCESS_KEY_ID; fi
+    if (( _had_secret )); then export AWS_SECRET_ACCESS_KEY="$_prev_secret"; else unset AWS_SECRET_ACCESS_KEY; fi
     return $result
 }
 
@@ -472,7 +481,9 @@ download-minio-certificate() {
 
     # Extract certificate from the HTTPS connection
     local temp_cert
-    temp_cert=$(mktemp "${TMPDIR:-/tmp}/minio-cert-XXXXXX.pem") || { echo "${RED}ERROR${NC}: Failed to create temp file" >&2; return 1; }
+    # BSD/macOS mktemp only substitutes TRAILING X's; a '.pem' suffix after them
+    # yields a fixed filename that collides (EEXIST) on the next run.
+    temp_cert=$(mktemp "${TMPDIR:-/tmp}/minio-cert-XXXXXX") || { echo "${RED}ERROR${NC}: Failed to create temp file" >&2; return 1; }
 
     # Use openssl with a connection timeout instead of external timeout command
     echo | openssl s_client -servername "$public_dns" -connect "${public_dns}:9000" -showcerts 2>/dev/null | \
@@ -631,8 +642,8 @@ ensure-default-bucket() {
     
     echo "${BLUE}INFO${NC}: Checking if bucket '$bucket_name' exists in deployment '$deployment_name'"
     
-    # Check if bucket exists
-    if aws s3 ls --endpoint-url "$endpoint" "${ca_bundle_args[@]}" 2>/dev/null | grep -q "$bucket_name"; then
+    # Check if bucket exists (exact match on the bucket-name column, not a substring/regex match)
+    if aws s3 ls --endpoint-url "$endpoint" "${ca_bundle_args[@]}" 2>/dev/null | awk -v b="$bucket_name" '$NF == b { found = 1 } END { exit !found }'; then
         echo "${GREEN}SUCCESS${NC}: Bucket '$bucket_name' already exists"
         return 0
     fi
@@ -698,7 +709,7 @@ metadata:
   namespace: $namespace
 type: Opaque
 data:
-  cloud: $(printf '%s' "$credentials_content" | base64)
+  cloud: $(printf '%s' "$credentials_content" | base64 | tr -d '\n')
 EOF
 
     # Create DataProtectionApplication YAML

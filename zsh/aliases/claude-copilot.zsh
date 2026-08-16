@@ -212,7 +212,12 @@ claude-copilot() {
 copilot-api-kill() {
     local port="${COPILOT_API_PORT:-4141}"
     local -a pids
-    pids=("${(f)$(lsof -ti "tcp:${port}" 2>/dev/null)}")
+    # -sTCP:LISTEN: without it, lsof also matches processes with an
+    # established connection TO this port -- which includes the very Claude
+    # Code session routing through the gateway (and our own in-flight curl
+    # health-checks), so an unfiltered kill takes them down too. Same guard
+    # ollama-serve-kill already uses below.
+    pids=("${(f)$(lsof -ti "tcp:${port}" -sTCP:LISTEN 2>/dev/null)}")
     if [[ -z "${pids[1]}" ]]; then
         echo "No process listening on port ${port}."
         return 1
@@ -220,7 +225,7 @@ copilot-api-kill() {
     echo "Killing copilot-api on port ${port} (pid: ${pids[*]})..."
     kill "${pids[@]}" 2>/dev/null
     sleep 1
-    pids=("${(f)$(lsof -ti "tcp:${port}" 2>/dev/null)}")
+    pids=("${(f)$(lsof -ti "tcp:${port}" -sTCP:LISTEN 2>/dev/null)}")
     if [[ -n "${pids[1]}" ]]; then
         echo "Still alive, sending SIGKILL..."
         kill -9 "${pids[@]}" 2>/dev/null

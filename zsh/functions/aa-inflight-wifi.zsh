@@ -9,7 +9,10 @@ aa-inflight-wifi() {
         return 1
     fi
 
-    trap 'unfunction check_internet reconnect_wifi 2>/dev/null' RETURN INT
+    # zsh has no RETURN trap (bash-ism); inside a function EXIT *is* the return trap.
+    # INT is intentionally not trapped: an INT trap that does not exit would stop
+    # Ctrl+C from breaking out of the main `while true` loop below.
+    trap 'unfunction check_internet reconnect_wifi 2>/dev/null' EXIT
 
     local ssid="aainflight.com"
     local wifi_url="https://www.aainflight.com/wifi/free"
@@ -19,7 +22,7 @@ aa-inflight-wifi() {
 
     # Detect WiFi interface dynamically
     local wifi_interface
-    wifi_interface=$(networksetup -listallhardwareports | grep -A 1 "Wi-Fi" | grep "Device:" | awk '{print $2}')
+    wifi_interface=$(networksetup -listallhardwareports 2>/dev/null | awk '/Wi-Fi/{found=1} found && /Device:/{print $2; exit}')
     if [[ -z "$wifi_interface" ]]; then
         echo "Error: Could not detect WiFi interface" >&2
         return 1

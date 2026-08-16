@@ -26,7 +26,7 @@ check-qemu-stuck() {
         return 1
     }
     local qemu_procs
-    qemu_procs=$(grep 'qemu-.*-static' <<< "$all_procs" | grep -v grep) || true
+    qemu_procs=$(grep 'qemu-.*-static' <<< "$all_procs") || true
 
     if [[ -z "$qemu_procs" ]]; then
         echo "✅ No QEMU emulation processes found"
@@ -51,7 +51,7 @@ check-qemu-stuck() {
             echo "  PID: $pid | Runtime: $etime | Cmd: $cmd"
 
             # Get process state details
-            state=$(podman machine ssh -- "cat /proc/$pid/status 2>/dev/null | grep -E '(State|Threads)'" 2>/dev/null)
+            state=$(podman machine ssh -- "cat /proc/$pid/status 2>/dev/null | grep -E '(State|Threads)'" </dev/null 2>/dev/null)
             echo "    State: $(tr '\n' ' ' <<< "$state")"
         done <<< "$stuck_procs"
         echo
@@ -92,7 +92,7 @@ kill-stuck-qemu() {
         return 1
     }
     local stuck_procs
-    stuck_procs=$(grep 'futex_wait_queue' <<< "$ssh_out" | grep 'qemu-.*-static' | grep -v grep) || true
+    stuck_procs=$(grep 'futex_wait_queue' <<< "$ssh_out" | grep 'qemu-.*-static') || true
 
     if [[ -z "$stuck_procs" ]]; then
         echo "✅ No stuck QEMU processes found"
@@ -163,7 +163,7 @@ kill-stuck-qemu() {
     if [[ "$confirm" =~ ^[Yy]$ ]]; then
         while read -r pid; do
             echo "  💀 Killing PID $pid..."
-            podman machine ssh -- "kill -9 $pid" 2>/dev/null
+            podman machine ssh -- "kill -9 $pid" </dev/null 2>/dev/null
         done <<< "$selected_pids"
         echo "✅ Selected processes killed"
 
@@ -178,7 +178,7 @@ kill-stuck-qemu() {
             if [[ "$confirm_buildah" =~ ^[Yy]$ ]]; then
                 while read -r pid; do
                     echo "  💀 Killing buildah PID $pid..."
-                    podman machine ssh -- "kill -9 $pid" 2>/dev/null
+                    podman machine ssh -- "kill -9 $pid" </dev/null 2>/dev/null
                 done <<< "$buildah_pids"
                 echo "✅ Buildah processes killed"
             fi

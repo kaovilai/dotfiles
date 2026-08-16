@@ -1,6 +1,6 @@
 # Velero related aliases
 export VELERO_NS=openshift-adp
-alias kubectl-patch-velero-debug="kubectl patch -n \$VELERO_NS deployment.apps/velero --type=json -p=\"[{\"op\": \"add\", \"path\": \"/spec/template/spec/containers/0/args/-\", \"value\": \"--log-level=debug\"}]\""
+alias kubectl-patch-velero-debug="kubectl patch -n \$VELERO_NS deployment.apps/velero --type=json -p='[{\"op\": \"add\", \"path\": \"/spec/template/spec/containers/0/args/-\", \"value\": \"--log-level=debug\"}]'"
 alias velero-goruninstall='velero-makecontainer-cluster-arch; go run cmd/velero/velero.go install --image="$(ghcr_notag):$(current-branch)-$(rev-sha-short)-$(cluster-arch-only)" --provider aws --bucket $AWS_BUCKET --prefix velero --plugins velero/velero-plugin-for-aws:latest --secret-file $AWS_SECRET_FILE'
 alias velero-goruninstall-node-agent='velero-makecontainer-cluster-arch; go run cmd/velero/velero.go install --use-node-agent --image="$(ghcr_notag):$(current-branch)-$(rev-sha-short)-$(cluster-arch-only)" --provider aws --bucket $AWS_BUCKET --prefix velero --plugins velero/velero-plugin-for-aws:latest --secret-file $AWS_SECRET_FILE'
 alias velero-makecontainer='make container IMAGE="$(ghcr_notag)" VERSION="$(current-branch)-$(rev-sha-short)" && docker push "$(ghcr_notag):$(current-branch)-$(rev-sha-short)"; echo "$(ghcr_notag):$(current-branch)-$(rev-sha-short)"'
