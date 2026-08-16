@@ -2,8 +2,11 @@
 
 This template shows the recommended structure for cluster creation functions using common utilities.
 
+Note: define the function plainly. `znap create-ocp-<provider>() { ... }` would be a zsh multi-name
+function definition, which redefines `znap` itself with this body and breaks the plugin manager.
+
 ```bash
-znap function create-ocp-<provider>() {
+create-ocp-<provider>() {
     # Unset SSH_AUTH_SOCK on Darwin systems to avoid SSH errors
     if [[ "$(uname)" == "Darwin" ]]; then
         unset SSH_AUTH_SOCK

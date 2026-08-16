@@ -1,5 +1,5 @@
 # Function to get the latest AMD64 release image from OpenShift CI API
-znap get_latest_amd64_release_image() {
+get_latest_amd64_release_image() {
     local pullSpec
     pullSpec=$(curl -sm 10 https://amd64.ocp.releases.ci.openshift.org/api/v1/releasestream/4-dev-preview/latest | jq -r '.pullSpec' 2>/dev/null)
     if [[ -z "$pullSpec" ]]; then
@@ -11,7 +11,7 @@ znap get_latest_amd64_release_image() {
 }
 
 # Function to get the latest ARM64 release image from OpenShift CI API
-znap get_latest_arm64_release_image() {
+get_latest_arm64_release_image() {
     local pullSpec
     pullSpec=$(curl -sm 10 https://arm64.ocp.releases.ci.openshift.org/api/v1/releasestream/4-dev-preview-arm64/latest | jq -r '.pullSpec' 2>/dev/null)
     if [[ -z "$pullSpec" ]]; then
@@ -23,7 +23,7 @@ znap get_latest_arm64_release_image() {
 }
 
 # Get the latest EC version from AMD64 release for compatibility
-znap get_latest_ec_version() {
+get_latest_ec_version() {
     local version
     version=$(curl -sm 10 https://amd64.ocp.releases.ci.openshift.org/api/v1/releasestream/4-dev-preview/latest | jq -r '.name' 2>/dev/null)
     if [[ -z "$version" ]]; then
@@ -35,7 +35,7 @@ znap get_latest_ec_version() {
 }
 
 # Function to get the latest multi-arch release image from OpenShift CI API
-znap get_latest_multi_release_image() {
+get_latest_multi_release_image() {
     local pullSpec
     pullSpec=$(curl -sm 10 https://multi.ocp.releases.ci.openshift.org/api/v1/releasestream/4-dev-preview-multi/latest | jq -r '.pullSpec' 2>/dev/null)
     if [[ -z "$pullSpec" ]]; then
@@ -65,7 +65,7 @@ get-ocp-release-image-multi() {
 
 # 4-stable release stream functions
 # Function to get the latest stable AMD64 release image from OpenShift CI API
-znap get_latest_stable_amd64_release_image() {
+get_latest_stable_amd64_release_image() {
     local pullSpec
     pullSpec=$(curl -sm 10 https://amd64.ocp.releases.ci.openshift.org/api/v1/releasestream/4-stable/latest | jq -r '.pullSpec' 2>/dev/null)
     if [[ -z "$pullSpec" ]]; then
@@ -77,7 +77,7 @@ znap get_latest_stable_amd64_release_image() {
 }
 
 # Function to get the latest stable ARM64 release image from OpenShift CI API
-znap get_latest_stable_arm64_release_image() {
+get_latest_stable_arm64_release_image() {
     local pullSpec
     pullSpec=$(curl -sm 10 https://arm64.ocp.releases.ci.openshift.org/api/v1/releasestream/4-stable-arm64/latest | jq -r '.pullSpec' 2>/dev/null)
     if [[ -z "$pullSpec" ]]; then
@@ -89,7 +89,7 @@ znap get_latest_stable_arm64_release_image() {
 }
 
 # Function to get the latest stable multi-arch release image from OpenShift CI API
-znap get_latest_stable_multi_release_image() {
+get_latest_stable_multi_release_image() {
     local pullSpec
     pullSpec=$(curl -sm 10 https://multi.ocp.releases.ci.openshift.org/api/v1/releasestream/4-stable-multi/latest | jq -r '.pullSpec' 2>/dev/null)
     if [[ -z "$pullSpec" ]]; then
@@ -101,7 +101,7 @@ znap get_latest_stable_multi_release_image() {
 }
 
 # Get the latest stable version from AMD64 release
-znap get_latest_stable_version() {
+get_latest_stable_version() {
     local version
     version=$(curl -sm 10 https://amd64.ocp.releases.ci.openshift.org/api/v1/releasestream/4-stable/latest | jq -r '.name' 2>/dev/null)
     if [[ -z "$version" ]]; then
@@ -137,7 +137,7 @@ get-ocp-release-image-stable-multi() {
 # nightly OCP payload -- see kubevirt-datamover-controller project memory
 # "oadp-virt-e2e-nightlies"). Unsigned and can be broken; use for reproducing
 # CI-specific behavior, not for anything you need to stay up.
-znap get_latest_nightly_release_image() {
+get_latest_nightly_release_image() {
     local minor=$1
     local stream_suffix=$2   # "" for amd64, "-arm64" for arm64, "-multi" for multi
     local arch_subdomain=$3

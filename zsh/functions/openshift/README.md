@@ -69,7 +69,10 @@ When found, it provides options to:
 ## Adding New Functions
 
 1. Create a new `.zsh` file in the appropriate subdirectory
-2. Define your function with `znap function your_function_name() { ... }`
+2. Define your function with plain `your_function_name() { ... }`
+   - Do NOT write `znap your_function_name() { ... }` or `znap function your_function_name() { ... }`.
+     In zsh, `word name() { ... }` is a multi-name function definition, so those forms define `znap`
+     itself with your function's body and destroy the plugin manager for the rest of the session.
 3. Add the file to `load.zsh` using `source ~/git/dotfiles/zsh/functions/openshift/path/to/file.zsh`
 
 ## Variables
@@ -77,5 +80,5 @@ When found, it provides options to:
 Common variables are defined in `variables.zsh`:
 - `OCP_FUNCTIONS_RELEASE_IMAGE`: Default OpenShift release image
 - `OCP_MANIFESTS_DIR`: Directory for cluster manifests
-- `TODAY`: Current date in YYYYMMDD format
+- `TODAY`: Current date in YYMMDD format (6 digits, `date +%y%m%d`)
 - Client OS and architecture detection for downloads
