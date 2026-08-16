@@ -4,8 +4,8 @@ use-rosa-sts() {
     #   $1 - Can be:
     #        - Empty (lists clusters and uses most recent)
     #        - Architecture suffix (arm64 or amd64) - creates name with today's date
-    #        - Date in YYYYMMDD format (e.g., 20250710)
-    #        - Full cluster name (e.g., rosa-20250710-amd64)
+    #        - Date in YYMMDD format (e.g., 250710), or legacy YYYYMMDD
+    #        - Full cluster name (e.g., rosa-250710-amd64)
     #   $2 - Architecture suffix if $1 is a date (defaults to amd64)
 
     local input=${1:-}
@@ -61,21 +61,22 @@ use-rosa-sts() {
             echo "Found ROSA cluster: $CLUSTER_NAME"
         fi
 
-        # Extract date and arch from cluster name
-        if [[ "$CLUSTER_NAME" =~ ^rosa-([0-9]{8})-(.*)$ ]]; then
+        # Extract date and arch from cluster name. TODAY is YYMMDD (6 digits,
+        # see variables.zsh); older clusters may still carry YYYYMMDD.
+        if [[ "$CLUSTER_NAME" =~ ^rosa-([0-9]{6,8})-(.*)$ ]]; then
             DATE_PREFIX=${match[1]}
             ARCH_SUFFIX=${match[2]}
         else
             echo "WARNING: Could not parse cluster name format: $CLUSTER_NAME"
-            DATE_PREFIX=$(date +%Y%m%d)
+            DATE_PREFIX=${TODAY:-$(date +%y%m%d)}
         fi
     elif [[ "$input" == "arm64" || "$input" == "amd64" ]]; then
         # Input is architecture
         ARCH_SUFFIX=$input
-        DATE_PREFIX=${TODAY:-$(date +%Y%m%d)}
+        DATE_PREFIX=${TODAY:-$(date +%y%m%d)}
         CLUSTER_NAME="rosa-$DATE_PREFIX-$ARCH_SUFFIX"
-    elif [[ "$input" =~ ^[0-9]{8}$ ]]; then
-        # Input is date in YYYYMMDD format
+    elif [[ "$input" =~ ^[0-9]{6,8}$ ]]; then
+        # Input is date in YYMMDD (or legacy YYYYMMDD) format
         DATE_PREFIX=$input
         ARCH_SUFFIX=${2:-amd64}
         CLUSTER_NAME="rosa-$DATE_PREFIX-$ARCH_SUFFIX"
@@ -83,7 +84,7 @@ use-rosa-sts() {
         # Input is full cluster name
         CLUSTER_NAME=$input
         # Extract date and arch from cluster name
-        if [[ "$CLUSTER_NAME" =~ ^rosa-([0-9]{8})-(.*)$ ]]; then
+        if [[ "$CLUSTER_NAME" =~ ^rosa-([0-9]{6,8})-(.*)$ ]]; then
             DATE_PREFIX=${match[1]}
             ARCH_SUFFIX=${match[2]}
         fi
@@ -93,9 +94,9 @@ use-rosa-sts() {
         echo "  Examples:"
         echo "    use-rosa-sts                      # List clusters and use most recent"
         echo "    use-rosa-sts arm64                # Use today's date with arm64"
-        echo "    use-rosa-sts 20250710             # Use specific date with amd64"
-        echo "    use-rosa-sts 20250710 arm64      # Use specific date with arm64"
-        echo "    use-rosa-sts rosa-20250710-amd64 # Use specific cluster name"
+        echo "    use-rosa-sts 250710               # Use specific date with amd64"
+        echo "    use-rosa-sts 250710 arm64         # Use specific date with arm64"
+        echo "    use-rosa-sts rosa-250710-amd64    # Use specific cluster name"
         return 1
     fi
 

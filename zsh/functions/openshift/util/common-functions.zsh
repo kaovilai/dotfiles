@@ -66,7 +66,7 @@ prompt-release-stream() {
         [.tags[].name
         | select(test("-multi") | not)
         | rtrimstr("-x86_64")]
-        | unique | sort_by(split(".-") | map(tonumber? // 99)) | reverse
+        | unique | sort_by(split("[.-]"; null) | map(tonumber? // 99)) | reverse
         | .[] as $v
         | if ($v | test("ec\\.|rc\\.")) then "[dev-preview] \($v)"
           else "[stable-\($v | split(".")[0:2] | join("."))] \($v)"
@@ -93,6 +93,14 @@ prompt-release-stream() {
         read -r selected </dev/tty
         if [[ "$selected" =~ ^[0-9]+$ ]]; then
             selected=$(echo "$versions" | sed -n "${selected}p")
+        elif [[ -n "$selected" && "$selected" != *[[:space:]]* ]]; then
+            # The prompt offers "line number or version"; map a bare typed
+            # version back onto its "[tag] version" line so the stream tag and
+            # the version are both parsed correctly below. No match falls
+            # through to the existing "No version selected" handling. Guarded
+            # on single-token input so a pasted whole list line
+            # ("[stable-4.19] 4.19.1") keeps parsing exactly as it does today.
+            selected=$(echo "$versions" | awk -v v="$selected" '$2 == v { print; exit }')
         fi
     fi
 

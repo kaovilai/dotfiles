@@ -36,6 +36,14 @@ delete-ocp-gcp-wif(){
     CLUSTER_NAME=tkaovila-$TODAY-wif
     if [[ -n $1 ]]; then
         CLUSTER_NAME=$1
+        # An explicit cluster name wins over $TODAY when it names a real
+        # install dir: delete-ocp-gcp-wif-dir passes OCP_CREATE_DIR as an env
+        # prefix, but the assignment above already clobbered it, which made
+        # suffixed clusters (...-wif-1) destroy the unsuffixed directory.
+        if [[ "$CLUSTER_NAME" =~ ^tkaovila-([0-9]{6,8})-wif(-[0-9]+)?$ ]] \
+           && [[ -d "$OCP_MANIFESTS_DIR/${match[1]}-gcp-wif${match[2]}" ]]; then
+            OCP_CREATE_DIR=$OCP_MANIFESTS_DIR/${match[1]}-gcp-wif${match[2]}
+        fi
     fi
     
     # Check if we need to clean up a cluster created with empty TODAY variable
@@ -55,11 +63,13 @@ delete-ocp-gcp-wif(){
         --credentials-requests-dir $EMPTY_TODAY_DIR/credentials-requests && echo "cleaned up legacy ccoctl gcp resources") || true
         
         ((rm -r $EMPTY_TODAY_DIR && echo "removed legacy create dir") || (true && echo "no legacy install dir")) || true
-        
-        # If we're only cleaning up legacy clusters, return here
-        if [[ "$1" == "cleanup-legacy" ]]; then
-            return 0
-        fi
+    fi
+
+    # If we were asked to clean up legacy clusters, stop here even when no
+    # legacy directory existed. Falling through would destroy the CURRENT
+    # cluster's directory with CLUSTER_NAME set to the literal "cleanup-legacy".
+    if [[ "$1" == "cleanup-legacy" ]]; then
+        return 0
     fi
 echo "Destroying GCP cluster in directory: $OCP_CREATE_DIR"
 $OPENSHIFT_INSTALL destroy cluster --dir $OCP_CREATE_DIR || echo "no existing cluster"

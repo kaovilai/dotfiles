@@ -303,10 +303,13 @@ credentialsMode: Manual # needed for WIF"
                 echo -n "."
                 sleep 5
             done
-        fi
-        if (( purge_retries <= 0 )); then
-            echo ""
-            echo "WARNING: Provider still exists after timeout, ccoctl may hit 409 errors"
+            # Keep this inside the branch that declares purge_retries: on the
+            # clean path the variable is undefined and (( undefined <= 0 )) is
+            # true, which produced a bogus warning.
+            if (( purge_retries <= 0 )); then
+                echo ""
+                echo "WARNING: Provider still exists after timeout, ccoctl may hit 409 errors"
+            fi
         fi
     fi
 

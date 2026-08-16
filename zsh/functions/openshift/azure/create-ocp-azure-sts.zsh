@@ -199,8 +199,10 @@ create-ocp-azure-sts(){
             
             # Reset the service principal credentials
             echo "DEBUG: Running: az ad sp credential reset --id '$existing_sp'"
-            # Capture only stdout, let stderr go to console for warnings
-            local sp_reset=$(az ad sp credential reset --id "$existing_sp" --query "{appId:appId, password:password, tenant:tenant}" -o json)
+            # Capture only stdout, let stderr go to console for warnings.
+            # Declare first, assign second: `local x=$(cmd)` yields the status
+            # of `local`, so $? would always be 0.
+            local sp_reset; sp_reset=$(az ad sp credential reset --id "$existing_sp" --query "{appId:appId, password:password, tenant:tenant}" -o json)
             local az_exit_code=$?
             
             if [[ $az_exit_code -ne 0 ]]; then
@@ -263,7 +265,9 @@ create-ocp-azure-sts(){
             # Create service principal with Contributor role using JSON auth format
             echo "DEBUG: Running: az ad sp create-for-rbac --name '$sp_name' --role Contributor --scopes /subscriptions/$AZURE_SUBSCRIPTION_ID --json-auth"
             # Capture only stdout, let stderr go to console for warnings
-            local sp_creds=$(az ad sp create-for-rbac \
+            # Declare first, assign second: `local x=$(cmd)` yields the status
+            # of `local`, so $? would always be 0.
+            local sp_creds; sp_creds=$(az ad sp create-for-rbac \
                 --name "$sp_name" \
                 --role Contributor \
                 --scopes /subscriptions/$AZURE_SUBSCRIPTION_ID \
@@ -988,6 +992,10 @@ create-velero-bsl-for-azure-cluster() {
         echo "Please run 'create-velero-identity-for-azure-cluster' first"
         return 1
     fi
+    
+    # Needed by the prerequisites checklist printed below, which otherwise
+    # reports an empty client ID.
+    local IDENTITY_CLIENT_ID; IDENTITY_CLIENT_ID=$(az identity show -g "$CLUSTER_RESOURCE_GROUP" -n "$IDENTITY_NAME" --query clientId -o tsv 2>/dev/null)
     
     
     # Create BSL YAML file
