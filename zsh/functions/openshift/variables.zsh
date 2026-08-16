@@ -183,13 +183,11 @@ else
         if command -v dpkg &>/dev/null; then
             export ocpclientarch=$(dpkg --print-architecture)
         else
-            _ocp_uname_m=$(uname -m)
-            case "$_ocp_uname_m" in
+            case "$CPUTYPE" in
                 x86_64)         export ocpclientarch='amd64' ;;
                 aarch64|arm64)  export ocpclientarch='arm64' ;;
-                *)              export ocpclientarch="$_ocp_uname_m" ;;
+                *)              export ocpclientarch="$CPUTYPE" ;;
             esac
-            unset _ocp_uname_m
         fi
     else
         echo "zsh/functions/openshift/variables.zsh: Unknown OS"
