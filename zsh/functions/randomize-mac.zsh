@@ -16,10 +16,18 @@ randomize-mac-ifconfig() {
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --network)
+                if [[ $# -lt 2 ]]; then
+                    echo "Error: --network requires an SSID argument" >&2
+                    return 1
+                fi
                 network_ssid="$2"
                 shift 2
                 ;;
             --interface)
+                if [[ $# -lt 2 ]]; then
+                    echo "Error: --interface requires a device argument" >&2
+                    return 1
+                fi
                 wifi_interface="$2"
                 shift 2
                 ;;

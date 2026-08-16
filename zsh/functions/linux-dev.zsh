@@ -42,6 +42,16 @@ ec2-linux() {
     local sync_dir="$PWD"
 
     while [[ $# -gt 0 ]]; do
+        # These options consume a value. Without this guard `shift 2` fails when the
+        # value is missing, $# never decreases, and the loop spins forever.
+        case $1 in
+            --region|--type|--arch|--key-name|--dir)
+                if [[ $# -lt 2 ]]; then
+                    echo "${RED}ERROR${NC}: $1 requires a value" >&2
+                    return 1
+                fi
+                ;;
+        esac
         case $1 in
             --region)       region="$2"; shift 2 ;;
             --type)         instance_type="$2"; shift 2 ;;
@@ -156,7 +166,8 @@ ec2-linux() {
             echo "${GREEN}OK${NC}: Temporary key pair deleted"
         fi
     }
-    trap 'unfunction _ec2_linux_cleanup 2>/dev/null' RETURN
+    # zsh has no RETURN trap (bash-ism); inside a function EXIT is the return trap.
+    trap 'unfunction _ec2_linux_cleanup 2>/dev/null' EXIT
     trap '_ec2_linux_cleanup; return 1' INT TERM
 
     # --- VPC / Subnet ---
@@ -334,6 +345,16 @@ az-linux() {
     local sync_dir="$PWD"
 
     while [[ $# -gt 0 ]]; do
+        # These options consume a value. Without this guard `shift 2` fails when the
+        # value is missing, $# never decreases, and the loop spins forever.
+        case $1 in
+            --location|--size|--arch|--dir)
+                if [[ $# -lt 2 ]]; then
+                    echo "${RED}ERROR${NC}: $1 requires a value" >&2
+                    return 1
+                fi
+                ;;
+        esac
         case $1 in
             --location)     location="$2"; shift 2 ;;
             --size)         vm_size="$2"; shift 2 ;;
@@ -407,7 +428,8 @@ az-linux() {
         rm -f "$key_path" "${key_path}.pub"
         echo "${GREEN}OK${NC}: Temporary SSH key deleted"
     }
-    trap 'unfunction _az_linux_cleanup 2>/dev/null' RETURN
+    # zsh has no RETURN trap (bash-ism); inside a function EXIT is the return trap.
+    trap 'unfunction _az_linux_cleanup 2>/dev/null' EXIT
     trap '_az_linux_cleanup; return 1' INT TERM
 
     # --- Create resource group ---
@@ -529,6 +551,16 @@ gcp-linux() {
     local sync_dir="$PWD"
 
     while [[ $# -gt 0 ]]; do
+        # These options consume a value. Without this guard `shift 2` fails when the
+        # value is missing, $# never decreases, and the loop spins forever.
+        case $1 in
+            --zone|--project|--type|--arch|--dir)
+                if [[ $# -lt 2 ]]; then
+                    echo "${RED}ERROR${NC}: $1 requires a value" >&2
+                    return 1
+                fi
+                ;;
+        esac
         case $1 in
             --zone)         zone="$2"; shift 2 ;;
             --project)      project="$2"; shift 2 ;;
@@ -616,6 +648,10 @@ gcp-linux() {
             image_family="ubuntu-2404-lts-amd64"
             image_project="ubuntu-os-cloud"
             ;;
+        *)
+            echo "${RED}ERROR${NC}: Unknown architecture: $architecture" >&2
+            return 1
+            ;;
     esac
 
     # --- Cleanup function ---
@@ -634,7 +670,8 @@ gcp-linux() {
         rm -f "$key_path" "${key_path}.pub"
         echo "${GREEN}OK${NC}: Temporary SSH key deleted"
     }
-    trap 'unfunction _gcp_linux_cleanup 2>/dev/null' RETURN
+    # zsh has no RETURN trap (bash-ism); inside a function EXIT is the return trap.
+    trap 'unfunction _gcp_linux_cleanup 2>/dev/null' EXIT
     trap '_gcp_linux_cleanup; return 1' INT TERM
 
     # --- Create firewall rule for SSH from my IP ---

@@ -14,6 +14,17 @@ set-dns-servers() {
 
     # Parse arguments
     while [[ $# -gt 0 ]]; do
+        # These options consume a value. Without this guard `shift 2` fails when the
+        # value is missing, $# never decreases, and the loop spins forever.
+        case "$1" in
+            --ipv4|--ipv6|--service)
+                if [[ $# -lt 2 ]]; then
+                    echo "Error: $1 requires a value" >&2
+                    echo "Use --help for usage information" >&2
+                    return 1
+                fi
+                ;;
+        esac
         case "$1" in
             --ipv4)
                 ipv4_servers="$2"
@@ -161,6 +172,13 @@ clear-dns-servers() {
 
     # Parse arguments
     while [[ $# -gt 0 ]]; do
+        # --service consumes a value. Without this guard `shift 2` fails when the
+        # value is missing, $# never decreases, and the loop spins forever.
+        if [[ "$1" == "--service" && $# -lt 2 ]]; then
+            echo "Error: --service requires a value" >&2
+            echo "Use --help for usage information" >&2
+            return 1
+        fi
         case "$1" in
             --service)
                 service="$2"
