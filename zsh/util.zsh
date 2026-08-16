@@ -36,7 +36,7 @@ wait-for-url() {
             if [[ "$(uname)" == "Darwin" ]]; then
                 say "${label} is back up" &
                 afplay /System/Library/Sounds/Glass.aiff 2>/dev/null &
-                local escaped_label="${label//\"/\\\"}"
+                local escaped_label="${${label//\\/\\\\}//\"/\\\"}"
                 osascript -e "display notification \"${escaped_label} is back up (HTTP $http_code)\" with title \"Service Recovered\" sound name \"Glass\"" 2>/dev/null
             fi
             return 0
@@ -61,7 +61,7 @@ code-git() {
 
 # # Non Essentials -- for vscode
 if [[ "$TERM_PROGRAM" != "vscode" ]]; then
-    # view current prs in dirs matched by find . -type d -maxdepth 1 -name "<$1>"
+    # view current prs in dirs matched by find . -type d -mindepth 1 -maxdepth 1 -name "<$1>"
     # view-pr-dirs "velero*"
     function view-pr-dirs() {
         if ! command -v gh &>/dev/null; then
@@ -73,11 +73,11 @@ if [[ "$TERM_PROGRAM" != "vscode" ]]; then
             echo "Example: view-pr-dirs \"velero*\"" >&2
             return 1
         fi
-        if [[ -z "$(find . -type d -maxdepth 1 -name "$1" -print -quit)" ]]; then
+        if [[ -z "$(find . -type d -mindepth 1 -maxdepth 1 -name "$1" -print -quit)" ]]; then
             echo "❌ No directories found matching pattern: $1" >&2
             return 1
         fi
-        find . -type d -maxdepth 1 -name "$1" -exec sh -c 'cd "$1" || { echo "Failed to cd into $1" >&2; exit 1; }; pwd && gh pr view --web' _ {} \;
+        find . -type d -mindepth 1 -maxdepth 1 -name "$1" -exec sh -c 'cd "$1" || { echo "Failed to cd into $1" >&2; exit 1; }; pwd && gh pr view --web' _ {} \;
     }
     alias view-pr-dirs='noglob view-pr-dirs'
 fi
