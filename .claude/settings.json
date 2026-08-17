@@ -1,0 +1,29 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "jq -r '.tool_input.file_path // empty' | { read -r f; case \"$f\" in *.zsh) if ! out=$(zsh -n \"$f\" 2>&1); then echo \"$out\" >&2; exit 2; fi ;; esac; }",
+            "statusMessage": "Checking .zsh syntax"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "if": "Bash(git commit *)",
+            "command": "git diff --cached --name-only --diff-filter=ACM -- '*.zsh' | while read -r f; do out=$(zsh -n \"$f\" 2>&1) || { echo \"$f: $out\" >&2; exit 2; }; done",
+            "statusMessage": "Checking staged .zsh syntax"
+          }
+        ]
+      }
+    ]
+  }
+}
