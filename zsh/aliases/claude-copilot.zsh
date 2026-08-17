@@ -252,6 +252,9 @@ claude-vertex() {
         export CLAUDE_CODE_USE_VERTEX=1
         export CLOUD_ML_REGION ANTHROPIC_VERTEX_PROJECT_ID
         [[ -n "$ANTHROPIC_VERTEX_BASE_URL" ]] && export ANTHROPIC_VERTEX_BASE_URL
+        export ANTHROPIC_MODEL="${ANTHROPIC_MODEL:-claude-sonnet-5[1m]}"
+        export ANTHROPIC_DEFAULT_OPUS_MODEL="${ANTHROPIC_DEFAULT_OPUS_MODEL:-claude-opus-4-8[1m]}"
+        export ANTHROPIC_DEFAULT_SONNET_MODEL="${ANTHROPIC_DEFAULT_SONNET_MODEL:-claude-sonnet-5[1m]}"
         command claude "$@"
     )
 }
