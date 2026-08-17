@@ -64,6 +64,9 @@ export BUILDX_INSTANCE=default
 export HAPPY_CLAUDE_PATH=~/.local/bin/claude
 # Keep Monitor tool working under claude-copilot/cec (see zsh/aliases/claude-copilot.zsh)
 export CLAUDE_COPILOT_ENABLE_MONITOR=1
+# Keep TaskCreate/TaskUpdate tools enabled even in non-interactive sessions
+# (isTodoV2Enabled() otherwise disables them there by default)
+export CLAUDE_CODE_ENABLE_TASKS=1
 # Load OS-specific essentials (lightweight aliases always loaded)
 [[ "$OSTYPE" == darwin* ]] && _safe_source ~/git/dotfiles/zsh/macos.zsh
 # Essential utilities (needed for basic shell functionality)
