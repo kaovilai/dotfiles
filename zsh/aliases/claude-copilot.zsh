@@ -435,12 +435,22 @@ claude-vertex() {
     local sonnet_stripped="${sonnet_model%\[*}"
     local haiku_stripped="${haiku_model%\[*}"
 
+    # Confirmed live (proxy log from an already-running claude session):
+    # Auto Mode's background classifier request arrived with
+    # model=claude-haiku-4-5-20251001 -- the CLI's own built-in dated
+    # default -- even though ANTHROPIC_DEFAULT_HAIKU_MODEL wasn't exported
+    # by that (older) session yet. Register the dated ID as an extra alias
+    # to the same working backend, alongside the resolved haiku_stripped
+    # value, so this doesn't silently break again for any session that
+    # predates a haiku_model default change, or if the CLI ever sends the
+    # dated form regardless of the exported override.
     if ! curl -sf --max-time 2 "${base}/health/liveliness" -o /dev/null; then
         _claude_vertex_proxy_write_config "$master_key" \
-            "${main_stripped}"   "${main_stripped}" \
-            "${opus_stripped}"   "${opus_stripped}" \
-            "${sonnet_stripped}" "${sonnet_stripped}" \
-            "${haiku_stripped}"  "${haiku_stripped}"
+            "${main_stripped}"           "${main_stripped}" \
+            "${opus_stripped}"           "${opus_stripped}" \
+            "${sonnet_stripped}"         "${sonnet_stripped}" \
+            "${haiku_stripped}"          "${haiku_stripped}" \
+            "claude-haiku-4-5-20251001"  "${haiku_stripped}"
         echo "Starting claude-vertex proxy (litellm ${CLAUDE_VERTEX_PROXY_LITELLM_VERSION}) on ${base} (log: ${log})..."
         # "google" extra pulls google-cloud-aiplatform -- without it litellm
         # fails at request time with "Google Cloud SDK not found", since
