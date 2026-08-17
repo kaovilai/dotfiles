@@ -38,3 +38,18 @@ znap source zsh-users/zsh-syntax-highlighting
 zstyle ':autocomplete:*' min-input 2
 znap source marlonrichert/zsh-autocomplete
 
+# -- Daily auto-update of all znap plugins --
+# znap does NOT auto-update; `znap pull` is manual. Run it at most once per 24h,
+# in the background, so plugin repos (pure, syntax-highlighting, etc.) stay fresh
+# without slowing shell startup. Guarded by a timestamp file's mtime.
+() {
+  setopt local_options extended_glob
+  local _stamp=~/.zsh-snap/.last-pull
+  # Run when stamp is missing OR older than 24h (mh+24 = modified 24+ hours ago).
+  local -a _stale=($_stamp(#qN.mh+24))
+  if [[ ! -f $_stamp ]] || (( ${#_stale} > 0 )); then
+    ( znap pull &> ~/.zsh-snap/.last-pull.log ) &!
+    print -n > $_stamp   # touch stamp now so concurrent shells don't also pull
+  fi
+}
+
