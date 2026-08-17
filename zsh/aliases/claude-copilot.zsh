@@ -233,14 +233,22 @@ copilot-api-kill() {
 }
 
 # ---------------------------------------------------------------------------
-# claude-vertex: raw claude binary, routed through Google Vertex AI. Unlike
-# claude-copilot, no local gateway process is needed — Claude Code talks to
-# Vertex directly once CLAUDE_CODE_USE_VERTEX is set. Requires
+# claude-vertex-native-adc: raw claude binary, routed through Google Vertex
+# AI via Claude Code's own built-in CLAUDE_CODE_USE_VERTEX integration — no
+# local gateway process, Claude Code talks to Vertex directly. Requires
 # CLOUD_ML_REGION and ANTHROPIC_VERTEX_PROJECT_ID already exported in the
 # shell (same vars computer-use-claude/cecon/claude-container use elsewhere
 # in this repo) and gcloud ADC set up (`gcloud auth application-default
 # login`).
-claude-vertex() {
+#
+# Trade-off vs. claude-vertex() (the default, proxy-based path below):
+# Monitor tool (https://code.claude.com/docs/en/tools-reference#monitor-tool)
+# is unconditionally unavailable whenever CLAUDE_CODE_USE_VERTEX is set — no
+# override flag exists, per the docs. Use this native-ADC path only when you
+# specifically don't want the local litellm proxy dependency (e.g. no `uv`
+# available, or troubleshooting whether an issue is proxy-side) and don't
+# need Monitor.
+claude-vertex-native-adc() {
     if [[ -z "$CLOUD_ML_REGION" || -z "$ANTHROPIC_VERTEX_PROJECT_ID" ]]; then
         echo "❌ CLOUD_ML_REGION and ANTHROPIC_VERTEX_PROJECT_ID must be exported to use Vertex AI." >&2
         return 1
@@ -262,8 +270,9 @@ claude-vertex() {
 # ---------------------------------------------------------------------------
 # claude-vertex-dashboard: open the Google Cloud console dashboard for the
 # Vertex AI project Claude Code routes through (ANTHROPIC_VERTEX_PROJECT_ID —
-# same var claude-vertex requires above), via the comet skill's opener script
-# so it's a single call instead of manually building/opening the URL.
+# same var claude-vertex()/claude-vertex-native-adc() require), via the comet
+# skill's opener script so it's a single call instead of manually building/
+# opening the URL.
 claude-vertex-dashboard() {
     if [[ -z "$ANTHROPIC_VERTEX_PROJECT_ID" ]]; then
         echo "❌ ANTHROPIC_VERTEX_PROJECT_ID must be exported to open its dashboard." >&2
@@ -276,6 +285,201 @@ claude-vertex-dashboard() {
     fi
     "$script" "https://console.cloud.google.com/home/dashboard?project=${ANTHROPIC_VERTEX_PROJECT_ID}"
 }
+
+# ---------------------------------------------------------------------------
+# claude-vertex: raw claude binary, routed through Google Vertex AI's native
+# Claude models via a local LiteLLM proxy, instead of Claude Code's built-in
+# CLAUDE_CODE_USE_VERTEX integration (see claude-vertex-native-adc() above).
+# This is the DEFAULT vertex path — pick this unless you have a specific
+# reason to use the native-ADC one instead.
+#
+# Why this exists: Claude Code's Monitor tool
+# (https://code.claude.com/docs/en/tools-reference#monitor-tool) is
+# unconditionally unavailable whenever CLAUDE_CODE_USE_VERTEX is set (also
+# Bedrock, MS Foundry) — there is no override flag, per the docs. LiteLLM's
+# proxy speaks Anthropic's own /v1/messages shape on the client side while
+# translating to Vertex's native streamRawPredict shape upstream, so from
+# Claude Code's perspective this looks like a direct-API-shaped backend
+# (ANTHROPIC_BASE_URL/ANTHROPIC_AUTH_TOKEN, same as claude-copilot()) and
+# Monitor stays enabled.
+#
+# Vetted alternative considered and rejected: 1rgs/claude-code-proxy. Its
+# README's "USE_VERTEX_AUTH" mode only maps to Gemini models via Vertex, not
+# Anthropic/Claude models — it has no path to Claude-on-Vertex at all, so it
+# can't do this job. LiteLLM does (vertex_ai/claude-* model routing).
+#
+# Pinned to litellm==1.97.0, NOT "latest": PyPI releases 1.82.7/1.82.8
+# shipped credential-stealing malware (BerriAI/litellm#24518). 1.97.0 is
+# well past that and the current stable release as of this writing — bump
+# deliberately, don't float.
+#
+# ALSO pinned: fastapi==0.136.3 (litellm's own declared minimum for the
+# proxy extra). Verified by actually running this exact command: litellm
+# 1.97.0's fastapi dependency spec is `fastapi<1.0,>=0.136.3` — unbounded
+# above — so an unpinned install resolves today's newest fastapi (0.141.1),
+# which has removed the private `fastapi.dependencies.utils.get_flat_dependant`
+# that litellm's proxy imports internally, crashing the server on startup
+# with `ImportError: cannot import name 'get_flat_dependant'` before falling
+# through to a second, more confusing `ModuleNotFoundError: No module named
+# 'proxy_server'`. Confirmed fastapi 0.136.3 through at least 0.140.x still
+# has this symbol; only pin it away from "latest", don't remove the pin.
+#
+# Requires: uv (runs litellm via `uv tool run --from`, with fastapi pinned
+# via `--with`, so no separate venv management is needed), gcloud ADC
+# (`gcloud auth application-default login`), and CLOUD_ML_REGION /
+# ANTHROPIC_VERTEX_PROJECT_ID already exported (same vars claude-vertex()
+# requires above).
+#
+# Known caveats from LiteLLM's own issue tracker (not hypothetical):
+#   - Extended-thinking can break on Vertex (beta headers dropped upstream,
+#     litellm#15299) — if you hit a "max_tokens must be greater than
+#     thinking.budget_tokens" error, this is why.
+#   - Cost-logging can crash on web-search tool use via Vertex (litellm#12063).
+# Prompt-caching parity with the raw Anthropic API is unverified either way.
+#
+# Model IDs: base names come from ANTHROPIC_MODEL/ANTHROPIC_DEFAULT_*_MODEL,
+# same as claude-vertex() — with any "[1m]" 1M-context suffix stripped for
+# BOTH the litellm model_list model_name key AND the litellm_params.model
+# backend value. Confirmed by testing: Claude Code strips "[1m]" before
+# putting the model name in the actual request body it sends to the
+# proxy — registering model_name with the bracket suffix still attached
+# caused a 400 "Invalid model name passed in model=claude-sonnet-5" because
+# the wire request used the bracket-free name and matched nothing in the
+# config. ANTHROPIC_MODEL etc. still keep the "[1m]" suffix when exported
+# below (that's what tells the CLI itself to request 1M-context mode); only
+# the proxy's own config needs the stripped form.
+#
+# Model ID format verified end-to-end (real /v1/messages round-trip against
+# live Vertex, not just docs): plain aliases like "claude-sonnet-5" DO
+# resolve as a Vertex publisher model ID — no "@YYYYMMDD" dated-snapshot
+# suffix needed, despite LiteLLM's own Vertex-partner docs
+# (https://docs.litellm.ai/docs/providers/vertex_partner) only listing
+# older dated-snapshot examples (that page is simply stale for newer
+# models). If a future model alias 404s, check the Vertex AI Model Garden
+# console for that project/region and override via ANTHROPIC_MODEL etc.
+# before calling this function.
+typeset -g CLAUDE_VERTEX_PROXY_LITELLM_VERSION="1.97.0"
+typeset -g CLAUDE_VERTEX_PROXY_FASTAPI_VERSION="0.136.3"
+typeset -g _claude_vertex_proxy_config="${XDG_CONFIG_HOME:-$HOME/.config}/claude-vertex-proxy.yaml"
+
+_claude_vertex_proxy_write_config() {
+    local master_key="$1"
+    shift
+    # $@ = alternating model_name/backend_model pairs
+    mkdir -p "${_claude_vertex_proxy_config:h}"
+    {
+        echo "model_list:"
+        while (( $# >= 2 )); do
+            local model_name="$1" backend_model="$2"
+            shift 2
+            # vertex_ai_project/vertex_ai_location, NOT vertex_project/
+            # vertex_location -- those latter two are the field names for
+            # litellm's generic Gemini vertex_ai/ route; the Anthropic
+            # partner-model route
+            # (https://docs.litellm.ai/docs/providers/vertex_partner)
+            # documents this different pair for claude-on-vertex specifically.
+            cat <<EOF
+  - model_name: ${model_name}
+    litellm_params:
+      model: vertex_ai/${backend_model}
+      vertex_ai_project: "${ANTHROPIC_VERTEX_PROJECT_ID}"
+      vertex_ai_location: "${CLOUD_ML_REGION}"
+EOF
+        done
+        echo "litellm_settings:"
+        echo "  master_key: \"${master_key}\""
+    } >| "$_claude_vertex_proxy_config"
+}
+
+claude-vertex() {
+    if [[ -z "$CLOUD_ML_REGION" || -z "$ANTHROPIC_VERTEX_PROJECT_ID" ]]; then
+        echo "❌ CLOUD_ML_REGION and ANTHROPIC_VERTEX_PROJECT_ID must be exported to use Vertex AI." >&2
+        return 1
+    fi
+    if ! command -v uv &>/dev/null; then
+        echo "❌ uv not found. Install it with: brew install uv" >&2
+        return 1
+    fi
+
+    local port="${CLAUDE_VERTEX_PROXY_PORT:-4142}"
+    local base="http://127.0.0.1:${port}"
+    local log="${TMPDIR:-/tmp}/claude-vertex-proxy-${port}.log"
+    local master_key="${CLAUDE_VERTEX_PROXY_TOKEN:-vertex-proxy-local}"
+
+    local main_model="${ANTHROPIC_MODEL:-claude-sonnet-5[1m]}"
+    local opus_model="${ANTHROPIC_DEFAULT_OPUS_MODEL:-claude-opus-4-8[1m]}"
+    local sonnet_model="${ANTHROPIC_DEFAULT_SONNET_MODEL:-claude-sonnet-5[1m]}"
+
+    # Claude Code strips any "[1m]" 1M-context suffix before putting the
+    # model name in the actual request body sent to the proxy -- confirmed
+    # by testing: a config registering "claude-sonnet-5[1m]" as model_name
+    # got a 400 "Invalid model name passed in model=claude-sonnet-5" because
+    # the wire request used the bracket-free name. So model_name here must
+    # be the stripped name (what the CLI actually sends), not the
+    # bracket-suffixed value from ANTHROPIC_MODEL/ANTHROPIC_DEFAULT_*_MODEL.
+    local main_stripped="${main_model%\[*}"
+    local opus_stripped="${opus_model%\[*}"
+    local sonnet_stripped="${sonnet_model%\[*}"
+
+    if ! curl -sf --max-time 2 "${base}/health/liveliness" -o /dev/null; then
+        _claude_vertex_proxy_write_config "$master_key" \
+            "${main_stripped}"   "${main_stripped}" \
+            "${opus_stripped}"   "${opus_stripped}" \
+            "${sonnet_stripped}" "${sonnet_stripped}"
+        echo "Starting claude-vertex proxy (litellm ${CLAUDE_VERTEX_PROXY_LITELLM_VERSION}) on ${base} (log: ${log})..."
+        # "google" extra pulls google-cloud-aiplatform -- without it litellm
+        # fails at request time with "Google Cloud SDK not found", since
+        # "proxy" alone doesn't include it (confirmed by testing).
+        (uv tool run --with "fastapi==${CLAUDE_VERTEX_PROXY_FASTAPI_VERSION}" \
+            --from "litellm[proxy,google]==${CLAUDE_VERTEX_PROXY_LITELLM_VERSION}" litellm \
+            --config "$_claude_vertex_proxy_config" --port "$port" --host 127.0.0.1 >> "${log}" 2>&1 &)
+        local i
+        for i in {1..60}; do
+            curl -sf --max-time 2 "${base}/health/liveliness" -o /dev/null && break
+            sleep 1
+        done
+        if ! curl -sf --max-time 2 "${base}/health/liveliness" -o /dev/null; then
+            echo "❌ claude-vertex proxy not ready on ${base} after 60s." >&2
+            echo "   Check the log: tail -f ${log}" >&2
+            return 1
+        fi
+    fi
+
+    _claude_copilot_unset_env
+    (
+        export ANTHROPIC_BASE_URL="${base}"
+        export ANTHROPIC_AUTH_TOKEN="${master_key}"
+        export ANTHROPIC_MODEL="${main_model}"
+        export ANTHROPIC_DEFAULT_OPUS_MODEL="${opus_model}"
+        export ANTHROPIC_DEFAULT_SONNET_MODEL="${sonnet_model}"
+        command claude "$@"
+    )
+}
+# claude-vertex-proxy: pre-rename alias -- claude-vertex() is now the
+# default vertex path (proxy-based); the old CLAUDE_CODE_USE_VERTEX-native
+# path moved to claude-vertex-native-adc().
+alias claude-vertex-proxy='claude-vertex'
+
+# claude-vertex-kill: stop the detached litellm proxy started by
+# claude-vertex(). Mirrors copilot-api-kill/ollama-serve-kill above.
+claude-vertex-kill() {
+    local port="${CLAUDE_VERTEX_PROXY_PORT:-4142}"
+    local -a pids
+    pids=("${(f)$(lsof -ti "tcp:${port}" -sTCP:LISTEN 2>/dev/null)}")
+    if [[ -z "${pids[1]}" ]]; then
+        echo "No process listening on port ${port}."
+        return 1
+    fi
+    echo "Killing claude-vertex proxy on port ${port} (pid: ${pids[*]})..."
+    kill "${pids[@]}" 2>/dev/null
+    sleep 1
+    pids=("${(f)$(lsof -ti "tcp:${port}" -sTCP:LISTEN 2>/dev/null)}")
+    if [[ -n "${pids[1]}" ]]; then
+        echo "Still alive, sending SIGKILL..."
+        kill -9 "${pids[@]}" 2>/dev/null
+    fi
+}
+alias claude-vertex-proxy-kill='claude-vertex-kill'
 
 # ---------------------------------------------------------------------------
 # claude-ollama: raw claude binary, routed through a local Ollama server
@@ -912,9 +1116,12 @@ claude-ollama-models() {
 
 # ---------------------------------------------------------------------------
 # claude mode switching: `claude` dispatches to the raw claude binary through
-# Google Vertex AI (vertex, default), the copilot-api gateway (copilot), or a
-# local Ollama server (ollama). Persisted in ~/.config/claude-mode so the
-# choice survives across shells.
+# a local LiteLLM proxy fronting Google Vertex AI's Claude models with
+# Monitor tool support (vertex, DEFAULT), Claude Code's built-in
+# CLAUDE_CODE_USE_VERTEX native integration with no Monitor support
+# (vertex-native-adc), the copilot-api gateway (copilot), or a local Ollama
+# server (ollama). Persisted in ~/.config/claude-mode so the choice survives
+# across shells.
 
 typeset -g _claude_mode_file="${XDG_CONFIG_HOME:-$HOME/.config}/claude-mode"
 
@@ -922,19 +1129,23 @@ _claude_mode_get() {
     local mode=""
     [[ -r "$_claude_mode_file" ]] && IFS= read -r mode < "$_claude_mode_file"
     case "$mode" in
-        copilot) print -r -- copilot ;;
-        ollama)  print -r -- ollama ;;
-        *)       print -r -- vertex ;;   # missing/unknown fails safe to vertex
+        copilot)           print -r -- copilot ;;
+        ollama)            print -r -- ollama ;;
+        vertex-native-adc) print -r -- vertex-native-adc ;;
+        # "vertex-proxy" is a pre-rename persisted value from before
+        # claude-vertex() itself became the proxy-based default -- treat it
+        # the same as "vertex" rather than erroring on an old config file.
+        *)                 print -r -- vertex ;;   # missing/unknown fails safe to vertex
     esac
 }
 
 claude-mode() {
     if (( $# > 1 )); then
-        echo "Usage: claude-mode [copilot|vertex|ollama]" >&2
+        echo "Usage: claude-mode [copilot|vertex|vertex-native-adc|ollama]" >&2
         return 1
     fi
     case "$1" in
-        copilot|vertex|ollama)
+        copilot|vertex|vertex-native-adc|ollama)
             # >| overrides NO_CLOBBER; fail loudly if persistence fails
             if ! mkdir -p "${_claude_mode_file:h}" ||
                ! print -r -- "$1" >| "$_claude_mode_file"; then
@@ -945,10 +1156,10 @@ claude-mode() {
             ;;
         "")
             echo "claude mode: $(_claude_mode_get)"
-            echo "usage: claude-mode [copilot|vertex|ollama]"
+            echo "usage: claude-mode [copilot|vertex|vertex-native-adc|ollama]"
             ;;
         *)
-            echo "Usage: claude-mode [copilot|vertex|ollama]" >&2
+            echo "Usage: claude-mode [copilot|vertex|vertex-native-adc|ollama]" >&2
             return 1
             ;;
     esac
@@ -961,10 +1172,11 @@ unalias claude 2>/dev/null || true   # tolerate missing alias under ERR_EXIT
 function claude {
     local mode="$(_claude_mode_get)"
     # stderr so piped/scripted output (e.g. claude -p) stays clean
-    echo "claude mode: ${mode} (switch: claude-mode copilot|vertex|ollama)" >&2
+    echo "claude mode: ${mode} (switch: claude-mode copilot|vertex|vertex-native-adc|ollama)" >&2
     case "$mode" in
-        copilot) claude-copilot "$@" ;;
-        ollama)  claude-ollama "$@" ;;
-        *)       claude-vertex "$@" ;;
+        copilot)           claude-copilot "$@" ;;
+        ollama)            claude-ollama "$@" ;;
+        vertex-native-adc) claude-vertex-native-adc "$@" ;;
+        *)                 claude-vertex "$@" ;;
     esac
 }
