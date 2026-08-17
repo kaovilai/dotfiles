@@ -51,7 +51,7 @@ load-minio-config() {
         return 1
     fi
     
-    cat "$config_file"
+    < "$config_file"
 }
 
 list-minio-deployments() {
