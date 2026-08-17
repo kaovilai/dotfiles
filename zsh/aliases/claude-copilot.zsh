@@ -409,6 +409,17 @@ claude-vertex() {
     local main_model="${ANTHROPIC_MODEL:-claude-sonnet-5[1m]}"
     local opus_model="${ANTHROPIC_DEFAULT_OPUS_MODEL:-claude-opus-4-8[1m]}"
     local sonnet_model="${ANTHROPIC_DEFAULT_SONNET_MODEL:-claude-sonnet-5[1m]}"
+    # Unlike opus/sonnet, claude-vertex-native-adc() and the CLI's own
+    # built-in default both leave haiku unset -- fine for those paths (the
+    # native Vertex integration resolves the CLI's baked-in default itself),
+    # but litellm's proxy strictly validates the request's model against
+    # its registered model_list (same failure mode we hit with sonnet), so
+    # background/Auto-Mode calls defaulting to haiku 400 here unless it's
+    # explicitly registered too, same as opus/sonnet already are.
+    # "claude-haiku-4-5-20251001" (dated) 404s against Vertex; the bare
+    # alias below is what actually resolves -- verified live, Vertex
+    # itself reports back model="claude-haiku-4-5-20251001" once resolved.
+    local haiku_model="${ANTHROPIC_DEFAULT_HAIKU_MODEL:-claude-haiku-4-5}"
 
     # Claude Code strips any "[1m]" 1M-context suffix before putting the
     # model name in the actual request body sent to the proxy -- confirmed
@@ -417,15 +428,19 @@ claude-vertex() {
     # the wire request used the bracket-free name. So model_name here must
     # be the stripped name (what the CLI actually sends), not the
     # bracket-suffixed value from ANTHROPIC_MODEL/ANTHROPIC_DEFAULT_*_MODEL.
+    # haiku_model has no "[1m]" suffix by default, but strip defensively in
+    # case a caller overrides ANTHROPIC_DEFAULT_HAIKU_MODEL with one.
     local main_stripped="${main_model%\[*}"
     local opus_stripped="${opus_model%\[*}"
     local sonnet_stripped="${sonnet_model%\[*}"
+    local haiku_stripped="${haiku_model%\[*}"
 
     if ! curl -sf --max-time 2 "${base}/health/liveliness" -o /dev/null; then
         _claude_vertex_proxy_write_config "$master_key" \
             "${main_stripped}"   "${main_stripped}" \
             "${opus_stripped}"   "${opus_stripped}" \
-            "${sonnet_stripped}" "${sonnet_stripped}"
+            "${sonnet_stripped}" "${sonnet_stripped}" \
+            "${haiku_stripped}"  "${haiku_stripped}"
         echo "Starting claude-vertex proxy (litellm ${CLAUDE_VERTEX_PROXY_LITELLM_VERSION}) on ${base} (log: ${log})..."
         # "google" extra pulls google-cloud-aiplatform -- without it litellm
         # fails at request time with "Google Cloud SDK not found", since
@@ -452,6 +467,7 @@ claude-vertex() {
         export ANTHROPIC_MODEL="${main_model}"
         export ANTHROPIC_DEFAULT_OPUS_MODEL="${opus_model}"
         export ANTHROPIC_DEFAULT_SONNET_MODEL="${sonnet_model}"
+        export ANTHROPIC_DEFAULT_HAIKU_MODEL="${haiku_model}"
         command claude "$@"
     )
 }
