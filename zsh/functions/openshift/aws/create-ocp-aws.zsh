@@ -90,6 +90,10 @@ create-ocp-aws() {
         echo "  - AWS credentials must be configured"
         echo "  - SSH key must be added to the agent (ssh-add ~/.ssh/id_rsa)"
         echo "  - Pull secret must exist at ~/pull-secret.txt"
+        echo "  - OCP_WORKER_INSTANCE_TYPE: optional override for the default (non-metal) worker"
+        echo "    pool's instance size (e.g. m5.2xlarge/m6a.2xlarge for CPU/memory-heavy day-2"
+        echo "    workloads like Ceph/rook-ceph). Mutually exclusive with --kvm-all-workers."
+        echo "  - OCP_CONTROLPLANE_INSTANCE_TYPE: optional override for control-plane instance size."
         echo ""
         echo "KVM/metal notes:"
         echo "  - Bare-metal instances only expose /dev/kvm on '.metal' EC2 types -- non-metal"
@@ -410,6 +414,16 @@ create-ocp-aws() {
         compute_platform_yaml="  platform:
     aws:
       type: $metal_instance_type"
+    elif [[ -n "$OCP_WORKER_INSTANCE_TYPE" ]]; then
+        # OCP_WORKER_INSTANCE_TYPE: optional override for the default (non-metal)
+        # worker pool's instance size, e.g. when a workload needs more vCPU/memory
+        # than the installer's own AWS default (m6i.xlarge). Sibling to
+        # OCP_CONTROLPLANE_INSTANCE_TYPE below, just for compute instead of
+        # controlPlane. Mutually exclusive with --kvm-all-workers (checked above).
+        echo "INFO: OCP_WORKER_INSTANCE_TYPE set: worker nodes will be $OCP_WORKER_INSTANCE_TYPE"
+        compute_platform_yaml="  platform:
+    aws:
+      type: $OCP_WORKER_INSTANCE_TYPE"
     fi
     # OCP_CONTROLPLANE_INSTANCE_TYPE: optional override for control-plane (master)
     # instance size, e.g. when the default (installer's own AWS default, m6i.xlarge
