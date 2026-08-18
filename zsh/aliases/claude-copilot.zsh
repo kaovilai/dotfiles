@@ -32,8 +32,11 @@ alias copilot-api="NODE_USE_SYSTEM_CA=1 bun run --cwd \$HOME/git/copilot-api ./s
 # Also defines claude-vertex (raw claude binary routed through Google Vertex
 # AI, using CLOUD_ML_REGION/ANTHROPIC_VERTEX_PROJECT_ID already exported in
 # the shell — same vars used by computer-use-claude/cecon elsewhere in this
-# repo), claude-vertex-dashboard (opens that project's GCP console dashboard
-# via the comet skill), claude-ollama (raw claude binary routed through a
+# repo — auto-picking the newest model per tier that this project's org
+# policy actually allows, since corp Vertex environments sometimes block
+# specific models like the latest Opus; see claude-vertex-models to force
+# a re-check), claude-vertex-dashboard (opens that project's GCP console
+# dashboard via the comet skill), claude-ollama (raw claude binary routed through a
 # local Ollama server on :11434 for fully offline use, auto-selecting a
 # gemma4 model per opus/sonnet/haiku tier, with a memory pre-flight check
 # before loading each one — see claude-ollama-models to force a re-pick,
@@ -391,6 +394,211 @@ EOF
     } >| "$_claude_vertex_proxy_config"
 }
 
+# ---------------------------------------------------------------------------
+# claude-vertex model auto-pick: some corp Vertex AI orgs block specific
+# Claude models via org policy (surfaces only as a 403 PERMISSION_DENIED at
+# request time -- there's no separate "list what my org allows" API on
+# Vertex). These helpers list every Claude id Model Garden offers in the
+# region, then probe each one newest-first via Vertex's free count-tokens
+# endpoint (no generation cost, unlike a real predict call -- see
+# https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/partner-models/claude/count-tokens)
+# until one actually works, so claude-vertex() degrades to e.g.
+# claude-opus-4-8 automatically when claude-opus-5 is blocked, instead of
+# hard-failing at session start on a hardcoded id that may not be allowed.
+# Resolved picks are cached in $_claude_vertex_models_file (keyed by
+# project+region) so this only re-probes once per
+# CLAUDE_VERTEX_MODEL_CACHE_TTL, not on every claude-vertex launch.
+
+typeset -g _claude_vertex_models_file="${XDG_CONFIG_HOME:-$HOME/.config}/claude-vertex-models"
+
+_claude_vertex_access_token() {
+    gcloud auth application-default print-access-token 2>/dev/null
+}
+
+# List every Anthropic publisher model Model Garden offers in
+# $CLOUD_ML_REGION -- the region-wide catalog, NOT filtered by this
+# project's org policy (Vertex has no API for that; see the probe step
+# below for the actual access check). The list response's array field name
+# ("publisherModels" vs "models") isn't independently confirmed from
+# Google's docs, so this accepts either key defensively rather than
+# asserting one.
+_claude_vertex_publisher_models() {
+    local token
+    token=$(_claude_vertex_access_token) || return 1
+    [[ -z "$token" ]] && return 1
+    curl -sf --max-time 10 \
+        -H "Authorization: Bearer ${token}" \
+        "https://${CLOUD_ML_REGION}-aiplatform.googleapis.com/v1/publishers/anthropic/models"
+}
+
+# Version-descending list of bare model ids (no "publishers/anthropic/models/"
+# prefix) for one family (opus|sonnet|haiku) from a publisher-models list
+# response. Reuses the same numeric major-then-minor version compare as
+# _claude_copilot_latest_model above, generalized to keep every match
+# sorted instead of collapsing to the top one -- callers still resolve to
+# exactly one id (see _claude_vertex_resolve_tier_model below), this just
+# gives the probe loop an order to walk.
+_claude_vertex_ranked_candidates() {
+    local family="$1" models_json="$2"
+    jq -r --arg fam "$family" '
+        (.publisherModels // .models // [])
+        | map(.name // empty)
+        | map(select(test("claude"; "i") and test($fam; "i")))
+        | map(sub("^publishers/anthropic/models/"; ""))
+        | map({id: .,
+               v: ((try (capture("(?<maj>[0-9]+)(?:[.-](?<min>[0-9]+))?")) catch null) as $m
+                   | if $m == null then 0
+                     else (($m.maj | tonumber) * 1000) + (($m.min // "0") | tonumber)
+                     end)})
+        | sort_by(.v) | reverse | .[].id
+    ' <<< "$models_json"
+}
+
+# Probe one model id via Vertex's free count-tokens endpoint. Model id must
+# be bare (no "@version" suffix) per the docs linked above.
+# Returns: 0 = usable, 1 = blocked (403 PERMISSION_DENIED), 2 = other error
+# (network/4xx/5xx -- treated as "try the next candidate" too, but logged
+# distinctly so a real outage doesn't read as a policy block).
+_claude_vertex_probe_model() {
+    local model_id="$1"
+    local token
+    token=$(_claude_vertex_access_token) || return 2
+    [[ -z "$token" ]] && return 2
+    local http_code
+    http_code=$(curl -s --max-time 10 -o /dev/null -w '%{http_code}' \
+        -H "Authorization: Bearer ${token}" \
+        -H "Content-Type: application/json" \
+        -d "$(jq -n --arg m "$model_id" '{anthropic_version:"vertex-2023-10-16", model:$m, messages:[{role:"user",content:"hi"}]}')" \
+        "https://${CLOUD_ML_REGION}-aiplatform.googleapis.com/v1/projects/${ANTHROPIC_VERTEX_PROJECT_ID}/locations/${CLOUD_ML_REGION}/publishers/anthropic/models/count-tokens:rawPredict")
+    case "$http_code" in
+        200) return 0 ;;
+        403) return 1 ;;
+        *)   return 2 ;;
+    esac
+}
+
+# Resolve one tier (opus|sonnet|haiku) to the newest model id Model Garden
+# offers in this region that this project's org policy actually allows --
+# walks the ranked candidate list newest-first (e.g. claude-opus-5, then
+# claude-opus-4-9, then claude-opus-4-8, ...), stopping at the first one
+# that probes successfully. Falls back to $2 (this tier's historical
+# hardcoded default) if the publisher list is empty/unreachable, or every
+# candidate is blocked/errors.
+_claude_vertex_resolve_tier_model() {
+    local family="$1" fallback="$2" models_json="$3"
+    local -a candidates
+    candidates=("${(@f)$(_claude_vertex_ranked_candidates "$family" "$models_json")}")
+    candidates=("${(@)candidates:#}")
+    if [[ ${#candidates[@]} -eq 0 ]]; then
+        echo "⚠️  No '${family}' models found in Model Garden for region ${CLOUD_ML_REGION} -- using fallback ${fallback}." >&2
+        print -r -- "$fallback"
+        return 0
+    fi
+    local c
+    for c in "${candidates[@]}"; do
+        _claude_vertex_probe_model "$c"
+        case $? in
+            0) print -r -- "$c"; return 0 ;;
+            1) echo "⚠️  '${c}' blocked by org policy for this project -- trying next ${family} candidate." >&2 ;;
+            2) echo "⚠️  Couldn't probe '${c}' (network/API error) -- trying next ${family} candidate." >&2 ;;
+        esac
+    done
+    echo "❌ No usable '${family}' model found (all candidates blocked or errored) -- falling back to ${fallback}. Check IAM/org policy." >&2
+    print -r -- "$fallback"
+}
+
+# Resolve (and cache) all three tiers in one go. Prints "opus sonnet haiku"
+# (space-separated bare ids) on stdout. Reuses the cache in
+# $_claude_vertex_models_file when it matches this project+region and is
+# under CLAUDE_VERTEX_MODEL_CACHE_TTL seconds old (default 1h) -- pass
+# force="force" to bypass the cache and re-probe unconditionally (see
+# claude-vertex-models below).
+_claude_vertex_get_models() {
+    local force="$1"
+    local ttl="${CLAUDE_VERTEX_MODEL_CACHE_TTL:-3600}"
+
+    if [[ -z "$force" && -r "$_claude_vertex_models_file" ]]; then
+        local cached_project cached_region cached_ts now
+        cached_project=$(awk -F= '$1=="PROJECT"{print $2; exit}' "$_claude_vertex_models_file")
+        cached_region=$(awk -F= '$1=="REGION"{print $2; exit}' "$_claude_vertex_models_file")
+        cached_ts=$(awk -F= '$1=="TIMESTAMP"{print $2; exit}' "$_claude_vertex_models_file")
+        now=$(date +%s)
+        if [[ "$cached_project" == "$ANTHROPIC_VERTEX_PROJECT_ID" && "$cached_region" == "$CLOUD_ML_REGION" \
+              && -n "$cached_ts" && $(( now - cached_ts )) -lt $ttl ]]; then
+            local o s h
+            o=$(awk -F= '$1=="OPUS"{print $2; exit}' "$_claude_vertex_models_file")
+            s=$(awk -F= '$1=="SONNET"{print $2; exit}' "$_claude_vertex_models_file")
+            h=$(awk -F= '$1=="HAIKU"{print $2; exit}' "$_claude_vertex_models_file")
+            if [[ -n "$o" && -n "$s" && -n "$h" ]]; then
+                print -r -- "${o} ${s} ${h}"
+                return 0
+            fi
+        fi
+    fi
+
+    local models_json
+    models_json=$(_claude_vertex_publisher_models) || echo "⚠️  Couldn't fetch Model Garden catalog -- using hardcoded fallbacks per tier." >&2
+
+    local opus sonnet haiku
+    opus=$(_claude_vertex_resolve_tier_model opus "claude-opus-4-8" "$models_json")
+    sonnet=$(_claude_vertex_resolve_tier_model sonnet "claude-sonnet-5" "$models_json")
+    haiku=$(_claude_vertex_resolve_tier_model haiku "claude-haiku-4-5" "$models_json")
+
+    mkdir -p "${_claude_vertex_models_file:h}"
+    {
+        echo "PROJECT=${ANTHROPIC_VERTEX_PROJECT_ID}"
+        echo "REGION=${CLOUD_ML_REGION}"
+        echo "TIMESTAMP=$(date +%s)"
+        echo "OPUS=${opus}"
+        echo "SONNET=${sonnet}"
+        echo "HAIKU=${haiku}"
+    } >| "$_claude_vertex_models_file"
+
+    print -r -- "${opus} ${sonnet} ${haiku}"
+}
+
+# claude-vertex-models: force re-probe of all three tiers (or one, if
+# passed), bypassing the cache TTL. Optional convenience, not a
+# prerequisite -- claude-vertex() auto-probes on its own the first time,
+# or once the cache goes stale. Mirrors claude-ollama-models's shape.
+claude-vertex-models() {
+    if [[ -z "$CLOUD_ML_REGION" || -z "$ANTHROPIC_VERTEX_PROJECT_ID" ]]; then
+        echo "❌ CLOUD_ML_REGION and ANTHROPIC_VERTEX_PROJECT_ID must be exported to probe Vertex models." >&2
+        return 1
+    fi
+    case "$1" in
+        ""|opus|sonnet|haiku) ;;
+        *)
+            echo "Usage: claude-vertex-models [opus|sonnet|haiku]" >&2
+            return 1
+            ;;
+    esac
+    if (( $# > 1 )); then
+        echo "Usage: claude-vertex-models [opus|sonnet|haiku]" >&2
+        return 1
+    fi
+    local resolved opus sonnet haiku
+    resolved=$(_claude_vertex_get_models force) || return 1
+    opus="${resolved%% *}"
+    local rest="${resolved#* }"
+    sonnet="${rest%% *}"
+    haiku="${rest#* }"
+    case "$1" in
+        opus)   echo "opus: ${opus}" ;;
+        sonnet) echo "sonnet: ${sonnet}" ;;
+        haiku)  echo "haiku: ${haiku}" ;;
+        "")
+            echo "opus: ${opus}"
+            echo "sonnet: ${sonnet}"
+            echo "haiku: ${haiku}"
+            ;;
+        *)
+            echo "Usage: claude-vertex-models [opus|sonnet|haiku]" >&2
+            return 1
+            ;;
+    esac
+}
+
 claude-vertex() {
     if [[ -z "$CLOUD_ML_REGION" || -z "$ANTHROPIC_VERTEX_PROJECT_ID" ]]; then
         echo "❌ CLOUD_ML_REGION and ANTHROPIC_VERTEX_PROJECT_ID must be exported to use Vertex AI." >&2
@@ -406,9 +614,31 @@ claude-vertex() {
     local log="${TMPDIR:-/tmp}/claude-vertex-proxy-${port}.log"
     local master_key="${CLAUDE_VERTEX_PROXY_TOKEN:-vertex-proxy-local}"
 
-    local main_model="${ANTHROPIC_MODEL:-claude-sonnet-5[1m]}"
-    local opus_model="${ANTHROPIC_DEFAULT_OPUS_MODEL:-claude-opus-4-8[1m]}"
-    local sonnet_model="${ANTHROPIC_DEFAULT_SONNET_MODEL:-claude-sonnet-5[1m]}"
+    # Auto-pick the newest AVAILABLE (org-policy-unrestricted) model per
+    # tier when the caller hasn't explicitly pinned it -- see the
+    # _claude_vertex_* helpers above. Only probes when at least one of the
+    # four vars below is unset; if the caller already exported all four,
+    # this whole block (and the network calls it'd trigger) is skipped and
+    # their explicit values win, unchanged from prior behavior.
+    local opus_bare="" sonnet_bare="" haiku_bare=""
+    if [[ -z "$ANTHROPIC_MODEL" || -z "$ANTHROPIC_DEFAULT_OPUS_MODEL" \
+          || -z "$ANTHROPIC_DEFAULT_SONNET_MODEL" || -z "$ANTHROPIC_DEFAULT_HAIKU_MODEL" ]]; then
+        local resolved
+        resolved=$(_claude_vertex_get_models) || return 1
+        opus_bare="${resolved%% *}"
+        local _rest="${resolved#* }"
+        sonnet_bare="${_rest%% *}"
+        haiku_bare="${_rest#* }"
+    fi
+
+    # "[1m]" is a Claude-Code-level suffix requesting the 1M-context variant
+    # -- inherited from this function's previous hardcoded opus/sonnet
+    # defaults, not independently verified for whichever version auto-pick
+    # lands on. Override via ANTHROPIC_DEFAULT_*_MODEL/ANTHROPIC_MODEL if a
+    # resolved version doesn't actually support it.
+    local main_model="${ANTHROPIC_MODEL:-${sonnet_bare}[1m]}"
+    local opus_model="${ANTHROPIC_DEFAULT_OPUS_MODEL:-${opus_bare}[1m]}"
+    local sonnet_model="${ANTHROPIC_DEFAULT_SONNET_MODEL:-${sonnet_bare}[1m]}"
     # Unlike opus/sonnet, claude-vertex-native-adc() and the CLI's own
     # built-in default both leave haiku unset -- fine for those paths (the
     # native Vertex integration resolves the CLI's baked-in default itself),
@@ -416,10 +646,12 @@ claude-vertex() {
     # its registered model_list (same failure mode we hit with sonnet), so
     # background/Auto-Mode calls defaulting to haiku 400 here unless it's
     # explicitly registered too, same as opus/sonnet already are.
-    # "claude-haiku-4-5-20251001" (dated) 404s against Vertex; the bare
-    # alias below is what actually resolves -- verified live, Vertex
-    # itself reports back model="claude-haiku-4-5-20251001" once resolved.
-    local haiku_model="${ANTHROPIC_DEFAULT_HAIKU_MODEL:-claude-haiku-4-5}"
+    # "claude-haiku-4-5-20251001" (dated) 404s against Vertex; a bare alias
+    # like "claude-haiku-4-5" is what actually resolves -- verified live,
+    # Vertex itself reports back model="claude-haiku-4-5-20251001" once
+    # resolved. Auto-pick above already returns bare ids (see
+    # _claude_vertex_ranked_candidates), so this still holds.
+    local haiku_model="${ANTHROPIC_DEFAULT_HAIKU_MODEL:-${haiku_bare}}"
 
     # Claude Code strips any "[1m]" 1M-context suffix before putting the
     # model name in the actual request body sent to the proxy -- confirmed
