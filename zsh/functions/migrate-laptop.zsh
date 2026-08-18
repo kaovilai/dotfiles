@@ -441,7 +441,7 @@ EOF
 WiFi Credentials Export
 ======================
 Created: $(date)
-Machine: $(hostname)
+Machine: $HOST
 
 This directory contains:
 - wifi-networks.xml: List of saved WiFi networks
@@ -618,8 +618,8 @@ backup-before-migration() {
     cat > "$backup_dir/MANIFEST.txt" << EOF
 Laptop Migration Backup
 Created: $(date)
-Machine: $(hostname)
-User: $(whoami)
+Machine: $HOST
+User: $USER
 
 Contents:
 $(ls -la "$backup_dir")
