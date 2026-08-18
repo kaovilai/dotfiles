@@ -40,7 +40,11 @@ alias copilot-api="NODE_USE_SYSTEM_CA=1 bun run --cwd \$HOME/git/copilot-api ./s
 # local Ollama server on :11434 for fully offline use, auto-selecting a
 # gemma4 model per opus/sonnet/haiku tier, with a memory pre-flight check
 # before loading each one — see claude-ollama-models to force a re-pick,
-# ollama-serve-kill to stop the auto-started server), plus
+# ollama-serve-kill to stop the auto-started server; launches with --bare
+# by default since a small local model gets overwhelmed by the full
+# session context (CLAUDE.md, skills listing, MCP tool schemas, hooks
+# incl. caveman mode) that a cloud-model session tolerates fine — set
+# CLAUDE_OLLAMA_FULL_CONTEXT=1 to opt back in), plus
 # the mode-dispatching `claude` function and the `claude-mode` switcher
 # (copilot ↔ vertex ↔ ollama, vertex is default) — see bottom of file.
 
@@ -1302,8 +1306,22 @@ claude-ollama() {
     # rationale as claude-copilot above: this is also a local-server backend.
     # `command` bypasses the claude() dispatcher without exec'ing a new
     # process, avoiding claude() -> claude-ollama -> claude() recursion.
+    #
+    # --bare by default: a small local model (12b-30b class) gets
+    # overwhelmed by the full session context a cloud-model session
+    # tolerates fine -- global+project CLAUDE.md, the entire skills
+    # listing, every connected MCP server's tool schemas, and hooks
+    # (including the caveman-mode SessionStart hook). --bare skips hook/
+    # plugin-sync/CLAUDE.md auto-discovery and MCP server auto-loading
+    # (verified via `claude --help`'s own --bare description plus the CLI
+    # reference docs), leaving a plain Bash/Read/Edit coding assistant --
+    # the surface a small local model can actually follow. Set
+    # CLAUDE_OLLAMA_FULL_CONTEXT=1 to opt back into today's full-context
+    # behavior (e.g. to test a more capable local model).
+    local -a bare_flag=(--bare)
+    [[ -n "$CLAUDE_OLLAMA_FULL_CONTEXT" && "$CLAUDE_OLLAMA_FULL_CONTEXT" != 0 ]] && bare_flag=()
     export "${envs[@]}"
-    command claude "$@"
+    command claude "${bare_flag[@]}" "$@"
 }
 alias claude-offline='claude-ollama'
 
