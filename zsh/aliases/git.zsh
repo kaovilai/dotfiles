@@ -6,15 +6,26 @@ alias gca='git commit --amend'
 alias gcas='git commit --amend --no-edit --signoff'
 alias gcasf='git commit --amend --no-edit --signoff && git push --force'
 gcu() {
-  git checkout upstream/main 2>/dev/null || git checkout upstream/master 2>/dev/null || git checkout upstream/oadp-dev
+  local branch
+  for branch in upstream/main upstream/master upstream/oadp-dev; do
+    if git rev-parse --verify --quiet "$branch" >/dev/null; then
+      git checkout "$branch"
+      return $?
+    fi
+  done
+  echo "Error: no upstream/main, upstream/master, or upstream/oadp-dev found" >&2
+  return 1
 }
 gcu_nb() {
-  if git checkout upstream/main 2>/dev/null || git checkout upstream/master 2>/dev/null || git checkout upstream/oadp-dev; then
-    git checkout -b "$@"
-  else
-    echo "Error: no upstream/main, upstream/master, or upstream/oadp-dev found" >&2
-    return 1
-  fi
+  local branch
+  for branch in upstream/main upstream/master upstream/oadp-dev; do
+    if git rev-parse --verify --quiet "$branch" >/dev/null; then
+      git checkout "$branch" && git checkout -b "$@"
+      return $?
+    fi
+  done
+  echo "Error: no upstream/main, upstream/master, or upstream/oadp-dev found" >&2
+  return 1
 }
 alias gcu_master='git checkout upstream/master'
 alias gcu_master_nb='git checkout upstream/master && git checkout -b'
