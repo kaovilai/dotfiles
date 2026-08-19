@@ -1,5 +1,7 @@
 # AWS-specific MinIO deployment functions
 
+zmodload zsh/datetime 2>/dev/null  # provides $EPOCHSECONDS (integer epoch)
+
 create-minio-aws() {
     local name=""
     local region="${AWS_REGION:-us-east-1}"
@@ -938,7 +940,7 @@ configure-minio-cluster-access() {
     # Test connectivity from cluster
     echo "${BLUE}INFO${NC}: Testing connectivity from cluster to MinIO..."
     
-    local test_pod_name="minio-test-$(date +%s)"
+    local test_pod_name="minio-test-${EPOCHSECONDS}"
     local test_manifest
     test_manifest=$(cat << EOF
 apiVersion: v1
