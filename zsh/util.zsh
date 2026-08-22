@@ -73,7 +73,8 @@ if [[ "$TERM_PROGRAM" != "vscode" ]]; then
             echo "Example: view-pr-dirs \"velero*\"" >&2
             return 1
         fi
-        if [[ -z "$(find . -type d -mindepth 1 -maxdepth 1 -name "$1" -print -quit)" ]]; then
+        local -a _dirs=(./$~1(/N))
+        if (( ${#_dirs} == 0 )); then
             echo "❌ No directories found matching pattern: $1" >&2
             return 1
         fi

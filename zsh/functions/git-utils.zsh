@@ -115,7 +115,8 @@ go-mod-upgrade-dirs() {
         echo "❌ gh not found. Install it with: brew install gh" >&2
         return 1
     fi
-    if [[ -z "$(find . -mindepth 1 -maxdepth 1 -type d -name "$1" -print -quit)" ]]; then
+    local -a _dirs=(./$~1(/N))
+    if (( ${#_dirs} == 0 )); then
         echo "❌ No directories found matching pattern: $1" >&2
         return 1
     fi
@@ -142,7 +143,8 @@ exec-dirs() {
         echo "Example: exec-dirs \"velero*\" my-branch \"go mod tidy\"" >&2
         return 1
     fi
-    if [[ -z "$(find . -mindepth 1 -maxdepth 1 -type d -name "$1" -print -quit)" ]]; then
+    local -a _dirs=(./$~1(/N))
+    if (( ${#_dirs} == 0 )); then
         echo "❌ No directories found matching pattern: $1" >&2
         return 1
     fi
@@ -186,8 +188,8 @@ exec-dirs-ds() {
     local branch_name="$4"
     local cmd="$5"
     local dir
-
-    if [[ -z "$(find . -mindepth 1 -maxdepth 1 -type d -name "$pattern" -print -quit)" ]]; then
+    local -a _dirs=(./$~pattern(/N))
+    if (( ${#_dirs} == 0 )); then
         echo "❌ No directories found matching pattern: $pattern" >&2
         return 1
     fi
@@ -245,8 +247,8 @@ exec-dirs-ds-echo() {
     local branch_name="$4"
     local cmd="$5"
     local dir
-
-    if [[ -z "$(find . -mindepth 1 -maxdepth 1 -type d -name "$pattern" -print -quit)" ]]; then
+    local -a _dirs=(./$~pattern(/N))
+    if (( ${#_dirs} == 0 )); then
         echo "❌ No directories found matching pattern: $pattern" >&2
         return 1
     fi
@@ -279,7 +281,8 @@ code-dirs() {
         return 1
     fi
 
-    if [[ -z "$(find . -mindepth 1 -maxdepth 1 -type d -name "$1" -print -quit)" ]]; then
+    local -a _dirs=(./$~1(/N))
+    if (( ${#_dirs} == 0 )); then
         echo "❌ No directories found matching pattern: $1" >&2
         return 1
     fi
@@ -303,7 +306,8 @@ finder-dirs() {
         return 1
     fi
 
-    if [[ -z "$(find . -mindepth 1 -maxdepth 1 -type d -name "$1" -print -quit)" ]]; then
+    local -a _dirs=(./$~1(/N))
+    if (( ${#_dirs} == 0 )); then
         echo "❌ No directories found matching pattern: $1" >&2
         return 1
     fi
