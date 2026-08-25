@@ -526,7 +526,7 @@ _claude_vertex_get_models() {
         cached_project=$(awk -F= '$1=="PROJECT"{print $2; exit}' "$_claude_vertex_models_file")
         cached_region=$(awk -F= '$1=="REGION"{print $2; exit}' "$_claude_vertex_models_file")
         cached_ts=$(awk -F= '$1=="TIMESTAMP"{print $2; exit}' "$_claude_vertex_models_file")
-        now=$(date +%s)
+        now=$EPOCHSECONDS
         if [[ "$cached_project" == "$ANTHROPIC_VERTEX_PROJECT_ID" && "$cached_region" == "$CLOUD_ML_REGION" \
               && -n "$cached_ts" && $(( now - cached_ts )) -lt $ttl ]]; then
             local o s h
@@ -552,7 +552,7 @@ _claude_vertex_get_models() {
     {
         echo "PROJECT=${ANTHROPIC_VERTEX_PROJECT_ID}"
         echo "REGION=${CLOUD_ML_REGION}"
-        echo "TIMESTAMP=$(date +%s)"
+        echo "TIMESTAMP=$EPOCHSECONDS"
         echo "OPUS=${opus}"
         echo "SONNET=${sonnet}"
         echo "HAIKU=${haiku}"
