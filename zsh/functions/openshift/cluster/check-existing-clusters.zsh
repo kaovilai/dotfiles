@@ -358,6 +358,14 @@ check-for-existing-clusters() {
                     else
                         echo "WARNING: Directory $dir does not exist, skipping deletion"
                     fi
+                elif [[ "$dir" == *"-aws-sts-"* ]]; then
+                    echo "Destroying AWS STS cluster: $dir_name"
+                    # Ensure the directory exists before attempting to delete
+                    if [[ -d "$dir" ]]; then
+                        delete-ocp-aws-sts-dir "$dir"
+                    else
+                        echo "WARNING: Directory $dir does not exist, skipping deletion"
+                    fi
                 elif [[ "$dir" == *"-aws-"* ]]; then
                     echo "Destroying AWS cluster: $dir_name"
                     # Ensure the directory exists before attempting to delete
