@@ -24,6 +24,9 @@ for func in \
     create-ocp-aws \
     create-ocp-aws-amd64 \
     create-ocp-aws-arm64 \
+    create-ocp-aws-sts \
+    create-ocp-aws-sts-amd64 \
+    create-ocp-aws-sts-arm64 \
     create-ocp-azure-sts \
     create-ocp-gcp-wif \
     create-rosa-sts \
@@ -38,11 +41,17 @@ for func in \
     create-velero-dpa-for-rosa-cluster \
     create-velero-identity-for-azure-cluster \
     create-velero-identity-for-gcp-cluster \
+    get-cluster-oc \
+    get-release-oc \
     create-velero-identity-for-rosa-cluster \
     delete-ocp-aws \
     delete-ocp-aws-amd64 \
     delete-ocp-aws-arm64 \
     delete-ocp-aws-dir \
+    delete-ocp-aws-sts \
+    delete-ocp-aws-sts-amd64 \
+    delete-ocp-aws-sts-arm64 \
+    delete-ocp-aws-sts-dir \
     delete-ocp-azure-sts \
     delete-ocp-azure-sts-dir \
     delete-ocp-gcp-wif \
@@ -81,6 +90,10 @@ for func in \
     update-pull-secret-with-podman \
     use-ocp-aws \
     use-ocp-aws-dir \
+    use-ocp-aws-sts \
+    use-ocp-aws-sts-amd64 \
+    use-ocp-aws-sts-arm64 \
+    use-ocp-aws-sts-dir \
     use-ocp-azure-sts \
     use-ocp-azure-sts-dir \
     use-ocp-cluster \

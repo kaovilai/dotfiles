@@ -21,6 +21,9 @@ _safe_source ~/git/dotfiles/zsh/functions/openshift/cluster/list-and-use.zsh
 _safe_source ~/git/dotfiles/zsh/functions/openshift/aws/create-ocp-aws.zsh
 _safe_source ~/git/dotfiles/zsh/functions/openshift/aws/delete-ocp-aws.zsh
 _safe_source ~/git/dotfiles/zsh/functions/openshift/aws/use-ocp-aws.zsh
+_safe_source ~/git/dotfiles/zsh/functions/openshift/aws/create-ocp-aws-sts.zsh
+_safe_source ~/git/dotfiles/zsh/functions/openshift/aws/delete-ocp-aws-sts.zsh
+_safe_source ~/git/dotfiles/zsh/functions/openshift/aws/use-ocp-aws-sts.zsh
 _safe_source ~/git/dotfiles/zsh/functions/openshift/rosa/create-rosa-sts.zsh
 _safe_source ~/git/dotfiles/zsh/functions/openshift/rosa/delete-rosa-sts.zsh
 _safe_source ~/git/dotfiles/zsh/functions/openshift/rosa/use-rosa-sts.zsh
