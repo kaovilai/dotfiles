@@ -14,6 +14,7 @@ alias go-install-kind='go install sigs.k8s.io/kind@latest'
 alias open-webui-serve='podman run -d -p 3000:8080 -v open-webui:/app/backend/data --name open-webui --restart always ghcr.io/open-webui/open-webui:main'
 alias open-webui-update='podman rm -f open-webui && podman pull ghcr.io/open-webui/open-webui:main && open-webui-serve'
 alias dsstore-rmall='find . -name ".DS_Store" -exec rm {} \;'
+alias socktainer='~/git/socktainer/.build/arm64-apple-macosx/debug/socktainer'
 # workaround https://github.com/anthropics/claude-code/issues/2299#issuecomment-2993762516
 function ln-claude-home() {
     local src="${XDG_CONFIG_HOME:-$HOME/.config}/claude/"
@@ -121,6 +122,7 @@ alias termc='osascript -e "tell app \"Terminal\" to do script \"cd $PWD && claud
 alias audio-desk='SwitchAudioSource -t all -s "FiiO USB DAC K1" && SwitchAudioSource -t input -s "HD Pro Webcam C920"'
 alias audio-poly='SwitchAudioSource -t all -s "Poly V4320 Series"'
 alias restart-dock='killall Dock'
+alias kill-screensharing='sudo launchctl kill KILL system/com.apple.screensharing'
 c() {
     if [[ "$OSTYPE" != darwin* ]]; then
         echo "Error: c is only supported on macOS" >&2
