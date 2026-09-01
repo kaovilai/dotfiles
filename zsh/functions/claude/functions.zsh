@@ -50,7 +50,7 @@ merge-claude-settings() {
     echo
     
     # Create backup of global settings before any changes
-    local backup_file="${global_settings}.backup.$(date +%Y%m%d_%H%M%S)"
+    local backup_file="${global_settings}.backup.${(%):-%D{%Y%m%d_%H%M%S}}"
     cp "$global_settings" "$backup_file" || { echo "Error: Failed to create backup at $backup_file" >&2; return 1; }
     
     # Ask about each new permission and add immediately
