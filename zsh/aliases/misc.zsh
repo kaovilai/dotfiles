@@ -245,7 +245,9 @@ gemini-review() {
     osascript -e "tell app \"Terminal\" to do script \"cd $HOME/experiments/ && gemini -p \\\"/review $1\\\"\""
 }
 alias gr='gemini-review'
-alias tailscale="/Applications/Tailscale.app/Contents/MacOS/Tailscale"
+if [[ "$OSTYPE" == darwin* ]] && [[ -x "/Applications/Tailscale.app/Contents/MacOS/Tailscale" ]]; then
+    alias tailscale="/Applications/Tailscale.app/Contents/MacOS/Tailscale"
+fi
 # Find and kill orphaned zsh processes that are busy-spinning CPU.
 # Detects: PPID=1 (parent died) + no TTY (lost terminal) + state R (busy-loop on closed fd)
 # Relies on macOS-specific ps(1) output: "??" no-TTY marker and -o lstart.
