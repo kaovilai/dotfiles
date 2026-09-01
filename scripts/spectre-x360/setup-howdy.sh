@@ -6,7 +6,10 @@
 set -e
 
 sudo dnf copr enable -y principis/howdy
-sudo dnf install -y cmake gcc-c++ python3-devel python3-pip python3-opencv v4l-utils ffmpeg
+# NOT ffmpeg (full build) here — it conflicts with Fedora's default
+# ffmpeg-free once the full rpmfusion-free repo is enabled, and neither
+# howdy nor ffmpeg-python need the CLI binary, just the pip bindings.
+sudo dnf install -y cmake gcc-c++ python3-devel python3-pip python3-opencv v4l-utils
 sudo pip install dlib face_recognition ffmpeg-python
 
 cd /tmp
