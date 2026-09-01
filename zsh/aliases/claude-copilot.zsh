@@ -76,6 +76,7 @@ typeset -ga _claude_copilot_env_names=(
     ANTHROPIC_AUTH_TOKEN
     ANTHROPIC_API_KEY
     ANTHROPIC_MODEL
+    ENABLE_TOOL_SEARCH
     ANTHROPIC_DEFAULT_OPUS_MODEL
     ANTHROPIC_DEFAULT_SONNET_MODEL
     ANTHROPIC_DEFAULT_HAIKU_MODEL
@@ -94,9 +95,38 @@ _claude_copilot_unset_env() {
     unset "${_claude_copilot_env_names[@]}"
 }
 
+# Install-hint helper for the ❌-not-found messages below -- brew is
+# Darwin-only, so a hardcoded "brew install X" is wrong on Linux (e.g.
+# Fedora). Falls back to whatever package manager is actually on PATH;
+# $2 overrides the hint entirely for a tool with no reliable distro
+# package (e.g. ollama, installed via curl script on Linux regardless of
+# distro).
+_claude_pkg_install_hint() {
+    local pkg="$1" linux_override="$2"
+    if [[ "$(uname)" == "Darwin" ]]; then
+        print -r -- "brew install ${pkg}"
+        return 0
+    fi
+    if [[ -n "$linux_override" ]]; then
+        print -r -- "$linux_override"
+        return 0
+    fi
+    if command -v dnf &>/dev/null; then
+        print -r -- "sudo dnf install ${pkg}"
+    elif command -v apt-get &>/dev/null; then
+        print -r -- "sudo apt install ${pkg}"
+    elif command -v pacman &>/dev/null; then
+        print -r -- "sudo pacman -S ${pkg}"
+    elif command -v brew &>/dev/null; then
+        print -r -- "brew install ${pkg}"
+    else
+        print -r -- "install ${pkg} via your package manager"
+    fi
+}
+
 claude-copilot() {
     if ! command -v jq &>/dev/null; then
-        echo "❌ jq not found. Install it with: brew install jq" >&2
+        echo "❌ jq not found. Install it with: $(_claude_pkg_install_hint jq)" >&2
         return 1
     fi
 
@@ -172,6 +202,18 @@ claude-copilot() {
         CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false
         CLAUDE_CODE_DISABLE_TERMINAL_TITLE=true
         CLAUDE_CODE_ENABLE_AWAY_SUMMARY=0
+        # SDK disables tool search by default for any non-first-party
+        # ANTHROPIC_BASE_URL (this local gateway included) since most
+        # proxies don't forward tool_reference blocks / the enabling beta
+        # header. Verified this gateway's local origin/dev checkout does
+        # NOT strip it: allowedAnthropicBetas in
+        # src/services/copilot/create-messages.ts already allows
+        # advanced-tool-use-2025-11-20, which per Anthropic's own
+        # 2025-11-24 blog is the single beta flag Tool Search Tool /
+        # Programmatic Tool Calling / tool_reference all share (confirmed
+        # live via a 5-test suite added to that checkout — see
+        # tests/create-messages.test.ts there). Safe to force back on.
+        ENABLE_TOOL_SEARCH=true
     )
     if [[ -z "$CLAUDE_COPILOT_ENABLE_MONITOR" || "$CLAUDE_COPILOT_ENABLE_MONITOR" == 0 ]]; then
         envs+=(
@@ -603,13 +645,13 @@ claude-vertex-models() {
     esac
 }
 
-claude-vertex() {
+_claude_vertex_prepare() {
     if [[ -z "$CLOUD_ML_REGION" || -z "$ANTHROPIC_VERTEX_PROJECT_ID" ]]; then
         echo "❌ CLOUD_ML_REGION and ANTHROPIC_VERTEX_PROJECT_ID must be exported to use Vertex AI." >&2
         return 1
     fi
     if ! command -v uv &>/dev/null; then
-        echo "❌ uv not found. Install it with: brew install uv" >&2
+        echo "❌ uv not found. Install it with: $(_claude_pkg_install_hint uv 'curl -LsSf https://astral.sh/uv/install.sh | sh')" >&2
         return 1
     fi
 
@@ -706,15 +748,59 @@ claude-vertex() {
         fi
     fi
 
+    # Hand the resolved proxy/model config back to the caller (claude-vertex
+    # / omni-claude-vertex) as globals -- zsh `local` doesn't cross function
+    # boundaries, and both wrappers need these to export before launching.
+    typeset -g _cv_base="$base" _cv_master_key="$master_key" \
+        _cv_main_model="$main_model" _cv_opus_model="$opus_model" \
+        _cv_sonnet_model="$sonnet_model" _cv_haiku_model="$haiku_model"
+}
+
+# claude-vertex: Vertex AI via a local litellm proxy -- see
+# _claude_vertex_prepare() above for model resolution / proxy bootstrap.
+claude-vertex() {
+    _claude_vertex_prepare || return 1
     _claude_copilot_unset_env
     (
-        export ANTHROPIC_BASE_URL="${base}"
-        export ANTHROPIC_AUTH_TOKEN="${master_key}"
-        export ANTHROPIC_MODEL="${main_model}"
-        export ANTHROPIC_DEFAULT_OPUS_MODEL="${opus_model}"
-        export ANTHROPIC_DEFAULT_SONNET_MODEL="${sonnet_model}"
-        export ANTHROPIC_DEFAULT_HAIKU_MODEL="${haiku_model}"
+        export ANTHROPIC_BASE_URL="${_cv_base}"
+        export ANTHROPIC_AUTH_TOKEN="${_cv_master_key}"
+        export ANTHROPIC_MODEL="${_cv_main_model}"
+        export ANTHROPIC_DEFAULT_OPUS_MODEL="${_cv_opus_model}"
+        export ANTHROPIC_DEFAULT_SONNET_MODEL="${_cv_sonnet_model}"
+        export ANTHROPIC_DEFAULT_HAIKU_MODEL="${_cv_haiku_model}"
+        # SDK disables tool search by default for any non-first-party
+        # ANTHROPIC_BASE_URL (this local proxy included). Verified litellm
+        # 1.97.0's vertex_ai anthropic-partner transformation.py has
+        # first-class support: is_tool_search_used() detects deferred
+        # tools and adds the required anthropic-beta header itself, plus
+        # _expand_tool_references() to unpack tool_reference blocks in
+        # responses. Safe to force back on.
+        export ENABLE_TOOL_SEARCH=true
         command claude "$@"
+    )
+}
+
+# omni-claude-vertex: same Vertex proxy/model resolution as claude-vertex(),
+# but launches through Omnigent's claude-native harness (native TUI, wrapped
+# with Omnigent's collab/policy layer) instead of the bare `claude` binary --
+# it inherits the same exported env vars either way, so Vertex routing is
+# unaffected by which binary actually execs.
+omni-claude-vertex() {
+    if ! command -v omni &>/dev/null; then
+        echo "❌ omni not found. Install: curl -fsSL https://omnigent.ai/install.sh | sh" >&2
+        return 1
+    fi
+    _claude_vertex_prepare || return 1
+    _claude_copilot_unset_env
+    (
+        export ANTHROPIC_BASE_URL="${_cv_base}"
+        export ANTHROPIC_AUTH_TOKEN="${_cv_master_key}"
+        export ANTHROPIC_MODEL="${_cv_main_model}"
+        export ANTHROPIC_DEFAULT_OPUS_MODEL="${_cv_opus_model}"
+        export ANTHROPIC_DEFAULT_SONNET_MODEL="${_cv_sonnet_model}"
+        export ANTHROPIC_DEFAULT_HAIKU_MODEL="${_cv_haiku_model}"
+        export ENABLE_TOOL_SEARCH=true
+        omni claude-native "$@"
     )
 }
 # claude-vertex-proxy: pre-rename alias -- claude-vertex() is now the
@@ -1030,7 +1116,7 @@ _claude_ollama_ensure_server() {
     curl -sf --max-time 2 "${base}/api/tags" -o /dev/null && return 0
 
     if ! command -v ollama &>/dev/null; then
-        echo "❌ ollama not found. Install it with: brew install ollama" >&2
+        echo "❌ ollama not found. Install it with: $(_claude_pkg_install_hint ollama 'curl -fsSL https://ollama.com/install.sh | sh')" >&2
         return 1
     fi
 
