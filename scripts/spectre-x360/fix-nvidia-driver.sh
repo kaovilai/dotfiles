@@ -12,4 +12,11 @@ sudo dnf remove akmod-nvidia 'xorg-x11-drv-nvidia*' 'kmod-nvidia*' nvidia-settin
 sudo dnf install akmod-nvidia-580xx xorg-x11-drv-nvidia-580xx
 sudo akmods --force
 sudo dracut -f --regenerate-all
-sudo reboot
+
+read -p "Reboot now to load the new driver? [y/N] " -n 1 -r
+echo
+if [[ $REPLY =~ ^[Yy]$ ]]; then
+    sudo reboot
+else
+    echo "Skipping reboot. Run 'sudo reboot' manually when ready."
+fi
