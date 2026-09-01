@@ -143,12 +143,18 @@ _safe_source ~/git/dotfiles/zsh/util.zsh
 if [[ "$TERM_PROGRAM" != "vscode" ]]; then
   # Git status check (background to avoid blocking startup)
   {
-    if command -v gtimeout &>/dev/null; then
-      if gtimeout 2 git -C ~/git/dotfiles status --porcelain 2>/dev/null | grep -qE '^(M.|.M)'; then
+    local timeout_cmd
+    if command -v timeout &>/dev/null; then
+      timeout_cmd=timeout
+    elif command -v gtimeout &>/dev/null; then
+      timeout_cmd=gtimeout
+    fi
+    if [[ -n $timeout_cmd ]]; then
+      if $timeout_cmd 2 git -C ~/git/dotfiles status --porcelain 2>/dev/null | grep -qE '^(M.|.M)'; then
         print "dotfiles repo has uncommitted changes, run ${RED}edit-dotfiles${NC} to review"
       fi
     else
-      print -P "%F{yellow}[dotfiles] Install coreutils for git timeout support: brew install coreutils%f" >&2
+      print -P "%F{yellow}[dotfiles] Install coreutils for git timeout support%f" >&2
       if git -C ~/git/dotfiles status --porcelain 2>/dev/null | grep -qE '^(M.|.M)'; then
         print "dotfiles repo has uncommitted changes, run ${RED}edit-dotfiles${NC} to review"
       fi
@@ -189,3 +195,10 @@ fi
     source ~/git/dotfiles/zsh/completions.zsh
   fi
 } &!
+
+# bun completions
+[ -s "/home/tigerkaovilai/.bun/_bun" ] && source "/home/tigerkaovilai/.bun/_bun"
+
+# bun
+export BUN_INSTALL="$HOME/.bun"
+export PATH="$BUN_INSTALL/bin:$PATH"
