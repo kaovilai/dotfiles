@@ -720,7 +720,7 @@ give-me-ram(){
         return 1
     fi
     local pids
-    pids=$(ps aux | grep -v grep | grep -E '/Messenger.app/|Acrobat|Fathom|Todoist|LINE' | sed -E 's/ +/ /g' | cut -d ' ' -f 2)
+    pids=$(pgrep -fE '/Messenger\.app/|Acrobat|Fathom|Todoist|LINE')
     if [[ -z "$pids" ]]; then
         echo "No matching processes found."
         return 0
