@@ -8,6 +8,14 @@
 # See ../../docs/fedora44-spectre-x360-setup.md for the diagnosis.
 set -e
 
+# Fedora's scoped third-party repo (rpmfusion-nonfree-nvidia-driver) only
+# carries the mainline driver. The legacy 580xx/470xx branches (needed for
+# Maxwell) live in the full rpmfusion-nonfree repo, which isn't enabled by
+# that scoped setup — enable it explicitly.
+sudo dnf install -y \
+    "https://download1.rpmfusion.org/free/fedora/rpmfusion-free-release-$(rpm -E %fedora).noarch.rpm" \
+    "https://download1.rpmfusion.org/nonfree/fedora/rpmfusion-nonfree-release-$(rpm -E %fedora).noarch.rpm"
+
 sudo dnf remove akmod-nvidia 'xorg-x11-drv-nvidia*' 'kmod-nvidia*' nvidia-settings nvidia-modprobe nvidia-gpu-firmware
 sudo dnf install akmod-nvidia-580xx xorg-x11-drv-nvidia-580xx
 sudo akmods --force

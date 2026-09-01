@@ -49,6 +49,14 @@ If a future `dnf upgrade` pulls the generic `akmod-nvidia`/`xorg-x11-drv-nvidia*
 packages back in (they can look like a newer version and win a plain
 upgrade), this will regress — re-run the fix script.
 
+**Repo gotcha:** Fedora's onboarding flow (`fedora-third-party` / "install
+NVIDIA driver" GUI prompt) enables a *scoped* repo,
+`rpmfusion-nonfree-nvidia-driver`, which only carries the mainline driver —
+not the legacy `580xx`/`470xx` branches. `dnf search`/`dnf install
+akmod-nvidia-580xx` will fail with "No match for argument" until the full
+`rpmfusion-free`/`rpmfusion-nonfree` repos are also enabled (the script does
+this first).
+
 ## Power management — already correct, don't install power-profiles-daemon
 
 Fedora 44 ships `tuned` + `tuned-ppd` (not `power-profiles-daemon`).
@@ -66,9 +74,17 @@ it). Not yet exercised/tested this boot at time of writing.
 
 ## Windows Hello equivalent (Howdy) — needs a workaround for f44
 
-The IR camera is real: `Suyin Corp. HP TrueVision FHD RGB-IR`, exposed as
-both `/dev/video0` and `/dev/video1` (same sensor name on both — one is the
-RGB stream, one is the IR stream; figure out which with `ffplay`).
+The IR camera is `Suyin Corp. HP TrueVision FHD RGB-IR`, but it only exposes
+**one** capture-capable node: `/dev/video0` (`Video Capture`). `/dev/video1`
+is `Metadata Capture` only — no frames, don't point anything at it (`ffplay
+/dev/video1` fails with "Inappropriate ioctl for device", which is expected).
+`v4l2-ctl -d /dev/video0 --list-formats-ext` only lists `MJPG`/`YUYV` (both
+RGB) — there's no separate IR pixel format either. IR mode on this sensor is
+toggled via a vendor UVC extension-unit control, which is exactly what
+`linux-enable-ir-emitter` is for — running `linux-enable-ir-emitter configure`
+is **required** here, not just a fallback for a dark IR LED. Its device
+auto-detection picks `/dev/video1` (wrong, metadata-only) by default — pass
+`-d /dev/video0` explicitly: `sudo linux-enable-ir-emitter -d /dev/video0 configure`.
 
 `principis/howdy`'s COPR RPM depends on `python3dist(dlib)`, which isn't
 packaged for Fedora 44 yet → `dnf install` fails with a conflicting-request
@@ -79,9 +95,8 @@ dependency check. Source: https://github.com/Boltgolt/howdy/issues/1135.
 Script: [`scripts/spectre-x360/setup-howdy.sh`](../scripts/spectre-x360/setup-howdy.sh).
 Automates the install; prints (but does not auto-run) the remaining manual
 steps:
-- Identify the IR `/dev/videoN` node.
-- Point howdy's `config.ini` at it and set frame dimensions.
-- Optionally `linux-enable-ir-emitter` if the IR LED doesn't light up.
+- Point howdy's `config.ini` at `/dev/video0` and set frame dimensions.
+- Run `linux-enable-ir-emitter configure` (required, see above).
 - `howdy add` / `howdy test` before touching PAM.
 - Add `auth sufficient pam_howdy.so` to `/etc/pam.d/gdm-password`, `sudo`,
   `polkit-1` (this machine runs GNOME/GDM, not KDE — different guides online
