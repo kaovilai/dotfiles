@@ -138,21 +138,19 @@ claude-copilot() {
     if ! curl -sf --max-time 2 "${base}/v1/models" -o /dev/null; then
         local -a runner
         local repo_dir="${COPILOT_API_DIR:-$HOME/git/copilot-api}"
-        if [[ -d "$repo_dir/.git" ]] && command -v bun &>/dev/null; then
+        local have_checkout=0 have_bun=0
+        [[ -d "$repo_dir/.git" ]] && have_checkout=1
+        command -v bun &>/dev/null && have_bun=1
+        if (( have_checkout && have_bun )); then
             # Local origin/dev checkout — bun runs the TS source directly, so
             # uncommitted work-in-progress fixes are picked up with no build step.
             runner=(env NODE_USE_SYSTEM_CA=1 bun run --cwd "$repo_dir" ./src/main.ts)
-        elif command -v bunx &>/dev/null; then
-            # upstream/published fallback, disabled by default (see above)
-            # runner=(bunx copilot-api@latest)
-            echo "❌ Local checkout not found at ${repo_dir}. Set COPILOT_API_DIR or uncomment the bunx/npx fallback." >&2
+        elif (( ! have_checkout )); then
+            echo "❌ No local checkout at ${repo_dir} (git clone -b dev https://github.com/kaovilai/copilot-api ${repo_dir}), or set COPILOT_API_DIR to point elsewhere." >&2
             return 1
-        elif command -v npx &>/dev/null; then
-            # runner=(npx -y copilot-api@latest)
-            echo "❌ Local checkout not found at ${repo_dir}. Set COPILOT_API_DIR or uncomment the bunx/npx fallback." >&2
-            return 1
-        else
-            echo "❌ Need bunx or npx to run copilot-api. Install bun or node." >&2
+        elif (( ! have_bun )); then
+            echo "❌ bun not found. Install it with: $(_claude_pkg_install_hint bun 'curl -fsSL https://bun.sh/install | bash')" >&2
+            echo "   (upstream/published bunx/npx fallback is disabled by default -- see the comments above this function)" >&2
             return 1
         fi
         echo "Starting copilot-api on ${base} (log: ${log})..."
