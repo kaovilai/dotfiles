@@ -5,3 +5,7 @@
 ## 2024-11-20 - Use Zsh Native Extended Globbing for File Staleness
 **Learning:** Checking file age by spawning `stat` and `date` as subprocesses adds unnecessary overhead and degrades shell startup performance. In this codebase, avoiding subprocesses is a critical optimization pattern.
 **Action:** Use native Zsh extended globbing (e.g., `(#qN.ms+seconds)`) coupled with `setopt local_options extended_glob` to perform file age evaluations natively within the shell, bypassing process spawning altogether.
+
+## 2026-07-29 - znap Handles compinit Automatically
+**Learning:** The zsh-snap (znap) plugin manager automatically handles compinit and completion dump caching out of the box. Running it manually before or after znap initializes is an anti-pattern that significantly degrades Zsh startup time due to redundant execution.
+**Action:** Do not manually call compinit in zshrc or related znap configuration files. Let znap handle it natively to optimize shell startup.
