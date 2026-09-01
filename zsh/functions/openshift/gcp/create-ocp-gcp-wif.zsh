@@ -1,5 +1,119 @@
 # create a cluster with gcp workload identity using CCO manual mode
 # pre-req: ssh-add ~/.ssh/id_rsa
+# Background helper: works around two GCP-specific bugs that otherwise eat
+# most of the 45min bootstrap window when diagnosed interactively (confirmed
+# live 2026-08-22, see create-ocp/SKILL.md "Apply bootstrap ILB workaround"):
+#
+# 1. installer#10590: GCP CAPI puts bootstrap in the same LB instance group
+#    as master-0, so the internal LB pins worker ignition traffic to
+#    bootstrap (which refuses it) -> worker ignition hangs forever. Fix:
+#    remove bootstrap from that instance group. CAPI's own reconciler
+#    periodically re-adds it, so this must be polled/re-applied, not one-shot.
+# 2. Removing bootstrap from the LB group short-circuits openshift-install's
+#    own graceful bootstrap-teardown, which normally creates a
+#    kube-system/bootstrap ConfigMap (data: status=complete) as part of its
+#    bootstrap-complete handoff. Without it, openshift-apiserver-operator's
+#    precondition check hangs forever on APIServicesAvailable:PreconditionNotReady
+#    even though the apiserver Deployment itself is healthy. Fix: apply that
+#    ConfigMap directly once the API is reachable. See okd-project/okd#2036.
+#
+# Caller must background THIS FUNCTION CALL ITSELF (`start-gcp-bootstrap-bugfix-helper ... &`,
+# then `local pid=$!`) and kill that PID once `openshift-install create
+# cluster` returns. Do NOT wrap the call in `$(...)` -- capturing a command
+# substitution around a call that backgrounds work internally corrupts the
+# calling shell's own stdout/stderr redirection in zsh (confirmed live
+# 2026-08-23: openshift-install's own progress logging, which goes to
+# stderr, silently vanished into a zsh-internal temp file instead of the
+# intended log for the rest of the script once this function had been
+# invoked via `$(...)`). This function intentionally does NOT background
+# anything internally, for the same reason -- one clean top-level background
+# job, nothing nested.
+#
+# Usage: start-gcp-bootstrap-bugfix-helper <ocp-create-dir> <gcp-project-id> <gcp-region>
+start-gcp-bootstrap-bugfix-helper() {
+    local create_dir=$1
+    local project_id=$2
+    local region=$3
+
+    # Resolve infra ID once metadata.json shows up (written early in
+    # `create cluster`, well before the bootstrap instance exists).
+    local infra_id=""
+    for i in $(seq 1 60); do
+        sleep 10
+        if [[ -f "$create_dir/metadata.json" ]]; then
+            infra_id=$(jq -r '.infraID // empty' "$create_dir/metadata.json" 2>/dev/null)
+            [[ -n "$infra_id" ]] && break
+        fi
+    done
+    if [[ -z "$infra_id" ]]; then
+        echo "WARNING: gcp-bugfix-helper: could not determine infra ID within 10min, giving up"
+        return 0
+    fi
+    echo "INFO: gcp-bugfix-helper: infra ID = $infra_id, watching for known GCP CAPI bugs"
+
+    local zones=($(gcloud compute zones list --filter="region:(${region})" --project="$project_id" --format='value(name)' 2>/dev/null))
+    [[ ${#zones[@]} -eq 0 ]] && zones=(${region}-a ${region}-b ${region}-c ${region}-d)
+
+    # Single loop, both fixes interleaved -- see comment above for why this
+    # isn't split into a nested background sub-job.
+    #
+    # BUG FIXED 2026-08-24 (was live-broken across at least 2 real attempts,
+    # both of which silently got zero benefit from this function): the
+    # bootstrap-instance-gone check below must NOT break on the very first
+    # iteration just because the instance isn't found yet -- metadata.json
+    # (used to resolve infra_id above) is written well before CAPI actually
+    # provisions the bootstrap compute instance, so "not found" on an early
+    # iteration means "hasn't been created yet", not "already torn down
+    # normally". The old code treated both cases the same and broke
+    # immediately, before ever removing bootstrap from the LB group or
+    # applying the configmap even once. Track whether we've ever actually
+    # seen the instance exist; only treat "not found" as "done, torn down
+    # normally" after that.
+    local configmap_applied=false
+    local seen_bootstrap=false
+    for i in $(seq 1 40); do
+        sleep 45
+
+        if [[ "$configmap_applied" == "false" && -f "$create_dir/auth/kubeconfig" ]] && \
+           KUBECONFIG="$create_dir/auth/kubeconfig" oc get ns kube-system &>/dev/null; then
+            if ! KUBECONFIG="$create_dir/auth/kubeconfig" oc get configmap bootstrap -n kube-system &>/dev/null; then
+                cat <<EOF | KUBECONFIG="$create_dir/auth/kubeconfig" oc apply -f - &>/dev/null
+kind: ConfigMap
+apiVersion: v1
+metadata:
+  name: bootstrap
+  namespace: kube-system
+data:
+  status: complete
+EOF
+                echo "INFO: gcp-bugfix-helper: applied kube-system/bootstrap configmap (works around installer bootstrap-teardown being skipped)"
+            fi
+            configmap_applied=true
+        fi
+
+        if gcloud compute instances list --project="$project_id" --filter="name=${infra_id}-bootstrap" --format='value(name)' 2>/dev/null | grep -q .; then
+            seen_bootstrap=true
+        elif [[ "$seen_bootstrap" == "true" ]]; then
+            echo "INFO: gcp-bugfix-helper: bootstrap instance torn down normally, stopping ILB-removal loop"
+            break
+        else
+            # Not created yet -- keep waiting, don't mistake this for "gone".
+            continue
+        fi
+
+        for zone in "${zones[@]}"; do
+            local present
+            present=$(gcloud compute instance-groups unmanaged list-instances "${infra_id}-master-${zone}" --zone="${zone}" --project="$project_id" --format='value(instance)' 2>/dev/null | grep "${infra_id}-bootstrap")
+            if [[ -n "$present" ]]; then
+                gcloud compute instance-groups unmanaged remove-instances "${infra_id}-master-${zone}" \
+                    --zone="${zone}" --instances="${infra_id}-bootstrap" --project="$project_id" --quiet 2>/dev/null \
+                    && echo "INFO: gcp-bugfix-helper: removed bootstrap from ${infra_id}-master-${zone} LB instance group (CAPI may re-add -- will keep checking)"
+            fi
+        done
+    done
+    echo "INFO: gcp-bugfix-helper: done watching"
+}
+
 create-ocp-gcp-wif(){
     # Unset SSH_AUTH_SOCK on Darwin systems to avoid SSH errors
     if [[ "$(uname)" == "Darwin" ]]; then
@@ -25,6 +139,22 @@ create-ocp-gcp-wif(){
         echo "              With --ec, if the signature preflight check finds a missing"
         echo "              signature, auto-disable ClusterImagePolicy enforcement (same as"
         echo "              --nightly) and continue instead of prompting/aborting"
+        echo "  --nightly[=X.Y]"
+        echo "              Use the raw per-minor-version OCP nightly release stream"
+        echo "              (X.Y.0-0.nightly) instead of dev-preview/stable/--ec. Prompts for"
+        echo "              the minor version if not given."
+        echo "  --install-cnv"
+        echo "              Install OpenShift Virtualization (CNV/KubeVirt operator + a minimal"
+        echo "              HyperConverged CR). Can be combined with --kvm or used alone."
+        echo "  --community-hco[=TAG]"
+        echo "              Install Community HCO (quay.io/kubevirt/hyperconverged-cluster-index)"
+        echo "              instead of productized CNV. Implies --install-cnv. TAG defaults to"
+        echo "              1.18.0. Use this when --nightly is also set."
+        echo "  --kvm       EXPERIMENTAL/best-effort: add a day-2 tainted worker MachineSet on a"
+        echo "              GCP boot image derived with the enable-vmx license, exposing /dev/kvm"
+        echo "              for nested virtualization. Default machine type n2-standard-4,"
+        echo "              override with OCP_GCP_NESTED_VIRT_MACHINE_TYPE. No prior confirmed"
+        echo "              working repro of this path -- unlike AWS/Azure's KVM support."
         echo ""
         echo "Prerequisites:"
         echo "  - GCP_PROJECT_ID environment variable must be set"
@@ -84,6 +214,17 @@ create-ocp-gcp-wif(){
     [[ -z "$unique_result" ]] && return 1
     local CLUSTER_NAME=$(echo "$unique_result" | grep "cluster_name:" | cut -d: -f2)
     local OCP_CREATE_DIR=$(echo "$unique_result" | grep "cluster_dir:" | cut -d: -f2)
+    # WIF pool/provider name persisted per-attempt-dir. GCP fully-deletes pools
+    # only ~30 days after soft-delete; reusing the same name across retries
+    # (old bug: this was just $CLUSTER_NAME, deterministic per-day) meant every
+    # retry undeleted+redeleted the SAME pool, and after several cycles GCP's
+    # eventual consistency broke: worker VMs got invalid_target errors trying
+    # to exchange tokens against the pool, so no workers ever joined. Fix: give
+    # every real create attempt a fresh random-suffixed name (see below, right
+    # before ccoctl gcp create-all); this marker records it so the *next*
+    # invocation's pre-create cleanup (right below) deletes the right pool
+    # instead of guessing $CLUSTER_NAME.
+    local WIF_NAME_MARKER="$OCP_MANIFESTS_DIR/.gcp-wif-name-$(basename $OCP_CREATE_DIR)"
     if [[ $1 == "gather" ]]; then
         if [[ -d "$OCP_CREATE_DIR" ]]; then
             $OPENSHIFT_INSTALL gather bootstrap --dir $OCP_CREATE_DIR || return 1
@@ -95,22 +236,41 @@ create-ocp-gcp-wif(){
     fi
     if [[ $1 != "no-delete" ]]; then
         local metadata_backup="$OCP_MANIFESTS_DIR/.metadata-backup-$(basename $OCP_CREATE_DIR).json"
+        # Resolve which WIF pool name to tear down: prefer the marker left by
+        # the attempt that actually created it, fall back to $CLUSTER_NAME for
+        # pre-existing dirs from before this fix.
+        local delete_wif_name="$CLUSTER_NAME"
+        [[ -f "$WIF_NAME_MARKER" ]] && delete_wif_name=$(cat "$WIF_NAME_MARKER")
         if [[ -d "$OCP_CREATE_DIR" ]]; then
+            # Safety guard (added 2026-08-31 after a real incident on AWS: a
+            # second same-day invocation destroyed a different, still-live
+            # cluster that happened to land on this same directory). Never
+            # destroy a live cluster -- fail loudly instead of guessing.
+            if is-cluster-live "$OCP_CREATE_DIR"; then
+                echo "ERROR: $OCP_CREATE_DIR is a LIVE, reachable cluster (API server responded). Refusing to destroy it automatically." >&2
+                echo "If this directory really should be replaced, verify the cluster is actually meant to be torn down first." >&2
+                return 1
+            fi
+            # Archive configs/logs before destroy -- this is the ONLY copy of a
+            # failed attempt's install-config/logs once we rm the dir below.
+            # See archive-logs.sh: never deletes anything itself, only copies
+            # to ~/OCP/manifests/.logs/ (kept >=30 days, see prune function).
+            bash ~/.claude/skills/create-ocp/scripts/archive-logs.sh "$OCP_CREATE_DIR" 2>/dev/null || true
             $OPENSHIFT_INSTALL_DESTROY destroy cluster --dir $OCP_CREATE_DIR || echo "no existing cluster"
             $OPENSHIFT_INSTALL_DESTROY destroy bootstrap --dir $OCP_CREATE_DIR || echo "no existing bootstrap"
             (ccoctl gcp delete \
-            --name $CLUSTER_NAME \
+            --name $delete_wif_name \
             --project $GCP_PROJECT_ID \
             --credentials-requests-dir $OCP_CREATE_DIR/credentials-requests && echo "cleaned up ccoctl gcp resources") || true
             ((rm -r $OCP_CREATE_DIR && echo "removed existing create dir") || (true && echo "no existing install dir")) || return 1
-            rm -f "$metadata_backup" 2>/dev/null
+            rm -f "$metadata_backup" "$WIF_NAME_MARKER" 2>/dev/null
         elif [[ -f "$metadata_backup" ]]; then
             # Restore metadata.json from backup to run destroy on orphaned resources
             echo "INFO: Restoring metadata.json from backup for destroy..."
             mkdir -p "$OCP_CREATE_DIR"
             cp "$metadata_backup" "$OCP_CREATE_DIR/metadata.json"
             $OPENSHIFT_INSTALL_DESTROY destroy cluster --dir $OCP_CREATE_DIR || echo "no existing cluster"
-            rm -rf "$OCP_CREATE_DIR" "$metadata_backup"
+            rm -rf "$OCP_CREATE_DIR" "$metadata_backup" "$WIF_NAME_MARKER"
         else
             echo "Directory $OCP_CREATE_DIR does not exist, nothing to delete"
         fi
@@ -129,12 +289,20 @@ create-ocp-gcp-wif(){
         GCP_PROJECT_ID \
         GCP_REGION \
         GCP_BASEDOMAIN || return 1
-    
+
+    preflight-check-gcp-permissions
+
     # Parse command line flags
     local force_new=false
     local auto_ec=false
     local verify_all_signatures=false
     local allow_unsigned=false
+    local use_nightly=false
+    local nightly_minor=""
+    local install_cnv=false
+    local community_hco=false
+    local community_hco_tag="1.18.0"
+    local add_kvm_pool=false
 
     local no_cleanup=false
 
@@ -154,6 +322,28 @@ create-ocp-gcp-wif(){
                 ;;
             --no-cleanup)
                 no_cleanup=true
+                ;;
+            --nightly)
+                use_nightly=true
+                ;;
+            --nightly=*)
+                use_nightly=true
+                nightly_minor="${arg#--nightly=}"
+                ;;
+            --install-cnv)
+                install_cnv=true
+                ;;
+            --community-hco)
+                community_hco=true
+                install_cnv=true
+                ;;
+            --community-hco=*)
+                community_hco=true
+                install_cnv=true
+                community_hco_tag="${arg#--community-hco=}"
+                ;;
+            --kvm)
+                add_kvm_pool=true
                 ;;
         esac
     done
@@ -175,7 +365,15 @@ create-ocp-gcp-wif(){
     
     # Prompt for release stream selection and get release image
     local stream
-    if [[ -n "$OCP_RELEASE_VERSION" ]]; then
+    if [[ "$use_nightly" == "true" ]]; then
+        if [[ -z "$nightly_minor" ]]; then
+            nightly_minor=$(prompt-nightly-minor-version) || return 1
+        fi
+        export OCP_NIGHTLY_MINOR="$nightly_minor"
+        stream="nightly"
+        echo "INFO: --nightly requested: using raw ${nightly_minor}.0-0.nightly release stream"
+        unset AUTO_SELECT_EC
+    elif [[ -n "$OCP_RELEASE_VERSION" ]]; then
         if [[ "$OCP_RELEASE_VERSION" =~ (ec|rc)\. ]]; then
             stream="dev-preview"
         else
@@ -203,6 +401,14 @@ create-ocp-gcp-wif(){
     # hang forever on a missing one. See enforce-release-signature-check()
     # in common-functions.zsh for the full story; no-op for stream != dev-preview.
     enforce-release-signature-check "$RELEASE_IMAGE" "$stream" "$verify_all_signatures" "$allow_unsigned" || return 1
+
+    # Raw nightlies aren't signed the way production release images are (see
+    # the identical block/comment in create-ocp-aws.zsh, OCPBUGS-104571) --
+    # bypass Sigstore ClusterImagePolicy enforcement for nightly streams.
+    if [[ "$stream" == "nightly" ]]; then
+        export OPENSHIFT_INSTALL_EXPERIMENTAL_DISABLE_IMAGE_POLICY=true
+        echo "INFO: Nightly stream detected -- exported OPENSHIFT_INSTALL_EXPERIMENTAL_DISABLE_IMAGE_POLICY=true to bypass Sigstore signature enforcement"
+    fi
 
     echo "INFO: Using release image: $RELEASE_IMAGE"
     # RELEASE_IMAGE=$($OPENSHIFT_INSTALL version | awk '/release image/ {print $3}')
@@ -249,7 +455,13 @@ publish: External
 credentialsMode: Manual # needed for WIF"
         add-credentials-to-install-config
     } > $OCP_CREATE_DIR/install-config.yaml || return 1
-    
+    # openshift-install consumes (deletes) install-config.yaml as soon as it
+    # renders manifests -- preserve a copy now, before that happens, so
+    # archive-logs.sh has something to grab even on a failure that occurs
+    # after manifest generation. See create-ocp SKILL.md's retention-policy
+    # section.
+    cp $OCP_CREATE_DIR/install-config.yaml $OCP_CREATE_DIR/install-config.yaml.orig
+
     echo "created install-config.yaml"
 
     echo "INFO: Using release image for GCP: $RELEASE_IMAGE"
@@ -257,21 +469,33 @@ credentialsMode: Manual # needed for WIF"
     export OPENSHIFT_INSTALL_RELEASE_IMAGE_OVERRIDE=$RELEASE_IMAGE
     echo "INFO: Exported OPENSHIFT_INSTALL_RELEASE_IMAGE_OVERRIDE=$RELEASE_IMAGE"
 
-    # Clean up existing GCP workload identity resources to avoid 409 conflicts
-    # GCP soft-deletes pools for ~30 days; ccoctl undeletes them but providers persist → alreadyExists
-    # Strategy: undelete pool, wait for provider to restore to ACTIVE, delete it, wait for DELETED
-    if gcloud iam workload-identity-pools describe "$CLUSTER_NAME" \
+    # Give this attempt a genuinely unique WIF pool/provider name instead of
+    # reusing $CLUSTER_NAME (see WIF_NAME_MARKER comment above for why: a
+    # fully-deleted-then-recreated pool needs a new name to reliably avoid
+    # GCP's eventual-consistency 409s / invalid_target auth failures --
+    # undelete-and-reuse on the same name is exactly what broke). Persist it
+    # so a later cleanup pass (this function's own pre-create block above, on
+    # the next invocation) knows what to tear down.
+    local WIF_NAME="${CLUSTER_NAME}-w$((RANDOM % 9000 + 1000))"
+    echo "INFO: Using unique workload-identity pool name $WIF_NAME (avoids GCP pool-reuse/eventual-consistency bug)"
+    echo "$WIF_NAME" > "$WIF_NAME_MARKER"
+
+    # Legacy safety net: in the unlikely event $WIF_NAME collides with a pool
+    # left over from a much older run (should never happen -- random suffix --
+    # but cheap to guard), undelete+drain it the same way the old
+    # $CLUSTER_NAME-based logic did, rather than failing into a 409.
+    if gcloud iam workload-identity-pools describe "$WIF_NAME" \
         --location=global --project="$GCP_PROJECT_ID" &>/dev/null; then
-        echo "INFO: Found existing workload identity pool $CLUSTER_NAME, cleaning provider..."
+        echo "INFO: Found existing workload identity pool $WIF_NAME, cleaning provider..."
         # Undelete pool if it's in soft-deleted state (no-op if already active)
-        gcloud iam workload-identity-pools undelete "$CLUSTER_NAME" \
+        gcloud iam workload-identity-pools undelete "$WIF_NAME" \
             --location=global --project="$GCP_PROJECT_ID" --quiet 2>/dev/null || true
         # Wait for provider to become ACTIVE (pool undelete restores providers async)
         echo "INFO: Waiting for provider to be restored by pool undelete..."
         local wait_retries=12
         while (( wait_retries-- > 0 )); do
-            local provider_state=$(gcloud iam workload-identity-pools providers describe "$CLUSTER_NAME" \
-                --workload-identity-pool="$CLUSTER_NAME" \
+            local provider_state=$(gcloud iam workload-identity-pools providers describe "$WIF_NAME" \
+                --workload-identity-pool="$WIF_NAME" \
                 --location=global --project="$GCP_PROJECT_ID" \
                 --format='value(state)' 2>/dev/null)
             if [[ "$provider_state" == "ACTIVE" ]]; then
@@ -286,14 +510,14 @@ credentialsMode: Manual # needed for WIF"
         done
         # Now delete the ACTIVE provider so ccoctl creates fresh with new OIDC keys
         if [[ "$provider_state" == "ACTIVE" ]]; then
-            gcloud iam workload-identity-pools providers delete "$CLUSTER_NAME" \
-                --workload-identity-pool="$CLUSTER_NAME" \
+            gcloud iam workload-identity-pools providers delete "$WIF_NAME" \
+                --workload-identity-pool="$WIF_NAME" \
                 --location=global --project="$GCP_PROJECT_ID" --quiet 2>/dev/null || true
             echo "INFO: Waiting for provider deletion to propagate..."
             local purge_retries=24
             while (( purge_retries-- > 0 )); do
-                provider_state=$(gcloud iam workload-identity-pools providers describe "$CLUSTER_NAME" \
-                    --workload-identity-pool="$CLUSTER_NAME" \
+                provider_state=$(gcloud iam workload-identity-pools providers describe "$WIF_NAME" \
+                    --workload-identity-pool="$WIF_NAME" \
                     --location=global --project="$GCP_PROJECT_ID" \
                     --format='value(state)' 2>/dev/null)
                 if [[ -z "$provider_state" || "$provider_state" == "DELETED" ]]; then
@@ -313,17 +537,37 @@ credentialsMode: Manual # needed for WIF"
         fi
     fi
 
-    # Use version-matched oc for credential extraction (--cloud=gcp requires 4.22+)
+    # Use version-matched oc for credential extraction. Requires oc 4.22+
+    # containing openshift/oc#2222 -- older oc mis-filters --included against
+    # install-config's capabilities, incorrectly including the
+    # openshift-cluster-api-gcp CredentialsRequest, which deadlocks bootkube
+    # forever trying to create capg-manager-bootstrap-credentials in a
+    # namespace that doesn't exist yet (OCPBUGS-77845, resolved upstream --
+    # see create-ocp SKILL.md's GCP-WIF troubleshooting section). Fail loudly
+    # here rather than silently proceeding with too-old an oc and deadlocking
+    # 45 minutes later with a confusing symptom.
     local OC_BIN=$(get-release-oc "$RELEASE_IMAGE")
+    local oc_ver; oc_ver=$($OC_BIN version --client 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)
+    if [[ -n "$oc_ver" ]]; then
+        autoload -U is-at-least
+        if ! is-at-least 4.22 "$oc_ver"; then
+            echo "ERROR: resolved oc ($OC_BIN) is version $oc_ver, need >=4.22 for correct --included filtering (OCPBUGS-77845)."
+            echo "  This usually means get-release-oc fell back to system oc -- check its output above for a WARNING line."
+            return 1
+        fi
+    else
+        echo "WARNING: could not determine $OC_BIN version, proceeding anyway"
+    fi
     echo "extracting credential-requests" && $OC_BIN adm release extract \
       --from=$RELEASE_IMAGE \
       --credentials-requests \
       --cloud=gcp \
-      --included \
+      --included=true \
       --install-config=$OCP_CREATE_DIR/install-config.yaml \
+      --registry-config ~/pull-secret.txt \
       --to=$OCP_CREATE_DIR/credentials-requests || return 1
     ccoctl gcp create-all \
-      --name $CLUSTER_NAME \
+      --name $WIF_NAME \
       --project $GCP_PROJECT_ID \
       --region $GCP_REGION \
       --output-dir $OCP_CREATE_DIR \
@@ -331,8 +575,19 @@ credentialsMode: Manual # needed for WIF"
     $OPENSHIFT_INSTALL create manifests --dir $OCP_CREATE_DIR || return 1
     cp $OCP_CREATE_DIR/credentials-requests/* $OCP_CREATE_DIR/manifests/ || return 1 # copy cred requests to manifests dir, ccoctl delete will delete cred requests in separate dir
     
-    # Create the cluster with error handling
-    if ! $OPENSHIFT_INSTALL create cluster --dir $OCP_CREATE_DIR --log-level=info; then
+    # Create the cluster with error handling. A background helper runs for
+    # the duration of this call to proactively work around the two known GCP
+    # CAPI bugs (ILB-pinning + the bootstrap-configmap side effect of fixing
+    # it) documented in start-gcp-bootstrap-bugfix-helper()'s comment above --
+    # doing this unconditionally, before either bug can eat bootstrap-timeout
+    # budget via interactive diagnosis, is the whole point.
+    start-gcp-bootstrap-bugfix-helper "$OCP_CREATE_DIR" "$GCP_PROJECT_ID" "$GCP_REGION" &
+    local bugfix_helper_pid=$!
+    local create_cluster_status=0
+    $OPENSHIFT_INSTALL create cluster --dir $OCP_CREATE_DIR --log-level=info || create_cluster_status=1
+    kill "$bugfix_helper_pid" 2>/dev/null
+    wait "$bugfix_helper_pid" 2>/dev/null
+    if [[ "$create_cluster_status" != "0" ]]; then
         if [[ "$no_cleanup" == "true" ]]; then
             echo "WARNING: Cluster creation failed but --no-cleanup set, skipping destroy"
             echo "  Cluster dir: $OCP_CREATE_DIR"
@@ -345,9 +600,36 @@ credentialsMode: Manual # needed for WIF"
         return 1
     fi
     
-    echo "workload-identity-pool: $CLUSTER_BASE_NAME"
-    echo "workload-identity-provider: $CLUSTER_BASE_NAME"
-    
+    echo "workload-identity-pool: $WIF_NAME"
+    echo "workload-identity-provider: $WIF_NAME"
+
+    # Post-install: add a nested-virtualization-capable worker MachineSet for
+    # /dev/kvm, if requested. EXPERIMENTAL/best-effort -- unlike AWS's --kvm
+    # (bare-metal instance types) or Azure's --kvm-all-workers (VM families
+    # that expose nested virt with zero extra config), GCP requires deriving
+    # a custom boot image carrying the enable-vmx license first. This has no
+    # prior confirmed-working repro in this codebase yet -- see
+    # add-gcp-nested-virt-machineset()'s doc comment. The cluster itself
+    # already succeeded above, so a failure/timeout here is a warning, not a
+    # hard failure of this function.
+    local kvm_dedicated_node=false
+    if [[ "$add_kvm_pool" == "true" ]]; then
+        if KUBECONFIG="$OCP_CREATE_DIR/auth/kubeconfig" add-gcp-nested-virt-machineset "$GCP_PROJECT_ID" "$CLUSTER_NAME"; then
+            kvm_dedicated_node=true
+        fi
+    fi
+
+    # Post-install: install OpenShift Virtualization (CNV/KubeVirt), if requested.
+    # install-cnv-operator is defined in aws/create-ocp-aws.zsh but is cloud-agnostic
+    # (only needs KUBECONFIG + a taint-tolerate bool + optional community tag) --
+    # reused as-is here since load.zsh sources that file first. Best-effort, same
+    # rationale as above.
+    if [[ "$install_cnv" == "true" ]]; then
+        local cnv_community_tag=""
+        [[ "$community_hco" == "true" ]] && cnv_community_tag="$community_hco_tag"
+        KUBECONFIG="$OCP_CREATE_DIR/auth/kubeconfig" install-cnv-operator "$kvm_dedicated_node" "$cnv_community_tag"
+    fi
+
     # Update or remind about secrets.zsh
     echo ""
     echo "Would you like to automatically update ~/secrets.zsh with the WIF values? (y/n)"
@@ -362,16 +644,16 @@ credentialsMode: Manual # needed for WIF"
             # Check if GCP_POOL_ID and GCP_PROVIDER_ID already exist
             if grep -q "^export GCP_POOL_ID=" ~/secrets.zsh && grep -q "^export GCP_PROVIDER_ID=" ~/secrets.zsh; then
                 # Update existing values
-                sed -i.tmp "s/^export GCP_POOL_ID=.*/export GCP_POOL_ID='$CLUSTER_BASE_NAME'/" ~/secrets.zsh
-                sed -i.tmp "s/^export GCP_PROVIDER_ID=.*/export GCP_PROVIDER_ID='$CLUSTER_BASE_NAME'/" ~/secrets.zsh
+                sed -i.tmp "s/^export GCP_POOL_ID=.*/export GCP_POOL_ID='$WIF_NAME'/" ~/secrets.zsh
+                sed -i.tmp "s/^export GCP_PROVIDER_ID=.*/export GCP_PROVIDER_ID='$WIF_NAME'/" ~/secrets.zsh
                 rm -f ~/secrets.zsh.tmp
                 echo "Updated existing GCP_POOL_ID and GCP_PROVIDER_ID in ~/secrets.zsh"
             else
                 # Append new values
                 echo "" >> ~/secrets.zsh
-                echo "#For WIF work on cluster $CLUSTER_BASE_NAME" >> ~/secrets.zsh
-                echo "export GCP_POOL_ID='$CLUSTER_BASE_NAME'" >> ~/secrets.zsh
-                echo "export GCP_PROVIDER_ID='$CLUSTER_BASE_NAME'" >> ~/secrets.zsh
+                echo "#For WIF work on cluster $WIF_NAME" >> ~/secrets.zsh
+                echo "export GCP_POOL_ID='$WIF_NAME'" >> ~/secrets.zsh
+                echo "export GCP_PROVIDER_ID='$WIF_NAME'" >> ~/secrets.zsh
                 echo "Added GCP_POOL_ID and GCP_PROVIDER_ID to ~/secrets.zsh"
             fi
             
@@ -380,19 +662,127 @@ credentialsMode: Manual # needed for WIF"
             echo "To apply the changes, run: source ~/secrets.zsh"
         else
             echo "ERROR: ~/secrets.zsh not found. Creating it with the WIF values..."
-            echo "#For WIF work on cluster $CLUSTER_BASE_NAME" > ~/secrets.zsh
-            echo "export GCP_POOL_ID='$CLUSTER_BASE_NAME'" >> ~/secrets.zsh
-            echo "export GCP_PROVIDER_ID='$CLUSTER_BASE_NAME'" >> ~/secrets.zsh
+            echo "#For WIF work on cluster $WIF_NAME" > ~/secrets.zsh
+            echo "export GCP_POOL_ID='$WIF_NAME'" >> ~/secrets.zsh
+            echo "export GCP_PROVIDER_ID='$WIF_NAME'" >> ~/secrets.zsh
             echo "Created ~/secrets.zsh with WIF values"
         fi
     else
         echo "Manual update required. Add the following to ~/secrets.zsh:"
-        echo "  export GCP_POOL_ID='$CLUSTER_BASE_NAME'"
-        echo "  export GCP_PROVIDER_ID='$CLUSTER_BASE_NAME'"
+        echo "  export GCP_POOL_ID='$WIF_NAME'"
+        echo "  export GCP_PROVIDER_ID='$WIF_NAME'"
     fi
     
     # Cleanup
     unset OPENSHIFT_INSTALL_RELEASE_IMAGE_OVERRIDE AUTO_SELECT_EC PROCEED_WITH_EXISTING_CLUSTERS
+}
+
+# Add a nested-virtualization-capable worker MachineSet to an existing GCP
+# cluster so /dev/kvm is exposed for OpenShift Virtualization/KubeVirt VMs.
+#
+# EXPERIMENTAL / best-effort: unlike AWS (.metal instance types, zero extra
+# config) or Azure (Dv3/Dsv3/Ev3/Esv3+ VM families expose nested virt
+# natively), GCP nested virtualization requires a boot image that carries the
+# "enable-vmx" license -- OpenShift's own installer-generated RHCOS image
+# doesn't have it, and GCP's install-config compute[].platform.gcp stanza has
+# no per-pool custom-image override the way AWS's `type:` field works for
+# instance size. So this has to run as a day-2 step: derive a licensed image
+# from the existing worker's boot image, then clone the worker MachineSet
+# (same jq clone-and-mutate pattern as AWS's add-kvm-machineset in
+# aws/create-ocp-aws.zsh) onto that image with a nested-virt-capable machine
+# type. This has NO prior confirmed-working repro in this codebase (unlike
+# AWS's --kvm, which cites a live-tested history) -- treat any failure here
+# as informative, not diagnostic of a real problem elsewhere.
+#
+# Usage: KUBECONFIG=/path/to/kubeconfig add-gcp-nested-virt-machineset <gcp-project-id> <cluster-name>
+add-gcp-nested-virt-machineset() {
+    local project_id=$1
+    local cluster_name=$2
+
+    if [[ -z "$project_id" || -z "$cluster_name" ]]; then
+        echo "Usage: add-gcp-nested-virt-machineset <gcp-project-id> <cluster-name>" >&2
+        return 1
+    fi
+
+    echo "INFO: --kvm requested: deriving a nested-virt-capable (enable-vmx) worker image (EXPERIMENTAL, best-effort)"
+
+    local infra_id
+    infra_id=$(oc get infrastructure cluster -o jsonpath='{.status.infrastructureName}' 2>/dev/null)
+    if [[ -z "$infra_id" ]]; then
+        echo "WARN: --kvm: could not determine infrastructureName, skipping nested-virt MachineSet" >&2
+        return 1
+    fi
+
+    local base_ms
+    base_ms=$(oc get machineset -n openshift-machine-api -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
+    if [[ -z "$base_ms" ]]; then
+        echo "WARN: --kvm: no worker MachineSet found, skipping nested-virt MachineSet" >&2
+        return 1
+    fi
+
+    local source_image
+    source_image=$(oc get machineset "$base_ms" -n openshift-machine-api -o jsonpath='{.spec.template.spec.providerSpec.value.disks[0].image}' 2>/dev/null)
+    if [[ -z "$source_image" ]]; then
+        echo "WARN: --kvm: could not read boot image from MachineSet $base_ms, skipping" >&2
+        return 1
+    fi
+
+    local licensed_image_name="${cluster_name}-nested-virt"
+    echo "INFO: --kvm: creating licensed image $licensed_image_name from $source_image..."
+    if ! gcloud compute images create "$licensed_image_name" \
+        --source-image="$source_image" \
+        --licenses="https://www.googleapis.com/compute/v1/projects/vm-options/global/licenses/enable-vmx" \
+        --project="$project_id" --quiet; then
+        echo "WARN: --kvm: failed to create licensed image, skipping nested-virt MachineSet" >&2
+        return 1
+    fi
+
+    local new_ms="${infra_id}-worker-nested-virt"
+    local machine_type="${OCP_GCP_NESTED_VIRT_MACHINE_TYPE:-n2-standard-4}"
+    local image_selflink="projects/${project_id}/global/images/${licensed_image_name}"
+
+    local jq_filter='
+        del(.metadata.resourceVersion, .metadata.uid, .metadata.creationTimestamp, .metadata.generation, .metadata.selfLink) |
+        del(.status) |
+        .metadata.name = $name |
+        .spec.replicas = 1 |
+        .spec.selector.matchLabels["machine.openshift.io/cluster-api-machineset"] = $name |
+        .spec.template.metadata.labels["machine.openshift.io/cluster-api-machineset"] = $name |
+        .spec.template.spec.providerSpec.value.machineType = $mtype |
+        .spec.template.spec.providerSpec.value.disks[0].image = $image |
+        .spec.template.spec.taints = [{"key": "dedicated", "value": "kubevirt", "effect": "NoSchedule"}] |
+        .spec.template.spec.metadata.labels["dedicated"] = "kubevirt" |
+        .spec.template.spec.metadata.labels["node-role.kubernetes.io/kvm"] = ""
+    '
+    if ! oc get machineset "$base_ms" -n openshift-machine-api -o json \
+        | jq --arg name "$new_ms" --arg mtype "$machine_type" --arg image "$image_selflink" "$jq_filter" \
+        | oc apply -f - ; then
+        echo "WARN: --kvm: failed to create nested-virt MachineSet $new_ms" >&2
+        return 1
+    fi
+
+    echo "INFO: --kvm: waiting up to 15m for $new_ms's machine to become Running and tainted (best-effort)..."
+    local elapsed=0
+    while (( elapsed < 900 )); do
+        local phase node_name taint_value
+        phase=$(oc get machine -n openshift-machine-api -l "machine.openshift.io/cluster-api-machineset=${new_ms}" -o jsonpath='{.items[0].status.phase}' 2>/dev/null)
+        if [[ "$phase" == "Running" ]]; then
+            node_name=$(oc get machine -n openshift-machine-api -l "machine.openshift.io/cluster-api-machineset=${new_ms}" -o jsonpath='{.items[0].status.nodeRef.name}' 2>/dev/null)
+            if [[ -n "$node_name" ]]; then
+                taint_value=$(oc get node "$node_name" -o jsonpath='{.spec.taints[?(@.key=="dedicated")].value}' 2>/dev/null)
+                if [[ "$taint_value" == "kubevirt" ]]; then
+                    echo "INFO: --kvm: nested-virt machine is Running and node $node_name is tainted"
+                    return 0
+                fi
+            fi
+        fi
+        sleep 15
+        (( elapsed += 15 ))
+    done
+
+    echo "WARN: --kvm: nested-virt machine did not reach Running+tainted within 15m (phase=${phase:-unknown})." >&2
+    echo "      Check: oc get machine -n openshift-machine-api -l machine.openshift.io/cluster-api-machineset=${new_ms}" >&2
+    return 1
 }
 
 # Function to create Velero identity for current GCP OpenShift cluster

@@ -25,6 +25,22 @@ create-ocp-azure-sts(){
         echo "              With --ec, if the signature preflight check finds a missing"
         echo "              signature, auto-disable ClusterImagePolicy enforcement (same as"
         echo "              --nightly) and continue instead of prompting/aborting"
+        echo "  --nightly[=X.Y]"
+        echo "              Use the raw per-minor-version OCP nightly release stream"
+        echo "              (X.Y.0-0.nightly) instead of dev-preview/stable/--ec. Prompts for"
+        echo "              the minor version if not given."
+        echo "  --install-cnv"
+        echo "              Install OpenShift Virtualization (CNV/KubeVirt operator + a minimal"
+        echo "              HyperConverged CR). Can be combined with --kvm-all-workers or used alone."
+        echo "  --community-hco[=TAG]"
+        echo "              Install Community HCO (quay.io/kubevirt/hyperconverged-cluster-index)"
+        echo "              instead of productized CNV. Implies --install-cnv. TAG defaults to"
+        echo "              1.18.0. Use this when --nightly is also set."
+        echo "  --kvm-all-workers"
+        echo "              Set the whole worker pool to a nested-virtualization-capable VM size"
+        echo "              (default Standard_D8s_v3, override with OCP_AZURE_NESTED_VIRT_VM_SIZE)."
+        echo "              Azure's Dv3/Dsv3/Ev3/Esv3+ families expose /dev/kvm on the guest"
+        echo "              natively -- no special image needed, unlike GCP's --kvm."
         echo ""
         echo "Prerequisites:"
         echo "  - AZURE_SUBSCRIPTION_ID environment variable must be set"
@@ -100,6 +116,20 @@ create-ocp-azure-sts(){
     fi
     if [[ $1 != "no-delete" ]]; then
         if [[ -d "$OCP_CREATE_DIR" ]]; then
+            # Safety guard (added 2026-08-31 after a real incident on AWS: a
+            # second same-day invocation destroyed a different, still-live
+            # cluster that happened to land on this same directory). Never
+            # destroy a live cluster -- fail loudly instead of guessing.
+            if is-cluster-live "$OCP_CREATE_DIR"; then
+                echo "ERROR: $OCP_CREATE_DIR is a LIVE, reachable cluster (API server responded). Refusing to destroy it automatically." >&2
+                echo "If this directory really should be replaced, verify the cluster is actually meant to be torn down first." >&2
+                return 1
+            fi
+            # Archive configs/logs before destroy -- this is the ONLY copy of a
+            # failed attempt's install-config/logs once we rm the dir below.
+            # See archive-logs.sh: never deletes anything itself, only copies
+            # to ~/OCP/manifests/.logs/ (kept >=30 days, see prune function).
+            bash ~/.claude/skills/create-ocp/scripts/archive-logs.sh "$OCP_CREATE_DIR" 2>/dev/null || true
             $OPENSHIFT_INSTALL destroy cluster --dir $OCP_CREATE_DIR || echo "no existing cluster"
             $OPENSHIFT_INSTALL destroy bootstrap --dir $OCP_CREATE_DIR || echo "no existing bootstrap"
             (retry-ccoctl-azure azure delete \
@@ -379,6 +409,12 @@ create-ocp-azure-sts(){
     local auto_ec=false
     local verify_all_signatures=false
     local allow_unsigned=false
+    local use_nightly=false
+    local nightly_minor=""
+    local install_cnv=false
+    local community_hco=false
+    local community_hco_tag="1.18.0"
+    local kvm_all_workers=false
 
     for arg in "$@"; do
         case "$arg" in
@@ -393,6 +429,28 @@ create-ocp-azure-sts(){
                 ;;
             --allow-unsigned)
                 allow_unsigned=true
+                ;;
+            --nightly)
+                use_nightly=true
+                ;;
+            --nightly=*)
+                use_nightly=true
+                nightly_minor="${arg#--nightly=}"
+                ;;
+            --install-cnv)
+                install_cnv=true
+                ;;
+            --community-hco)
+                community_hco=true
+                install_cnv=true
+                ;;
+            --community-hco=*)
+                community_hco=true
+                install_cnv=true
+                community_hco_tag="${arg#--community-hco=}"
+                ;;
+            --kvm-all-workers)
+                kvm_all_workers=true
                 ;;
         esac
     done
@@ -414,7 +472,15 @@ create-ocp-azure-sts(){
     
     # Prompt for release stream selection and get release image
     local stream
-    if [[ -n "$OCP_RELEASE_VERSION" ]]; then
+    if [[ "$use_nightly" == "true" ]]; then
+        if [[ -z "$nightly_minor" ]]; then
+            nightly_minor=$(prompt-nightly-minor-version) || return 1
+        fi
+        export OCP_NIGHTLY_MINOR="$nightly_minor"
+        stream="nightly"
+        echo "INFO: --nightly requested: using raw ${nightly_minor}.0-0.nightly release stream"
+        unset AUTO_SELECT_EC
+    elif [[ -n "$OCP_RELEASE_VERSION" ]]; then
         if [[ "$OCP_RELEASE_VERSION" =~ (ec|rc)\. ]]; then
             stream="dev-preview"
         else
@@ -443,12 +509,36 @@ create-ocp-azure-sts(){
     # in common-functions.zsh for the full story; no-op for stream != dev-preview.
     enforce-release-signature-check "$RELEASE_IMAGE" "$stream" "$verify_all_signatures" "$allow_unsigned" || return 1
 
+    # Raw nightlies aren't signed the way production release images are (see
+    # the identical block/comment in create-ocp-aws.zsh, OCPBUGS-104571) --
+    # bypass Sigstore ClusterImagePolicy enforcement for nightly streams.
+    if [[ "$stream" == "nightly" ]]; then
+        export OPENSHIFT_INSTALL_EXPERIMENTAL_DISABLE_IMAGE_POLICY=true
+        echo "INFO: Nightly stream detected -- exported OPENSHIFT_INSTALL_EXPERIMENTAL_DISABLE_IMAGE_POLICY=true to bypass Sigstore signature enforcement"
+    fi
+
     echo "INFO: Using release image: $RELEASE_IMAGE"
     local BASE_RELEASE_IMAGE_REGISTRY=$(echo $RELEASE_IMAGE | awk -F/ '{print $1}')
 
     # Handle registry login and pull secret update
     handle-registry-login "$BASE_RELEASE_IMAGE_REGISTRY"
     update-pull-secret-with-podman "$BASE_RELEASE_IMAGE_REGISTRY"
+    # Azure's Dv3/Dsv3/Ev3/Esv3 (and newer) VM families are Generation-2,
+    # Broadwell-or-later, and expose nested virtualization/-dev-kvm on the
+    # guest natively -- no special image/licensing step needed (unlike GCP),
+    # just picking the right compute[].platform.azure.type. This mirrors
+    # AWS's --kvm-all-workers (whole pool, day-1, no taint) rather than
+    # --kvm's day-2 tainted-node semantics, since there's no dedicated/metal
+    # node concept here -- every worker gets the nested-virt-capable size.
+    local compute_platform_yaml="  platform: {}"
+    if [[ "$kvm_all_workers" == "true" ]]; then
+        local nested_virt_vm_size="${OCP_AZURE_NESTED_VIRT_VM_SIZE:-Standard_D8s_v3}"
+        echo "INFO: --kvm-all-workers requested: all compute nodes will be $nested_virt_vm_size (nested-virt-capable)"
+        compute_platform_yaml="  platform:
+    azure:
+      type: $nested_virt_vm_size"
+    fi
+
     mkdir -p $OCP_CREATE_DIR && \
     echo "additionalTrustBundlePolicy: Proxyonly
 apiVersion: v1
@@ -457,7 +547,7 @@ compute:
 - architecture: amd64
   hyperthreading: Enabled
   name: worker
-  platform: {}
+$compute_platform_yaml
   replicas: 3
 controlPlane:
   architecture: amd64
@@ -492,6 +582,12 @@ pullSecret: '$(cat ~/pull-secret.txt)'
 sshKey: |
   $(cat ~/.ssh/id_rsa.pub)
 " > $OCP_CREATE_DIR/install-config.yaml && echo "created install-config.yaml" || return 1
+    # openshift-install consumes (deletes) install-config.yaml as soon as it
+    # renders manifests -- preserve a copy now, before that happens, so
+    # archive-logs.sh has something to grab even on a failure that occurs
+    # after manifest generation. See create-ocp SKILL.md's retention-policy
+    # section.
+    cp $OCP_CREATE_DIR/install-config.yaml $OCP_CREATE_DIR/install-config.yaml.orig
 
     echo "INFO: Using multi-architecture release image for Azure: $RELEASE_IMAGE"
 
@@ -499,13 +595,34 @@ sshKey: |
     echo "INFO: Exported OPENSHIFT_INSTALL_RELEASE_IMAGE_OVERRIDE=$RELEASE_IMAGE"
 
     # Use version-matched oc for credential extraction (--cloud=azure requires 4.22+)
+    # Use version-matched oc for credential extraction. Requires oc 4.22+
+    # containing openshift/oc#2222 -- older oc mis-filters --included against
+    # install-config's capabilities, incorrectly including the
+    # openshift-cluster-api-azure CredentialsRequest, which deadlocks bootkube
+    # forever trying to create capz-manager-bootstrap-credentials in a
+    # namespace that doesn't exist yet (OCPBUGS-77845, resolved upstream --
+    # see create-ocp SKILL.md's GCP-WIF troubleshooting section). Fail loudly
+    # here rather than silently proceeding with too-old an oc and deadlocking
+    # 45 minutes later with a confusing symptom.
     local OC_BIN=$(get-release-oc "$RELEASE_IMAGE")
+    local oc_ver; oc_ver=$($OC_BIN version --client 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)
+    if [[ -n "$oc_ver" ]]; then
+        autoload -U is-at-least
+        if ! is-at-least 4.22 "$oc_ver"; then
+            echo "ERROR: resolved oc ($OC_BIN) is version $oc_ver, need >=4.22 for correct --included filtering (OCPBUGS-77845)."
+            echo "  This usually means get-release-oc fell back to system oc -- check its output above for a WARNING line."
+            return 1
+        fi
+    else
+        echo "WARNING: could not determine $OC_BIN version, proceeding anyway"
+    fi
     echo "extracting credential-requests" && $OC_BIN adm release extract \
       --from=$RELEASE_IMAGE \
       --credentials-requests \
       --cloud=azure \
-      --included \
+      --included=true \
       --install-config=$OCP_CREATE_DIR/install-config.yaml \
+      --registry-config ~/pull-secret.txt \
       --to=$OCP_CREATE_DIR/credentials-requests || return 1
 
     echo "INFO: Running ccoctl azure create-all with retry logic for eventual consistency handling..."
@@ -535,6 +652,20 @@ sshKey: |
     echo "azure-subscription-id: $AZURE_SUBSCRIPTION_ID"
     echo "azure-resource-group: $CLUSTER_RESOURCE_GROUP"
     echo "azure-basedomain-resource-group: $AZURE_BASEDOMAIN_RESOURCE_GROUP"
+
+    # Post-install: install OpenShift Virtualization (CNV/KubeVirt), if requested.
+    # install-cnv-operator is defined in aws/create-ocp-aws.zsh but is cloud-agnostic
+    # (only needs KUBECONFIG + a taint-tolerate bool + optional community tag) --
+    # reused as-is here since load.zsh sources that file first. Best-effort: the
+    # cluster itself already succeeded above, so a failure/timeout here is a warning.
+    if [[ "$install_cnv" == "true" ]]; then
+        local cnv_community_tag=""
+        [[ "$community_hco" == "true" ]] && cnv_community_tag="$community_hco_tag"
+        # false: no taint -- --kvm-all-workers sizes the WHOLE pool for nested
+        # virt (matching AWS's --kvm-all-workers), so there's no dedicated/tainted
+        # node for the HyperConverged CR to tolerate.
+        KUBECONFIG="$OCP_CREATE_DIR/auth/kubeconfig" install-cnv-operator "false" "$cnv_community_tag"
+    fi
 
     # Cleanup
     unset OPENSHIFT_INSTALL_RELEASE_IMAGE_OVERRIDE AUTO_SELECT_EC PROCEED_WITH_EXISTING_CLUSTERS
