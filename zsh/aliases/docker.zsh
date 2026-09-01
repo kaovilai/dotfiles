@@ -112,6 +112,64 @@ function socktainer-export-all-undo() {
   socktainer-export-podman-undo
 }
 
+# Easy flip between socktainer and real podman machine, persisted for new terminal sessions
+SOCKTAINER_MODE_FILE="$HOME/.cache/socktainer-mode"
+
+function socktainer-use() {
+  socktainer-export-all || return 1
+  mkdir -p "${SOCKTAINER_MODE_FILE:h}"
+  echo "socktainer" > "$SOCKTAINER_MODE_FILE"
+  echo "✅ socktainer mode -- persisted for new terminals (see 'socktainer-mode' / 'podman-machine-use' to switch back)"
+}
+
+function podman-machine-use() {
+  socktainer-export-all-undo
+  mkdir -p "${SOCKTAINER_MODE_FILE:h}"
+  echo "podman" > "$SOCKTAINER_MODE_FILE"
+  echo "✅ podman machine mode -- persisted for new terminals"
+}
+
+function socktainer-mode() {
+  if [[ -f "$SOCKTAINER_MODE_FILE" ]]; then
+    cat "$SOCKTAINER_MODE_FILE"
+  else
+    echo "podman (default)"
+  fi
+}
+
+function socktainer-select() {
+  if ! command -v fzf &> /dev/null; then
+    echo "❌ fzf not found. Install it with: brew install fzf" >&2
+    return 1
+  fi
+
+  local current choice
+  current=$(socktainer-mode)
+
+  choice=$(printf "socktainer\npodman\n" | fzf \
+    --header="Select container runtime (current: $current)" \
+    --header-first \
+    --reverse \
+    --height=40% \
+    --border \
+    --prompt="Runtime> ") || {
+    echo "❌ No selection made" >&2
+    return 1
+  }
+
+  case "$choice" in
+    socktainer) socktainer-use ;;
+    podman) podman-machine-use ;;
+  esac
+}
+
+# Apply the persisted choice to every new shell -- silent, no socket check
+# (a missing daemon should surface as a normal connection error when actually used, not shell-startup noise)
+if [[ -f "$SOCKTAINER_MODE_FILE" ]] && [[ "$(<$SOCKTAINER_MODE_FILE)" == "socktainer" ]]; then
+  export DOCKER_HOST="unix://$HOME/.socktainer/container.sock"
+  export CONTAINER_HOST="unix://$HOME/.socktainer/container.sock"
+fi
+
 # Auth file aliases
 alias docker-auth='echo ~/.docker/config.json'
 alias podman-auth='echo ${XDG_RUNTIME_DIR:-~/.config}/containers/auth.json'

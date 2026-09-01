@@ -108,6 +108,12 @@ create-ocp-aws() {
         echo "    every worker is metal)."
         echo "  - This adds ~1 extra large/expensive node -- delete-ocp-aws tears it down with the"
         echo "    rest of the cluster; do not leave it running longer than needed."
+        echo "  - --kvm-all-workers automatically backgrounds a health watcher for the duration of"
+        echo "    cluster creation that detects EC2 System Status Check failures ('impaired') on"
+        echo "    .metal workers and deletes the affected Machine so its MachineSet reprovisions a"
+        echo "    replacement -- no separate flag needed. This is real, seen-live AWS hardware"
+        echo "    flakiness that nothing in openshift-install/CAPI/MachineHealthCheck otherwise"
+        echo "    detects on its own (see create-ocp SKILL.md's EC2 .metal troubleshooting section)."
         echo ""
         echo "CNV/virt notes:"
         echo "  - --install-cnv installs the kubevirt-hyperconverged operator via OLM and waits"
@@ -171,7 +177,9 @@ create-ocp-aws() {
         echo "ERROR: AWS credentials not configured. Please run 'aws configure' or set AWS credentials"
         return 1
     fi
-    
+
+    preflight-check-aws-permissions
+
     # Note: We skip architecture validation of the installer's default release image
     # because we always override it with OPENSHIFT_INSTALL_RELEASE_IMAGE_OVERRIDE.
     # The installer binary can be any architecture (arm64/amd64) as long as it runs on the host.
@@ -210,6 +218,22 @@ create-ocp-aws() {
     
     if [[ $1 != "no-delete" ]]; then
         if [[ -d "$OCP_CREATE_DIR" ]]; then
+            # Safety guard (added 2026-08-31 after a real incident: a second
+            # same-day invocation destroyed a different, still-live cluster
+            # that happened to land on this same directory). Even though
+            # generate-unique-cluster-name should already have suffixed away
+            # from a live cluster above, never destroy one -- fail loudly
+            # instead of guessing.
+            if is-cluster-live "$OCP_CREATE_DIR"; then
+                echo "ERROR: $OCP_CREATE_DIR is a LIVE, reachable cluster (API server responded). Refusing to destroy it automatically." >&2
+                echo "If this directory really should be replaced, verify the cluster is actually meant to be torn down first." >&2
+                return 1
+            fi
+            # Archive configs/logs before destroy -- this is the ONLY copy of a
+            # failed attempt's install-config/logs once we rm the dir below.
+            # See archive-logs.sh: never deletes anything itself, only copies
+            # to ~/OCP/manifests/.logs/ (kept >=30 days, see prune function).
+            bash ~/.claude/skills/create-ocp/scripts/archive-logs.sh "$OCP_CREATE_DIR" 2>/dev/null || true
             $OPENSHIFT_INSTALL destroy cluster --dir $OCP_CREATE_DIR || echo "no existing cluster"
             $OPENSHIFT_INSTALL destroy bootstrap --dir $OCP_CREATE_DIR || echo "no existing bootstrap"
             ((rm -r $OCP_CREATE_DIR && echo "removed existing create dir") || (true && echo "no existing install dir")) || return 1
@@ -410,6 +434,7 @@ create-ocp-aws() {
     local compute_platform_yaml="  platform: {}"
     if [[ "$kvm_all_workers" == "true" ]]; then
         local metal_instance_type=$(resolve-kvm-instance-type "$ARCHITECTURE")
+        preflight-check-instance-type-capacity "$metal_instance_type" "$AWS_REGION" || return 1
         echo "INFO: --kvm-all-workers requested: all compute nodes will be $metal_instance_type"
         compute_platform_yaml="  platform:
     aws:
@@ -469,17 +494,38 @@ platform:
 publish: External"
         add-credentials-to-install-config
     } > $OCP_CREATE_DIR/install-config.yaml || return 1
-    
+    # openshift-install consumes (deletes) install-config.yaml as soon as it
+    # renders manifests -- preserve a copy now, before that happens, so
+    # archive-logs.sh has something to grab even on a failure that occurs
+    # after manifest generation. See create-ocp SKILL.md's retention-policy
+    # section.
+    cp $OCP_CREATE_DIR/install-config.yaml $OCP_CREATE_DIR/install-config.yaml.orig
+
     echo "created install-config.yaml"
-    
+
     $OPENSHIFT_INSTALL create manifests --dir $OCP_CREATE_DIR || return 1
-    
+
+    # Background: proactively watch for and remediate impaired .metal workers
+    # for the ENTIRE duration of `create cluster` -- see
+    # start-aws-metal-health-watcher()'s doc comment for why this is
+    # necessary (no part of the OpenShift/CAPI stack polls AWS's own System
+    # Status Check API on its own). Only relevant when --kvm-all-workers put
+    # metal instances in the pool from day 1; the day-2 --kvm/--kvm-spot path
+    # already has its own narrower wait-and-check loop in add-kvm-machineset.
+    local metal_watcher_pid=""
+    if [[ "$kvm_all_workers" == "true" ]]; then
+        start-aws-metal-health-watcher "$OCP_CREATE_DIR" "$AWS_REGION" &
+        metal_watcher_pid=$!
+    fi
+
     # Create the cluster with error handling
     if ! $OPENSHIFT_INSTALL create cluster --dir $OCP_CREATE_DIR --log-level=info; then
+        [[ -n "$metal_watcher_pid" ]] && kill "$metal_watcher_pid" 2>/dev/null && wait "$metal_watcher_pid" 2>/dev/null
         cleanup-on-failure "$OCP_CREATE_DIR" "$CLUSTER_NAME" "aws"
         unset OPENSHIFT_INSTALL_RELEASE_IMAGE_OVERRIDE OPENSHIFT_INSTALL_EXPERIMENTAL_DISABLE_IMAGE_POLICY AUTO_SELECT_EC PROCEED_WITH_EXISTING_CLUSTERS OCP_NIGHTLY_MINOR
         return 1
     fi
+    [[ -n "$metal_watcher_pid" ]] && kill "$metal_watcher_pid" 2>/dev/null && wait "$metal_watcher_pid" 2>/dev/null
 
     # Post-install: add a bare-metal worker MachineSet for /dev/kvm, if requested.
     # Best-effort -- the cluster itself already succeeded above, so a failure
@@ -488,7 +534,7 @@ publish: External"
     if [[ "$add_kvm_pool" == "true" ]]; then
         local kvm_instance_type=$(resolve-kvm-instance-type "$ARCHITECTURE")
         local kvm_zone="${OCP_KVM_ZONE:-${AWS_REGION}b}"
-        if KUBECONFIG="$OCP_CREATE_DIR/auth/kubeconfig" add-kvm-machineset "$kvm_zone" "$kvm_instance_type" "$kvm_spot"; then
+        if preflight-check-instance-type-capacity "$kvm_instance_type" "$AWS_REGION" && KUBECONFIG="$OCP_CREATE_DIR/auth/kubeconfig" add-kvm-machineset "$kvm_zone" "$kvm_instance_type" "$kvm_spot"; then
             kvm_dedicated_node=true
         fi
     fi
@@ -503,6 +549,158 @@ publish: External"
 
     # Cleanup
     unset OPENSHIFT_INSTALL_RELEASE_IMAGE_OVERRIDE OPENSHIFT_INSTALL_EXPERIMENTAL_DISABLE_IMAGE_POLICY AUTO_SELECT_EC PROCEED_WITH_EXISTING_CLUSTERS OCP_NIGHTLY_MINOR
+}
+
+# Background watcher: proactively detect and remediate EC2 .metal workers
+# that fail AWS's own System Status Check ("impaired"/"reachability: failed")
+# during a --kvm-all-workers install. Meant to be backgrounded for the
+# duration of `openshift-install create cluster` and killed right after,
+# same pattern as start-gcp-bootstrap-bugfix-helper.
+#
+# WHY THIS EXISTS (confirmed live 2026-08-31/09-01, AWS): nothing in the
+# OpenShift/CAPI stack polls AWS's System Status Check API. CAPI's machine
+# controller only watches EC2 instance STATE (pending/running/terminated)
+# via DescribeInstances, never DescribeInstanceStatus's separate
+# SystemStatus/InstanceStatus health fields -- so a physically-broken host
+# can sit "running" from CAPI's point of view forever. MachineHealthCheck
+# (the CRD actually designed for auto-remediating bad machines) triggers off
+# "no Node / Node NotReady for N minutes" -- but an impaired .metal instance
+# often never gets far enough to register a Node at all during initial
+# bootstrap, so there's nothing for MachineHealthCheck to watch yet, and
+# (also) MachineHealthCheck resources aren't created for worker MachineSets
+# by default anyway. Net effect: this class of failure never self-heals
+# without an explicit `oc delete machine` (which lets the owning MachineSet
+# reprovision a replacement, usually on different underlying hardware).
+# Manually diagnosing+applying this fix cost real 40min timeout windows
+# across repeated attempts (both us-east-1 and us-west-2) before this
+# watcher existed -- catching it within the first minute or two, instead of
+# only when a human happens to check, is the entire point.
+#
+# Usage: start-aws-metal-health-watcher <install-dir> <aws-region> &
+#        local pid=$!
+#        ...
+#        kill "$pid" 2>/dev/null; wait "$pid" 2>/dev/null
+start-aws-metal-health-watcher() {
+    # Explicitly silence xtrace/verbose regardless of the caller's shell
+    # state -- confirmed live 2026-09-01: this function's own code already
+    # only prints on an actual problem (impaired instance found), but the
+    # backgrounding shell's own xtrace setting (inherited from wherever it
+    # was enabled upstream, e.g. a sourced dotfile) was leaking a raw
+    # `impaired_ids='...'` trace line into the log on every single 60s tick,
+    # healthy or not -- pure noise for a background watcher meant to be
+    # silent until there's something to report.
+    unsetopt xtrace verbose 2>/dev/null
+
+    local install_dir=$1
+    local region=$2
+    local kubeconfig="$install_dir/auth/kubeconfig"
+
+    # Wait for kubeconfig to exist (written mid-bootstrap, well before this
+    # matters -- metal workers aren't even requested until install-config is
+    # rendered, which is after this function is already backgrounded).
+    local waited=0
+    while [[ ! -f "$kubeconfig" ]]; do
+        sleep 10
+        (( waited += 10 ))
+        if (( waited >= 1800 )); then
+            echo "WARNING: metal-health-watcher: no kubeconfig after 30min, giving up" >&2
+            return 0
+        fi
+    done
+
+    local infra_id=""
+    while [[ -z "$infra_id" ]]; do
+        infra_id=$(jq -r '.infraID // empty' "$install_dir/metadata.json" 2>/dev/null)
+        [[ -n "$infra_id" ]] && break
+        sleep 5
+    done
+    echo "INFO: metal-health-watcher: watching for impaired .metal instances on cluster $infra_id in $region" >&2
+
+    while true; do
+        sleep 60
+
+        local impaired_ids
+        impaired_ids=$(aws ec2 describe-instance-status --region "$region" \
+            --filters "Name=system-status.status,Values=impaired" \
+                      "Name=tag:kubernetes.io/cluster/${infra_id},Values=owned" \
+            --query 'InstanceStatuses[].InstanceId' --output text 2>/dev/null)
+        [[ -z "$impaired_ids" ]] && continue
+
+        for instance_id in ${(z)impaired_ids}; do
+            local machine_name
+            machine_name=$(KUBECONFIG="$kubeconfig" oc get machines -n openshift-machine-api --request-timeout=10s \
+                -o jsonpath="{range .items[?(@.spec.providerID==\"aws:///*/${instance_id}\")]}{.metadata.name}{end}" 2>/dev/null)
+            # jsonpath doesn't support wildcards mid-string reliably across all oc
+            # versions -- fall back to a jq-based match on the full list if the
+            # jsonpath query above came up empty.
+            if [[ -z "$machine_name" ]]; then
+                machine_name=$(KUBECONFIG="$kubeconfig" oc get machines -n openshift-machine-api --request-timeout=10s -o json 2>/dev/null \
+                    | jq -r --arg id "$instance_id" '.items[] | select(.spec.providerID // "" | endswith($id)) | .metadata.name')
+            fi
+            [[ -z "$machine_name" ]] && continue
+
+            local phase
+            phase=$(KUBECONFIG="$kubeconfig" oc get machine "$machine_name" -n openshift-machine-api --request-timeout=10s -o jsonpath='{.status.phase}' 2>/dev/null)
+            if [[ "$phase" == "Deleting" ]]; then
+                continue
+            fi
+
+            echo "WARNING: metal-health-watcher: instance $instance_id (machine $machine_name) failed System Status Check, deleting so its MachineSet reprovisions a replacement" >&2
+            KUBECONFIG="$kubeconfig" oc delete machine "$machine_name" -n openshift-machine-api --request-timeout=15s 2>&1 | sed 's/^/INFO: metal-health-watcher: /' >&2
+        done
+    done
+}
+
+# Preflight-check an EC2 instance type/region combo before committing to a
+# 40min+ cluster-create attempt (or a 15min day-2 machineset wait) that could
+# otherwise fail deep in provisioning. Two checks, two different severities:
+#
+# 1. HARD (fails the caller): is $instance_type offered in $region AT ALL?
+#    This is a real, deterministic AWS fact (some instance types/families are
+#    entirely absent from certain regions) -- catching it here takes seconds
+#    instead of discovering it after a wasted install attempt.
+# 2. SOFT (warns only, never fails the caller): a Spot placement score for
+#    $instance_type in $region, as an ADVISORY capacity-pressure signal. This
+#    is NOT a reliable predictor of on-demand launch success or of System
+#    Status Check health after launch -- confirmed live 2026-08-31, where
+#    m5.metal workers in us-east-1 launched fine (capacity existed) but then
+#    repeatedly failed EC2 System Status Checks (a hardware-fault class of
+#    problem, unrelated to capacity availability) across 4 separate attempts.
+#    AWS has no public API that reports real-time on-demand launch success
+#    odds or hardware-health odds -- this score is the closest available
+#    signal and is deliberately non-blocking because of that limitation.
+#
+# Usage: preflight-check-instance-type-capacity <instance-type> <region>
+preflight-check-instance-type-capacity() {
+    local instance_type=$1
+    local region=$2
+
+    if [[ -z "$instance_type" || -z "$region" ]]; then
+        echo "Usage: preflight-check-instance-type-capacity <instance-type> <region>" >&2
+        return 1
+    fi
+
+    local offered
+    offered=$(aws ec2 describe-instance-type-offerings --region "$region" \
+        --filters "Name=instance-type,Values=$instance_type" \
+        --query 'InstanceTypeOfferings[0].InstanceType' --output text 2>/dev/null)
+    if [[ -z "$offered" || "$offered" == "None" ]]; then
+        echo "ERROR: preflight: $instance_type is not offered anywhere in $region -- pick a different region or override the instance type (OCP_KVM_INSTANCE_TYPE)." >&2
+        return 1
+    fi
+    echo "INFO: preflight: $instance_type is offered in $region" >&2
+
+    local score
+    score=$(aws ec2 get-spot-placement-scores --instance-types "$instance_type" \
+        --target-capacity 1 --region-names "$region" \
+        --query 'SpotPlacementScores[0].Score' --output text 2>/dev/null)
+    if [[ -n "$score" && "$score" != "None" ]]; then
+        echo "INFO: preflight: capacity-pressure hint (Spot placement score, advisory only, NOT a guarantee for on-demand or a predictor of hardware health) for $instance_type in $region: ${score}/10" >&2
+        if (( score <= 3 )); then
+            echo "WARNING: preflight: low placement score (${score}/10) suggests $region may be capacity-constrained for $instance_type right now. This does not block the attempt -- if launches keep failing (InsufficientInstanceCapacity, or repeated System Status Check failures across fresh replacement instances), try a different AWS_REGION next time (see create-ocp SKILL.md's EC2 .metal troubleshooting section)." >&2
+        fi
+    fi
+    return 0
 }
 
 # Resolve the default bare-metal EC2 instance type for /dev/kvm exposure,

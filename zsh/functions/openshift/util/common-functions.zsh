@@ -7,6 +7,8 @@
 #   - prompt-release-stream: Interactive release stream selection (dev-preview/stable)
 #   - get-release-image: Get release image URL for specific stream and architecture
 #   - validate-env-vars: Validate required environment variables are set
+#   - preflight-check-aws-permissions: Dry-run check AWS create/delete IAM perms
+#   - preflight-check-gcp-permissions: Check GCP account has an admin-equivalent role
 #   - get-openshift-install: Find or install openshift-install binary
 #   - handle-registry-login: Login to container registries (podman)
 #   - update-pull-secret-with-podman: Update pull-secret.txt with registry credentials
@@ -496,6 +498,104 @@ validate-env-vars() {
     return 0
 }
 
+# Preflight-check that the current AWS identity can both create and delete
+# the resource kinds openshift-install needs (EC2 instances/VPC, IAM roles,
+# Route53 records, ELB/NLB) -- catching an under-scoped IAM policy before
+# spending 40+ minutes on a bootstrap that will fail partway through, or
+# worse, leaving orphaned infra because delete permissions were missing.
+# Uses IAM's policy simulator (a dry-run evaluation -- creates nothing) so
+# this is safe to run unconditionally. Only works for IAM *user* ARNs (the
+# simulator needs the user/role ARN, not an STS assumed-role session ARN);
+# skips with a WARN for assumed-role sessions since simulate-principal-policy
+# can't resolve those directly.
+# Usage: preflight-check-aws-permissions
+# Returns: 0 if the identity is a user and simulation ran (regardless of
+#          individual action results -- denials are printed but non-fatal,
+#          since a scoped-down-but-sufficient policy is common and false
+#          positives from the simulator are possible with SCPs/permission
+#          boundaries it can't see); 0 (with a WARN) if skipped entirely.
+preflight-check-aws-permissions() {
+    local caller_arn
+    caller_arn=$(aws sts get-caller-identity --query Arn --output text 2>/dev/null)
+    if [[ -z "$caller_arn" ]]; then
+        echo "WARN: preflight: could not determine AWS caller identity, skipping permission check" >&2
+        return 0
+    fi
+
+    if [[ "$caller_arn" != *":user/"* ]]; then
+        echo "WARN: preflight: AWS identity is not an IAM user ($caller_arn) -- IAM policy simulator" >&2
+        echo "      can't evaluate assumed-role sessions directly, skipping permission preflight" >&2
+        return 0
+    fi
+
+    echo "INFO: preflight: checking AWS permissions for $caller_arn..."
+    local -a actions=(
+        ec2:RunInstances ec2:TerminateInstances
+        ec2:CreateVpc ec2:DeleteVpc
+        ec2:CreateNatGateway ec2:DeleteNatGateway
+        iam:CreateRole iam:DeleteRole
+        iam:CreateInstanceProfile iam:DeleteInstanceProfile
+        route53:ChangeResourceRecordSets
+        elasticloadbalancing:CreateLoadBalancer elasticloadbalancing:DeleteLoadBalancer
+    )
+    local result
+    result=$(aws iam simulate-principal-policy \
+        --policy-source-arn "$caller_arn" \
+        --action-names "${actions[@]}" \
+        --query 'EvaluationResults[?EvalDecision!=`allowed`].[EvalActionName,EvalDecision]' \
+        --output text 2>/dev/null)
+
+    if [[ -n "$result" ]]; then
+        echo "WARN: preflight: the following actions are NOT allowed for $caller_arn:" >&2
+        echo "$result" | while IFS=$'\t' read -r action decision; do
+            echo "  - $action: $decision" >&2
+        done
+        echo "WARN: preflight: cluster create/destroy may fail partway through -- continuing anyway" >&2
+        echo "      (the simulator can't see SCPs/permission boundaries, so this may be a false positive)" >&2
+    else
+        echo "INFO: preflight: all checked create/delete actions allowed"
+    fi
+    return 0
+}
+
+# Preflight-check that the active gcloud account has sufficient IAM
+# permissions on GCP_PROJECT_ID to both create and delete the resource kinds
+# openshift-install/ccoctl need (Compute instances/networks, IAM service
+# accounts, workload identity pools). Cheaper and less precise than AWS's
+# policy-simulator check (GCP has no equivalent dry-run API for arbitrary
+# permission lists without enumerating every testable permission), so this
+# just checks for a broad admin-equivalent role (owner/editor) and warns
+# rather than fails otherwise -- a narrower custom role could still be
+# sufficient and this check can't prove a negative.
+# Usage: preflight-check-gcp-permissions
+# Returns: always 0 (warns, never fails -- see rationale above)
+preflight-check-gcp-permissions() {
+    local account
+    account=$(gcloud config get-value account 2>/dev/null)
+    if [[ -z "$account" || -z "$GCP_PROJECT_ID" ]]; then
+        echo "WARN: preflight: could not determine gcloud account or GCP_PROJECT_ID, skipping permission check" >&2
+        return 0
+    fi
+
+    echo "INFO: preflight: checking GCP permissions for $account on $GCP_PROJECT_ID..."
+    local roles
+    roles=$(gcloud projects get-iam-policy "$GCP_PROJECT_ID" \
+        --flatten="bindings[].members" \
+        --filter="bindings.members:$account" \
+        --format="value(bindings.role)" 2>/dev/null)
+
+    if echo "$roles" | grep -qE '^roles/(owner|editor)$'; then
+        echo "INFO: preflight: $account has $(echo "$roles" | grep -E '^roles/(owner|editor)$' | head -1) on $GCP_PROJECT_ID (create+delete on all resource types)"
+    else
+        echo "WARN: preflight: $account has no roles/owner or roles/editor binding on $GCP_PROJECT_ID." >&2
+        echo "      Current roles: ${roles:-<none found>}" >&2
+        echo "      A narrower custom role may still be sufficient -- continuing anyway, but cluster" >&2
+        echo "      create or delete (ccoctl gcp create-all/delete, compute/IAM resources) may fail" >&2
+        echo "      partway through if a specific permission is actually missing." >&2
+    fi
+    return 0
+}
+
 # Internal helper to download openshift-install binary
 _download-openshift-install() {
     local version=$1
@@ -746,55 +846,90 @@ sshKey: |
   $(cat ~/.ssh/id_rsa.pub)"
 }
 
+# Check whether a cluster install directory belongs to a LIVE, reachable
+# cluster (API server responds), as opposed to a stale/failed/leftover
+# attempt directory that's safe to archive+destroy+reuse.
+#
+# Usage: is-cluster-live "$OCP_CREATE_DIR"
+#
+# Added 2026-08-31 after a real incident: a second same-day AWS
+# cluster-create invocation's pre-create cleanup silently destroyed a
+# DIFFERENT, still-converging, actively-needed cluster because it happened
+# to land on the same directory (see generate-unique-cluster-name's old
+# collision-check bug below). Never assume a directory is stale just
+# because it exists -- check.
+is-cluster-live() {
+    local cluster_dir=$1
+    local kubeconfig="$cluster_dir/auth/kubeconfig"
+    [[ -f "$kubeconfig" ]] || return 1
+    KUBECONFIG="$kubeconfig" timeout 10 oc get clusterversion version >/dev/null 2>&1
+}
+
 # Function to generate unique cluster name and directory
 # Usage: result=$(generate-unique-cluster-name "tkaovila-20250114-sts" "/path/to/dir")
 #        cluster_name=$(echo "$result" | grep "cluster_name:" | cut -d: -f2)
 #        cluster_dir=$(echo "$result" | grep "cluster_dir:" | cut -d: -f2)
-# Description: Generates unique cluster name by appending suffix if conflicts exist
-#              Only adds suffix when PROCEED_WITH_EXISTING_CLUSTERS=true
+# Description: Generates unique cluster name by appending suffix if conflicts exist.
+#              A directory containing a LIVE cluster (API server reachable) is ALWAYS
+#              skipped past, regardless of PROCEED_WITH_EXISTING_CLUSTERS -- this
+#              function must never hand back a directory to the caller's pre-create
+#              cleanup that a live cluster is still using. A directory that merely
+#              *exists* but is not live only gets suffixed when
+#              PROCEED_WITH_EXISTING_CLUSTERS=true (old default-reuse behavior for
+#              stale/failed attempts is unchanged).
 # Parameters:
 #   $1 - base_name: Base cluster name
 #   $2 - base_dir: Base directory path
 # Returns: Two lines to stdout: "cluster_name:NAME" and "cluster_dir:DIR"
 # Environment:
-#   PROCEED_WITH_EXISTING_CLUSTERS - If "true", appends -1, -2, etc. to avoid conflicts
+#   PROCEED_WITH_EXISTING_CLUSTERS - If "true", appends -1, -2, etc. to avoid
+#     conflicting with any existing (even non-live) directory.
 # Example:
 #   local unique=$(generate-unique-cluster-name "$CLUSTER_NAME" "$OCP_CREATE_DIR")
 #   [[ -z "$unique" ]] && return 1
+#
+# HISTORY: previously checked collisions via `find "$OCP_MANIFESTS_DIR" -name
+# "*${base_name}*"`, matching against the cluster NAME (e.g.
+# "tkaovila-260831-amd64"). That pattern never matches AWS's actual directory
+# naming convention ("260831-aws-amd64" -- no "tkaovila-" prefix, "aws-"
+# inserted mid-string), so the collision check silently never fired on AWS,
+# and a live cluster sharing that day+arch got destroyed by a second
+# invocation (confirmed live 2026-08-31). Fixed to check the candidate
+# DIRECTORY's existence directly instead of a name-pattern guess.
 generate-unique-cluster-name() {
     local base_name=$1
     local base_dir=$2
     local suffix=""
     local suffix_num=1
-    
-    # Check if PROCEED_WITH_EXISTING_CLUSTERS is set
-    if [[ -n "$PROCEED_WITH_EXISTING_CLUSTERS" && "$PROCEED_WITH_EXISTING_CLUSTERS" == "true" ]]; then
-        # Look for existing clusters with the same base name
-        while find "$OCP_MANIFESTS_DIR" -type d -name "*${base_name}*" 2>/dev/null | grep -q .; do
-            suffix="-${suffix_num}"
-            local test_name="${base_name}${suffix}"
-            echo "Found existing cluster with similar name, trying: $test_name"
-            
-            # Check if the new name exists
-            if ! find "$OCP_MANIFESTS_DIR" -type d -name "*${test_name}*" 2>/dev/null | grep -q .; then
-                # Found a unique name
-                echo "cluster_name:${test_name}"
-                echo "cluster_dir:${base_dir}${suffix}"
-                return 0
-            fi
-            
-            ((suffix_num++))
-            # Safety check to avoid infinite loop
-            if [[ $suffix_num -gt 10 ]]; then
-                echo "ERROR: Cannot find a unique cluster name after 10 attempts" >&2
-                return 1
-            fi
-        done
-    fi
-    
-    # Return the base name if no conflicts or not proceeding with existing
-    echo "cluster_name:${base_name}"
-    echo "cluster_dir:${base_dir}"
+    local candidate_dir="$base_dir"
+    local candidate_name="$base_name"
+
+    while [[ -d "$candidate_dir" ]]; do
+        if is-cluster-live "$candidate_dir"; then
+            echo "Found LIVE cluster at $candidate_dir (API server reachable) -- never auto-reusing/destroying a live cluster's directory, picking a new name/dir" >&2
+        elif [[ "$PROCEED_WITH_EXISTING_CLUSTERS" != "true" ]]; then
+            # Existing but not live, and caller hasn't opted into
+            # auto-suffixing: keep prior default behavior of returning this
+            # name/dir as-is (the caller's own pre-create cleanup will
+            # archive+destroy+reuse it, same as always).
+            break
+        fi
+
+        suffix="-${suffix_num}"
+        candidate_name="${base_name}${suffix}"
+        candidate_dir="${base_dir}${suffix}"
+        echo "Found existing cluster dir, trying: $candidate_name" >&2
+
+        ((suffix_num++))
+        # Safety check to avoid infinite loop
+        if [[ $suffix_num -gt 10 ]]; then
+            echo "ERROR: Cannot find a unique cluster name after 10 attempts" >&2
+            return 1
+        fi
+    done
+
+    echo "cluster_name:${candidate_name}"
+    echo "cluster_dir:${candidate_dir}"
     return 0
 }
 
@@ -813,33 +948,67 @@ generate-unique-cluster-name() {
 #       return 1
 #   fi
 # Get a version-matched oc binary from a release image
-# Extracts oc to /tmp/oc-<version>/oc if not cached, returns the path
+# Extracts oc to /tmp/oc-<cache-key>/oc if not cached, returns the path
 # Falls back to system oc if extraction fails
 # Usage: local OC_BIN=$(get-release-oc "$RELEASE_IMAGE")
 get-release-oc() {
     local release_image=$1
     [[ -z "$release_image" ]] && { echo "oc"; return; }
 
-    local version; version=$(echo "$release_image" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+-[a-z]+\.[0-9]+' | head -1)
-    [[ -z "$version" ]] && { echo "oc"; return; }
+    # Cache key: use whatever hex identifier is in the image ref (the sha256
+    # digest for a digest-pinned image, or a build-ID-ish hex string for a
+    # tag), NOT a regex-extracted semver. Nightly images
+    # (quay.io/.../ocp-release-nightly@sha256:<digest>, no version substring
+    # anywhere in the string at all) used to make the old semver regex match
+    # nothing, silently falling back to plain system `oc` for the ENTIRE
+    # nightly code path -- meaning the "version-matched oc" behavior this
+    # function promises was never actually happening for --nightly installs.
+    # A digest/hex-based key works for both digest and tag references and
+    # doesn't depend on parsing any particular naming convention.
+    local cache_key; cache_key=$(echo "$release_image" | grep -oE '[0-9a-f]{12,64}' | tail -1)
+    if [[ -z "$cache_key" ]]; then
+        cache_key=$(echo "$release_image" | (md5 -q 2>/dev/null || md5sum | cut -d' ' -f1))
+    fi
 
-    local oc_dir="/tmp/oc-${version}"
+    local oc_dir="/tmp/oc-${cache_key}"
     if [[ -x "$oc_dir/oc" ]]; then
         echo "$oc_dir/oc"
         return
     fi
 
-    echo "INFO: Extracting oc $version from release image..." >&2
+    echo "INFO: Extracting oc matching release image $release_image..." >&2
     mkdir -p "$oc_dir"
     oc adm release extract --command=oc --to "$oc_dir" \
         --registry-config ~/pull-secret.txt "$release_image" 2>/dev/null
     if [[ -x "$oc_dir/oc" ]]; then
-        echo "INFO: Cached oc $version at $oc_dir/oc" >&2
+        echo "INFO: Cached oc at $oc_dir/oc" >&2
         echo "$oc_dir/oc"
     else
         echo "WARNING: Failed to extract oc from release, using system oc" >&2
         echo "oc"
     fi
+}
+
+# Get a version-matched oc binary for an ALREADY-RUNNING cluster, by reading
+# its actual ClusterVersion desired-release image (not whatever stream/flag
+# was requested at create time -- the two can differ, e.g. after a partial
+# upgrade, or if you're inspecting someone else's cluster). This is what to
+# use for ANY interactive post-install diagnostics (oc get co/nodes/etc.)
+# against a nightly/pre-GA cluster -- the system `oc` on PATH is very likely
+# older than what the cluster is running (confirmed live: system oc was
+# 4.21.18 while diagnosing a 5.0.0-0.nightly cluster) and can silently behave
+# differently (missing fields/CRDs it doesn't know about, subtly wrong output
+# for newer API versions) without necessarily erroring.
+# Usage: local OC_BIN=$(get-cluster-oc "$KUBECONFIG_PATH")
+get-cluster-oc() {
+    local kubeconfig=$1
+    [[ -z "$kubeconfig" || ! -f "$kubeconfig" ]] && { echo "oc"; return; }
+
+    local release_image
+    release_image=$(KUBECONFIG="$kubeconfig" oc get clusterversion version -o jsonpath='{.status.desired.image}' 2>/dev/null)
+    [[ -z "$release_image" ]] && { echo "oc"; return; }
+
+    get-release-oc "$release_image"
 }
 
 cleanup-on-failure() {
@@ -849,15 +1018,20 @@ cleanup-on-failure() {
 
     echo "ERROR: Cluster creation failed, cleaning up resources..."
 
-    # Archive logs before any cleanup destroys them
-    bash ~/.claude/skills/create-ocp-gcp-wif/scripts/archive-logs.sh "$cluster_dir" 2>/dev/null || true
-
     # Try to gather bootstrap logs first
     if [[ -d "$cluster_dir" ]]; then
         local openshift_install; openshift_install=$(get-openshift-install)
         if [[ -n "$openshift_install" ]]; then
             echo "Attempting to gather bootstrap logs..."
             $openshift_install gather bootstrap --dir "$cluster_dir" || true
+
+            # Archive AFTER gather (which is what actually produces
+            # log-bundle-*.tar.gz) and BEFORE destroy -- this function never
+            # deletes cluster_dir itself, but the *next* invocation's
+            # pre-create cleanup block does, so this dir is not guaranteed to
+            # survive; archive now while everything gather produced is still
+            # here. Never deletes anything itself -- see archive-logs.sh.
+            bash ~/.claude/skills/create-ocp/scripts/archive-logs.sh "$cluster_dir" 2>/dev/null || true
 
             # Run destroy if metadata.json exists (installer can identify resources)
             if [[ -f "$cluster_dir/metadata.json" ]]; then
