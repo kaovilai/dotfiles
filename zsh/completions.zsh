@@ -182,8 +182,8 @@ zsh-completion-cache-status() {
   for file in "$ZSH_COMPLETION_CACHE_DIR"/_*(N); do
     if [[ -f "$file" ]]; then
       local modified size
-      modified=$(stat -f "%Sm" -t "%Y-%m-%d %H:%M:%S" "$file" 2>/dev/null || stat -c "%y" "$file" 2>/dev/null | cut -d'.' -f1)
-      size=$(du -h "$file" | cut -f1)
+      modified=${$(stat -f "%Sm" -t "%Y-%m-%d %H:%M:%S" "$file" 2>/dev/null || stat -c "%y" "$file" 2>/dev/null)%%.*}
+      size=${$(du -h "$file")%%$'\t'*}
       local name="${file:t}"
       echo "  $name ($size) - Last updated: $modified"
     fi
