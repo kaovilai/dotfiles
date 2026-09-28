@@ -5,3 +5,7 @@
 ## 2024-11-20 - Use Zsh Native Extended Globbing for File Staleness
 **Learning:** Checking file age by spawning `stat` and `date` as subprocesses adds unnecessary overhead and degrades shell startup performance. In this codebase, avoiding subprocesses is a critical optimization pattern.
 **Action:** Use native Zsh extended globbing (e.g., `(#qN.ms+seconds)`) coupled with `setopt local_options extended_glob` to perform file age evaluations natively within the shell, bypassing process spawning altogether.
+
+## 2024-07-28 - Avoid Redundant `compinit` When Using Znap
+**Learning:** The `znap` plugin manager automatically handles `compinit` and `compdump` files natively out of the box. Manually executing `compinit` (e.g. inside `znap.zsh`) or redundantly running it alongside plugins like `zsh-autocomplete` degrades Zsh shell startup performance by ~17% (~21ms) due to redundant executions and security path checking.
+**Action:** Remove redundant manual `compinit` invocations when using plugin managers that manage completions automatically, adding inline comments to preserve the context and prevent accidental reintroduction.
