@@ -149,14 +149,61 @@ if len(kept) != len(entries):
     echo "Use kill-hermes-session to also stop the underlying process if needed."
 }
 
+# Desktop ships as a compiled app.asar bundle (built by `npm run dist` under
+# apps/desktop) — it is NOT the live source tree, so quitting/relaunching alone
+# only re-reads whatever asar was last built. Returns 0 (stale, needs rebuild)
+# or 1 (asar is newer than every tracked source/dep file) via return code.
+_hermes_desktop_asar_is_stale() {
+    local repo=~/.hermes/hermes-agent
+    local asar="$repo/apps/desktop/release/mac-arm64/Hermes.app/Contents/Resources/app.asar"
+    [[ -f "$asar" ]] || return 0   # never built — treat as stale
+
+    local asar_mtime
+    asar_mtime=$(stat -f %m "$asar" 2>/dev/null) || return 0
+
+    # Newest mtime among tracked+dirty files under apps/desktop and apps/shared
+    # (git ls-files -m/-o catches uncommitted edits too, not just commits).
+    local newest
+    newest=$(cd "$repo" && { git ls-files -z apps/desktop apps/shared; git ls-files -z -m -o --exclude-standard apps/desktop apps/shared; } \
+        | xargs -0 stat -f '%m' 2>/dev/null | sort -rn | head -1)
+
+    [[ -z "$newest" ]] && return 1   # couldn't determine — don't force a rebuild
+    (( newest > asar_mtime ))
+}
+
+# Rebuild the Hermes Desktop app.asar (TS compile + electron-builder repackage)
+# ONLY if source is newer than the last build. Safe to call unconditionally —
+# no-ops when nothing changed. Pass -f to force a rebuild regardless.
+rebuild-hermes-desktop-if-stale() {
+    local force=0
+    [[ "$1" == "-f" ]] && force=1
+
+    if [[ $force -eq 0 ]] && ! _hermes_desktop_asar_is_stale; then
+        echo "Desktop app.asar is up to date with apps/desktop + apps/shared — skipping rebuild."
+        return 0
+    fi
+
+    echo "Desktop source is newer than the built app.asar — rebuilding (npm run dist)..."
+    echo "This runs a TS compile + electron-builder repackage; can take a few minutes."
+    (cd ~/.hermes/hermes-agent/apps/desktop && npm run dist)
+    local status=$?
+    if [[ $status -eq 0 ]]; then
+        echo "✓ Desktop rebuild complete."
+    else
+        echo "✗ Desktop rebuild FAILED (exit $status) — desktop app still on the OLD build." >&2
+    fi
+    return $status
+}
+
 # Restart everything Hermes-related after a fork/code update so all surfaces
 # pick up the new code. Two independent backends exist by design (see
 # hermes-fork-inherit-pr skill): the launchd-managed gateway service (Telegram,
-# cron, kanban — keeps running regardless of any UI) and the desktop app's own
-# local `serve` backend (spawned by Electron, tied to the app's lifecycle).
-# Neither restart implies the other, so both are needed, plus any live CLI
-# sessions (which keep running whatever module versions they imported at
-# launch and won't pick up new code just by existing).
+# cron, kanban — keeps running regardless of any UI, runs off the source tree
+# directly so no rebuild needed) and the desktop app's own local `serve`
+# backend, which is bundled into a compiled app.asar and DOES need a rebuild
+# before a relaunch does anything. Neither restart implies the other, so both
+# are needed, plus any live CLI sessions (which keep running whatever module
+# versions they imported at launch and won't pick up new code just by existing).
 restart-hermes-full() {
     echo "== Restarting launchd-managed Hermes gateway (ai.hermes.gateway) =="
     if launchctl kickstart -k "gui/$(id -u)/ai.hermes.gateway" 2>&1; then
@@ -167,15 +214,19 @@ restart-hermes-full() {
     fi
     echo
     echo "== Desktop app =="
-    if pgrep -f "Hermes.app/Contents/MacOS/Hermes" >/dev/null 2>&1; then
-        echo "Desktop app is running — quitting it now (Cmd+Q equivalent)."
-        osascript -e 'tell application "Hermes" to quit' 2>/dev/null
-        sleep 2
-        echo "Relaunching..."
-        open -a Hermes
-        echo "✓ Desktop app relaunched (its own local backend respawns fresh on open)"
+    if ! rebuild-hermes-desktop-if-stale; then
+        echo "Skipping desktop restart — fix the build failure above first." >&2
     else
-        echo "Desktop app is not currently running — nothing to quit."
+        if pgrep -f "Hermes.app/Contents/MacOS/Hermes" >/dev/null 2>&1; then
+            echo "Desktop app is running — quitting it now (Cmd+Q equivalent)."
+            osascript -e 'tell application "Hermes" to quit' 2>/dev/null
+            sleep 2
+            echo "Relaunching..."
+            open -a Hermes
+            echo "✓ Desktop app relaunched (its own local backend respawns fresh on open)"
+        else
+            echo "Desktop app is not currently running — nothing to quit."
+        fi
     fi
     echo
     echo "== Live CLI sessions =="
