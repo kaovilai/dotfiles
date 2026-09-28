@@ -38,6 +38,11 @@ znap source zsh-users/zsh-syntax-highlighting
 zstyle ':autocomplete:*' min-input 2
 znap source marlonrichert/zsh-autocomplete
 
+# zsh-autocomplete rebinds ^R to its own async completion-menu toggle instead of
+# real incremental search, and that async path can silently fail to produce
+# matches. Restore native reverse-i-search so Ctrl+R reliably works.
+bindkey '^R' .history-incremental-search-backward
+
 # -- Daily auto-update of all znap plugins --
 # znap does NOT auto-update; `znap pull` is manual. Run it at most once per 24h,
 # in the background, so plugin repos (pure, syntax-highlighting, etc.) stay fresh

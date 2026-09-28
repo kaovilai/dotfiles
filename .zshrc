@@ -49,8 +49,8 @@ export BASH_MAX_TIMEOUT_MS=600000
 export BASH_DEFAULT_TIMEOUT_MS=480000
 
 # Essential exports and aliases for immediate shell usage
-alias edit-dotfiles='code ~/git/dotfiles/'
-alias edit-agents='code ~/.claude/agents/'
+alias edit-dotfiles='claude ~/git/dotfiles/'
+alias edit-agents='claude ~/.claude/agents/'
 source ~/git/dotfiles/zsh/alias.zsh
 # gpg tty
 export GPG_TTY=$TTY
@@ -73,6 +73,7 @@ export CLAUDE_CODE_ENABLE_TASKS=1
 _safe_source ~/git/dotfiles/zsh/paths.zsh
 _safe_source ~/git/dotfiles/zsh/functions/openshift/load-lazy.zsh
 _safe_source ~/git/dotfiles/zsh/functions/claude/functions.zsh
+_safe_source ~/git/dotfiles/zsh/functions/hermes/functions.zsh
 _safe_source ~/git/dotfiles/zsh/functions/s3/load-lazy.zsh
 # Git utilities (lazy-loaded — ~303 lines only parsed when first used)
 typeset -g GIT_UTILS_LOADED=0
@@ -202,3 +203,6 @@ fi
 # bun
 export BUN_INSTALL="$HOME/.bun"
 export PATH="$BUN_INSTALL/bin:$PATH"
+
+# Added by cua-driver-rs installer — see https://github.com/trycua/cua
+export PATH="/Users/tkaovila/.local/bin:$PATH"
