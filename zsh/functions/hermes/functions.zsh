@@ -185,14 +185,22 @@ rebuild-hermes-desktop-if-stale() {
 
     echo "Desktop source is newer than the built app.asar — rebuilding (npm run dist)..."
     echo "This runs a TS compile + electron-builder repackage; can take a few minutes."
-    (cd ~/.hermes/hermes-agent/apps/desktop && npm run dist)
-    local status=$?
-    if [[ $status -eq 0 ]]; then
+
+    local repo=~/.hermes/hermes-agent
+    local hpython="$repo/venv/bin/python"
+    if [[ ! -x "$hpython" ]]; then
+        echo "✗ Expected dev venv python at $hpython — not found. Set HERMES_PYTHON yourself and rerun 'npm run dist' in apps/desktop." >&2
+        return 1
+    fi
+
+    (cd "$repo/apps/desktop" && HERMES_PYTHON="$hpython" npm run dist)
+    local build_rc=$?
+    if [[ $build_rc -eq 0 ]]; then
         echo "✓ Desktop rebuild complete."
     else
-        echo "✗ Desktop rebuild FAILED (exit $status) — desktop app still on the OLD build." >&2
+        echo "✗ Desktop rebuild FAILED (exit $build_rc) — desktop app still on the OLD build." >&2
     fi
-    return $status
+    return $build_rc
 }
 
 # Restart everything Hermes-related after a fork/code update so all surfaces
