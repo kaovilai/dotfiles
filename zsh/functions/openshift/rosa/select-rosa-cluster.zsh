@@ -36,7 +36,7 @@ select-rosa-cluster() {
     fi
 
     # Count clusters
-    local cluster_count; cluster_count=$(echo "$clusters" | wc -l | tr -d ' ')
+    local cluster_count=${#${(f)clusters}}
 
     if [[ $cluster_count -eq 1 ]]; then
         # Only one cluster, connect to it automatically
