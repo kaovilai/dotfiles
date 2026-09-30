@@ -56,7 +56,7 @@ function socktainer-symlink-docker-undo() {
 
 function socktainer-symlink-podman() {
   _check_socktainer_socket || return 1
-  local podman_sock_dir="${TMPDIR%/}/storage-run-$(id -u)/podman"
+  local podman_sock_dir="${TMPDIR%/}/storage-run-${UID}/podman"
   mkdir -p "$podman_sock_dir" || { echo "Error: Failed to create podman socket directory $podman_sock_dir" >&2; return 1; }
   ln -sf "$HOME/.socktainer/container.sock" "$podman_sock_dir/podman.sock" || {
     echo "❌ Failed to create symlink $podman_sock_dir/podman.sock" >&2
@@ -66,7 +66,7 @@ function socktainer-symlink-podman() {
 }
 
 function socktainer-symlink-podman-undo() {
-  rm -f "${TMPDIR%/}/storage-run-$(id -u)/podman/podman.sock"
+  rm -f "${TMPDIR%/}/storage-run-${UID}/podman/podman.sock"
   echo "Removed podman socket symlink"
 }
 
