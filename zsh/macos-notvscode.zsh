@@ -40,7 +40,7 @@ set-tf-proxy(){
         return 1
     fi
     local _router_ip
-    _router_ip=$(networksetup -getinfo Wi-Fi | grep -e "^Router" | cut -d " " -f 2)
+    _router_ip=$(networksetup -getinfo Wi-Fi | awk '/^Router/{print $2; exit}')
     if [[ -z "$_router_ip" ]]; then
         echo "Error: Could not determine Wi-Fi router IP" >&2
         return 1
@@ -257,7 +257,7 @@ set-socks-proxy(){
         _wifi_info=$(networksetup -getinfo Wi-Fi)
         if grep -q "^Manual Configuration" <<< "$_wifi_info"; then
             local _manual_router_ip
-            _manual_router_ip=$(grep -e "^Router" <<< "$_wifi_info" | cut -d " " -f 2)
+            _manual_router_ip=$(awk '/^Router/{print $2; exit}' <<< "$_wifi_info")
             if [[ "$_manual_router_ip" == "172.20.10.1" ]]; then
                 echo "Wi-Fi already manually configured for the 172.20.10.1 iOS hotspot fallback; reusing it"
                 export SOCKS_ROUTER_IP="172.20.10.1"
@@ -268,7 +268,7 @@ set-socks-proxy(){
             fi
         else
             local _router_ip
-            _router_ip=$(grep -e "^Router" <<< "$_wifi_info" | cut -d " " -f 2)
+            _router_ip=$(awk '/^Router/{print $2; exit}' <<< "$_wifi_info")
             if [[ -z "$_router_ip" || "$_router_ip" == "none" ]]; then
                 echo "Error: Could not determine Wi-Fi router IP" >&2
                 return 1
@@ -603,7 +603,7 @@ unset-socks-proxy(){
     local _wifi_info _manual_router
     _wifi_info=$(networksetup -getinfo Wi-Fi)
     if grep -q "^Manual Configuration" <<< "$_wifi_info"; then
-        _manual_router=$(grep -e "^Router" <<< "$_wifi_info" | cut -d " " -f 2)
+        _manual_router=$(awk '/^Router/{print $2; exit}' <<< "$_wifi_info")
     fi
     if [[ "$SOCKS_ADHOC_APPLIED" == "1" || "$_manual_router" == "172.20.10.1" ]]; then
         echo "Reverting Wi-Fi IPv4/DNS to DHCP"
@@ -643,7 +643,7 @@ get-socks-proxy(){
         fi
     fi
     if [[ -z "$router_ip" ]]; then
-        router_ip=$(networksetup -getinfo Wi-Fi | grep -e "^Router" | cut -d " " -f 2)
+        router_ip=$(networksetup -getinfo Wi-Fi | awk '/^Router/{print $2; exit}')
     fi
     : "${proxy_port:=1888}"
 
