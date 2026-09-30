@@ -72,13 +72,13 @@ cached-exec() {
   
   # Skip caching in VS Code terminals to avoid disk writes during editing
   if [[ "$TERM_PROGRAM" == "vscode" && -f "$cache_file" ]]; then
-    cat "$cache_file"
+    < "$cache_file"
     return $?
   fi
 
   # Check if cache is valid
   if ! cache-file-expired "$cache_file" "$cache_time"; then
-    cat "$cache_file"
+    < "$cache_file"
     return $?
   fi
 
@@ -94,7 +94,7 @@ cached-exec() {
     # If command failed but cache exists, use cached version
     if [[ -f "$cache_file" ]]; then
       echo "Warning: Command failed, using cached version" >&2
-      cat "$cache_file"
+      < "$cache_file"
       return $?
     fi
   fi
