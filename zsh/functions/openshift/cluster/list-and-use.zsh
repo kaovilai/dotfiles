@@ -137,7 +137,9 @@ list-ocp-clusters() {
         # Check CRC status if crc command is available
         local crc_status=""
         if command -v crc &> /dev/null; then
-            crc_status=$(crc status 2>&1 | grep "CRC VM:" | awk '{print $3}')
+            local _crc_vm_line
+            _crc_vm_line=$(crc status 2>&1 | grep "CRC VM:")
+            crc_status=${${=_crc_vm_line}[3]}
         fi
 
         if [[ "$show_full" == true ]]; then
@@ -262,7 +264,9 @@ use-ocp-cluster() {
             # Check CRC status
             local crc_status=""
             if command -v crc &> /dev/null; then
-                crc_status=$(crc status 2>&1 | grep "CRC VM:" | awk '{print $3}')
+                local _crc_vm_line2
+                _crc_vm_line2=$(crc status 2>&1 | grep "CRC VM:")
+                crc_status=${${=_crc_vm_line2}[3]}
             fi
 
             kubeconfig_files+=("$HOME/.crc/machines/crc/kubeconfig")
@@ -349,7 +353,9 @@ use-ocp-cluster() {
     # Check if this is CRC and warn if it's stopped
     if [[ "$selected_path" == *".crc/machines/crc/kubeconfig"* ]]; then
         if command -v crc &> /dev/null; then
-            crc_vm_status=$(crc status 2>&1 | grep "CRC VM:" | awk '{print $3}')
+            local _crc_vm_line3
+            _crc_vm_line3=$(crc status 2>&1 | grep "CRC VM:")
+            crc_vm_status=${${=_crc_vm_line3}[3]}
             if [[ "$crc_vm_status" == "Stopped" ]]; then
                 echo ""
                 echo "WARNING: CRC is stopped. You need to start it first:"
