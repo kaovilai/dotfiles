@@ -2,6 +2,8 @@
 # For when you need native Linux and podman on Mac is being weird
 # All functions can run concurrently in separate shell sessions.
 
+zmodload zsh/datetime 2>/dev/null  # provides $EPOCHSECONDS (integer epoch)
+
 # Color codes for output — conditional so we don't overwrite user-defined values
 : ${RED:=$'\033[0;31m'}
 : ${GREEN:=$'\033[0;32m'}
@@ -115,7 +117,7 @@ ec2-linux() {
     local tmp_key_created=false
     local key_path=""
     if [[ -z "$key_name" ]]; then
-        key_name="ec2-linux-tmp-$(date +%s)-${RANDOM}"
+        key_name="ec2-linux-tmp-${EPOCHSECONDS}-${RANDOM}"
         key_path="${TMPDIR:-/tmp}/${key_name}.pem"
         echo "${BLUE}INFO${NC}: Creating temporary key pair: $key_name"
         if ! aws ec2 create-key-pair --region "$region" \
@@ -193,7 +195,7 @@ ec2-linux() {
     fi
 
     # --- Security group (SSH only from my IP) ---
-    local sg_name="ec2-linux-dev-$(date +%s)-${RANDOM}"
+    local sg_name="ec2-linux-dev-${EPOCHSECONDS}-${RANDOM}"
     local sg_id
     sg_id=$(aws ec2 create-security-group \
         --region "$region" \
@@ -406,7 +408,7 @@ az-linux() {
     fi
 
     # Use a unique resource group so cleanup is just deleting the group
-    local rg_name="az-linux-dev-$(date +%s)-${RANDOM}"
+    local rg_name="az-linux-dev-${EPOCHSECONDS}-${RANDOM}"
     local vm_name="az-linux-dev"
 
     # --- Temporary SSH key ---
@@ -621,7 +623,7 @@ gcp-linux() {
         esac
     fi
 
-    local instance_name="gcp-linux-dev-$(date +%s)-${RANDOM}"
+    local instance_name="gcp-linux-dev-${EPOCHSECONDS}-${RANDOM}"
 
     # --- Temporary SSH key ---
     local key_path="${TMPDIR:-/tmp}/${instance_name}"
