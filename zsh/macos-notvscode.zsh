@@ -5,16 +5,16 @@ is-at-home() {
     [[ "$OSTYPE" != darwin* ]] && return 1
     local usb_info
     usb_info=$(ioreg -p IOUSB) &&
-    grep -q "Plugable USBC-6950U" <<< "$usb_info" &&
-    grep -q "TS4" <<< "$usb_info" &&
+    [[ "$usb_info" == *"Plugable USBC-6950U"* ]] &&
+    [[ "$usb_info" == *TS4* ]] &&
     networksetup -getnetworkserviceenabled "Thunderbolt Ethernet Slot 2" | grep -q Enabled
 }
 is-displaylink-connected() {
     [[ "$OSTYPE" != darwin* ]] && return 1
     local display_info
     display_info=$(system_profiler SPDisplaysDataType)
-    grep -q "ARZOPA" <<< "$display_info" ||
-    grep -q "TYPE-C" <<< "$display_info"
+    [[ "$display_info" == *ARZOPA* ]] ||
+    [[ "$display_info" == *TYPE-C* ]]
 }
 restart-displaylink() {
     if [[ "$OSTYPE" != darwin* ]]; then
