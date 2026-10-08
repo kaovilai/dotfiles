@@ -101,7 +101,9 @@ _claude_copilot_unset_env() {
 # rows ("Custom Opus model" duplicates, an unusable Fable row).
 # Args: role=model[|Display Name] ... for the pinned tiers, then
 # =model[|Display Name] ... for extra models the backend offers (listed after
-# the pinned ones, no role suffix). Empty models skipped. With no explicit
+# the pinned ones, no role suffix), sorted newest first by the version parsed
+# from the id (6.1 > 6 > 5.10 > 5.9; ids without a version last). Empty models
+# skipped. With no explicit
 # display name the id is prettified (gpt-5-mini -> "GPT-5 Mini",
 # qwen3-coder:30b -> "Qwen3 Coder 30B"); a "[1m]" suffix stays in the row's
 # model id but shows as " 1M" in the label. Needs jq; without it $reply is
@@ -124,7 +126,7 @@ _claude_picker_args() {
                   elif test("^[0-9.]+[bB]$") then ascii_upcase
                   elif test("^[0-9]") or test("^o[0-9]") then .
                   else (.[0:1] | ascii_upcase) + .[1:] end)
-            | join(" ") | gsub("(?<a>[0-9]) (?<b>[0-9])"; "\(.a).\(.b)") | sub("^GPT "; "GPT-");
+            | join(" ") | gsub("(?<![0-9])(?<a>[0-9]{1,2}) (?<b>[0-9]{1,2})(?![0-9])"; "\(.a).\(.b)") | sub("^GPT "; "GPT-");
         reduce ($ARGS.positional[]
                 | (index("|") as $i | if $i == null then [., ""] else [.[0:$i], .[$i+1:]] end) as $p
                 | $p[0] | split("=") as $kv
@@ -133,6 +135,10 @@ _claude_picker_args() {
             | if any(.[]; .model == $e.model)
               then map(if .model == $e.model then .roles += $r else . end)
               else . + [{model: $e.model, roles: $r, name: $e.name}] end)
+        | def ver: (try (capture("(?<v>[0-9]+([.-][0-9]{1,2}(?![0-9]))*)").v | [scan("[0-9]+") | tonumber]) catch []);
+          ([.[] | select(.roles | length > 0)]) as $pinned
+        | ([.[] | select(.roles | length == 0)] | group_by(.model | ver) | reverse | map(sort_by(.model)) | add // []) as $extras
+        | ($pinned + $extras)
         | {modelPicker: {replaceBuiltInOptions: true,
             options: map(
                 (.model | endswith("[1m]")) as $big
@@ -1948,15 +1954,17 @@ _claude_openai_key() {
 
 # Chat-capable models from OpenAI's /v1/models as "id<TAB>created" lines,
 # cached 6h (stale cache served if the API is unreachable). Filters out
-# embeddings/audio/image/realtime/moderation/etc. -- not usable via Claude Code.
+# embeddings/audio/image/realtime/moderation/etc. -- not usable via Claude Code
+# -- and dated snapshots (gpt-4-0613, ...-2025-08-07), whose undated alias is listed.
 _claude_openai_list_models() {
-    local key="$1" cache="${XDG_CACHE_HOME:-$HOME/.cache}/claude-openai-models.tsv"
+    local key="$1" cache="${XDG_CACHE_HOME:-$HOME/.cache}/claude-openai-models-v2.tsv"
     if [[ ! -s "$cache" || -n "$(find "$cache" -mmin +360 2>/dev/null)" ]]; then
         local out
         out=$(curl -sf --max-time 10 -H "Authorization: Bearer ${key}" https://api.openai.com/v1/models 2>/dev/null \
             | jq -r '[.data[]
                 | select(.id | test("^(gpt-|chatgpt-|o[0-9])"))
-                | select(.id | test("audio|realtime|transcribe|tts|image|embedding|moderation|search|instruct|diarize"; "i") | not)]
+                | select(.id | test("audio|realtime|transcribe|tts|image|embedding|moderation|search|instruct|diarize"; "i") | not)
+                | select(.id | test("-[0-9]{4}(-[0-9]{2}-[0-9]{2})?$|-[0-9]{8}$") | not)]
                 | sort_by(.id)[] | "\(.id)\t\(.created // 0)"' 2>/dev/null)
         if [[ -n "$out" ]]; then
             mkdir -p "${cache:h}" && print -r -- "$out" >| "$cache"
