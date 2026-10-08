@@ -15,8 +15,14 @@ function hostPort(url: string): { host: string; port: string } | undefined {
 
 /**
  * Names the provider a session runs on from its own transport env.
- * No single env names the mode; a trailing "?" marks a heuristic match
- * (EnMaaS and the Vertex proxy are both loopback, so port decides).
+ *
+ * No single env names the mode, so the whole base URL decides. The launchers
+ * use different hosts: copilot is http://localhost:<port>, the Vertex proxy and
+ * EnMaaS are http://127.0.0.1:<port>, Ollama is http://<OLLAMA_HOST>. A match on
+ * host and port is certain; any other loopback URL reads as enmass? (a
+ * trailing "?" marks a guess, by elimination: EnMaaS uses a random port).
+ * Known gap: EnMaaS on exactly 127.0.0.1:<vertex port> reads as vertex, as the
+ * two share host and port.
  */
 export function classify(env: Env): string {
   if (env.useVertex === '1') return 'vertex-native-adc'
@@ -28,12 +34,12 @@ export function classify(env: Env): string {
   const vertex = env.vertexProxyPort || '4142'
   const ollama = hostPort(`http://${env.ollamaHost || 'localhost:11434'}`)
 
+  if (ollama && hp.host === ollama.host && hp.port === (ollama.port || '11434')) return 'ollama'
+
   if (LOOPBACK.has(hp.host)) {
-    if (hp.port === copilot) return 'copilot'
-    if (hp.port === vertex) return 'vertex'
-    if (ollama && hp.port === (ollama.port || '11434')) return 'ollama'
+    if (hp.host === 'localhost' && hp.port === copilot) return 'copilot'
+    if (hp.host === '127.0.0.1' && hp.port === vertex) return 'vertex'
     return 'enmass?'
   }
-  if (ollama && hp.host === ollama.host && hp.port === ollama.port) return 'ollama'
   return `custom (${hp.host})`
 }

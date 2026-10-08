@@ -10,7 +10,7 @@ test('falls back to anthropic with no base url', () => {
   expect(classify({})).toBe('anthropic')
 })
 
-test('maps default ports', () => {
+test('maps each launcher by its full base url', () => {
   expect(classify({ baseUrl: 'http://localhost:4141' })).toBe('copilot')
   expect(classify({ baseUrl: 'http://127.0.0.1:4142' })).toBe('vertex')
   expect(classify({ baseUrl: 'http://localhost:11434' })).toBe('ollama')
@@ -19,6 +19,15 @@ test('maps default ports', () => {
 test('honors overridden ports', () => {
   expect(classify({ baseUrl: 'http://localhost:5555', copilotPort: '5555' })).toBe('copilot')
   expect(classify({ baseUrl: 'http://127.0.0.1:6000', vertexProxyPort: '6000' })).toBe('vertex')
+})
+
+test('EnMaaS on the copilot port is told apart by host', () => {
+  // EnMaaS is 127.0.0.1; copilot is localhost. Same port, different base url.
+  expect(classify({ baseUrl: 'http://127.0.0.1:4141' })).toBe('enmass?')
+})
+
+test('a localhost url on the vertex port is not vertex', () => {
+  expect(classify({ baseUrl: 'http://localhost:4142' })).toBe('enmass?')
 })
 
 test('treats other loopback ports as a heuristic enmass match', () => {
