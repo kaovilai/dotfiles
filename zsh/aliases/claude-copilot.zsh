@@ -1949,8 +1949,8 @@ claude-offline() {
 # at start; run claude-openai-kill after changing it). Three tiers map independently:
 #   CLAUDE_OPENAI_FABLE_MODEL / _OPUS_MODEL / _SONNET_MODEL / _HAIKU_MODEL
 # Unset tiers are detected (see _claude_openai_autopick): each tier's variant
-# (CLAUDE_OPENAI_TIER_MAP, default fable=astra opus=sol sonnet=terra haiku=luna)
-# at the newest version the key can see.
+# (CLAUDE_OPENAI_TIER_MAP, default fable=astra opus=sol sonnet=terra,sol
+# haiku=luna) at the newest version the key can see.
 typeset -g CLAUDE_OPENAI_PROXY_LITELLM_VERSION="1.97.0"
 typeset -g CLAUDE_OPENAI_PROXY_FASTAPI_VERSION="0.136.3"
 typeset -g _claude_openai_proxy_config="${XDG_CONFIG_HOME:-$HOME/.config}/claude-openai-proxy.yaml"
@@ -1989,16 +1989,27 @@ _claude_openai_list_models() {
 
 # Prints the proxy config (the caller writes it and fingerprints it).
 # Per-tier picks from "id<TAB>created" lines on stdin. $1 = tier map,
-# "tier=variant ..." (default CLAUDE_OPENAI_TIER_MAP, else
-# "fable=astra opus=sol sonnet=terra haiku=luna"); the VERSION is always
-# detected, only the variant-to-tier mapping is configured. Each id is parsed
-# as <family><version><rest> (gpt-6.1-sol -> gpt, 6.1, "-sol"); dated snapshots
-# are skipped. A tier's pick = the newest model whose rest is "-<variant>":
-# highest version (component-wise, so 6.1 > 6 and 5.10 > 5.9), then newest
-# `created`, then id. A tier whose variant doesn't exist falls back to the
-# greatest-latest model overall. Prints one id per line in map order.
+# "tier=variant[,variant...] ..." (default CLAUDE_OPENAI_TIER_MAP, else
+# "fable=astra opus=sol sonnet=terra,sol haiku=luna"); the VERSION is always
+# detected, only the variant-to-tier mapping is configured.
+#
+# Why sonnet=terra,sol and not plain terra: as of GPT-5.6, Terra ($2.5/$15 per
+# Mtok) is pricier AND less capable than 6.1 Sol ($2/$10; near Astra on
+# Artificial Analysis' index) -- Sol dominates it on both axes, and no GPT-6
+# Terra exists, so Terra sits two generations back. A list is a preference
+# order: the winner is the alternative whose newest model has the highest MAJOR
+# version, ties going to the earliest listed. So today sonnet resolves to Sol,
+# and the moment a gpt-6-terra (same major as Sol) shows up in the key's model
+# list, Sonnet switches to Terra automatically. To force a variant regardless,
+# set CLAUDE_OPENAI_SONNET_MODEL or a one-variant map entry (sonnet=terra).
+#
+# Each id is parsed as <family><version><rest> (gpt-6.1-sol -> gpt, 6.1,
+# "-sol"); dated snapshots are skipped. A variant's newest model = highest
+# version (component-wise, so 6.1 > 6 and 5.10 > 5.9), then newest `created`,
+# then id. A tier with no matching variant falls back to the greatest-latest
+# model overall. Prints one id per line in map order.
 _claude_openai_autopick() {
-    local map="${1:-${CLAUDE_OPENAI_TIER_MAP:-fable=astra opus=sol sonnet=terra haiku=luna}}"
+    local map="${1:-${CLAUDE_OPENAI_TIER_MAP:-fable=astra opus=sol sonnet=terra,sol haiku=luna}}"
     jq -Rrn --arg map "$map" '
         [inputs | split("\t") | {id: .[0], created: ((.[1] // "0") | tonumber? // 0)}
          | . as $m
@@ -2008,9 +2019,13 @@ _claude_openai_autopick() {
          | {id: $m.id, rest: $c.rest, v: ($c.v | split(".") | map(tonumber)), created: $m.created}] as $all
         | ($all | sort_by([.v, .created, .id]) | last | .id // "") as $top
         | if $top == "" then empty else
-            ($map | split(" ") | map(select(length > 0) | split("=")[1])) []
-            | . as $variant
-            | ([$all[] | select(.rest == "-" + $variant)] | sort_by([.v, .created, .id]) | last | .id) // $top
+            $map | split(" ") | map(select(length > 0) | split("=")[1] | split(",")) | .[]
+            | . as $alts
+            | ([$alts | to_entries[] | . as $a
+                | ([$all[] | select(.rest == "-" + $a.value)] | sort_by([.v, .created, .id]) | last) as $w
+                | select($w != null)
+                | {idx: $a.key, major: $w.v[0], id: $w.id}]
+               | sort_by([(.major * -1), .idx]) | first | .id) // $top
           end' 2>/dev/null
 }
 
