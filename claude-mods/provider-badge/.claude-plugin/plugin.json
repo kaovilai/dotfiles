@@ -1,0 +1,5 @@
+{
+  "name": "provider-badge",
+  "version": "0.1.0",
+  "description": "Colored badge above the prompt naming the provider this Claude Code session actually runs on (copilot, enmass, vertex, vertex-native-adc, ollama)."
+}

@@ -1,0 +1,5 @@
+{
+  "name": "dotfiles-mods",
+  "owner": { "name": "tkaovila" },
+  "plugins": [{ "name": "provider-badge", "source": "./provider-badge" }]
+}
