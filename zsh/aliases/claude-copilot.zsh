@@ -95,6 +95,114 @@ _claude_copilot_unset_env() {
     unset "${_claude_copilot_env_names[@]}"
 }
 
+# Builds a `--settings` arg (into $reply) so the /model picker lists only the
+# models a wrapper actually pinned -- one row per distinct model, labelled with
+# a display name plus the tiers it serves -- instead of Claude Code's built-in
+# rows ("Custom Opus model" duplicates, an unusable Fable row).
+# Args: role=model[|Display Name] ... for the pinned tiers, then
+# =model[|Display Name] ... for extra models the backend offers (listed after
+# the pinned ones, no role suffix). Empty models skipped. With no explicit
+# display name the id is prettified (gpt-5-mini -> "GPT-5 Mini",
+# qwen3-coder:30b -> "Qwen3 Coder 30B"); a "[1m]" suffix stays in the row's
+# model id but shows as " 1M" in the label. Needs jq; without it $reply is
+# empty and the default picker shows. Claude Code reads `modelPicker` from
+# --settings (v2.1.242+).
+_claude_picker_args() {
+    reply=()
+    command -v jq &>/dev/null || return 0
+    local -a pairs=()
+    local a
+    for a in "$@"; do [[ "${${a%%|*}#*=}" == "" ]] || pairs+=("$a"); done
+    (( ${#pairs} )) || return 0
+    local json
+    json=$(jq -nc --args '
+        def pretty:
+            sub("^(openai|anthropic|mlx-community)/"; "") | sub(":latest$"; "")
+            | [match("[^-_: ]+"; "g").string]
+            | map(if test("^gpt$"; "i") then "GPT"
+                  elif test("^chatgpt$"; "i") then "ChatGPT"
+                  elif test("^[0-9.]+[bB]$") then ascii_upcase
+                  elif test("^[0-9]") or test("^o[0-9]") then .
+                  else (.[0:1] | ascii_upcase) + .[1:] end)
+            | join(" ") | gsub("(?<a>[0-9]) (?<b>[0-9])"; "\(.a).\(.b)") | sub("^GPT "; "GPT-");
+        reduce ($ARGS.positional[]
+                | (index("|") as $i | if $i == null then [., ""] else [.[0:$i], .[$i+1:]] end) as $p
+                | $p[0] | split("=") as $kv
+                | {role: $kv[0], model: ($kv[1:] | join("=")), name: $p[1]}) as $e ([];
+            ($e.role | if . == "" then [] else [.] end) as $r
+            | if any(.[]; .model == $e.model)
+              then map(if .model == $e.model then .roles += $r else . end)
+              else . + [{model: $e.model, roles: $r, name: $e.name}] end)
+        | {modelPicker: {replaceBuiltInOptions: true,
+            options: map(
+                (.model | endswith("[1m]")) as $big
+                | (.model | sub("\\[1m\\]$"; "")) as $bare
+                | ((if .name != "" then .name else ($bare | pretty) end) + (if $big then " 1M" else "" end)) as $nm
+                | {model, label: (if (.roles | length) > 0 then "\($nm) (\(.roles | join(", ")))" else $nm end)})}}' \
+        "${pairs[@]}") || return 0
+    reply=(--settings "$json")
+}
+
+# Prints "=model" args (one per line) for every id in a jq-extracted list on
+# stdin, for _claude_picker_args' extras. Usage:
+#   extras=(${(f)"$(print -r -- "$json" | jq -r '...ids...' | _claude_picker_extras)"})
+_claude_picker_extras() {
+    local id
+    while IFS= read -r id; do [[ -n "$id" ]] && print -r -- "=${id}"; done
+}
+
+# --- proxy hot reload ------------------------------------------------------
+# The local proxies/gateways read their config and credential files only at
+# start. Each wrapper fingerprints everything that shapes the running process
+# (generated config, API key or credential-file contents, versions) on every
+# launch; _claude_proxy_sync restarts the process when the fingerprint differs
+# from the one recorded when it was started, and _claude_proxy_record stores
+# it once the new process is healthy. State: ~/.local/state/claude-<name>.fingerprint.
+
+# sha256 over the args (unit-separator joined).
+_claude_proxy_fp() {
+    local IFS=$'\x1f'
+    print -rn -- "$*" | shasum -a 256 | cut -d' ' -f1
+}
+
+# Combined hash of the given files' contents; missing files hash as "missing".
+_claude_file_hash() {
+    local f
+    for f in "$@"; do
+        if [[ -r "$f" ]]; then shasum -a 256 < "$f" | cut -d' ' -f1; else print -r -- "missing"; fi
+    done | shasum -a 256 | cut -d' ' -f1
+}
+
+# _claude_proxy_sync <label> <name> <health-url> <fingerprint> <kill-fn> <adopt>
+# Running + fingerprint differs -> kill via <kill-fn> and wait for the port to
+# free so the caller's normal start path relaunches it. Running with no
+# recorded fingerprint: adopt=1 records the current one and leaves the process
+# alone; adopt=0 treats it as stale and restarts.
+_claude_proxy_sync() {
+    local label="$1" name="$2" health="$3" fp="$4" killfn="$5" adopt="$6"
+    local state="${XDG_STATE_HOME:-$HOME/.local/state}/claude-${name}.fingerprint"
+    curl -sf --max-time 2 "$health" -o /dev/null || return 0
+    local recorded
+    recorded=$(cat "$state" 2>/dev/null)
+    [[ "$recorded" == "$fp" ]] && return 0
+    if [[ -z "$recorded" && "$adopt" == 1 ]]; then
+        mkdir -p "${state:h}" && print -r -- "$fp" >| "$state"
+        return 0
+    fi
+    echo "${label}: config or credentials changed -- restarting..." >&2
+    "$killfn" >/dev/null 2>&1
+    local j
+    for j in {1..20}; do
+        curl -sf --max-time 1 "$health" -o /dev/null || break
+        sleep 0.5
+    done
+}
+
+_claude_proxy_record() {
+    local state="${XDG_STATE_HOME:-$HOME/.local/state}/claude-${1}.fingerprint"
+    mkdir -p "${state:h}" && print -r -- "$2" >| "$state"
+}
+
 # Install-hint helper for the ❌-not-found messages below -- brew is
 # Darwin-only, so a hardcoded "brew install X" is wrong on Linux (e.g.
 # Fedora). Falls back to whatever package manager is actually on PATH;
@@ -134,6 +242,15 @@ claude-copilot() {
     local base="http://localhost:${port}"
     local log="${TMPDIR:-/tmp}/copilot-api-${port}.log"
 
+    # Hot reload -- see _claude_proxy_sync. copilot-api reads its GitHub OAuth
+    # token (github_token) and config.json only at start, so a re-login or
+    # config edit restarts the gateway. A running gateway with no recorded
+    # fingerprint is adopted.
+    local capi_data="${COPILOT_API_HOME:-$HOME/.local/share/copilot-api}"
+    local cfp
+    cfp=$(_claude_proxy_fp "$(_claude_file_hash "${capi_data}/github_token" "${capi_data}/config.json")" "$port")
+    _claude_proxy_sync claude-copilot copilot-api "${base}/v1/models" "$cfp" kill-copilot-api 1
+
     # Start the gateway if nothing is serving yet
     if ! curl -sf --max-time 2 "${base}/v1/models" -o /dev/null; then
         local -a runner
@@ -166,6 +283,9 @@ claude-copilot() {
             echo "   Or run interactively once: ${runner[*]} start --port ${port}" >&2
             return 1
         fi
+        # re-hash after start: the gateway may rewrite config.json itself
+        cfp=$(_claude_proxy_fp "$(_claude_file_hash "${capi_data}/github_token" "${capi_data}/config.json")" "$port")
+        _claude_proxy_record copilot-api "$cfp"
     fi
 
     local models_json
@@ -249,7 +369,18 @@ claude-copilot() {
     # process (unlike env), avoiding claude() → claude-copilot → claude()
     # recursion while keeping the exported vars in this same shell.
     export "${envs[@]}"
-    command claude "$@"
+    # Gateway display names (e.g. "Claude Opus 4.8") for pinned tiers and extras
+    local -a picker_extras
+    picker_extras=(${(f)"$(print -r -- "$models_json" | jq -r '.data[] | select(.id | test("embedding"; "i") | not) | "\(.id)|\(.display_name // .name // "")"' 2>/dev/null | _claude_picker_extras)"})
+    local _t _id _suffix
+    local -a picker_pins
+    for _t in opus sonnet haiku fable; do
+        _id="${(P)_t}"
+        [[ -z "$_id" ]] && continue
+        picker_pins+=("${_t}=${_id}|$(print -r -- "$models_json" | jq -r --arg id "${_id%\[*}" '[.data[] | select(.id == $id)][0] | (.display_name // .name // "")' 2>/dev/null)")
+    done
+    _claude_picker_args "${picker_pins[@]}" "${picker_extras[@]}"
+    command claude "${reply[@]}" "$@"
 }
 
 # kill-copilot-api: stop a stale/unresponsive detached copilot-api gateway
@@ -751,13 +882,25 @@ _claude_vertex_prepare() {
     # value, so this doesn't silently break again for any session that
     # predates a haiku_model default change, or if the CLI ever sends the
     # dated form regardless of the exported override.
+    local -a vproxy_models=(
+        "${main_stripped}"           "${main_stripped}"
+        "${opus_stripped}"           "${opus_stripped}"
+        "${sonnet_stripped}"         "${sonnet_stripped}"
+        "${haiku_stripped}"          "${haiku_stripped}"
+        "claude-haiku-4-5-20251001"  "${haiku_stripped}"
+    )
+    # Hot reload -- see _claude_proxy_sync. Credentials come from the
+    # Application Default Credentials file (gcloud auth application-default
+    # login), so its contents are part of the fingerprint. A running proxy
+    # with no recorded fingerprint is adopted, not restarted.
+    local vfp
+    vfp=$(_claude_proxy_fp "${vproxy_models[@]}" "$ANTHROPIC_VERTEX_PROJECT_ID" "$CLOUD_ML_REGION" \
+        "$CLAUDE_VERTEX_PROXY_LITELLM_VERSION" "$master_key" \
+        "$(_claude_file_hash "${GOOGLE_APPLICATION_CREDENTIALS:-$HOME/.config/gcloud/application_default_credentials.json}")")
+    _claude_proxy_sync claude-vertex vertex-proxy "${base}/health/liveliness" "$vfp" claude-vertex-kill 1
+
     if ! curl -sf --max-time 2 "${base}/health/liveliness" -o /dev/null; then
-        _claude_vertex_proxy_write_config "$master_key" \
-            "${main_stripped}"           "${main_stripped}" \
-            "${opus_stripped}"           "${opus_stripped}" \
-            "${sonnet_stripped}"         "${sonnet_stripped}" \
-            "${haiku_stripped}"          "${haiku_stripped}" \
-            "claude-haiku-4-5-20251001"  "${haiku_stripped}"
+        _claude_vertex_proxy_write_config "$master_key" "${vproxy_models[@]}"
         echo "Starting claude-vertex proxy (litellm ${CLAUDE_VERTEX_PROXY_LITELLM_VERSION}) on ${base} (log: ${log})..."
         # "google" extra pulls google-cloud-aiplatform -- without it litellm
         # fails at request time with "Google Cloud SDK not found", since
@@ -775,6 +918,7 @@ _claude_vertex_prepare() {
             echo "   Check the log: tail -f ${log}" >&2
             return 1
         fi
+        _claude_proxy_record vertex-proxy "$vfp"
     fi
 
     # Hand the resolved proxy/model config back to the caller (claude-vertex
@@ -1436,7 +1580,10 @@ claude-ollama() {
     local -a bare_flag=(--bare)
     [[ -n "$CLAUDE_OLLAMA_FULL_CONTEXT" && "$CLAUDE_OLLAMA_FULL_CONTEXT" != 0 ]] && bare_flag=()
     export "${envs[@]}"
-    command claude "${bare_flag[@]}" "$@"
+    local -a picker_extras
+    picker_extras=(${(f)"$(curl -sf --max-time 5 "$(_claude_ollama_base)/api/tags" 2>/dev/null | jq -r '.models[].name' 2>/dev/null | _claude_picker_extras)"})
+    _claude_picker_args opus="${opus}" sonnet="${sonnet}" haiku="${haiku}" "${picker_extras[@]}"
+    command claude "${reply[@]}" "${bare_flag[@]}" "$@"
 }
 # claude-offline: see the dispatcher function defined after claude-mlx-models
 # below (needs _claude_mlx_supported, which isn't defined until then) --
@@ -1626,6 +1773,15 @@ _claude_mlx_prepare() {
     local model
     model=$(_claude_mlx_resolve_model)
 
+    # Hot reload -- see _claude_proxy_sync. mlx_lm.server can't hot-swap
+    # models, so a changed model (env var or claude-mlx-models) restarts it
+    # together with its proxy (claude-mlx-kill kills both). No credentials
+    # involved. A running pair with no recorded fingerprint is adopted.
+    local mlx_master_key="${CLAUDE_MLX_PROXY_TOKEN:-mlx-proxy-local}"
+    local mfp
+    mfp=$(_claude_proxy_fp "$model" "$mlx_master_key" "$CLAUDE_MLX_PROXY_LITELLM_VERSION")
+    _claude_proxy_sync claude-mlx mlx "$(_claude_mlx_base)/health" "$mfp" claude-mlx-kill 1
+
     _claude_mlx_ensure_server "$model" || return 1
 
     local port="${CLAUDE_MLX_PROXY_PORT:-4144}"
@@ -1653,6 +1809,7 @@ _claude_mlx_prepare() {
             return 1
         fi
     fi
+    _claude_proxy_record mlx "$mfp"
 
     typeset -g _cmx_base="$base" _cmx_master_key="$master_key" _cmx_model="$model"
 }
@@ -1694,7 +1851,8 @@ claude-mlx() {
     local -a bare_flag=(--bare)
     [[ -n "$CLAUDE_MLX_FULL_CONTEXT" && "$CLAUDE_MLX_FULL_CONTEXT" != 0 ]] && bare_flag=()
     export "${envs[@]}"
-    command claude "${bare_flag[@]}" "$@"
+    _claude_picker_args opus="${_cmx_model}" sonnet="${_cmx_model}" haiku="${_cmx_model}"
+    command claude "${reply[@]}" "${bare_flag[@]}" "$@"
 }
 
 # claude-mlx-kill: stop both local processes claude-mlx starts -- the
@@ -1762,6 +1920,172 @@ claude-offline() {
     else
         claude-ollama "$@"
     fi
+}
+
+# ---------------------------------------------------------------------------
+# claude-openai: raw claude binary routed through OpenAI's API via a local
+# LiteLLM proxy -- same reason as claude-vertex/claude-mlx: OpenAI doesn't
+# speak Anthropic's /v1/messages shape, so litellm translates it. API key:
+# $OPENAI_API_KEY, else Codex CLI's ~/.codex/auth.json (passed to the proxy
+# at start; run claude-openai-kill after changing it). Three tiers map independently:
+#   CLAUDE_OPENAI_OPUS_MODEL   (default gpt-5)
+#   CLAUDE_OPENAI_SONNET_MODEL (default gpt-5)
+#   CLAUDE_OPENAI_HAIKU_MODEL  (default gpt-5-mini)
+# Defaults are unverified guesses at current model ids -- override as needed.
+typeset -g CLAUDE_OPENAI_PROXY_LITELLM_VERSION="1.97.0"
+typeset -g CLAUDE_OPENAI_PROXY_FASTAPI_VERSION="0.136.3"
+typeset -g _claude_openai_proxy_config="${XDG_CONFIG_HOME:-$HOME/.config}/claude-openai-proxy.yaml"
+
+# Key lookup, same store as Codex CLI: $OPENAI_API_KEY, else the
+# OPENAI_API_KEY field of ${CODEX_HOME:-~/.codex}/auth.json.
+_claude_openai_key() {
+    local key="$OPENAI_API_KEY" f="${CODEX_HOME:-$HOME/.codex}/auth.json"
+    if [[ -z "$key" && -r "$f" ]] && command -v jq &>/dev/null; then
+        key=$(jq -r '.OPENAI_API_KEY // empty' "$f" 2>/dev/null)
+    fi
+    [[ -n "$key" ]] || return 1
+    print -r -- "$key"
+}
+
+# Chat-capable model ids from OpenAI's /v1/models, cached 6h (one id per
+# line; stale cache served if the API is unreachable). Filters out
+# embeddings/audio/image/realtime/moderation/etc. -- not usable via Claude Code.
+_claude_openai_list_models() {
+    local key="$1" cache="${XDG_CACHE_HOME:-$HOME/.cache}/claude-openai-models.txt"
+    if [[ ! -s "$cache" || -n "$(find "$cache" -mmin +360 2>/dev/null)" ]]; then
+        local out
+        out=$(curl -sf --max-time 10 -H "Authorization: Bearer ${key}" https://api.openai.com/v1/models 2>/dev/null \
+            | jq -r '[.data[].id
+                | select(test("^(gpt-|chatgpt-|o[0-9])"))
+                | select(test("audio|realtime|transcribe|tts|image|embedding|moderation|search|instruct|diarize"; "i") | not)]
+                | unique[]' 2>/dev/null)
+        if [[ -n "$out" ]]; then
+            mkdir -p "${cache:h}" && print -r -- "$out" >| "$cache"
+        fi
+    fi
+    [[ -r "$cache" ]] && cat "$cache"
+}
+
+# Prints the proxy config (the caller writes it and fingerprints it).
+_claude_openai_proxy_config_text() {
+    local master_key="$1"; shift
+    local m
+    {
+        print -r -- "model_list:"
+        # wildcard so any model id picked in /model routes to OpenAI, not
+        # just the three pinned tiers
+        print -r -- "  - model_name: \"*\""
+        print -r -- "    litellm_params:"
+        print -r -- "      model: openai/*"
+        print -r -- "      api_key: os.environ/OPENAI_API_KEY"
+        for m in "$@"; do
+            print -r -- "  - model_name: ${m}"
+            print -r -- "    litellm_params:"
+            print -r -- "      model: openai/${m}"
+            print -r -- "      api_key: os.environ/OPENAI_API_KEY"
+        done
+        print -r -- "litellm_settings:"
+        print -r -- "  drop_params: true"
+        print -r -- "  master_key: \"${master_key}\""
+    }
+}
+
+# Hands results back via globals (_cop_*) -- zsh `local` doesn't cross
+# function boundaries (same as _claude_mlx_prepare's _cmx_*).
+_claude_openai_prepare() {
+    local key
+    key=$(_claude_openai_key) || {
+        echo "❌ No OpenAI API key: set OPENAI_API_KEY or run 'codex login --with-api-key' (stored in ${CODEX_HOME:-$HOME/.codex}/auth.json)." >&2
+        return 1
+    }
+    if ! command -v uv &>/dev/null; then
+        echo "❌ uv not found. Install it with: $(_claude_pkg_install_hint uv 'curl -LsSf https://astral.sh/uv/install.sh | sh')" >&2
+        return 1
+    fi
+
+    local opus="${CLAUDE_OPENAI_OPUS_MODEL:-gpt-5}"
+    local sonnet="${CLAUDE_OPENAI_SONNET_MODEL:-gpt-5}"
+    local haiku="${CLAUDE_OPENAI_HAIKU_MODEL:-gpt-5-mini}"
+    local port="${CLAUDE_OPENAI_PROXY_PORT:-4145}"
+    local base="http://127.0.0.1:${port}"
+    local log="${TMPDIR:-/tmp}/claude-openai-proxy-${port}.log"
+    local master_key="${CLAUDE_OPENAI_PROXY_TOKEN:-openai-proxy-local}"
+
+    # Hot reload -- see _claude_proxy_sync. A running proxy with no recorded
+    # fingerprint (older version) is restarted (adopt=0).
+    local -a models=(${(u)=:-$opus $sonnet $haiku})
+    local cfg fp
+    cfg=$(_claude_openai_proxy_config_text "$master_key" "${models[@]}")
+    fp=$(_claude_proxy_fp "$cfg" "$key" "$CLAUDE_OPENAI_PROXY_LITELLM_VERSION")
+    _claude_proxy_sync claude-openai openai-proxy "${base}/health/liveliness" "$fp" claude-openai-kill 0
+
+    if ! curl -sf --max-time 2 "${base}/health/liveliness" -o /dev/null; then
+        print -r -- "$cfg" > "$_claude_openai_proxy_config" || {
+            echo "❌ Failed to write ${_claude_openai_proxy_config}." >&2
+            return 1
+        }
+        echo "Starting claude-openai proxy (litellm ${CLAUDE_OPENAI_PROXY_LITELLM_VERSION}) on ${base} (log: ${log})..." >&2
+        (OPENAI_API_KEY="$key" uv tool run --with "fastapi==${CLAUDE_OPENAI_PROXY_FASTAPI_VERSION}" \
+            --from "litellm[proxy]==${CLAUDE_OPENAI_PROXY_LITELLM_VERSION}" litellm \
+            --config "$_claude_openai_proxy_config" --port "$port" --host 127.0.0.1 >> "${log}" 2>&1 &)
+        local i
+        for i in {1..60}; do
+            curl -sf --max-time 2 "${base}/health/liveliness" -o /dev/null && break
+            sleep 1
+        done
+        if ! curl -sf --max-time 2 "${base}/health/liveliness" -o /dev/null; then
+            echo "❌ claude-openai proxy not ready on ${base} after 60s." >&2
+            echo "   Check the log: tail -f ${log}" >&2
+            return 1
+        fi
+        _claude_proxy_record openai-proxy "$fp"
+    fi
+
+    typeset -g _cop_base="$base" _cop_master_key="$master_key" \
+        _cop_opus="$opus" _cop_sonnet="$sonnet" _cop_haiku="$haiku"
+    typeset -ga _cop_extras
+    _cop_extras=(${(f)"$(_claude_openai_list_models "$key" | _claude_picker_extras)"})
+}
+
+claude-openai() {
+    _claude_openai_prepare || return 1
+    _claude_copilot_unset_env
+
+    local -a envs
+    envs=(
+        ANTHROPIC_BASE_URL="${_cop_base}"
+        ANTHROPIC_AUTH_TOKEN="${_cop_master_key}"
+        ANTHROPIC_API_KEY=""
+        ANTHROPIC_MODEL="${_cop_sonnet}"
+        ANTHROPIC_DEFAULT_OPUS_MODEL="${_cop_opus}"
+        ANTHROPIC_DEFAULT_SONNET_MODEL="${_cop_sonnet}"
+        ANTHROPIC_DEFAULT_HAIKU_MODEL="${_cop_haiku}"
+    )
+    if [[ -z "$CLAUDE_COPILOT_ENABLE_MONITOR" || "$CLAUDE_COPILOT_ENABLE_MONITOR" == 0 ]]; then
+        envs+=(
+            DISABLE_NON_ESSENTIAL_MODEL_CALLS=1
+            CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
+        )
+    fi
+    export "${envs[@]}"
+    _claude_picker_args opus="${_cop_opus}" sonnet="${_cop_sonnet}" haiku="${_cop_haiku}" "${_cop_extras[@]}"
+    command claude "${reply[@]}" "$@"
+}
+
+# claude-openai-kill: stop the litellm proxy claude-openai started.
+claude-openai-kill() {
+    local port="${CLAUDE_OPENAI_PROXY_PORT:-4145}" pids
+    pids=("${(f)$(lsof -ti "tcp:${port}" -sTCP:LISTEN 2>/dev/null)}")
+    if [[ -z "${pids[1]}" ]]; then
+        echo "No process listening on port ${port} (claude-openai proxy)."
+        return 0
+    fi
+    echo "Killing claude-openai proxy on port ${port} (pid: ${pids[*]})..."
+    kill "${pids[@]}" 2>/dev/null
+    sleep 1
+    pids=("${(f)$(lsof -ti "tcp:${port}" -sTCP:LISTEN 2>/dev/null)}")
+    [[ -n "${pids[1]}" ]] && kill -9 "${pids[@]}" 2>/dev/null
+    return 0
 }
 
 # ---------------------------------------------------------------------------
