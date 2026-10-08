@@ -12,27 +12,40 @@ const COLORS: Record<string, string> = {
 }
 
 export const register: Register = on => {
-  // Resolved once per load; a running session's provider env cannot change.
-  let resolved: Promise<{ mode: string; model: string }> | undefined
+  // The provider env of a running session cannot change, so resolve it once.
+  // session.start fires again on every reload, which refills this.
+  let resolved: { mode: string; model: string } | undefined
 
+  on('session.start', async ($, e, next) => {
+    const mode = classify({
+      useVertex: await $.env.get('CLAUDE_CODE_USE_VERTEX'),
+      baseUrl: await $.env.get('ANTHROPIC_BASE_URL'),
+      copilotPort: await $.env.get('COPILOT_API_PORT'),
+      vertexProxyPort: await $.env.get('CLAUDE_VERTEX_PROXY_PORT'),
+      ollamaHost: await $.env.get('OLLAMA_HOST'),
+    })
+    const model = (await $.env.get('ANTHROPIC_MODEL')) ?? ''
+    resolved = { mode, model }
+
+    // The status line is the reliable surface: unlike the AbovePrompt band
+    // (one slot, first tree wins), it cannot be taken over by another mod.
+    $.ui.status(`● ${mode.toUpperCase()}${model ? ` · ${model}` : ''}`)
+
+    return next(e)
+  })
+
+  // Fallback band: drawn only when no other mod holds the AbovePrompt slot,
+  // so it never hides (or is hidden by) e.g. review-inbox.
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
-    if (e.props.hasSurvey) {
+    if (e.props.hasSurvey || resolved === undefined) {
       return next(e)
     }
+    const below = await next(e)
+    if (below) {
+      return below
+    }
 
-    resolved ??= (async () => {
-      const mode = classify({
-        useVertex: await $.env.get('CLAUDE_CODE_USE_VERTEX'),
-        baseUrl: await $.env.get('ANTHROPIC_BASE_URL'),
-        copilotPort: await $.env.get('COPILOT_API_PORT'),
-        vertexProxyPort: await $.env.get('CLAUDE_VERTEX_PROXY_PORT'),
-        ollamaHost: await $.env.get('OLLAMA_HOST'),
-      })
-      const model = (await $.env.get('ANTHROPIC_MODEL')) ?? ''
-      return { mode, model }
-    })()
-
-    const { mode, model } = await resolved
+    const { mode, model } = resolved
     const { Box, Text } = $.ui.resolve(e)
     const base = mode.replace(/\?$/, '')
 
