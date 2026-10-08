@@ -1993,15 +1993,40 @@ _claude_openai_list_models() {
 # "fable=astra opus=sol sonnet=terra,sol haiku=luna"); the VERSION is always
 # detected, only the variant-to-tier mapping is configured.
 #
-# Why sonnet=terra,sol and not plain terra: as of GPT-5.6, Terra ($2.5/$15 per
-# Mtok) is pricier AND less capable than 6.1 Sol ($2/$10; near Astra on
-# Artificial Analysis' index) -- Sol dominates it on both axes, and no GPT-6
-# Terra exists, so Terra sits two generations back. A list is a preference
-# order: the winner is the alternative whose newest model has the highest MAJOR
+# Why sonnet=terra,sol and not plain terra (checked 2026-10-08): Terra's newest
+# model is gpt-5.6-terra at $2/$12 per Mtok (in/out), vs gpt-6.1-sol at $2/$10
+# with near-Astra intelligence (Artificial Analysis: ~1 point under Astra,
+# ~5 over 5.6 Sol) -- Sol is equal-or-cheaper AND smarter, and no GPT-6 Terra
+# exists, so Terra sits two generations back. A list is a preference order:
+# the winner is the alternative whose newest model has the highest MAJOR
 # version, ties going to the earliest listed. So today sonnet resolves to Sol,
-# and the moment a gpt-6-terra (same major as Sol) shows up in the key's model
+# and the moment a gpt-6-terra (same major as Sol) appears in the key's model
 # list, Sonnet switches to Terra automatically. To force a variant regardless,
 # set CLAUDE_OPENAI_SONNET_MODEL or a one-variant map entry (sonnet=terra).
+#
+# RE-EVALUATING THE MAP (for future maintainers/agents): the mapping assumes
+# astra > sol > terra > luna in capability/price. Re-check when a new GPT
+# generation ships, when prices change, or when a variant is added/renamed:
+#   - What exists / is new: the key's own model list (GET /v1/models, cached by
+#     _claude_openai_list_models) -- the source of truth for availability --
+#     and https://platform.openai.com/docs/models
+#   - Price (in/out per Mtok), machine-readable, no auth, and they agreed on
+#     every GPT-6 model on 2026-10-08 (one-liners: jq '.["gpt-6.1-sol"] |
+#     {input_cost_per_token, output_cost_per_token}' on the first; each
+#     openrouter.ai model has .pricing.prompt/.completion per token):
+#       https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json
+#       https://openrouter.ai/api/v1/models        (ids are "openai/<id>")
+#     Human-readable: https://platform.openai.com/docs/pricing
+#     Beware stale secondary articles -- one cited Terra at $2.5/$15 after the
+#     price had already dropped to $2/$12.
+#   - Intelligence per cost: https://artificialanalysis.ai/leaderboards/models
+#     (per-model pages like https://artificialanalysis.ai/models/gpt-6-1-sol
+#     show the intelligence index, price and cost-to-run side by side).
+#     openai.com announcement pages return 403 to scripts; use the above.
+# Re-pick a tier's variant when another variant is equal-or-cheaper AND at
+# least as capable at the same or newer generation (that is why Sol replaced
+# Terra for Sonnet); flip it back when a same-generation Terra is cheaper per
+# unit of intelligence than Sol.
 #
 # Each id is parsed as <family><version><rest> (gpt-6.1-sol -> gpt, 6.1,
 # "-sol"); dated snapshots are skipped. A variant's newest model = highest
