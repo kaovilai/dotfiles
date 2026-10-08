@@ -584,6 +584,15 @@ _claude_vertex_proxy_write_config() {
     mkdir -p "${_claude_vertex_proxy_config:h}"
     {
         echo "model_list:"
+        # wildcard so any Claude id picked in /model routes to Vertex, not just
+        # the pinned tiers (exact model_name entries below still win)
+        cat <<EOF
+  - model_name: "claude-*"
+    litellm_params:
+      model: vertex_ai/claude-*
+      vertex_ai_project: "${ANTHROPIC_VERTEX_PROJECT_ID}"
+      vertex_ai_location: "${CLOUD_ML_REGION}"
+EOF
         while (( $# >= 2 )); do
             local model_name="$1" backend_model="$2"
             shift 2
@@ -900,7 +909,7 @@ _claude_vertex_prepare() {
     # login), so its contents are part of the fingerprint. A running proxy
     # with no recorded fingerprint is adopted, not restarted.
     local vfp
-    vfp=$(_claude_proxy_fp "${vproxy_models[@]}" "$ANTHROPIC_VERTEX_PROJECT_ID" "$CLOUD_ML_REGION" \
+    vfp=$(_claude_proxy_fp wildcard-v1 "${vproxy_models[@]}" "$ANTHROPIC_VERTEX_PROJECT_ID" "$CLOUD_ML_REGION" \
         "$CLAUDE_VERTEX_PROXY_LITELLM_VERSION" "$master_key" \
         "$(_claude_file_hash "${GOOGLE_APPLICATION_CREDENTIALS:-$HOME/.config/gcloud/application_default_credentials.json}")")
     _claude_proxy_sync claude-vertex vertex-proxy "${base}/health/liveliness" "$vfp" claude-vertex-kill 1
@@ -955,7 +964,11 @@ claude-vertex() {
         # _expand_tool_references() to unpack tool_reference blocks in
         # responses. Safe to force back on.
         export ENABLE_TOOL_SEARCH=true
-        command claude "$@"
+        # Pinned tiers only: Model Garden's catalog listing is often denied by
+        # org policy, so there is no reliable "all models" list on Vertex (any
+        # Claude id still routes via the proxy's wildcard entry, e.g. --model).
+        _claude_picker_args opus="${_cv_opus_model}" sonnet="${_cv_sonnet_model}" haiku="${_cv_haiku_model}"
+        command claude "${reply[@]}" "$@"
     )
 }
 
@@ -1934,9 +1947,10 @@ claude-offline() {
 # speak Anthropic's /v1/messages shape, so litellm translates it. API key:
 # $OPENAI_API_KEY, else Codex CLI's ~/.codex/auth.json (passed to the proxy
 # at start; run claude-openai-kill after changing it). Three tiers map independently:
-#   CLAUDE_OPENAI_OPUS_MODEL / _SONNET_MODEL / _HAIKU_MODEL
-# Unset tiers default to the greatest-latest model the key can see, detected
-# from OpenAI's model list (nothing hardcoded; see _claude_openai_autopick).
+#   CLAUDE_OPENAI_FABLE_MODEL / _OPUS_MODEL / _SONNET_MODEL / _HAIKU_MODEL
+# Unset tiers are detected (see _claude_openai_autopick): each tier's variant
+# (CLAUDE_OPENAI_TIER_MAP, default fable=astra opus=sol sonnet=terra haiku=luna)
+# at the newest version the key can see.
 typeset -g CLAUDE_OPENAI_PROXY_LITELLM_VERSION="1.97.0"
 typeset -g CLAUDE_OPENAI_PROXY_FASTAPI_VERSION="0.136.3"
 typeset -g _claude_openai_proxy_config="${XDG_CONFIG_HOME:-$HOME/.config}/claude-openai-proxy.yaml"
@@ -1974,21 +1988,30 @@ _claude_openai_list_models() {
 }
 
 # Prints the proxy config (the caller writes it and fingerprints it).
-# Greatest-latest model from "id<TAB>created" lines on stdin -- no model or
-# family names hardcoded. Each id is parsed as <family><version><rest>
-# (gpt-5.4-mini -> gpt, 5.4; o3 -> o, 3); dated snapshots (gpt-4-0613,
-# ...-2025-08-07) are skipped. Ranking: highest version first (compared
-# component-wise, so 6.1 > 6 and 5.10 > 5.9), then newest `created`, then id.
-# Prints the winning id, or nothing if no id parses.
+# Per-tier picks from "id<TAB>created" lines on stdin. $1 = tier map,
+# "tier=variant ..." (default CLAUDE_OPENAI_TIER_MAP, else
+# "fable=astra opus=sol sonnet=terra haiku=luna"); the VERSION is always
+# detected, only the variant-to-tier mapping is configured. Each id is parsed
+# as <family><version><rest> (gpt-6.1-sol -> gpt, 6.1, "-sol"); dated snapshots
+# are skipped. A tier's pick = the newest model whose rest is "-<variant>":
+# highest version (component-wise, so 6.1 > 6 and 5.10 > 5.9), then newest
+# `created`, then id. A tier whose variant doesn't exist falls back to the
+# greatest-latest model overall. Prints one id per line in map order.
 _claude_openai_autopick() {
-    jq -Rrn '
+    local map="${1:-${CLAUDE_OPENAI_TIER_MAP:-fable=astra opus=sol sonnet=terra haiku=luna}}"
+    jq -Rrn --arg map "$map" '
         [inputs | split("\t") | {id: .[0], created: ((.[1] // "0") | tonumber? // 0)}
          | . as $m
          | (.id | capture("^(?<f>[a-z]+)-?(?<v>[0-9]+(\\.[0-9]+)*)(?<rest>.*)$")?) as $c
          | select($c != null)
          | select($c.rest | test("(^|-)[0-9]{4}(-[0-9]{2}-[0-9]{2})?$|(^|-)[0-9]{8}$") | not)
-         | {id: $m.id, v: ($c.v | split(".") | map(tonumber)), created: $m.created}]
-        | sort_by([.v, .created, .id]) | last | .id // empty' 2>/dev/null
+         | {id: $m.id, rest: $c.rest, v: ($c.v | split(".") | map(tonumber)), created: $m.created}] as $all
+        | ($all | sort_by([.v, .created, .id]) | last | .id // "") as $top
+        | if $top == "" then empty else
+            ($map | split(" ") | map(select(length > 0) | split("=")[1])) []
+            | . as $variant
+            | ([$all[] | select(.rest == "-" + $variant)] | sort_by([.v, .created, .id]) | last | .id) // $top
+          end' 2>/dev/null
 }
 
 _claude_openai_proxy_config_text() {
@@ -2027,15 +2050,18 @@ _claude_openai_prepare() {
         return 1
     fi
 
-    # Defaults: the greatest-latest model the key can see (see
-    # _claude_openai_autopick), for every tier; CLAUDE_OPENAI_*_MODEL
-    # overrides per tier. gpt-5 only if the model list is unreachable/empty.
-    local models_tsv latest
+    # Defaults: newest version of each tier's variant in the model list the
+    # key can see (see _claude_openai_autopick); CLAUDE_OPENAI_*_MODEL overrides
+    # per tier; gpt-5/gpt-5-mini only if the list is unreachable.
+    local models_tsv picks
+    local -a pick
     models_tsv=$(_claude_openai_list_models "$key")
-    latest=$(print -r -- "$models_tsv" | _claude_openai_autopick)
-    local opus="${CLAUDE_OPENAI_OPUS_MODEL:-${latest:-gpt-5}}"
-    local sonnet="${CLAUDE_OPENAI_SONNET_MODEL:-${latest:-gpt-5}}"
-    local haiku="${CLAUDE_OPENAI_HAIKU_MODEL:-${latest:-gpt-5-mini}}"
+    picks=$(print -r -- "$models_tsv" | _claude_openai_autopick)
+    pick=("${(@f)picks}")
+    local fable="${CLAUDE_OPENAI_FABLE_MODEL:-${pick[1]:-gpt-5}}"
+    local opus="${CLAUDE_OPENAI_OPUS_MODEL:-${pick[2]:-gpt-5}}"
+    local sonnet="${CLAUDE_OPENAI_SONNET_MODEL:-${pick[3]:-gpt-5}}"
+    local haiku="${CLAUDE_OPENAI_HAIKU_MODEL:-${pick[4]:-gpt-5-mini}}"
     local port="${CLAUDE_OPENAI_PROXY_PORT:-4145}"
     local base="http://127.0.0.1:${port}"
     local log="${TMPDIR:-/tmp}/claude-openai-proxy-${port}.log"
@@ -2043,7 +2069,7 @@ _claude_openai_prepare() {
 
     # Hot reload -- see _claude_proxy_sync. A running proxy with no recorded
     # fingerprint (older version) is restarted (adopt=0).
-    local -a models=(${(u)=:-$opus $sonnet $haiku})
+    local -a models=(${(u)=:-$fable $opus $sonnet $haiku})
     local cfg fp
     cfg=$(_claude_openai_proxy_config_text "$master_key" "${models[@]}")
     fp=$(_claude_proxy_fp "$cfg" "$key" "$CLAUDE_OPENAI_PROXY_LITELLM_VERSION")
@@ -2072,7 +2098,7 @@ _claude_openai_prepare() {
     fi
 
     typeset -g _cop_base="$base" _cop_master_key="$master_key" \
-        _cop_opus="$opus" _cop_sonnet="$sonnet" _cop_haiku="$haiku"
+        _cop_fable="$fable" _cop_opus="$opus" _cop_sonnet="$sonnet" _cop_haiku="$haiku"
     typeset -ga _cop_extras
     _cop_extras=(${(f)"$(print -r -- "$models_tsv" | cut -f1 | _claude_picker_extras)"})
 }
@@ -2090,6 +2116,7 @@ claude-openai() {
         ANTHROPIC_DEFAULT_OPUS_MODEL="${_cop_opus}"
         ANTHROPIC_DEFAULT_SONNET_MODEL="${_cop_sonnet}"
         ANTHROPIC_DEFAULT_HAIKU_MODEL="${_cop_haiku}"
+        ANTHROPIC_DEFAULT_FABLE_MODEL="${_cop_fable}"
     )
     if [[ -z "$CLAUDE_COPILOT_ENABLE_MONITOR" || "$CLAUDE_COPILOT_ENABLE_MONITOR" == 0 ]]; then
         envs+=(
@@ -2098,7 +2125,7 @@ claude-openai() {
         )
     fi
     export "${envs[@]}"
-    _claude_picker_args opus="${_cop_opus}" sonnet="${_cop_sonnet}" haiku="${_cop_haiku}" "${_cop_extras[@]}"
+    _claude_picker_args fable="${_cop_fable}" opus="${_cop_opus}" sonnet="${_cop_sonnet}" haiku="${_cop_haiku}" "${_cop_extras[@]}"
     command claude "${reply[@]}" "$@"
 }
 
