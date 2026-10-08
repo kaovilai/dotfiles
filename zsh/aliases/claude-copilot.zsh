@@ -1928,10 +1928,9 @@ claude-offline() {
 # speak Anthropic's /v1/messages shape, so litellm translates it. API key:
 # $OPENAI_API_KEY, else Codex CLI's ~/.codex/auth.json (passed to the proxy
 # at start; run claude-openai-kill after changing it). Three tiers map independently:
-#   CLAUDE_OPENAI_OPUS_MODEL   (default gpt-5)
-#   CLAUDE_OPENAI_SONNET_MODEL (default gpt-5)
-#   CLAUDE_OPENAI_HAIKU_MODEL  (default gpt-5-mini)
-# Defaults are unverified guesses at current model ids -- override as needed.
+#   CLAUDE_OPENAI_OPUS_MODEL / _SONNET_MODEL / _HAIKU_MODEL
+# Unset tiers default to the greatest-latest model the key can see, detected
+# from OpenAI's model list (nothing hardcoded; see _claude_openai_autopick).
 typeset -g CLAUDE_OPENAI_PROXY_LITELLM_VERSION="1.97.0"
 typeset -g CLAUDE_OPENAI_PROXY_FASTAPI_VERSION="0.136.3"
 typeset -g _claude_openai_proxy_config="${XDG_CONFIG_HOME:-$HOME/.config}/claude-openai-proxy.yaml"
@@ -1947,18 +1946,18 @@ _claude_openai_key() {
     print -r -- "$key"
 }
 
-# Chat-capable model ids from OpenAI's /v1/models, cached 6h (one id per
-# line; stale cache served if the API is unreachable). Filters out
+# Chat-capable models from OpenAI's /v1/models as "id<TAB>created" lines,
+# cached 6h (stale cache served if the API is unreachable). Filters out
 # embeddings/audio/image/realtime/moderation/etc. -- not usable via Claude Code.
 _claude_openai_list_models() {
-    local key="$1" cache="${XDG_CACHE_HOME:-$HOME/.cache}/claude-openai-models.txt"
+    local key="$1" cache="${XDG_CACHE_HOME:-$HOME/.cache}/claude-openai-models.tsv"
     if [[ ! -s "$cache" || -n "$(find "$cache" -mmin +360 2>/dev/null)" ]]; then
         local out
         out=$(curl -sf --max-time 10 -H "Authorization: Bearer ${key}" https://api.openai.com/v1/models 2>/dev/null \
-            | jq -r '[.data[].id
-                | select(test("^(gpt-|chatgpt-|o[0-9])"))
-                | select(test("audio|realtime|transcribe|tts|image|embedding|moderation|search|instruct|diarize"; "i") | not)]
-                | unique[]' 2>/dev/null)
+            | jq -r '[.data[]
+                | select(.id | test("^(gpt-|chatgpt-|o[0-9])"))
+                | select(.id | test("audio|realtime|transcribe|tts|image|embedding|moderation|search|instruct|diarize"; "i") | not)]
+                | sort_by(.id)[] | "\(.id)\t\(.created // 0)"' 2>/dev/null)
         if [[ -n "$out" ]]; then
             mkdir -p "${cache:h}" && print -r -- "$out" >| "$cache"
         fi
@@ -1967,6 +1966,23 @@ _claude_openai_list_models() {
 }
 
 # Prints the proxy config (the caller writes it and fingerprints it).
+# Greatest-latest model from "id<TAB>created" lines on stdin -- no model or
+# family names hardcoded. Each id is parsed as <family><version><rest>
+# (gpt-5.4-mini -> gpt, 5.4; o3 -> o, 3); dated snapshots (gpt-4-0613,
+# ...-2025-08-07) are skipped. Ranking: highest version first (compared
+# component-wise, so 6.1 > 6 and 5.10 > 5.9), then newest `created`, then id.
+# Prints the winning id, or nothing if no id parses.
+_claude_openai_autopick() {
+    jq -Rrn '
+        [inputs | split("\t") | {id: .[0], created: ((.[1] // "0") | tonumber? // 0)}
+         | . as $m
+         | (.id | capture("^(?<f>[a-z]+)-?(?<v>[0-9]+(\\.[0-9]+)*)(?<rest>.*)$")?) as $c
+         | select($c != null)
+         | select($c.rest | test("(^|-)[0-9]{4}(-[0-9]{2}-[0-9]{2})?$|(^|-)[0-9]{8}$") | not)
+         | {id: $m.id, v: ($c.v | split(".") | map(tonumber)), created: $m.created}]
+        | sort_by([.v, .created, .id]) | last | .id // empty' 2>/dev/null
+}
+
 _claude_openai_proxy_config_text() {
     local master_key="$1"; shift
     local m
@@ -2003,9 +2019,15 @@ _claude_openai_prepare() {
         return 1
     fi
 
-    local opus="${CLAUDE_OPENAI_OPUS_MODEL:-gpt-5}"
-    local sonnet="${CLAUDE_OPENAI_SONNET_MODEL:-gpt-5}"
-    local haiku="${CLAUDE_OPENAI_HAIKU_MODEL:-gpt-5-mini}"
+    # Defaults: the greatest-latest model the key can see (see
+    # _claude_openai_autopick), for every tier; CLAUDE_OPENAI_*_MODEL
+    # overrides per tier. gpt-5 only if the model list is unreachable/empty.
+    local models_tsv latest
+    models_tsv=$(_claude_openai_list_models "$key")
+    latest=$(print -r -- "$models_tsv" | _claude_openai_autopick)
+    local opus="${CLAUDE_OPENAI_OPUS_MODEL:-${latest:-gpt-5}}"
+    local sonnet="${CLAUDE_OPENAI_SONNET_MODEL:-${latest:-gpt-5}}"
+    local haiku="${CLAUDE_OPENAI_HAIKU_MODEL:-${latest:-gpt-5-mini}}"
     local port="${CLAUDE_OPENAI_PROXY_PORT:-4145}"
     local base="http://127.0.0.1:${port}"
     local log="${TMPDIR:-/tmp}/claude-openai-proxy-${port}.log"
@@ -2044,7 +2066,7 @@ _claude_openai_prepare() {
     typeset -g _cop_base="$base" _cop_master_key="$master_key" \
         _cop_opus="$opus" _cop_sonnet="$sonnet" _cop_haiku="$haiku"
     typeset -ga _cop_extras
-    _cop_extras=(${(f)"$(_claude_openai_list_models "$key" | _claude_picker_extras)"})
+    _cop_extras=(${(f)"$(print -r -- "$models_tsv" | cut -f1 | _claude_picker_extras)"})
 }
 
 claude-openai() {
