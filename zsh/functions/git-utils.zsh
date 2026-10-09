@@ -192,9 +192,8 @@ exec-dirs-ds() {
         return 1
     fi
 
-    # Use ZSH glob qualifiers to locate matching directories (no subprocess fork)
-    local -a _iter_dirs=(./$~pattern(/N))
-    for dir in "${_iter_dirs[@]}"; do
+    # Use find to locate matching directories
+    find . -mindepth 1 -maxdepth 1 -type d -name "$pattern" | while read -r dir; do
         (
             print "\033[1;34mProcessing $dir...\033[0m"
             cd "$dir" || { print "\033[1;31mFailed to cd into $dir\033[0m" >&2; return 1; }
@@ -253,8 +252,7 @@ exec-dirs-ds-echo() {
     fi
 
     # Pass the same arguments but set a flag to only echo commands
-    local -a _iter_dirs=(./$~pattern(/N))
-    for dir in "${_iter_dirs[@]}"; do
+    find . -mindepth 1 -maxdepth 1 -type d -name "$pattern" | while read -r dir; do
         print "\033[1;34mWould process $dir\033[0m"
         echo "  Would fetch $ds_name"
         echo "  Would checkout $ds_name/$base_branch"
