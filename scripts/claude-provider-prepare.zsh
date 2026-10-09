@@ -21,8 +21,7 @@ claude-provider-prepare() {
     unsetopt xtrace verbose
     source "$root/zsh/paths.zsh"
     path=(/opt/homebrew/bin /usr/local/bin "$HOME/.bun/bin" $path)
-    source "$root/zsh/aliases/claude-copilot.zsh"
-    source "$root/zsh/aliases/claude-enmass.zsh"
+    source "$root/zsh/functions/claude/load.zsh"
     export CLAUDE_PROVIDER_NO_RESTART=1
     export CLAUDE_PROVIDER_CAPTURE_SCRIPT="$root/scripts/claude-provider.py"
     export CLAUDE_PROVIDER_PROFILE="$profile"

@@ -9,7 +9,7 @@ tmp=$(mktemp -d "${TMPDIR:-/tmp}/claude-enmass-tests.XXXXXXXX")
 trap '[[ -n "$run_pid" ]] && kill -TERM "$run_pid" 2>/dev/null; rm -rf -- "$tmp"' EXIT
 
 # Load actual shared helpers without unrelated wrapper startup configuration.
-source <(python3 - "$repo/zsh/aliases/claude-copilot.zsh" <<'PY'
+source <(python3 - "$repo/zsh/functions/claude/common.zsh" <<'PY'
 import re, sys
 s = open(sys.argv[1]).read()
 for name in ('_claude_copilot_latest_model', '_claude_picker_args', '_claude_copilot_unset_env'):
@@ -17,7 +17,7 @@ for name in ('_claude_copilot_latest_model', '_claude_picker_args', '_claude_cop
 print(re.search(r'^typeset -ga _claude_copilot_env_names=\(\n.*?^\)', s, re.M | re.S).group())
 PY
 )
-source "$repo/zsh/aliases/claude-enmass.zsh"
+source "$repo/zsh/functions/claude/providers/enmass.zsh"
 # Preserve the real emitted helper for isolated Python tests, then replace the
 # launcher seam before any claude-enmass call can reach an actual daemon.
 _claude_enmass_program > "$tmp/actual-daemon.py"

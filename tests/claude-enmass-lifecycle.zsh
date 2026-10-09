@@ -32,7 +32,7 @@ def wait_for(check, description, timeout=15):
 with tempfile.TemporaryDirectory(prefix='enmass-lifecycle-') as tmp:
     program = Path(tmp) / 'proxy.py'
     emitted = subprocess.run(['zsh', '-f', '-c',
-        'source "$ENMASS_TEST_REPO/zsh/functions/enmass-proxy.zsh"; _claude_enmass_proxy_program'],
+        'source "$ENMASS_TEST_REPO/zsh/functions/claude/providers/enmass-proxy.zsh"; _claude_enmass_proxy_program'],
         env=dict(env, ENMASS_TEST_REPO=str(repo)), text=True, capture_output=True, check=True)
     program.write_text(emitted.stdout)
     program.chmod(0o600)

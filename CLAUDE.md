@@ -136,6 +136,7 @@ No formal test suite exists. Changes should be manually tested by:
 ### Important Files
 - `zsh/alias.zsh`: Sources all alias category files
 - `zsh/functions/openshift/load.zsh`: Loads all OpenShift-related functions
+- `zsh/functions/claude/load.zsh`: Loads Claude provider wrappers (`common.zsh`, one file per provider in `providers/`, then `mode.zsh`)
 - `zsh/znap.zsh`: Manages ZSH plugins (pure prompt, syntax highlighting, autocomplete)
 - `Brewfile`: Defines all Homebrew dependencies
 

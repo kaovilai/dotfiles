@@ -3,13 +3,13 @@
 # (https://docs.paperclip.ing/reference/adapters/claude-code/).
 #
 # Paperclip's adapter execs `command` non-interactively and parses stdout as
-# stream-json, so this just re-uses claude-copilot() from claude-copilot.zsh
+# stream-json, so this just re-uses claude-copilot() from zsh/functions/claude/providers/copilot.zsh
 # (gateway autostart + model pinning against the local copilot-api gateway)
 # and passes every adapter-supplied arg straight through to `claude`. Any
 # diagnostic output claude-copilot() prints must go to stderr, not stdout, or
 # it corrupts the stream-json Paperclip expects on stdout -- fixed upstream in
-# claude-copilot.zsh; do not reintroduce a bare `echo` there.
-source "${0:A:h}/../zsh/aliases/claude-copilot.zsh"
+# providers/copilot.zsh; do not reintroduce a bare `echo` there.
+source "${0:A:h}/../zsh/functions/claude/load.zsh"
 
 # Paperclip's adapter form requires a non-empty ANTHROPIC_API_KEY (or
 # Bedrock/subscription login) to pass its own auth check, then injects

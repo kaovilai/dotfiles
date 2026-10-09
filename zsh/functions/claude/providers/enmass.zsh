@@ -1,7 +1,30 @@
-# EnMaaS sessions share the standard loopback LiteLLM proxy and model routes.
-# Caller env, saved mode and persistent Claude settings stay intact.
-# Source claude-copilot.zsh first for its model/picker/environment helpers.
-source "${${(%):-%N}:A:h:h}/functions/enmass-proxy.zsh"
+# ---------------------------------------------------------------------------
+# claude-enmass: raw claude binary routed through the EnMaaS gateway via one
+# shared loopback LiteLLM proxy (default :4146, CLAUDE_ENMASS_PROXY_PORT).
+# Requires ENMASS_API_BASE_URL (gateway root, or its /v1) and ENMASS_API_KEY
+# exported in the shell. Caller env, saved claude-mode and persistent Claude
+# settings stay intact; a caller's final --settings object/file is merged
+# under the wrapper's transport/picker fields.
+#
+# Models: Anthropic (x-api-key) and gateway Bearer catalogs, plus the OpenAI
+# upstream catalog reached through the same gateway/key (see
+# _claude_enmass_discover), newest Claude per tier, Sonnet default. Overrides:
+#   CLAUDE_ENMASS_MODEL                         default model
+#   CLAUDE_ENMASS_{OPUS,SONNET,HAIKU,FABLE}_MODEL  per-tier
+#   CLAUDE_ENMASS_MODEL_DIALECTS='id=responses other=chat'  exact ids needing
+#     a dialect (anthropic -> /v1/messages, chat -> /v1/chat/completions,
+#     responses -> /v1/responses); confirm gateway support first.
+# A catalog entry is a selectable candidate, not proof of entitlement.
+#
+# Lifecycle: first launch starts the proxy, later launches reuse it; session
+# exit leaves it running. Private runtime dir
+# /tmp/claude-enmass-proxy-<uid>-<port> (0700/0600); config references
+# os.environ/ENMASS_API_KEY and Claude children only get the local token.
+# Gateway/key/dependency/route changes fail with a restart instruction
+# instead of disrupting active sessions. claude-enmass-kill stops only the
+# recorded, birth-time-verified proxy process group (disconnects every
+# session using it).
+source "${${(%):-%N}:A:h}/enmass-proxy.zsh"
 
 _claude_enmass_root() {
     python3 - "$1" <<'PY'
@@ -131,20 +154,6 @@ _claude_enmass_cleanup() {
     return 0
 }
 
-kill-enmass-api() (
-    emulate -L zsh
-    umask 077
-    local port tmp result=0
-    port=$(_claude_enmass_port) || return 1
-    tmp=$(command mktemp -d "${TMPDIR:-/tmp}/enmass-kill.XXXXXXXX") || return 1
-    trap 'command rm -rf -- "$tmp"' EXIT
-    _claude_enmass_proxy_program > "$tmp/proxy.py" || return 1
-    python3 "$tmp/proxy.py" stop "$port" || result=$?
-    return "$result"
-)
-
-alias claude-enmass-kill='kill-enmass-api'
-
 claude-enmass() (
     emulate -L zsh
     setopt localtraps
@@ -161,7 +170,7 @@ claude-enmass() (
     done
     for dep in _claude_copilot_latest_model _claude_picker_args _claude_copilot_unset_env; do
         (( $+functions[$dep] )) || {
-            print -ru2 -- 'claude-enmass: source claude-copilot.zsh before claude-enmass.zsh.'
+            print -ru2 -- 'claude-enmass: source zsh/functions/claude/load.zsh, not this provider file alone.'
             return 1
         }
     done
@@ -363,3 +372,21 @@ claude-enmass() (
     _claude_enmass_claude_pid=''
     return "$result"
 )
+
+# Live shells may still carry the pre-rename claude-enmass-kill alias, which
+# would expand in the definition below and redefine kill-enmass-api instead.
+unalias claude-enmass-kill 2>/dev/null || true
+claude-enmass-kill() (
+    emulate -L zsh
+    umask 077
+    local port tmp result=0
+    port=$(_claude_enmass_port) || return 1
+    tmp=$(command mktemp -d "${TMPDIR:-/tmp}/enmass-kill.XXXXXXXX") || return 1
+    trap 'command rm -rf -- "$tmp"' EXIT
+    _claude_enmass_proxy_program > "$tmp/proxy.py" || return 1
+    python3 "$tmp/proxy.py" stop "$port" || result=$?
+    return "$result"
+)
+
+# Pre-rename name -- claude-enmass-kill is the current name.
+alias kill-enmass-api='claude-enmass-kill'

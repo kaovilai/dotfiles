@@ -38,21 +38,9 @@ The main entry point is `.zshrc` which sources all the necessary files.
 - `import-wifi-credentials`: Import WiFi networks on new laptop
 - `list-wifi-networks`: List currently saved WiFi networks
 
-### Claude providers in T3 Code
+### Claude providers
 
-Your shell functions `claude-copilot`, `claude-vertex`, `claude-openai`, and `claude-enmass` also have executable entry points for T3: `~/.local/bin/claude-t3-{copilot,vertex,openai,enmass}`. These **launchers** load `~/secrets.zsh`, prepare or reuse the corresponding local proxy, and start the real Claude CLI. T3 uses executable paths rather than interactive shell functions.
-
-After a reboot or credential change, prewarm the backend you intend to use, for example:
-
-```zsh
-claude-t3-vertex --prepare
-```
-
-Wait for preparation to finish, then select **Claude · Vertex** and **Auto Sonnet tier** in T3's model picker. The equivalent Copilot, OpenAI, and EnMaaS instances are configured in `~/.t3/userdata/settings.json`. Preparation also runs automatically on launch; prewarming helps avoid T3's startup timeout for cold services.
-
-Existing shell functions remain usable and share the same proxies. Copilot, Vertex, and OpenAI shell wrappers can restart a proxy when its configuration changes, which can interrupt active T3 sessions. The T3 launchers instead refuse a conflicting configuration; finish active sessions before restarting a shared proxy. EnMaaS uses an explicit restart policy.
-
-See [Claude backends in T3 Code](docs/setup-claude-t3.md) for credential requirements, installation paths, startup order, model selection, lifecycle behavior, tests, and rollback.
+`claude` dispatches to the provider saved by `claude-mode`; each provider also has its own `claude-<provider>` / `claude-<provider>-kill` commands. Every provider lives in one file under `zsh/functions/claude/providers/`, whose header comment documents its requirements and environment variables. Non-interactive launchers for apps such as T3 Code are documented in `scripts/claude-provider.zsh`.
 
 ## Features
 

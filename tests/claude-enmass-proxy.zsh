@@ -160,8 +160,7 @@ try:
                     'CLAUDE_ENMASS_MODEL_DIALECTS': 'offline-responses=responses offline-error=chat', 'UV_OFFLINE': '1',
                     'ANTHROPIC_AUTH_TOKEN': 'parent-token', 'ANTHROPIC_API_KEY': 'parent-key',
                     'CLAUDE_CODE_USE_VERTEX': '1', 'CLAUDE_CODE_USE_BEDROCK': '1'})
-        script = '''source "$ENMASS_TEST_REPO/zsh/aliases/claude-copilot.zsh"
-source "$ENMASS_TEST_REPO/zsh/aliases/claude-enmass.zsh"
+        script = '''source "$ENMASS_TEST_REPO/zsh/functions/claude/load.zsh"
 claude-enmass
 result=$?
 [[ $ANTHROPIC_AUTH_TOKEN == parent-token && $ANTHROPIC_API_KEY == parent-key && $CLAUDE_CODE_USE_VERTEX == 1 && $CLAUDE_CODE_USE_BEDROCK == 1 ]] || exit 99
@@ -208,12 +207,12 @@ exit $result
         for model, endpoint in expected.items():
             assert any(r['model'] == model and r['path'] == endpoint for r in records), (model, endpoint)
         print('PASS: exact model IDs, per-model dialect authentication, shared standard proxy and parent environment isolation')
-        stop = subprocess.run(['zsh', '-f', '-c', 'source "$ENMASS_TEST_REPO/zsh/aliases/claude-enmass.zsh"; kill-enmass-api'],
+        stop = subprocess.run(['zsh', '-f', '-c', 'source "$ENMASS_TEST_REPO/zsh/functions/claude/providers/enmass.zsh"; claude-enmass-kill'],
                               env=env, text=True, capture_output=True, timeout=30)
         assert stop.returncode == 0, stop.stderr
 finally:
     if 'env' in locals():
-        subprocess.run(['zsh', '-f', '-c', 'source "$ENMASS_TEST_REPO/zsh/aliases/claude-enmass.zsh"; kill-enmass-api'],
+        subprocess.run(['zsh', '-f', '-c', 'source "$ENMASS_TEST_REPO/zsh/functions/claude/providers/enmass.zsh"; claude-enmass-kill'],
                        env=env, text=True, capture_output=True, timeout=30)
     gateway.shutdown()
 PY

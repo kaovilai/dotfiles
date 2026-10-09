@@ -139,16 +139,16 @@ c() {
     fi
 }
 alias ce='cd ~/experiments/ && claude'
-# cec = copilot edition of ce (raw claude via copilot-api gateway; see claude-copilot.zsh)
+# cec = copilot edition of ce (raw claude via copilot-api gateway; see zsh/functions/claude/providers/)
 # NOTE: cec previously launched the podman claude-container — that is now cecon.
 alias cec='cd ~/experiments/ && claude-copilot'
-# ce-vertex = vertex edition of ce (raw claude routed through Google Vertex AI; see claude-copilot.zsh)
+# ce-vertex = vertex edition of ce (raw claude routed through Google Vertex AI; see zsh/functions/claude/providers/)
 alias ce-vertex='cd ~/experiments/ && claude-vertex'
-# ce-ollama = ollama edition of ce (raw claude routed through a local Ollama server; see claude-copilot.zsh)
+# ce-ollama = ollama edition of ce (raw claude routed through a local Ollama server; see zsh/functions/claude/providers/)
 alias ce-ollama='cd ~/experiments/ && claude-ollama'
-# ce-offline = offline edition of ce (alias of ce-ollama; see claude-copilot.zsh)
+# ce-offline = offline edition of ce (alias of ce-ollama; see zsh/functions/claude/providers/)
 alias ce-offline='cd ~/experiments/ && claude-offline'
-# ce-openai = openai edition of ce (raw claude routed through OpenAI via a local litellm proxy; see claude-copilot.zsh)
+# ce-openai = openai edition of ce (raw claude routed through OpenAI via a local litellm proxy; see zsh/functions/claude/providers/)
 alias ce-openai='cd ~/experiments/ && claude-openai'
 # Builds -e flags to pass the host's active Anthropic/copilot-api gateway
 # config into a container. ANTHROPIC_BASE_URL's host is rewritten from
@@ -208,7 +208,7 @@ alias gcloud-token='gcloud auth print-access-token'
 alias claude-agents='~/.local/bin/claude agents'
 alias claude-install='~/.local/bin/claude install'
 alias claude-local='~/.local/bin/claude'
-# claude is a mode-dispatching function defined in claude-copilot.zsh (sourced
+# claude is a mode-dispatching function defined in functions/claude/mode.zsh (sourced
 # after this file); switch backends with claude-mode [copilot|default].
 alias claude-dangerously='claude --dangerously-skip-permissions'
 alias claude-sonnet='claude --model sonnet'

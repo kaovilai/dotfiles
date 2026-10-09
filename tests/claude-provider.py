@@ -21,13 +21,12 @@ class ProviderBridge(unittest.TestCase):
         self.temporary = tempfile.TemporaryDirectory(prefix="claude-provider-test-")
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
-        for directory in ("scripts", "zsh/aliases", "zsh", "bin"):
+        for directory in ("scripts", "zsh/functions/claude", "zsh", "bin"):
             (self.root / directory).mkdir(parents=True, exist_ok=True)
         for name in ("claude-provider.zsh", "claude-provider.py", "claude-provider-prepare.zsh"):
             shutil.copyfile(REPO / "scripts" / name, self.root / "scripts" / name)
         (self.root / "zsh/paths.zsh").write_text("")
-        (self.root / "zsh/aliases/claude-enmass.zsh").write_text("")
-        (self.root / "zsh/aliases/claude-copilot.zsh").write_text('''
+        (self.root / "zsh/functions/claude/load.zsh").write_text('''
 _claude_fixture() {
     local root='deliberate dynamic-scope shadow'
     [[ "$CLAUDE_PROVIDER_NO_RESTART" == 1 ]] || return 93

@@ -3,7 +3,7 @@
 emulate -LR zsh
 setopt err_exit pipe_fail
 local repo="${0:A:h:h}"
-source <(python3 - "$repo/zsh/aliases/claude-copilot.zsh" <<'PY'
+source <(python3 - "$repo/zsh/functions/claude/common.zsh" <<'PY'
 import re, sys
 text = open(sys.argv[1]).read()
 print(re.search(r'^_claude_picker_args\(\) \{\n.*?^\}', text, re.M | re.S).group())

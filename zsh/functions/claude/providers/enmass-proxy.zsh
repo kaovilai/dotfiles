@@ -108,18 +108,18 @@ def ensure(root, port, config, versions, timeout, required):
     key = os.environ['ENMASS_API_KEY']
     if owned(info):
         if not ready(info, root):
-            raise RuntimeError('recorded proxy is not ready; run kill-enmass-api before relaunching')
+            raise RuntimeError('recorded proxy is not ready; run claude-enmass-kill before relaunching')
         old = read_private(root / 'config.json')
         if (info['versions'] != versions or info['key_signature'] != signature(key, info['token'])
                 or old['model_list'][0]['litellm_params']['api_base'] != config['model_list'][0]['litellm_params']['api_base']):
-            raise RuntimeError('shared gateway/key or dependency settings changed; run kill-enmass-api and relaunch')
+            raise RuntimeError('shared gateway/key or dependency settings changed; run claude-enmass-kill and relaunch')
         previous = {r['model_name']: r['litellm_params'] for r in old['model_list']}
         proposed = {r['model_name']: r['litellm_params'] for r in config['model_list']}
         for model in required:
             want = proposed[model]
             actual = previous.get(model, dict(previous['*'], model=previous['*']['model'].replace('*', model)))
             if actual != want:
-                raise RuntimeError('model routing changed or is not loaded; run kill-enmass-api and relaunch')
+                raise RuntimeError('model routing changed or is not loaded; run claude-enmass-kill and relaunch')
         # Frozen routes remain authoritative; do not rewrite or restart a proxy
         # merely because discovery or one session's selected tier changed.
         return dict(info, models=[model for model, want in proposed.items()

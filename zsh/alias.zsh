@@ -13,8 +13,7 @@ _safe_source ~/git/dotfiles/zsh/aliases/code.zsh
 _safe_source ~/git/dotfiles/zsh/aliases/ibmcloud.zsh
 _safe_source ~/git/dotfiles/zsh/aliases/velero.zsh
 _safe_source ~/git/dotfiles/zsh/aliases/misc.zsh
-_safe_source ~/git/dotfiles/zsh/aliases/claude-copilot.zsh
-_safe_source ~/git/dotfiles/zsh/aliases/claude-enmass.zsh
+_safe_source ~/git/dotfiles/zsh/functions/claude/load.zsh
 _safe_source ~/git/dotfiles/zsh/aliases/omnigent.zsh
 
 # Linux dev environments (lazy-loaded — ~756 lines only parsed when first used)
