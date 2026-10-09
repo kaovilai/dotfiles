@@ -40,6 +40,7 @@ brew "node"
 brew "node@18"
 brew "pipx"                  # Python CLI tool installer
 brew "uv"                    # Fast Python package manager
+brew "python"                # EnMaaS URL validation and shared proxy lifecycle
 brew "yarn"
 brew "pkgconf"               # Package config
 
@@ -57,6 +58,7 @@ brew "rosa-cli"              # ROSA CLI
 brew "stern"                 # Multi-pod log tailing
 
 # Network tools
+brew "lsof"                  # Verify EnMaaS proxy listener ownership
 brew "iperf"
 brew "iperf3"
 brew "spoof-mac"             # MAC address spoofing

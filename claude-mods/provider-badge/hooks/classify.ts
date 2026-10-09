@@ -3,6 +3,7 @@ export type Env = {
   baseUrl?: string
   copilotPort?: string
   vertexProxyPort?: string
+  enmassPort?: string
   ollamaHost?: string
 }
 
@@ -16,13 +17,12 @@ function hostPort(url: string): { host: string; port: string } | undefined {
 /**
  * Names the provider a session runs on from its own transport env.
  *
- * No single env names the mode, so the whole base URL decides. The launchers
- * use different hosts: copilot is http://localhost:<port>, the Vertex proxy and
- * EnMaaS are http://127.0.0.1:<port>, Ollama is http://<OLLAMA_HOST>. A match on
- * host and port is certain; any other loopback URL reads as enmass? (a
- * trailing "?" marks a guess, by elimination: EnMaaS uses a random port).
- * Known gap: EnMaaS on exactly 127.0.0.1:<vertex port> reads as vertex, as the
- * two share host and port.
+ * No single env names the mode, so the whole base URL decides. Each launcher is
+ * one daemon on its own fixed port: copilot http://localhost:<4141>, the Vertex
+ * proxy http://127.0.0.1:<4142>, the EnMaaS proxy http://127.0.0.1:<4146>,
+ * Ollama http://<OLLAMA_HOST>. A match on host and port is certain. Any other
+ * loopback URL reads as local (:port): a legacy per-session proxy, or something
+ * this table does not know, never guessed to be one of the above.
  */
 export function classify(env: Env): string {
   if (env.useVertex === '1') return 'vertex-native-adc'
@@ -32,6 +32,7 @@ export function classify(env: Env): string {
 
   const copilot = env.copilotPort || '4141'
   const vertex = env.vertexProxyPort || '4142'
+  const enmass = env.enmassPort || '4146'
   const ollama = hostPort(`http://${env.ollamaHost || 'localhost:11434'}`)
 
   if (ollama && hp.host === ollama.host && hp.port === (ollama.port || '11434')) return 'ollama'
@@ -39,7 +40,8 @@ export function classify(env: Env): string {
   if (LOOPBACK.has(hp.host)) {
     if (hp.host === 'localhost' && hp.port === copilot) return 'copilot'
     if (hp.host === '127.0.0.1' && hp.port === vertex) return 'vertex'
-    return 'enmass?'
+    if (hp.host === '127.0.0.1' && hp.port === enmass) return 'enmass'
+    return `local (:${hp.port || '?'})`
   }
   return `custom (${hp.host})`
 }

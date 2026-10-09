@@ -21,13 +21,12 @@ alias copilot-api="NODE_USE_SYSTEM_CA=1 bun run --cwd \$HOME/git/copilot-api ./s
 # claude-copilot() below. Set COPILOT_API_DIR to point elsewhere, or unset/
 # rmdir that path to fall back to the commented-out bunx/npx upstream lines.
 #
-# By default, claude-copilot sets DISABLE_NON_ESSENTIAL_MODEL_CALLS=1 and
-# CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 to cut nonessential
-# traffic/telemetry through the gateway. Tradeoff: this also disables Claude
-# Code's Monitor tool (https://code.claude.com/docs/en/tools-reference#monitor-tool),
-# which breaks anything relying on it (e.g. inter-session plugin's push-based
-# messaging). Set CLAUDE_COPILOT_ENABLE_MONITOR=1 to opt back into Monitor
-# (e.g. `CLAUDE_COPILOT_ENABLE_MONITOR=1 claude-copilot` or `cec`).
+# We always want Monitor available for background watches and messaging.
+# Keep DISABLE_NON_ESSENTIAL_MODEL_CALLS and
+# CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC unset, not set to 0: disabling
+# nonessential traffic makes Monitor unavailable. Every provider clears
+# these variables via _claude_copilot_unset_env before launching Claude.
+# https://code.claude.com/docs/en/tools-reference#monitor-tool
 #
 # Also defines claude-vertex (raw claude binary routed through Google Vertex
 # AI, using CLOUD_ML_REGION/ANTHROPIC_VERTEX_PROJECT_ID already exported in
@@ -92,7 +91,19 @@ typeset -ga _claude_copilot_env_names=(
 )
 
 _claude_copilot_unset_env() {
+    # Always allow the traffic Monitor needs; discard inherited disable flags.
     unset "${_claude_copilot_env_names[@]}"
+}
+
+# Machine-facing bridges can replace this final invocation to prepare a
+# transport without launching a CLI. Interactive wrappers keep normal behavior.
+_claude_invoke() {
+    command claude "$@"
+}
+
+_claude_proxy_start() {
+    local log="$1"; shift
+    ("$@" >> "$log" 2>&1 &)
 }
 
 # Builds a `--settings` arg (into $reply) so the /model picker lists only the
@@ -100,10 +111,10 @@ _claude_copilot_unset_env() {
 # a display name plus the tiers it serves -- instead of Claude Code's built-in
 # rows ("Custom Opus model" duplicates, an unusable Fable row).
 # Args: role=model[|Display Name] ... for the pinned tiers, then
-# =model[|Display Name] ... for extra models the backend offers (listed after
-# the pinned ones, no role suffix), sorted newest first by the version parsed
-# from the id (6.1 > 6 > 5.10 > 5.9; ids without a version last). Empty models
-# skipped. With no explicit
+# =model[|Display Name] ... for extra models the backend offers. Newest Claude
+# generation first, then current GPT variants and other alternatives, then older
+# Claude/GPT choices. Versions compare numerically within those groups; all
+# supplied ids and tier mappings stay intact. Empty models skipped. With no explicit
 # display name the id is prettified (gpt-5-mini -> "GPT-5 Mini",
 # qwen3-coder:30b -> "Qwen3 Coder 30B"); a "[1m]" suffix stays in the row's
 # model id but shows as " 1M" in the label. Needs jq; without it $reply is
@@ -135,15 +146,35 @@ _claude_picker_args() {
             | if any(.[]; .model == $e.model)
               then map(if .model == $e.model then .roles += $r else . end)
               else . + [{model: $e.model, roles: $r, name: $e.name}] end)
-        | def ver: (try (capture("(?<v>[0-9]+([.-][0-9]{1,2}(?![0-9]))*)").v | [scan("[0-9]+") | tonumber]) catch []);
-          ([.[] | select(.roles | length > 0)]) as $pinned
-        | ([.[] | select(.roles | length == 0)] | group_by(.model | ver) | reverse | map(sort_by(.model)) | add // []) as $extras
-        | ($pinned + $extras)
+        | def ver: ([match("[0-9]+([.-][0-9]{1,2}(?![0-9]))*").string] | first // "" | [scan("[0-9]+") | tonumber]);
+          def identity:
+            ascii_downcase | sub("\\[1m\\]$"; "")
+            | if test("(^|/)claude-(opus|sonnet|haiku|fable)-[0-9]") then
+                capture("(^|/)claude-(?<family>opus|sonnet|haiku|fable)-(?<v>[0-9]+([.-][0-9]{1,2}(?![0-9]))*)")
+                | {kind: "claude", family, version: (.v | ver)}
+              elif test("(^|/)(chat)?gpt-[0-9]") then
+                capture("(^|/)(chat)?gpt-(?<v>[0-9]+([.-][0-9]{1,2}(?![0-9]))*)(?<suffix>.*)$")
+                | {kind: "gpt", family: (.suffix | sub("-[0-9]{8}$"; "")), version: (.v | ver)}
+              else {kind: "other", family: "", version: ver} end;
+          to_entries | map(.value + {order: .key} + (.value.model | identity)) as $rows
+        | ([$rows[] | select(.kind == "claude") | .version[0]] | max // 0) as $claude_major
+        | ([$rows[] | select(.kind != "other")] | group_by([.kind, .family])
+            | map({key: (.[0].kind + "/" + .[0].family), value: (map(.version) | max)}) | from_entries) as $latest
+        | $rows | map(. + {rank:
+            (if .kind == "claude" then
+                if .version[0] == $claude_major and .version == $latest["claude/" + .family] then 0 else 3 end
+             elif .kind == "gpt" then
+                if .version == $latest["gpt/" + .family] then 1 else 4 end
+             else 2 end)})
+        | sort_by([.rank,
+            (if .rank == 0 and (.roles | length > 0) then 0 else 1 end),
+            (if .rank == 0 and (.roles | length > 0) then .order else 0 end),
+            -(.version[0] // 0), -(.version[1] // 0), -(.version[2] // 0), .model])
         | {modelPicker: {replaceBuiltInOptions: true,
             options: map(
                 (.model | endswith("[1m]")) as $big
                 | (.model | sub("\\[1m\\]$"; "")) as $bare
-                | ((if .name != "" then .name else ($bare | pretty) end) + (if $big then " 1M" else "" end)) as $nm
+                | ((if .name != "" and .name != .model and .name != $bare then .name else ($bare | pretty) end) + (if $big then " 1M" else "" end)) as $nm
                 | {model, label: (if (.roles | length) > 0 then "\($nm) (\(.roles | join(", ")))" else $nm end)})}}' \
         "${pairs[@]}") || return 0
     reply=(--settings "$json")
@@ -194,6 +225,10 @@ _claude_proxy_sync() {
     if [[ -z "$recorded" && "$adopt" == 1 ]]; then
         mkdir -p "${state:h}" && print -r -- "$fp" >| "$state"
         return 0
+    fi
+    if [[ "${CLAUDE_PROVIDER_NO_RESTART-}" == 1 ]]; then
+        echo "${label}: running proxy configuration differs; restart it explicitly after active sessions finish." >&2
+        return 1
     fi
     echo "${label}: config or credentials changed -- restarting..." >&2
     "$killfn" >/dev/null 2>&1
@@ -255,7 +290,7 @@ claude-copilot() {
     local capi_data="${COPILOT_API_HOME:-$HOME/.local/share/copilot-api}"
     local cfp
     cfp=$(_claude_proxy_fp "$(_claude_file_hash "${capi_data}/github_token" "${capi_data}/config.json")" "$port")
-    _claude_proxy_sync claude-copilot copilot-api "${base}/v1/models" "$cfp" kill-copilot-api 1
+    _claude_proxy_sync claude-copilot copilot-api "${base}/v1/models" "$cfp" kill-copilot-api 1 || return 1
 
     # Start the gateway if nothing is serving yet
     if ! curl -sf --max-time 2 "${base}/v1/models" -o /dev/null; then
@@ -277,7 +312,7 @@ claude-copilot() {
             return 1
         fi
         echo "Starting copilot-api on ${base} (log: ${log})..." >&2
-        ("${runner[@]}" start --port "${port}" >> "${log}" 2>&1 &)
+        _claude_proxy_start "$log" "${runner[@]}" start --port "${port}" || return 1
         local i
         for i in {1..60}; do
             curl -sf --max-time 2 "${base}/v1/models" -o /dev/null && break
@@ -339,12 +374,6 @@ claude-copilot() {
         # tests/create-messages.test.ts there). Safe to force back on.
         ENABLE_TOOL_SEARCH=true
     )
-    if [[ -z "$CLAUDE_COPILOT_ENABLE_MONITOR" || "$CLAUDE_COPILOT_ENABLE_MONITOR" == 0 ]]; then
-        envs+=(
-            DISABLE_NON_ESSENTIAL_MODEL_CALLS=1
-            CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
-        )
-    fi
     # All three tiers are pinned to the gateway's detected id (via
     # _claude_copilot_latest_model, which always finds whichever version is
     # currently latest — no hardcoded version number to go stale) so each
@@ -386,7 +415,7 @@ claude-copilot() {
         picker_pins+=("${_t}=${_id}|$(print -r -- "$models_json" | jq -r --arg id "${_id%\[*}" '[.data[] | select(.id == $id)][0] | (.display_name // .name // "")' 2>/dev/null)")
     done
     _claude_picker_args "${picker_pins[@]}" "${picker_extras[@]}"
-    command claude "${reply[@]}" "$@"
+    _claude_invoke "${reply[@]}" "$@"
 }
 
 # kill-copilot-api: stop a stale/unresponsive detached copilot-api gateway
@@ -912,17 +941,17 @@ _claude_vertex_prepare() {
     vfp=$(_claude_proxy_fp wildcard-v1 "${vproxy_models[@]}" "$ANTHROPIC_VERTEX_PROJECT_ID" "$CLOUD_ML_REGION" \
         "$CLAUDE_VERTEX_PROXY_LITELLM_VERSION" "$master_key" \
         "$(_claude_file_hash "${GOOGLE_APPLICATION_CREDENTIALS:-$HOME/.config/gcloud/application_default_credentials.json}")")
-    _claude_proxy_sync claude-vertex vertex-proxy "${base}/health/liveliness" "$vfp" claude-vertex-kill 1
+    _claude_proxy_sync claude-vertex vertex-proxy "${base}/health/liveliness" "$vfp" claude-vertex-kill 1 || return 1
 
     if ! curl -sf --max-time 2 "${base}/health/liveliness" -o /dev/null; then
         _claude_vertex_proxy_write_config "$master_key" "${vproxy_models[@]}"
-        echo "Starting claude-vertex proxy (litellm ${CLAUDE_VERTEX_PROXY_LITELLM_VERSION}) on ${base} (log: ${log})..."
+        echo "Starting claude-vertex proxy (litellm ${CLAUDE_VERTEX_PROXY_LITELLM_VERSION}) on ${base} (log: ${log})..." >&2
         # "google" extra pulls google-cloud-aiplatform -- without it litellm
         # fails at request time with "Google Cloud SDK not found", since
         # "proxy" alone doesn't include it (confirmed by testing).
-        (uv tool run --with "fastapi==${CLAUDE_VERTEX_PROXY_FASTAPI_VERSION}" \
+        _claude_proxy_start "$log" uv tool run --with "fastapi==${CLAUDE_VERTEX_PROXY_FASTAPI_VERSION}" \
             --from "litellm[proxy,google]==${CLAUDE_VERTEX_PROXY_LITELLM_VERSION}" litellm \
-            --config "$_claude_vertex_proxy_config" --port "$port" --host 127.0.0.1 >> "${log}" 2>&1 &)
+            --config "$_claude_vertex_proxy_config" --port "$port" --host 127.0.0.1 || return 1
         local i
         for i in {1..60}; do
             curl -sf --max-time 2 "${base}/health/liveliness" -o /dev/null && break
@@ -968,7 +997,7 @@ claude-vertex() {
         # org policy, so there is no reliable "all models" list on Vertex (any
         # Claude id still routes via the proxy's wildcard entry, e.g. --model).
         _claude_picker_args opus="${_cv_opus_model}" sonnet="${_cv_sonnet_model}" haiku="${_cv_haiku_model}"
-        command claude "${reply[@]}" "$@"
+        _claude_invoke "${reply[@]}" "$@"
     )
 }
 
@@ -1565,19 +1594,6 @@ claude-ollama() {
         ANTHROPIC_DEFAULT_SONNET_MODEL="${sonnet}"
         ANTHROPIC_DEFAULT_HAIKU_MODEL="${haiku}"
     )
-    # Same default as claude-copilot above, same opt-out
-    # (CLAUDE_COPILOT_ENABLE_MONITOR=1): these two vars gate whether Claude
-    # Code makes the background nonessential calls the Monitor tool depends
-    # on, not general Anthropic telemetry — set to 1, they disable Monitor
-    # (breaking anything relying on it, e.g. inter-session's push-based
-    # messaging), which is why the escape hatch exists. Left on by default
-    # here too, matching claude-copilot's own tradeoff.
-    if [[ -z "$CLAUDE_COPILOT_ENABLE_MONITOR" || "$CLAUDE_COPILOT_ENABLE_MONITOR" == 0 ]]; then
-        envs+=(
-            DISABLE_NON_ESSENTIAL_MODEL_CALLS=1
-            CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
-        )
-    fi
 
     # `export` (not a subshell) so descendant Claude Code sessions — e.g. an
     # agent sub-shell re-entering `claude` — inherit the Ollama routing, same
@@ -1857,12 +1873,6 @@ claude-mlx() {
         ANTHROPIC_DEFAULT_SONNET_MODEL="${_cmx_model}"
         ANTHROPIC_DEFAULT_HAIKU_MODEL="${_cmx_model}"
     )
-    if [[ -z "$CLAUDE_COPILOT_ENABLE_MONITOR" || "$CLAUDE_COPILOT_ENABLE_MONITOR" == 0 ]]; then
-        envs+=(
-            DISABLE_NON_ESSENTIAL_MODEL_CALLS=1
-            CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
-        )
-    fi
 
     # --bare by default -- same rationale as claude-ollama above: a small
     # local model gets overwhelmed by full session context. Opt back in via
@@ -2113,7 +2123,7 @@ _claude_openai_prepare() {
     local cfg fp
     cfg=$(_claude_openai_proxy_config_text "$master_key" "${models[@]}")
     fp=$(_claude_proxy_fp "$cfg" "$key" "$CLAUDE_OPENAI_PROXY_LITELLM_VERSION")
-    _claude_proxy_sync claude-openai openai-proxy "${base}/health/liveliness" "$fp" claude-openai-kill 0
+    _claude_proxy_sync claude-openai openai-proxy "${base}/health/liveliness" "$fp" claude-openai-kill 0 || return 1
 
     if ! curl -sf --max-time 2 "${base}/health/liveliness" -o /dev/null; then
         print -r -- "$cfg" > "$_claude_openai_proxy_config" || {
@@ -2121,9 +2131,9 @@ _claude_openai_prepare() {
             return 1
         }
         echo "Starting claude-openai proxy (litellm ${CLAUDE_OPENAI_PROXY_LITELLM_VERSION}) on ${base} (log: ${log})..." >&2
-        (OPENAI_API_KEY="$key" uv tool run --with "fastapi==${CLAUDE_OPENAI_PROXY_FASTAPI_VERSION}" \
+        OPENAI_API_KEY="$key" _claude_proxy_start "$log" uv tool run --with "fastapi==${CLAUDE_OPENAI_PROXY_FASTAPI_VERSION}" \
             --from "litellm[proxy]==${CLAUDE_OPENAI_PROXY_LITELLM_VERSION}" litellm \
-            --config "$_claude_openai_proxy_config" --port "$port" --host 127.0.0.1 >> "${log}" 2>&1 &)
+            --config "$_claude_openai_proxy_config" --port "$port" --host 127.0.0.1 || return 1
         local i
         for i in {1..60}; do
             curl -sf --max-time 2 "${base}/health/liveliness" -o /dev/null && break
@@ -2143,6 +2153,14 @@ _claude_openai_prepare() {
     _cop_extras=(${(f)"$(print -r -- "$models_tsv" | cut -f1 | _claude_picker_extras)"})
 }
 
+# "[1m]" for models with a ~1M context window (GPT-6+: 1,050,000), else "".
+# Claude Code reads the suffix to size its window; wrong on a smaller model
+# means it never compacts before the API rejects the request.
+_claude_openai_ctx_suffix() {
+    [[ "${1#openai/}" =~ '^gpt-([6-9]|[1-9][0-9])([.-]|$)' ]] && print -rn -- '[1m]'
+    return 0
+}
+
 claude-openai() {
     _claude_openai_prepare || return 1
     _claude_copilot_unset_env
@@ -2152,21 +2170,17 @@ claude-openai() {
         ANTHROPIC_BASE_URL="${_cop_base}"
         ANTHROPIC_AUTH_TOKEN="${_cop_master_key}"
         ANTHROPIC_API_KEY=""
-        ANTHROPIC_MODEL="${_cop_sonnet}"
-        ANTHROPIC_DEFAULT_OPUS_MODEL="${_cop_opus}"
-        ANTHROPIC_DEFAULT_SONNET_MODEL="${_cop_sonnet}"
-        ANTHROPIC_DEFAULT_HAIKU_MODEL="${_cop_haiku}"
-        ANTHROPIC_DEFAULT_FABLE_MODEL="${_cop_fable}"
+        ANTHROPIC_MODEL="${_cop_sonnet}$(_claude_openai_ctx_suffix "${_cop_sonnet}")"
+        ANTHROPIC_DEFAULT_OPUS_MODEL="${_cop_opus}$(_claude_openai_ctx_suffix "${_cop_opus}")"
+        ANTHROPIC_DEFAULT_SONNET_MODEL="${_cop_sonnet}$(_claude_openai_ctx_suffix "${_cop_sonnet}")"
+        ANTHROPIC_DEFAULT_HAIKU_MODEL="${_cop_haiku}$(_claude_openai_ctx_suffix "${_cop_haiku}")"
+        ANTHROPIC_DEFAULT_FABLE_MODEL="${_cop_fable}$(_claude_openai_ctx_suffix "${_cop_fable}")"
     )
-    if [[ -z "$CLAUDE_COPILOT_ENABLE_MONITOR" || "$CLAUDE_COPILOT_ENABLE_MONITOR" == 0 ]]; then
-        envs+=(
-            DISABLE_NON_ESSENTIAL_MODEL_CALLS=1
-            CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
-        )
-    fi
     export "${envs[@]}"
-    _claude_picker_args fable="${_cop_fable}" opus="${_cop_opus}" sonnet="${_cop_sonnet}" haiku="${_cop_haiku}" "${_cop_extras[@]}"
-    command claude "${reply[@]}" "$@"
+    # "[1m]" (GPT-6+ only, see _claude_openai_ctx_suffix) makes Claude Code treat the window as ~1M;
+    # it strips the suffix before the wire request, so the proxy still sees bare ids.
+    _claude_picker_args fable="${_cop_fable}$(_claude_openai_ctx_suffix "${_cop_fable}")" opus="${_cop_opus}$(_claude_openai_ctx_suffix "${_cop_opus}")" sonnet="${_cop_sonnet}$(_claude_openai_ctx_suffix "${_cop_sonnet}")" haiku="${_cop_haiku}$(_claude_openai_ctx_suffix "${_cop_haiku}")" "${_cop_extras[@]}"
+    _claude_invoke "${reply[@]}" "$@"
 }
 
 # claude-openai-kill: stop the litellm proxy claude-openai started.
@@ -2190,8 +2204,8 @@ claude-openai-kill() {
 # a local LiteLLM proxy fronting Google Vertex AI's Claude models with
 # Monitor tool support (vertex, DEFAULT), Claude Code's built-in
 # CLAUDE_CODE_USE_VERTEX native integration with no Monitor support
-# (vertex-native-adc), the copilot-api gateway (copilot), or a local Ollama
-# server (ollama). Persisted in ~/.config/claude-mode so the choice survives
+# (vertex-native-adc), the copilot-api gateway (copilot), the EnMaaS gateway
+# (enmass), or a local Ollama server (ollama). Persisted in ~/.config/claude-mode so the choice survives
 # across shells.
 
 typeset -g _claude_mode_file="${XDG_CONFIG_HOME:-$HOME/.config}/claude-mode"
@@ -2201,6 +2215,7 @@ _claude_mode_get() {
     [[ -r "$_claude_mode_file" ]] && IFS= read -r mode < "$_claude_mode_file"
     case "$mode" in
         copilot)           print -r -- copilot ;;
+        enmass)            print -r -- enmass ;;
         ollama)            print -r -- ollama ;;
         vertex-native-adc) print -r -- vertex-native-adc ;;
         # "vertex-proxy" is a pre-rename persisted value from before
@@ -2212,11 +2227,11 @@ _claude_mode_get() {
 
 claude-mode() {
     if (( $# > 1 )); then
-        echo "Usage: claude-mode [copilot|vertex|vertex-native-adc|ollama]" >&2
+        echo "Usage: claude-mode [copilot|enmass|vertex|vertex-native-adc|ollama]" >&2
         return 1
     fi
     case "$1" in
-        copilot|vertex|vertex-native-adc|ollama)
+        copilot|enmass|vertex|vertex-native-adc|ollama)
             # >| overrides NO_CLOBBER; fail loudly if persistence fails
             if ! mkdir -p "${_claude_mode_file:h}" ||
                ! print -r -- "$1" >| "$_claude_mode_file"; then
@@ -2227,10 +2242,10 @@ claude-mode() {
             ;;
         "")
             echo "claude mode: $(_claude_mode_get)"
-            echo "usage: claude-mode [copilot|vertex|vertex-native-adc|ollama]"
+            echo "usage: claude-mode [copilot|enmass|vertex|vertex-native-adc|ollama]"
             ;;
         *)
-            echo "Usage: claude-mode [copilot|vertex|vertex-native-adc|ollama]" >&2
+            echo "Usage: claude-mode [copilot|enmass|vertex|vertex-native-adc|ollama]" >&2
             return 1
             ;;
     esac
@@ -2243,9 +2258,10 @@ unalias claude 2>/dev/null || true   # tolerate missing alias under ERR_EXIT
 function claude {
     local mode="$(_claude_mode_get)"
     # stderr so piped/scripted output (e.g. claude -p) stays clean
-    echo "claude mode: ${mode} (switch: claude-mode copilot|vertex|vertex-native-adc|ollama)" >&2
+    echo "claude mode: ${mode} (switch: claude-mode copilot|enmass|vertex|vertex-native-adc|ollama)" >&2
     case "$mode" in
         copilot)           claude-copilot "$@" ;;
+        enmass)            claude-enmass "$@" ;;
         ollama)            claude-ollama "$@" ;;
         vertex-native-adc) claude-vertex-native-adc "$@" ;;
         *)                 claude-vertex "$@" ;;

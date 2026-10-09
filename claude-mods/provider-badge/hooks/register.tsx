@@ -22,6 +22,7 @@ export const register: Register = on => {
       baseUrl: await $.env.get('ANTHROPIC_BASE_URL'),
       copilotPort: await $.env.get('COPILOT_API_PORT'),
       vertexProxyPort: await $.env.get('CLAUDE_VERTEX_PROXY_PORT'),
+      enmassPort: await $.env.get('CLAUDE_ENMASS_PROXY_PORT'),
       ollamaHost: await $.env.get('OLLAMA_HOST'),
     })
     const model = (await $.env.get('ANTHROPIC_MODEL')) ?? ''
