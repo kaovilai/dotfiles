@@ -72,6 +72,7 @@ _safe_source ~/git/dotfiles/zsh/paths.zsh
 _safe_source ~/git/dotfiles/zsh/functions/openshift/load-lazy.zsh
 _safe_source ~/git/dotfiles/zsh/functions/claude/functions.zsh
 _safe_source ~/git/dotfiles/zsh/functions/hermes/functions.zsh
+_safe_source ~/git/dotfiles/zsh/functions/t3code.zsh
 _safe_source ~/git/dotfiles/zsh/functions/s3/load-lazy.zsh
 # Git utilities (lazy-loaded — ~303 lines only parsed when first used)
 typeset -g GIT_UTILS_LOADED=0
@@ -204,3 +205,6 @@ export PATH="$BUN_INSTALL/bin:$PATH"
 
 # Added by cua-driver-rs installer — see https://github.com/trycua/cua
 export PATH="/Users/tkaovila/.local/bin:$PATH"
+
+# rust for t3code dev
+export PATH=/opt/homebrew/opt/rustup/bin:$PATH
