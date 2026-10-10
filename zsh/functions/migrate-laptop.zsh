@@ -35,6 +35,9 @@ command_exists() {
     command -v "$1" >/dev/null 2>&1
 }
 
+# T3 Code export/import (export-t3-data, import-t3-data, verify-t3-migration)
+source "${${(%):-%x}:A:h}/t3-migrate.zsh"
+
 # Function to manually install packages (fallback when no Brewfile)
 install_packages_manually() {
     if ! command_exists brew; then
@@ -573,6 +576,7 @@ verify-migration() {
     _verify_check "Go installed" command_exists go
     _verify_check "Node installed" command_exists node
     _verify_check "Python installed" command_exists python3
+    _verify_check "T3 Code data" verify-t3-migration
     
     echo ""
     echo "Checks passed: $_verify_checks_passed/$_verify_checks_total"
@@ -613,6 +617,12 @@ backup-before-migration() {
     # Export WiFi credentials
     progress "Exporting WiFi credentials..."
     export-wifi-credentials "$backup_dir/wifi-credentials"
+
+    # Export T3 Code threads, settings, and pairing data
+    if [[ -d "$T3CODE_HOME/userdata" ]]; then
+        progress "Exporting T3 Code data..."
+        export-t3-data "$backup_dir/t3-code.tar.gz.enc" || warning "T3 Code export failed"
+    fi
     
     # Create a manifest
     cat > "$backup_dir/MANIFEST.txt" << EOF

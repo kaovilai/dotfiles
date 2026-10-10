@@ -124,6 +124,40 @@ gpg --edit-key your-email@example.com
 # Type: trust, 5, y, quit
 ```
 
+#### T3 Code (threads, settings, pairing data)
+
+`backup-before-migration` already does this step. To run it on its own:
+
+```bash
+# On OLD laptop - writes an encrypted archive (prompts for a passphrase)
+export-t3-data ~/t3-code.tar.gz.enc
+
+# Transfer the archive privately (AirDrop/USB). It contains server signing
+# keys and auth tokens.
+
+# On NEW laptop - install the app, quit it if it's running, then import
+brew install --cask t3-code
+import-t3-data ~/t3-code.tar.gz.enc
+
+# Re-check any time
+verify-t3-migration
+```
+
+What gets migrated:
+- `~/.t3/userdata`: settings, keybindings, themes, providers, `secrets/`, `clerk-tokens.json`, attachments, and the `state*.sqlite` databases, which hold every thread, project, pairing link, and auth session
+- `~/.t3/dev`: dev-build state
+- `~/Library/Application Support/t3code-v2` and `t3code`: UI storage
+
+The databases are copied with `sqlite3 .backup`, so exporting while T3 Code is running is safe. Every table's row count is recorded at export and compared on import. If any thread is missing, `verify-t3-migration` reports the table and both counts.
+
+Not migrated, because the app rebuilds them: logs, `server-browser`, usage caches, `~/.t3/bin`, `~/.t3/tools`, `~/.t3/caches`, and `~/.t3/worktrees`. Recreate the worktrees from their branches.
+
+After importing:
+- Sign in again. The Electron cookies are encrypted with the `t3code Safe Storage` keychain item, which isn't migrated.
+- Re-pair any phone or browser that doesn't reconnect.
+- If your username or home path changed, re-add projects whose paths no longer exist, or symlink the old path.
+- Anything that was already in `~/.t3/userdata` is moved to `userdata.pre-import-<timestamp>`, not deleted.
+
 #### Application-Specific Configs
 
 1. **VS Code**
@@ -325,6 +359,7 @@ export TAILSCALE_TAILNET="your-tailnet"
 - [ ] Homebrew packages are installed
 - [ ] GPG signing works
 - [ ] SSH connections work
+- [ ] T3 Code threads and pairings restored: `verify-t3-migration`
 
 ### 5. Cleanup
 

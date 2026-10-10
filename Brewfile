@@ -95,6 +95,7 @@ brew "socktainer/tap/socktainer" # Container socket manager
 
 # Cask applications
 cask "ghostty"               # GPU-accelerated terminal
+cask "t3-code"               # T3 Code agent GUI (migrate data: export-t3-data)
 cask "gstreamer-runtime"
 cask "openscad@snapshot"     # 3D CAD modeler
 

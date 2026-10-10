@@ -46,6 +46,9 @@ for func in \
     list-wifi-networks \
     verify-migration \
     backup-before-migration \
+    export-t3-data \
+    import-t3-data \
+    verify-t3-migration \
     update-brewfile \
     brewfile-cleanup; do
     functions[$func]="_lazy_load_migrate || return 1; ${func} \"\$@\""
