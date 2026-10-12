@@ -49,6 +49,8 @@ for func in \
     export-t3-data \
     import-t3-data \
     verify-t3-migration \
+    link-claude-t3-launchers \
+    verify-claude-t3-launchers \
     update-brewfile \
     brewfile-cleanup; do
     functions[$func]="_lazy_load_migrate || return 1; ${func} \"\$@\""

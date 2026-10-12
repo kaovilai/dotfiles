@@ -235,6 +235,13 @@ export ANTHROPIC_API_KEY=""
 export CLOUD_ML_REGION=""
 export ANTHROPIC_VERTEX_PROJECT_ID=""
 
+# EnMaaS gateway (claude-enmass and T3 Code's claude-t3-enmass launcher)
+export ENMASS_API_BASE_URL=""
+export ENMASS_API_KEY=""
+
+# OpenAI (claude-openai, claude-t3-openai); unset falls back to ~/.codex/auth.json
+# export OPENAI_API_KEY=""
+
 # Network Configuration
 export TF_NETWORK_NAME=""
 
@@ -253,8 +260,12 @@ EOF
     else
         success "secrets.zsh exists"
     fi
-    
-    # Step 11: Generate SSH key if needed
+
+    # Step 11: Link the Claude provider launchers T3 Code runs
+    progress "Linking T3 Code's Claude provider launchers..."
+    link-claude-t3-launchers || warning "Some launchers were not linked; see above"
+
+    # Step 12: Generate SSH key if needed
     progress "Checking SSH keys..."
     if [[ ! -f ~/.ssh/id_ed25519 ]]; then
         local generate_ssh
@@ -272,7 +283,7 @@ EOF
         success "SSH key already exists"
     fi
     
-    # Step 12: Install VS Code extensions
+    # Step 13: Install VS Code extensions
     progress "Installing VS Code extensions..."
     if command_exists code; then
         local vscode_extensions=(
@@ -303,7 +314,8 @@ EOF
     echo "1. Edit ~/secrets.zsh with your secrets"
     echo "2. Import your GPG keys (see docs/LAPTOP_MIGRATION.md)"
     echo "3. Configure cloud CLI tools (aws, gcloud, ibmcloud)"
-    echo "4. Test your setup with verification commands"
+    echo "4. Install Claude Code, then import T3 Code data: import-t3-data <archive> (see docs/LAPTOP_MIGRATION.md)"
+    echo "5. Test your setup with verification commands"
     echo ""
     echo "Run 'source ~/.zshrc' to reload your shell configuration"
 }
@@ -576,6 +588,9 @@ verify-migration() {
     _verify_check "Go installed" command_exists go
     _verify_check "Node installed" command_exists node
     _verify_check "Python installed" command_exists python3
+    _verify_check "Claude Code" test -x "$HOME/.local/bin/claude"
+    _verify_check "T3 Code Claude launchers" verify-claude-t3-launchers
+    _verify_check "T3 Code provider binaries" _t3_check_provider_binaries
     _verify_check "T3 Code data" verify-t3-migration
     
     echo ""

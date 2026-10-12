@@ -23,15 +23,28 @@
 # consistent snapshot even while T3 Code is running. Row counts of every table
 # are recorded in the manifest and compared on import, so a missing thread
 # shows up as a count mismatch.
+#
+# Not in the archive or in git: the ~/.local/bin/claude-t3-<backend> launchers
+# that T3 Code's Claude provider instances run. link-claude-t3-launchers
+# recreates them and verify-claude-t3-launchers checks them.
 
 : ${T3CODE_HOME:=$HOME/.t3}
 : ${T3_APPSUPPORT_DIR:=$HOME/Library/Application Support}
+: ${T3_CLAUDE_LAUNCHER_DIR:=$HOME/.local/bin}
 
 # Subdirectories of $T3CODE_HOME that hold state worth migrating
 typeset -ga _T3_STATE_DIRS=(userdata dev)
 
 # Electron profile dirs under $T3_APPSUPPORT_DIR
 typeset -ga _T3_ELECTRON_DIRS=(t3code-v2 t3code)
+
+# Dotfiles checkout this file lives in (zsh/functions/t3-migrate.zsh)
+typeset -g _T3_DOTFILES_ROOT=${${(%):-%x}:A:h:h:h}
+
+# Each claude-t3-<backend> launcher is a symlink to scripts/claude-provider.zsh,
+# which takes its backend from the link name. Keep this list in sync with the
+# backends that script accepts.
+typeset -ga _T3_CLAUDE_BACKENDS=(copilot vertex openai enmass)
 
 _t3_userdata_excludes=(
     --exclude='logs/'
@@ -258,6 +271,10 @@ verify-t3-migration() {
         fi
     done
 
+    # Reported but not counted: a missing tool doesn't mean the imported data
+    # is wrong. verify-migration checks provider binaries on their own.
+    _t3_check_provider_binaries warning
+
     if [[ -f "$manifest" ]]; then
         local _count table expected actual
         local -i checked=0 mismatched=0
@@ -286,5 +303,101 @@ verify-t3-migration() {
         echo "  $rel: ${threads:-0} threads, ${pairings:-0} pairing links"
     done
 
+    return $failed
+}
+
+# Provider binaryPaths in settings.json are absolute, so a launcher that was
+# never linked, or a home directory that changed, leaves that provider unable
+# to start. Disabled instances never start and bare command names resolve
+# through the app's PATH, so both are skipped. $1 is the reporter for missing
+# binaries (error by default); the return status is 1 either way.
+_t3_check_provider_binaries() {
+    local report="${1:-error}"
+    local settings="$T3CODE_HOME/userdata/settings.json"
+    [[ -f "$settings" ]] || return 0
+    if ! command_exists jq; then
+        warning "jq not found; skipping provider binary checks"
+        return 0
+    fi
+
+    local bins bin hint failed=0
+    bins=$(jq -r '[.providerInstances[]? | select(.enabled != false) | .config.binaryPath? // empty] | unique[]' "$settings") \
+        || { error "Could not read provider binaries from $settings"; return 1; }
+    for bin in ${(f)bins}; do
+        [[ "$bin" == /* ]] || continue
+        if [[ -x "$bin" ]]; then
+            success "Provider binary $bin"
+            continue
+        fi
+        hint="install it, or fix binaryPath in settings.json"
+        [[ "${bin:t}" == claude-t3-* ]] && hint="run link-claude-t3-launchers, or fix binaryPath in settings.json if your home path changed"
+        $report "Provider binary $bin missing ($hint)"
+        failed=1
+    done
+    return $failed
+}
+
+# What the launchers need at run time that neither git nor the T3 archive
+# carries. Warnings only: each backend needs a different subset.
+_t3_claude_launcher_prereqs() {
+    local native="${CLAUDE_PROVIDER_NATIVE_BINARY:-$HOME/.local/bin/claude}"
+    [[ -x "$native" ]] \
+        || warning "Claude Code not found at $native (install: curl -fsSL https://claude.ai/install.sh | bash)"
+
+    local cmd
+    for cmd in python3 jq uv; do
+        command_exists $cmd || warning "$cmd not found (brew bundle --file=$_T3_DOTFILES_ROOT/Brewfile)"
+    done
+
+    local credentials="${CLAUDE_PROVIDER_CREDENTIALS_FILE:-$HOME/secrets.zsh}"
+    [[ -r "$credentials" ]] \
+        || warning "$credentials not found; the launchers read provider keys from it (see docs/LAPTOP_MIGRATION.md)"
+}
+
+# Point each claude-t3-<backend> launcher at this checkout's
+# scripts/claude-provider.zsh. Existing symlinks are repointed; anything else
+# at a launcher path is left alone and reported.
+link-claude-t3-launchers() {
+    local target="$_T3_DOTFILES_ROOT/scripts/claude-provider.zsh"
+    [[ -x "$target" ]] || { error "Launcher script missing or not executable: $target"; return 1; }
+    mkdir -p "$T3_CLAUDE_LAUNCHER_DIR" || { error "Failed to create $T3_CLAUDE_LAUNCHER_DIR"; return 1; }
+
+    local backend link failed=0
+    for backend in $_T3_CLAUDE_BACKENDS; do
+        link="$T3_CLAUDE_LAUNCHER_DIR/claude-t3-$backend"
+        if [[ -L "$link" && "${link:A}" == "${target:A}" ]]; then
+            success "claude-t3-$backend already linked"
+        elif [[ -e "$link" && ! -L "$link" ]]; then
+            error "$link exists and is not a symlink; leaving it untouched"
+            failed=1
+        elif ln -sfn "$target" "$link"; then
+            success "Linked $link -> $target"
+        else
+            error "Failed to link $link"
+            failed=1
+        fi
+    done
+
+    _t3_claude_launcher_prereqs
+    return $failed
+}
+
+# Check each launcher resolves to this checkout and starts Claude Code.
+# `--version` skips credentials and proxies, so this is safe to run any time.
+verify-claude-t3-launchers() {
+    local target="$_T3_DOTFILES_ROOT/scripts/claude-provider.zsh"
+    local backend link failed=0
+    for backend in $_T3_CLAUDE_BACKENDS; do
+        link="$T3_CLAUDE_LAUNCHER_DIR/claude-t3-$backend"
+        if [[ ! -L "$link" || "${link:A}" != "${target:A}" ]]; then
+            error "claude-t3-$backend is not linked to $target (run link-claude-t3-launchers)"
+            failed=1
+        elif ! "$link" --version >/dev/null 2>&1; then
+            error "claude-t3-$backend --version failed (is Claude Code installed?)"
+            failed=1
+        else
+            success "claude-t3-$backend starts Claude Code"
+        fi
+    done
     return $failed
 }

@@ -135,7 +135,10 @@ export-t3-data ~/t3-code.tar.gz.enc
 # Transfer the archive privately (AirDrop/USB). It contains server signing
 # keys and auth tokens.
 
-# On NEW laptop - install the app, quit it if it's running, then import
+# On NEW laptop - install Claude Code and the app, quit the app if it's
+# running, then import. Claude Code goes first because T3's Claude providers
+# run it (see "Claude provider launchers" below).
+curl -fsSL https://claude.ai/install.sh | bash
 brew install --cask t3-code
 import-t3-data ~/t3-code.tar.gz.enc
 
@@ -155,8 +158,31 @@ Not migrated, because the app rebuilds them: logs, `server-browser`, usage cache
 After importing:
 - Sign in again. The Electron cookies are encrypted with the `t3code Safe Storage` keychain item, which isn't migrated.
 - Re-pair any phone or browser that doesn't reconnect.
-- If your username or home path changed, re-add projects whose paths no longer exist, or symlink the old path.
+- If your username or home path changed, re-add projects whose paths no longer exist, or symlink the old path. Do the same for each provider `binaryPath` in `~/.t3/userdata/settings.json`.
 - Anything that was already in `~/.t3/userdata` is moved to `userdata.pre-import-<timestamp>`, not deleted.
+
+##### Claude provider launchers
+
+T3 Code's Claude provider instances don't run `claude` directly. Each instance's `binaryPath` in `~/.t3/userdata/settings.json` points at `~/.local/bin/claude-t3-<backend>` (`copilot`, `vertex`, `openai`, or `enmass`), a symlink to `scripts/claude-provider.zsh` in this repo. The script takes the backend from the link name, reads keys from `~/secrets.zsh`, sets up that backend's gateway or proxy, then starts Claude Code from `~/.local/bin/claude`.
+
+Git doesn't track these links and `export-t3-data` doesn't include them. On the new laptop, after installing Claude Code (above):
+
+```bash
+# Create or repoint the links (migrate-to-new-laptop runs this too).
+# Run it again whenever the dotfiles checkout moves.
+link-claude-t3-launchers
+
+# Each launcher should resolve to this checkout and start Claude Code
+verify-claude-t3-launchers
+```
+
+`verify-t3-migration` also warns about any enabled provider whose absolute `binaryPath` in `settings.json` doesn't exist, and `verify-migration` counts that as a failed check.
+
+Every backend needs `python3` and `jq` from the Brewfile. Beyond that:
+- `enmass`: `ENMASS_API_BASE_URL` and `ENMASS_API_KEY` in `~/secrets.zsh`, and `uv` for the local LiteLLM proxy
+- `openai`: `OPENAI_API_KEY` in `~/secrets.zsh`, or the key `codex login --with-api-key` saves to `~/.codex/auth.json`, and `uv`
+- `vertex`: `CLOUD_ML_REGION` and `ANTHROPIC_VERTEX_PROJECT_ID` in `~/secrets.zsh`, `gcloud auth application-default login`, and `uv`
+- `copilot`: the copilot-api gateway checkout (`git clone -b dev https://github.com/kaovilai/copilot-api ~/git/copilot-api`) and `bun`. Its GitHub login in `~/.local/share/copilot-api` isn't migrated, so sign in again with `bun run --cwd ~/git/copilot-api ./src/main.ts auth`.
 
 #### Application-Specific Configs
 
@@ -343,6 +369,10 @@ export ANTHROPIC_API_KEY="your-key"
 # Or use Google Vertex AI instead (preferred when set):
 # export CLOUD_ML_REGION="us-east5"
 # export ANTHROPIC_VERTEX_PROJECT_ID="your-project-id"
+# Claude provider launchers T3 Code runs (see "Claude provider launchers")
+export ENMASS_API_BASE_URL="https://your-gateway"
+export ENMASS_API_KEY="your-key"
+# export OPENAI_API_KEY="your-key"   # optional; falls back to ~/.codex/auth.json
 export TF_NETWORK_NAME="your-network"
 export TAILSCALE_API_KEY="your-key"
 export TAILSCALE_TAILNET="your-tailnet"
@@ -360,6 +390,7 @@ export TAILSCALE_TAILNET="your-tailnet"
 - [ ] GPG signing works
 - [ ] SSH connections work
 - [ ] T3 Code threads and pairings restored: `verify-t3-migration`
+- [ ] T3 Code's Claude launchers start: `verify-claude-t3-launchers`
 
 ### 5. Cleanup
 
