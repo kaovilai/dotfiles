@@ -117,9 +117,12 @@ _claude_enmass_models() {
 # Build JSON (also valid YAML) so model ids/labels/URLs cannot inject config.
 # Anthropic-compatible IDs are deliberately determined by discovery membership,
 # explicit dialect metadata/overrides, or Claude-family naming; never owned_by.
+# Optional _claude_enmass_fallback_from/_to name a text-only model and the
+# multimodal model LiteLLM retries it on after an upstream error (e.g. images).
 _claude_enmass_config() {
     local root="$1" token="$2" models="$3"; shift 3
     jq -nc --arg root "$root" --arg token "$token" \
+        --arg fb_from "${_claude_enmass_fallback_from-}" --arg fb_to "${_claude_enmass_fallback_to-}" \
         --argjson models "$models" --args '
         def claude: test("(^|/)claude([/_.-]|$)"; "i");
         def provider($d; $id):
@@ -141,7 +144,9 @@ _claude_enmass_config() {
            # Otherwise LiteLLM sends all openai/* Messages requests to Responses,
            # bypassing the per-model responses/ bridge and leaking its prefix.
            litellm_settings: {drop_params: true,
-             use_chat_completions_url_for_anthropic_messages: true}}' "$@"
+             use_chat_completions_url_for_anthropic_messages: true}}
+          + (if $fb_from != "" and $fb_to != "" and $fb_from != $fb_to
+             then {router_settings: {fallbacks: [{($fb_from): [$fb_to]}]}} else {} end)' "$@"
 }
 
 # Session cleanup only stops its Claude child; the shared proxy persists.
@@ -280,8 +285,12 @@ claude-enmass() (
     # Documented text-only context: 262144; output: 65536. These are model
     # metadata, not verified gateway transport limits or global Claude settings.
     local glm='rits/zai-org/glm-5-3'
+    # GLM is text-only: image/PDF requests it rejects are retried on a Claude
+    # Sonnet. Resolved from discovery, not $sonnet, which a GLM session remaps
+    # to GLM itself and the shared proxy freezes whichever launch started it.
+    local vision_fallback="${CLAUDE_ENMASS_VISION_FALLBACK_MODEL:-$(_claude_copilot_latest_model sonnet "$models")}"
     local -a ids pairs reply
-    ids=("${(@f)$(jq -r '.data[].id' <<< "$models")}" "$selected" "$opus" "$sonnet" "$haiku" "$fable" "$glm")
+    ids=("${(@f)$(jq -r '.data[].id' <<< "$models")}" "$selected" "$opus" "$sonnet" "$haiku" "$fable" "$glm" "$vision_fallback")
     ids=("${(@)ids:#}")
     for mapping in ${=CLAUDE_ENMASS_MODEL_DIALECTS}; do
         id="${mapping%=*}" dialect="${mapping##*=}"
@@ -334,7 +343,8 @@ claude-enmass() (
         print -ru2 -- 'claude-enmass: CLAUDE_ENMASS_PROXY_START_TIMEOUT must be 1 through 600 seconds.'
         return 1
     }
-    config=$(_claude_enmass_config "$root" '' "$models" "${ids[@]}") || return 1
+    config=$(_claude_enmass_fallback_from="$glm" _claude_enmass_fallback_to="$vision_fallback" \
+        _claude_enmass_config "$root" '' "$models" "${ids[@]}") || return 1
     _claude_enmass_proxy_program > "${_claude_enmass_tmp}/proxy.py" || return 1
     export ENMASS_API_KEY
     service=$(print -rn -- "$config" | python3 "${_claude_enmass_tmp}/proxy.py" ensure \
