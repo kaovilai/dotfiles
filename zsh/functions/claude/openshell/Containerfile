@@ -1,0 +1,33 @@
+# Sandbox image for the openshell-* Claude Code wrappers
+# (zsh/functions/claude/providers/openshell.zsh). Build with
+# `openshell-claude-image-build`, which tags localhost/openshell-claude:latest
+# using the podman machine the local OpenShell gateway's podman driver uses.
+#
+# OpenShell requirements (examples/bring-your-own-container in NVIDIA/OpenShell):
+# non-root USER, a writable /sandbox workspace, iproute2. The image's CMD is
+# replaced by the sandbox supervisor, so none is set here.
+FROM docker.io/library/ubuntu:24.04
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ca-certificates curl git iproute2 nftables ripgrep jq less \
+    && rm -rf /var/lib/apt/lists/*
+
+# Native installer: a self-contained binary (no node), so the policy's
+# `binaries` entry names the process that actually opens connections. Copied
+# to a fixed path because sandbox network policy matches on the real path.
+# CLAUDE_VERSION: "latest", "stable", or an exact version such as 2.1.296.
+ARG CLAUDE_VERSION=latest
+RUN curl -fsSL https://claude.ai/install.sh | bash -s -- "${CLAUDE_VERSION}" \
+    && install -m 0755 "$(readlink -f /root/.local/bin/claude)" /usr/local/bin/claude \
+    && rm -rf /root/.local/share/claude /root/.local/bin/claude /root/.claude* \
+    && /usr/local/bin/claude --version
+
+RUN groupadd --gid 1500 app \
+    && useradd --uid 1500 --gid app --create-home --shell /bin/bash app \
+    && install -d -o app -g app /sandbox
+
+# The image is rebuilt to upgrade; an in-sandbox self-update would be lost
+# with the sandbox anyway.
+ENV DISABLE_AUTOUPDATER=1
+WORKDIR /sandbox
+USER app
