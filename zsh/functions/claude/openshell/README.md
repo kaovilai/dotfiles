@@ -119,8 +119,6 @@ e.g. for a hung session.
   (`zsh/functions/t3-migrate.zsh`). The Python bridge's final `Popen` would
   call `openshell sandbox exec` instead of the native binary, reusing the
   `capture()` transport and the base-URL rewrite here.
-- **`claude-mode` options:** add `openshell-*` arms to `claude-mode` and the
-  `claude` dispatcher in `mode.zsh`, and sync the usage strings.
 - **Full (non-`--bare`) setup:** upload a curated subset of `~/.claude`
   (CLAUDE.md, skills, hooks, settings) and allow remote MCP endpoints in the
   policy. Telemetry hosts stay blocked; Monitor needs
