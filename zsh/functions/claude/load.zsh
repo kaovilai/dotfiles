@@ -10,6 +10,7 @@ source "${${(%):-%N}:A:h}/providers/mlx.zsh"
 source "${${(%):-%N}:A:h}/providers/offline.zsh"
 source "${${(%):-%N}:A:h}/providers/openai.zsh"
 source "${${(%):-%N}:A:h}/providers/enmass.zsh"
+source "${${(%):-%N}:A:h}/providers/glm-hybrid.zsh"
 # Sandboxed variants of the wrappers above (openshell-copilot etc.).
 source "${${(%):-%N}:A:h}/providers/openshell.zsh"
 source "${${(%):-%N}:A:h}/mode.zsh"
