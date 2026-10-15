@@ -134,6 +134,7 @@ def ensure(root, port, config, versions, timeout, required):
             raise RuntimeError('proxy port is occupied; refusing to adopt or stop its listener')
     token = 'sk-enmaas-' + secrets.token_hex(32)
     config['general_settings']['master_key'] = token
+    config.setdefault("litellm_settings", {})["callbacks"] = ["/private/tmp/unwrap_tools_middleware.py:proxy_handler_instance"]
     write_private(root / 'config.json', config)
     args = ['uv', 'tool', 'run', '--with', 'fastapi==' + versions[1],
             '--from', 'litellm[proxy]==' + versions[0], 'litellm',
