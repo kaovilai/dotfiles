@@ -10,9 +10,10 @@
 # monthly EnMaaS budget) cannot reach Claude/GPT through EnMaaS, so both go
 # through the local "claude" GLM hybrid LiteLLM proxy (scripts/glm-hybrid-proxy.zsh,
 # port 4148): GLM -> anthropic/ Messages on the EnMaaS root (same as
-# claude-enmaas), review model -> OpenAI. The proxy's hook disables GLM's
-# default reasoning on requests without a thinking field; without it the
-# classifier times out on GLM. Every other tier, subagents (forced) and
+# claude-enmaas), review model -> OpenAI. The proxy's hook cuts GLM's default
+# reasoning on requests without a thinking field (GLM 5.3 is thinking-only:
+# thinking disabled leaves ~one sentence of reasoning, not none); without it
+# the classifier times out on GLM. Every other tier, subagents (forced) and
 # background small-fast calls stay on GLM; the picker lists GLM only.
 # CLAUDE_CODE_AUTO_MODE_SERVER=0 keeps auto-mode review client-side, where
 # the classifier model above applies.

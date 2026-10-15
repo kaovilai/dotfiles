@@ -14,9 +14,12 @@ reviewer) pass through untouched.
    auto-mode classifier sends ~40k-token prompts with no thinking field and a
    2112-token stage-1 cap; GLM then reasons 1.5-2k tokens for 20-27s, gets
    truncated or exceeds the client's wall-clock limit, and auto mode reports
-   the classifier as "temporarily unavailable (timed out)". Setting
-   thinking={type: disabled} restores the Anthropic meaning. Main turns, which
-   send thinking explicitly, are unchanged.
+   the classifier as "temporarily unavailable (timed out)". GLM 5.3 is a
+   thinking-only model, so thinking={type: disabled} does not turn reasoning
+   off: it cuts it to about one sentence (9-14 output tokens on a 26k-token
+   prompt, vs 130-270 without it), which is what keeps the classifier inside
+   the time limit. chat_template_kwargs.enable_thinking=false is ignored.
+   Main turns, which send thinking explicitly, are unchanged.
 """
 
 from litellm.integrations.custom_logger import CustomLogger

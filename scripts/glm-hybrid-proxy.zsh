@@ -13,8 +13,9 @@
 #           Messages on the EnMaaS root, same as claude-enmaas. Used by
 #           claude-glm-hybrid (zsh/functions/claude/providers/glm-hybrid.zsh).
 # Both load glm_hybrid_hooks.py (GLM only): strips the grammar vLLM rejects
-# from Codex's apply_patch, and disables GLM's default reasoning on Messages
+# from Codex's apply_patch, and cuts GLM's default reasoning on Messages
 # requests that send no thinking field (Claude Code's auto-mode classifier).
+# GLM 5.3 is thinking-only: thinking disabled leaves ~one sentence, not none.
 #
 # Upstream keys: ENMAAS_API_KEY (caller loads it, e.g. from ~/secrets.zsh) and
 # OPENAI_API_KEY, else ${GLM_HYBRID_OPENAI_AUTH_FILE:-~/.codex/auth.json} (not
