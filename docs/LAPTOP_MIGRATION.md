@@ -179,7 +179,7 @@ verify-claude-t3-launchers
 `verify-t3-migration` also warns about any enabled provider whose absolute `binaryPath` in `settings.json` doesn't exist, and `verify-migration` counts that as a failed check.
 
 Every backend needs `python3` and `jq` from the Brewfile. Beyond that:
-- `enmass`: `ENMASS_API_BASE_URL` and `ENMASS_API_KEY` in `~/secrets.zsh`, and `uv` for the local LiteLLM proxy
+- `enmass`: `ENMAAS_API_BASE_URL` and `ENMAAS_API_KEY` in `~/secrets.zsh`, and `uv` for the local LiteLLM proxy
 - `openai`: `OPENAI_API_KEY` in `~/secrets.zsh`, or the key `codex login --with-api-key` saves to `~/.codex/auth.json`, and `uv`
 - `vertex`: `CLOUD_ML_REGION` and `ANTHROPIC_VERTEX_PROJECT_ID` in `~/secrets.zsh`, `gcloud auth application-default login`, and `uv`
 - `copilot`: the copilot-api gateway checkout (`git clone -b dev https://github.com/kaovilai/copilot-api ~/git/copilot-api`) and `bun`. Its GitHub login in `~/.local/share/copilot-api` isn't migrated, so sign in again with `bun run --cwd ~/git/copilot-api ./src/main.ts auth`.
@@ -370,8 +370,8 @@ export ANTHROPIC_API_KEY="your-key"
 # export CLOUD_ML_REGION="us-east5"
 # export ANTHROPIC_VERTEX_PROJECT_ID="your-project-id"
 # Claude provider launchers T3 Code runs (see "Claude provider launchers")
-export ENMASS_API_BASE_URL="https://your-gateway"
-export ENMASS_API_KEY="your-key"
+export ENMAAS_API_BASE_URL="https://your-gateway"
+export ENMAAS_API_KEY="your-key"
 # export OPENAI_API_KEY="your-key"   # optional; falls back to ~/.codex/auth.json
 export TF_NETWORK_NAME="your-network"
 export TAILSCALE_API_KEY="your-key"

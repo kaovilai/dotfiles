@@ -49,16 +49,16 @@ codex-enmass() {
         return
     fi
 
-    if [[ -z "${ENMASS_API_KEY:-}" ]]; then
+    if [[ -z "${ENMAAS_API_KEY:-}" ]]; then
         local credentials="${CLAUDE_PROVIDER_CREDENTIALS_FILE:-$HOME/secrets.zsh}"
         [[ -r "$credentials" ]] && source "$credentials" >/dev/null
     fi
-    [[ -n "${ENMASS_API_KEY:-}" ]] || {
-        print -ru2 -- 'codex-enmass: ENMASS_API_KEY is not set and no credential file provided it.'
+    [[ -n "${ENMAAS_API_KEY:-}" ]] || {
+        print -ru2 -- 'codex-enmass: ENMAAS_API_KEY is not set and no credential file provided it.'
         return 1
     }
 
-    local base_url="${ENMASS_API_BASE_URL:-https://api.enmaas.devshift.net/v1}"
+    local base_url="${ENMAAS_API_BASE_URL:-https://api.enmaas.devshift.net/v1}"
     [[ "$base_url" == */v1 ]] || base_url="${base_url%/}/v1"
     local model="${CODEX_ENMASS_MODEL:-rits/zai-org/glm-5-3}"
     local effort="${CODEX_ENMASS_REASONING_EFFORT:-high}"
@@ -67,12 +67,21 @@ codex-enmass() {
         -c model_provider=enmaas \
         -c model_providers.enmaas.name=EnMaaS \
         -c model_providers.enmaas.base_url="$base_url" \
-        -c model_providers.enmaas.env_key=ENMASS_API_KEY \
+        -c model_providers.enmaas.env_key=ENMAAS_API_KEY \
         -c model_providers.enmaas.wire_api=responses \
         -c model_providers.enmaas.requires_openai_auth=false \
         -c model="$model" \
         -c model_reasoning_effort="$effort" \
         "$@"
+}
+
+# codex-glm-only: GLM for everything (auto-review included) through the local
+# GLM hybrid proxy; see scripts/codex-provider.zsh (backend glm-only) for the
+# wiring. Stop the shared proxy: codex-glm-only --stop-proxy
+typeset -g _codex_provider_script="${${(%):-%x}:A:h:h:h}/scripts/codex-provider.zsh"
+codex-glm-only() {
+    CODEX_PROVIDER_NATIVE_BINARY="${CODEX_NATIVE_BINARY:-$(whence -p codex)}" \
+        /bin/zsh -f "$_codex_provider_script" glm-only "$@"
 }
 
 unalias codex 2>/dev/null || true

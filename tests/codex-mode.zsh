@@ -9,7 +9,7 @@ trap 'rm -rf "$tmp"' EXIT
 
 export XDG_CONFIG_HOME="$tmp/config"
 export CLAUDE_PROVIDER_CREDENTIALS_FILE="$tmp/secrets.zsh"
-export ENMASS_API_KEY="test-enmass-key"
+export ENMAAS_API_KEY="test-enmass-key"
 export CODEX_NATIVE_BINARY="$tmp/bin/codex"
 export PATH="$tmp/bin:$PATH"
 

@@ -109,7 +109,7 @@ for name, text in files.items():
     if name.startswith('bin/'): f.chmod(0o700)
 PY
 _claude_enmass_program() { print -r -- "$(<"$tmp/mock-daemon.py")"; }
-export ENMASS_API_BASE_URL='http://127.0.0.1:58123/v1/messages' ENMASS_API_KEY='upstream-test-secret'
+export ENMAAS_API_BASE_URL='http://127.0.0.1:58123/v1/messages' ENMAAS_API_KEY='upstream-test-secret'
 export PATH="$tmp/bin:$PATH" ENMASS_TEST_ROOT="$tmp" ENMASS_TEST_CAPTURE="$tmp/capture" CLAUDE_ENMASS_PROXY_START_TIMEOUT=3
 mkdir "$ENMASS_TEST_CAPTURE"
 
@@ -119,7 +119,7 @@ _claude_enmass_assert() {
     else print -ru2 -- "FAIL - $description"; exit 1; fi
 }
 
-_claude_enmass_assert 'gateway root normalization' test "$(_claude_enmass_root "$ENMASS_API_BASE_URL")" = 'http://127.0.0.1:58123'
+_claude_enmass_assert 'gateway root normalization' test "$(_claude_enmass_root "$ENMAAS_API_BASE_URL")" = 'http://127.0.0.1:58123'
 for endpoint in '' '/v1/' '/v1/models' '/v1/messages' '/v1/chat/completions' '/v1/responses'; do
     _claude_enmass_assert 'HTTPS endpoint normalization' test "$(_claude_enmass_root "https://gateway.example${endpoint}")" = 'https://gateway.example'
 done
@@ -173,7 +173,7 @@ assert not any(i in m for i in ('gpt-realtime','gpt-image-1','text-embedding-3-s
 assert m['native-claude']['model']=='anthropic/native-claude'
 assert m['*']['model']=='openai/*'
 assert m['rits/zai-org/glm-5-3']['model']=='anthropic/rits/zai-org/glm-5-3'
-assert all(row['api_key']=='os.environ/ENMASS_API_KEY' for row in m.values())
+assert all(row['api_key']=='os.environ/ENMAAS_API_KEY' for row in m.values())
 assert reg['upstream_key']=='upstream-test-secret'
 assert (c/'program-mode').read_text()=='0o600'; assert (c/'directory-mode').read_text()=='0o700'
 assert launch['argv'][2:]==['--model=gemini-3-pro','--print','argument with spaces']
@@ -198,7 +198,7 @@ assert settings['env']['ANTHROPIC_API_KEY']==''
 assert all(e[k]=='0' for k in ('CLAUDE_CODE_USE_VERTEX','CLAUDE_CODE_USE_BEDROCK','CLAUDE_CODE_USE_FOUNDRY'))
 assert e['ANTHROPIC_CUSTOM_HEADERS']==''
 assert 'ANTHROPIC_FOUNDRY_API_KEY' not in e and 'CLAUDE_CODE_API_KEY_HELPER' not in e
-assert 'ENMASS_API_KEY' not in e, 'upstream key inherited by Claude child'
+assert 'ENMAAS_API_KEY' not in e, 'upstream key inherited by Claude child'
 assert not Path((c/'session-path').read_text()).exists(), 'private directory survives return'
 try: os.kill(int((c/'lease.pid').read_text()),0)
 except ProcessLookupError: pass
@@ -215,7 +215,7 @@ PY
 local first_token=$(jq -r '.token' "$ENMASS_TEST_CAPTURE/registration.json")
 local config=$(_claude_enmass_config 'https://gateway.example' 'test-token' '{"data":[]}' 'test-marker' 'custom')
 _claude_enmass_assert 'config enables explicit Chat conversion' test "$(jq -r '.litellm_settings.use_chat_completions_url_for_anthropic_messages' <<< "$config")" = true
-_claude_enmass_assert 'config contains no literal upstream credential' test "$(jq -r '.model_list | all(.litellm_params.api_key == "os.environ/ENMASS_API_KEY")' <<< "$config")" = true
+_claude_enmass_assert 'config contains no literal upstream credential' test "$(jq -r '.model_list | all(.litellm_params.api_key == "os.environ/ENMAAS_API_KEY")' <<< "$config")" = true
 
 export ENMASS_TEST_CLAUDE_STATUS=0
 touch "$tmp/openai-unavailable"
@@ -325,13 +325,13 @@ export ENMASS_TEST_TRANSPORT_FAIL=1
 claude-enmass --model offline-exact >"$tmp/stdout" 2>"$tmp/stderr"
 _claude_enmass_assert 'transport failure accepts explicit selection' test "$(jq -r '.env.ANTHROPIC_MODEL' "$ENMASS_TEST_CAPTURE/claude.json")" = offline-exact
 unset ENMASS_TEST_TRANSPORT_FAIL
-for credential in ENMASS_API_KEY ENMASS_API_BASE_URL; do
+for credential in ENMAAS_API_KEY ENMAAS_API_BASE_URL; do
     rc=0
     (unset "$credential"; claude-enmass) >"$tmp/stdout" 2>"$tmp/stderr" || rc=$?
     _claude_enmass_assert "missing $credential fails" test "$rc" = 1
 done
 rc=0
-( export ENMASS_API_KEY=$'invalid\nkey'; claude-enmass ) >"$tmp/stdout" 2>"$tmp/stderr" || rc=$?
+( export ENMAAS_API_KEY=$'invalid\nkey'; claude-enmass ) >"$tmp/stdout" 2>"$tmp/stderr" || rc=$?
 _claude_enmass_assert 'control characters in key rejected' test "$rc" = 1
 
 # TERM only reaches invocation-owned mock lease/client children, never a daemon.
@@ -442,12 +442,12 @@ def spawn(argv, **kwargs):
  (root/'daemon.json').write_text(json.dumps(identity)); (root/'daemon.json').chmod(0o600)
  return FakeChild()
 namespace['verified']=lambda root, identity: bool(identity)
-with patch.object(namespace['socket'], 'socket', AvailableSocket), patch.object(namespace['subprocess'], 'Popen', spawn), patch.dict(os.environ, {'ENMASS_API_KEY':'unit-upstream-secret','ANTHROPIC_API_KEY':'other-provider-secret'}), patch.object(sys, 'stdout', io.StringIO()):
+with patch.object(namespace['socket'], 'socket', AvailableSocket), patch.object(namespace['subprocess'], 'Popen', spawn), patch.dict(os.environ, {'ENMAAS_API_KEY':'unit-upstream-secret','ANTHROPIC_API_KEY':'other-provider-secret'}), patch.object(sys, 'stdout', io.StringIO()):
  g['ensure'](4146,'1.97.0','0.136.3',1)
 argv, options=spawned[0]
 assert 'litellm[proxy]==1.97.0' in argv and 'fastapi==0.136.3' in argv
 assert 'unit-upstream-secret' not in json.dumps(argv)+json.dumps(options)
-assert 'ENMASS_API_KEY' not in options['env'] and 'ANTHROPIC_API_KEY' not in options['env']
+assert 'ENMAAS_API_KEY' not in options['env'] and 'ANTHROPIC_API_KEY' not in options['env']
 assert options['start_new_session'] is True
 assert (root/'daemon.py').stat().st_mode & 0o777==0o600
 

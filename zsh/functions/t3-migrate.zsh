@@ -44,12 +44,12 @@ typeset -g _T3_DOTFILES_ROOT=${${(%):-%x}:A:h:h:h}
 # Each claude-t3-<backend> launcher is a symlink to scripts/claude-provider.zsh,
 # which takes its backend from the link name. Keep this list in sync with the
 # backends that script accepts.
-typeset -ga _T3_CLAUDE_BACKENDS=(copilot vertex openai enmass glm-hybrid)
+typeset -ga _T3_CLAUDE_BACKENDS=(copilot vertex openai enmass glm-hybrid glm-only)
 
 # Each codex-t3-<backend> launcher is a symlink to scripts/codex-provider.zsh,
 # same link-name dispatch. Keep this list in sync with the backends that
 # script accepts.
-typeset -ga _T3_CODEX_BACKENDS=(enmass glm-hybrid)
+typeset -ga _T3_CODEX_BACKENDS=(enmass glm-hybrid glm-only)
 
 _t3_userdata_excludes=(
     --exclude='logs/'

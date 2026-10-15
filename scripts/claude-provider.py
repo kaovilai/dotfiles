@@ -90,7 +90,7 @@ def capture(destination):
         index += 1
     environment = dict(os.environ)
     # Upstream gateway keys stay with the proxies, not the Claude child.
-    for key in ("ENMASS_API_KEY", "OPENAI_API_KEY"):
+    for key in ("ENMAAS_API_KEY", "OPENAI_API_KEY"):
         environment.pop(key, None)
     for key in list(environment):
         if key.startswith("CLAUDE_PROVIDER_"):
@@ -223,7 +223,7 @@ def main():
                                  stderr=log, start_new_session=True)
             return 0
         backend, native, *args = sys.argv[1:]
-        if backend not in ("copilot", "vertex", "openai", "enmass", "glm-hybrid"):
+        if backend not in ("copilot", "vertex", "openai", "enmass", "glm-hybrid", "glm-only"):
             raise ValueError("invalid provider")
         return run(backend, native, args)
     except (ValueError, OSError, KeyError, json.JSONDecodeError):

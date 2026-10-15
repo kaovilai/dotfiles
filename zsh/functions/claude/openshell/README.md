@@ -130,7 +130,7 @@ e.g. for a hung session.
   instead.
 - **Proxy keys as provider profiles:** the `sk-enmass-*` key is the local
   proxy's per-start master key (`enmass-proxy.zsh`). The real
-  `ENMASS_API_KEY` never enters the sandbox, and the key travels in the
+  `ENMAAS_API_KEY` never enters the sandbox, and the key travels in the
   0600 settings file rather than on argv. A provider profile would
   additionally hide it from processes inside the sandbox, but it needs L7
   inspection, which these plain-HTTP L4 endpoints don't have.

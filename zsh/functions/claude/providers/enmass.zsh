@@ -1,7 +1,7 @@
 # ---------------------------------------------------------------------------
 # claude-enmass: raw claude binary routed through the EnMaaS gateway via one
 # shared loopback LiteLLM proxy (default :4146, CLAUDE_ENMASS_PROXY_PORT).
-# Requires ENMASS_API_BASE_URL (gateway root, or its /v1) and ENMASS_API_KEY
+# Requires ENMAAS_API_BASE_URL (gateway root, or its /v1) and ENMAAS_API_KEY
 # exported in the shell. Caller env, saved claude-mode and persistent Claude
 # settings stay intact; a caller's final --settings object/file is merged
 # under the wrapper's transport/picker fields.
@@ -19,7 +19,7 @@
 # Lifecycle: first launch starts the proxy, later launches reuse it; session
 # exit leaves it running. Private runtime dir
 # /tmp/claude-enmass-proxy-<uid>-<port> (0700/0600); config references
-# os.environ/ENMASS_API_KEY and Claude children only get the local token.
+# os.environ/ENMAAS_API_KEY and Claude children only get the local token.
 # Gateway/key/dependency/route changes fail with a restart instruction
 # instead of disrupting active sessions. claude-enmass-kill stops only the
 # recorded, birth-time-verified proxy process group (disconnects every
@@ -53,7 +53,7 @@ try:
         raise ValueError()
     print(f'{u.scheme}://{u.netloc}')
 except (ValueError, UnicodeError):
-    print('claude-enmass: invalid ENMASS_API_BASE_URL; use an HTTPS gateway root or /v1 endpoint (HTTP only on loopback), without credentials, query, or fragment.', file=sys.stderr)
+    print('claude-enmass: invalid ENMAAS_API_BASE_URL; use an HTTPS gateway root or /v1 endpoint (HTTP only on loopback), without credentials, query, or fragment.', file=sys.stderr)
     sys.exit(1)
 PY
 }
@@ -130,7 +130,7 @@ _claude_enmass_config() {
           elif $d == "responses" then "openai/responses/" + $id
           else "openai/" + $id end;
         def entry($id; $d): {model_name: $id, litellm_params: {
-          model: provider($d; $id), api_key: "os.environ/ENMASS_API_KEY",
+          model: provider($d; $id), api_key: "os.environ/ENMAAS_API_KEY",
           api_base: ($root + (if $d == "anthropic" then "" else "/v1" end))}};
         ($models.data | map({key: .id, value: .}) | from_entries) as $known
         | ($ARGS.positional | unique | map(. as $id
@@ -179,17 +179,17 @@ claude-enmass() (
             return 1
         }
     done
-    [[ -n "${ENMASS_API_BASE_URL-}" && -n "${ENMASS_API_KEY-}" ]] || {
-        print -ru2 -- 'claude-enmass: set ENMASS_API_BASE_URL and ENMASS_API_KEY in your environment.'
+    [[ -n "${ENMAAS_API_BASE_URL-}" && -n "${ENMAAS_API_KEY-}" ]] || {
+        print -ru2 -- 'claude-enmass: set ENMAAS_API_BASE_URL and ENMAAS_API_KEY in your environment.'
         return 1
     }
     # Reject control characters before handing the key to curl config parsing.
-    [[ "$ENMASS_API_KEY" != *[[:cntrl:]]* ]] || {
-        print -ru2 -- 'claude-enmass: ENMASS_API_KEY contains an invalid control character.'
+    [[ "$ENMAAS_API_KEY" != *[[:cntrl:]]* ]] || {
+        print -ru2 -- 'claude-enmass: ENMAAS_API_KEY contains an invalid control character.'
         return 1
     }
     local root port
-    root=$(_claude_enmass_root "$ENMASS_API_BASE_URL") || return 1
+    root=$(_claude_enmass_root "$ENMAAS_API_BASE_URL") || return 1
     port=$(_claude_enmass_port) || return 1
 
     local _claude_enmass_tmp="" _claude_enmass_claude_pid=""
@@ -231,11 +231,11 @@ claude-enmass() (
     fi
 
     local a='{"data":[]}' b='{"data":[]}' r='{"data":[]}' payload models
-    payload=$(_claude_enmass_discover anthropic "$root" "$ENMASS_API_KEY")
+    payload=$(_claude_enmass_discover anthropic "$root" "$ENMAAS_API_KEY")
     if jq -e '(.data | type == "array")' <<< "$payload" &>/dev/null; then a="$payload"; fi
-    payload=$(_claude_enmass_discover chat "$root" "$ENMASS_API_KEY")
+    payload=$(_claude_enmass_discover chat "$root" "$ENMAAS_API_KEY")
     if jq -e '(.data | type == "array")' <<< "$payload" &>/dev/null; then b="$payload"; fi
-    payload=$(_claude_enmass_discover responses "$root" "$ENMASS_API_KEY")
+    payload=$(_claude_enmass_discover responses "$root" "$ENMAAS_API_KEY")
     if jq -e '(.data | type == "array")' <<< "$payload" &>/dev/null; then
         r="$payload"
     else
@@ -346,7 +346,7 @@ claude-enmass() (
     config=$(_claude_enmass_fallback_from="$glm" _claude_enmass_fallback_to="$vision_fallback" \
         _claude_enmass_config "$root" '' "$models" "${ids[@]}") || return 1
     _claude_enmass_proxy_program > "${_claude_enmass_tmp}/proxy.py" || return 1
-    export ENMASS_API_KEY
+    export ENMAAS_API_KEY
     service=$(print -rn -- "$config" | python3 "${_claude_enmass_tmp}/proxy.py" ensure \
         "$port" "$litellm_version" "$fastapi_version" "$timeout" "$selected" "$opus" "$sonnet" "$haiku" "$fable" "$glm" \
         ${${=CLAUDE_ENMASS_MODEL_DIALECTS}%=*}) || return 1
@@ -366,7 +366,7 @@ claude-enmass() (
         '$caller * $wrapper') || return 1
     # Clean only this subshell. Unrelated parent/wrapper state remains intact.
     _claude_copilot_unset_env
-    unset ENMASS_API_KEY ANTHROPIC_CUSTOM_HEADERS CLAUDE_CODE_USE_FOUNDRY ANTHROPIC_FOUNDRY_API_KEY \
+    unset ENMAAS_API_KEY ANTHROPIC_CUSTOM_HEADERS CLAUDE_CODE_USE_FOUNDRY ANTHROPIC_FOUNDRY_API_KEY \
         ANTHROPIC_FOUNDRY_RESOURCE ANTHROPIC_FOUNDRY_BASE_URL CLAUDE_CODE_API_KEY_HELPER
     export ANTHROPIC_BASE_URL="$base" ANTHROPIC_API_KEY='' ANTHROPIC_AUTH_TOKEN="$token" \
         ANTHROPIC_MODEL="$selected" ANTHROPIC_DEFAULT_OPUS_MODEL="$opus" \

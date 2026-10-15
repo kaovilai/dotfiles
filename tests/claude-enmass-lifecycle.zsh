@@ -17,7 +17,7 @@ import urllib.error
 import urllib.request
 
 repo = Path(os.environ['ENMASS_TEST_REPO'])
-env = dict(os.environ, UV_OFFLINE='1', ENMASS_API_KEY='offline-lifecycle-key')
+env = dict(os.environ, UV_OFFLINE='1', ENMAAS_API_KEY='offline-lifecycle-key')
 
 
 def wait_for(check, description, timeout=15):
@@ -38,14 +38,14 @@ with tempfile.TemporaryDirectory(prefix='enmass-lifecycle-') as tmp:
     program.chmod(0o600)
     helper = runpy.run_path(str(program))
     config = {'model_list': [{'model_name': model, 'litellm_params': {
-        'model': route, 'api_base': 'http://127.0.0.1:1/v1', 'api_key': 'os.environ/ENMASS_API_KEY'}}
+        'model': route, 'api_base': 'http://127.0.0.1:1/v1', 'api_key': 'os.environ/ENMAAS_API_KEY'}}
         for model, route in [('*', 'openai/*'), ('offline-model', 'openai/offline-model')]],
         'general_settings': {'master_key': ''}, 'litellm_settings': {'drop_params': True}}
 
     def controller(op, port, value=config, required=('offline-model',), key=None):
         args = [str(port), '1.97.0', '0.136.3', '90', *required] if op == 'ensure' else [str(port)]
         return subprocess.run(['python3', str(program), op, *args],
-            env=dict(env, ENMASS_API_KEY=key or env['ENMASS_API_KEY']), input=json.dumps(value),
+            env=dict(env, ENMAAS_API_KEY=key or env['ENMAAS_API_KEY']), input=json.dumps(value),
             text=True, capture_output=True, timeout=110)
 
     with socket.socket() as listener:
@@ -81,7 +81,7 @@ with tempfile.TemporaryDirectory(prefix='enmass-lifecycle-') as tmp:
         changed = json.loads(json.dumps(config))
         changed['model_list'].append({'model_name': 'new-chat', 'litellm_params': {
             'model': 'openai/new-chat', 'api_base': 'http://127.0.0.1:1/v1',
-            'api_key': 'os.environ/ENMASS_API_KEY'}})
+            'api_key': 'os.environ/ENMAAS_API_KEY'}})
         reused = controller('ensure', port, changed, ('new-chat',))
         assert reused.returncode == 0, reused.stderr
         assert json.loads((root / 'proxy.json').read_text())['pid'] == original_pid

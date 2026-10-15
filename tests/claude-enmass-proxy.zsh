@@ -156,7 +156,7 @@ try:
             proxy_port = probe.getsockname()[1]
         env.update({'PATH': tmp + ':' + env['PATH'], 'ENMASS_TEST_REPO': str(repo),
                     'CLAUDE_ENMASS_PROXY_PORT': str(proxy_port),
-                    'ENMASS_API_BASE_URL': f'http://127.0.0.1:{gateway.server_port}/v1', 'ENMASS_API_KEY': 'offline-key-a',
+                    'ENMAAS_API_BASE_URL': f'http://127.0.0.1:{gateway.server_port}/v1', 'ENMAAS_API_KEY': 'offline-key-a',
                     'CLAUDE_ENMASS_MODEL_DIALECTS': 'offline-responses=responses offline-error=chat', 'UV_OFFLINE': '1',
                     'ANTHROPIC_AUTH_TOKEN': 'parent-token', 'ANTHROPIC_API_KEY': 'parent-key',
                     'CLAUDE_CODE_USE_VERTEX': '1', 'CLAUDE_CODE_USE_BEDROCK': '1'})

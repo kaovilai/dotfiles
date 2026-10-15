@@ -105,7 +105,7 @@ def stop(root, info):
 
 def ensure(root, port, config, versions, timeout, required):
     info = read_private(root / 'proxy.json')
-    key = os.environ['ENMASS_API_KEY']
+    key = os.environ['ENMAAS_API_KEY']
     if owned(info):
         if not ready(info, root):
             raise RuntimeError('recorded proxy is not ready; run claude-enmass-kill before relaunching')
@@ -141,7 +141,7 @@ def ensure(root, port, config, versions, timeout, required):
             '--telemetry', 'False']
     env = {k: v for k, v in os.environ.items() if k in
            ('PATH', 'HOME', 'TMPDIR', 'UV_CACHE_DIR', 'UV_OFFLINE', 'XDG_CACHE_HOME', 'LANG', 'LC_ALL')}
-    env.update(ENMASS_API_KEY=key, LITELLM_LOG='ERROR')
+    env.update(ENMAAS_API_KEY=key, LITELLM_LOG='ERROR')
     child = subprocess.Popen(args, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                              stderr=subprocess.DEVNULL, start_new_session=True)
     info = {'pid': child.pid, 'birth': birth(child.pid), 'port': port, 'token': token,

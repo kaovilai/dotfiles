@@ -150,6 +150,12 @@ alias ce-ollama='cd ~/experiments/ && claude-ollama'
 alias ce-offline='cd ~/experiments/ && claude-offline'
 # ce-openai = openai edition of ce (raw claude routed through OpenAI via a local litellm proxy; see zsh/functions/claude/providers/)
 alias ce-openai='cd ~/experiments/ && claude-openai'
+# ce-enmass = EnMaaS edition of ce (raw claude routed through the EnMaaS gateway via a local litellm proxy; see zsh/functions/claude/providers/)
+alias ce-enmass='cd ~/experiments/ && claude-enmass'
+# ce-glm-hybrid = GLM 5.3 on EnMaaS, auto-mode classifier on an OpenAI model (local GLM hybrid proxy; see zsh/functions/claude/providers/glm-hybrid.zsh)
+alias ce-glm-hybrid='cd ~/experiments/ && claude-glm-hybrid'
+# ce-glm-only = GLM 5.3 on EnMaaS for everything, classifier included; no OpenAI key needed (see zsh/functions/claude/providers/glm-hybrid.zsh)
+alias ce-glm-only='cd ~/experiments/ && claude-glm-only'
 # Builds -e flags to pass the host's active Anthropic/copilot-api gateway
 # config into a container. ANTHROPIC_BASE_URL's host is rewritten from
 # localhost/127.0.0.1 to host.containers.internal since the container's

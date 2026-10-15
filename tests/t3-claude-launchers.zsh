@@ -18,7 +18,7 @@ source "$repo/zsh/functions/migrate-laptop.zsh"
 
 fail() { print -ru2 -- "FAIL: $*"; exit 1; }
 local target="$repo/scripts/claude-provider.zsh" out b l
-(( ${#_T3_CLAUDE_BACKENDS} == 5 )) || fail "expected five backends, got $_T3_CLAUDE_BACKENDS"
+(( ${#_T3_CLAUDE_BACKENDS} == 6 )) || fail "expected six backends, got $_T3_CLAUDE_BACKENDS"
 [[ "$_T3_DOTFILES_ROOT" == "${repo:A}" ]] || fail "dotfiles root resolved to $_T3_DOTFILES_ROOT"
 
 # A fresh directory gets every link, each resolving to this checkout
@@ -55,7 +55,7 @@ verify-claude-t3-launchers >/dev/null 2>&1 || fail "verify failed with every lau
 export CODEX_PROVIDER_NATIVE_BINARY="$tmp/codex"
 print -r -- $'#!/bin/sh\necho "codex-cli 9.9.9"' > "$tmp/codex"
 chmod +x "$tmp/codex"
-(( ${#_T3_CODEX_BACKENDS} == 2 )) || fail "expected two codex backends, got $_T3_CODEX_BACKENDS"
+(( ${#_T3_CODEX_BACKENDS} == 3 )) || fail "expected three codex backends, got $_T3_CODEX_BACKENDS"
 local codex_target="$repo/scripts/codex-provider.zsh"
 link-codex-t3-launchers >/dev/null 2>&1 || fail "codex link run failed"
 for b in $_T3_CODEX_BACKENDS; do

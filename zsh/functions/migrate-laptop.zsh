@@ -236,8 +236,8 @@ export CLOUD_ML_REGION=""
 export ANTHROPIC_VERTEX_PROJECT_ID=""
 
 # EnMaaS gateway (claude-enmass and T3 Code's claude-t3-enmass launcher)
-export ENMASS_API_BASE_URL=""
-export ENMASS_API_KEY=""
+export ENMAAS_API_BASE_URL=""
+export ENMAAS_API_KEY=""
 
 # OpenAI (claude-openai, claude-t3-openai); unset falls back to ~/.codex/auth.json
 # export OPENAI_API_KEY=""

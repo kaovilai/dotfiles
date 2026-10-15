@@ -66,7 +66,7 @@ else:
     print(json.dumps({'args':sys.argv[3:], 'settings':settings,
         'stdin':sys.stdin.read(), 'cwd':os.getcwd(),
         'configDir':os.environ.get('CLAUDE_CONFIG_DIR'),
-        'upstreamKeyLeaked':any(k in os.environ for k in ['OPENAI_API_KEY','ENMASS_API_KEY']),
+        'upstreamKeyLeaked':any(k in os.environ for k in ['OPENAI_API_KEY','ENMAAS_API_KEY']),
         'settingsPath':sys.argv[2]}))
     sys.exit(int(os.environ.get('FIXTURE_EXIT','0')))
 ''')
@@ -75,7 +75,7 @@ else:
         self.credentials.write_text('''
 print -r -- 'credential-bootstrap-output-must-not-leak'
 export OPENAI_API_KEY='fixture-upstream-key'
-export ENMASS_API_KEY='fixture-upstream-key'
+export ENMAAS_API_KEY='fixture-upstream-key'
 export CLAUDE_CONFIG_DIR='/wrong/source/home'
 print loaded > "$FIXTURE_BOOTSTRAPPED"
 ''')

@@ -20,8 +20,11 @@
 # OPENAI_API_KEY, else ${GLM_HYBRID_OPENAI_AUTH_FILE:-~/.codex/auth.json} (not
 # $CODEX_HOME: hosts like T3 may point Codex at a shadow home). Only the proxy
 # gets them; clients get the local token ${GLM_HYBRID_PROXY_TOKEN:-glm-hybrid-local}.
+# GLM-only launchers (claude-glm-only, codex-glm-only) use the same proxies with
+# GLM as the reviewer too, and need no OpenAI key.
 # Other knobs: GLM_HYBRID_MODEL, GLM_HYBRID_REVIEW_MODEL,
-# GLM_HYBRID_ENMAAS_BASE_URL (gateway root), GLM_HYBRID_LITELLM_VERSION,
+# GLM_HYBRID_ENMAAS_BASE_URL (gateway root; default $ENMAAS_API_BASE_URL),
+# GLM_HYBRID_LITELLM_VERSION,
 # GLM_HYBRID_FASTAPI_VERSION, GLM_HYBRID_LITELLM_LOG (default ERROR; INFO logs
 # each routed model, e.g. to confirm the review model is being called).
 #
@@ -50,8 +53,9 @@ _glm_hybrid_proxy_vars() {
 }
 
 _glm_hybrid_proxy_config() {
-    local enmaas="${GLM_HYBRID_ENMAAS_BASE_URL:-https://api.enmaas.devshift.net}"
+    local enmaas="${GLM_HYBRID_ENMAAS_BASE_URL:-${ENMAAS_API_BASE_URL:-https://api.enmaas.devshift.net}}"
     enmaas="${enmaas%/}"
+    enmaas="${enmaas%/v1}"
     local glm_params
     if [[ "$_ghp_flavor" == codex ]]; then
         glm_params="      model: \"openai/$_ghp_glm\"
@@ -64,22 +68,27 @@ _glm_hybrid_proxy_config() {
   - model_name: \"$_ghp_glm\"
     litellm_params:
 $glm_params
-      api_key: os.environ/ENMAAS_API_KEY
-  - model_name: \"$_ghp_review\"
+      api_key: os.environ/ENMAAS_API_KEY"
+    (( _ghp_with_review )) && print -r -- "  - model_name: \"$_ghp_review\"
     litellm_params:
       model: \"openai/$_ghp_review\"
-      api_key: os.environ/OPENAI_API_KEY
-litellm_settings:
+      api_key: os.environ/OPENAI_API_KEY"
+    print -r -- "litellm_settings:
   drop_params: true"
     print -r -- '  callbacks: ["glm_hybrid_hooks.proxy_handler_instance"]'
     print -r -- "general_settings:
   master_key: os.environ/GLM_HYBRID_PROXY_TOKEN"
 }
 
-# _glm_hybrid_proxy_ensure <flavor>: proxy healthy with the current config, or
-# return 1 (stderr says why). Sets _ghp_base/_ghp_token. Writes nothing to stdout.
+# _glm_hybrid_proxy_ensure <flavor> [review]: proxy healthy with the current
+# config, or return 1 (stderr says why). Sets _ghp_base/_ghp_token. Writes
+# nothing to stdout. The review-model route is added whenever an OpenAI key is
+# found (so hybrid and GLM-only launches share one config); "review" makes the
+# key mandatory (hybrid launchers), without it a missing key just drops the
+# route (GLM-only launchers need no OpenAI key).
 _glm_hybrid_proxy_ensure() {
     _glm_hybrid_proxy_vars "$1" || return 1
+    local need_review="${2-}"
     local health="$_ghp_base/health/liveliness"
     local litellm_version="${GLM_HYBRID_LITELLM_VERSION:-1.97.0}"
     local fastapi_version="${GLM_HYBRID_FASTAPI_VERSION:-0.136.3}"
@@ -89,7 +98,9 @@ _glm_hybrid_proxy_ensure() {
     if [[ -z "$openai_key" && -r "$auth" ]]; then
         openai_key=$(jq -r '.OPENAI_API_KEY // empty' "$auth" 2>/dev/null)
     fi
-    [[ -n "$openai_key" ]] || {
+    typeset -gi _ghp_with_review=0
+    [[ -n "$openai_key" ]] && _ghp_with_review=1
+    [[ "$need_review" != review ]] || (( _ghp_with_review )) || {
         print -ru2 -- 'glm-hybrid: no OpenAI key for the review model (set OPENAI_API_KEY or run codex login --with-api-key).'
         return 1
     }
