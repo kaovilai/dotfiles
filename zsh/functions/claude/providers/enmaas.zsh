@@ -1,6 +1,6 @@
 # ---------------------------------------------------------------------------
-# claude-enmass: raw claude binary routed through the EnMaaS gateway via one
-# shared loopback LiteLLM proxy (default :4146, CLAUDE_ENMASS_PROXY_PORT).
+# claude-enmaas: raw claude binary routed through the EnMaaS gateway via one
+# shared loopback LiteLLM proxy (default :4146, CLAUDE_ENMAAS_PROXY_PORT).
 # Requires ENMAAS_API_BASE_URL (gateway root, or its /v1) and ENMAAS_API_KEY
 # exported in the shell. Caller env, saved claude-mode and persistent Claude
 # settings stay intact; a caller's final --settings object/file is merged
@@ -8,25 +8,25 @@
 #
 # Models: Anthropic (x-api-key) and gateway Bearer catalogs, plus the OpenAI
 # upstream catalog reached through the same gateway/key (see
-# _claude_enmass_discover), newest Claude per tier, Sonnet default. Overrides:
-#   CLAUDE_ENMASS_MODEL                         default model
-#   CLAUDE_ENMASS_{OPUS,SONNET,HAIKU,FABLE}_MODEL  per-tier
-#   CLAUDE_ENMASS_MODEL_DIALECTS='id=responses other=chat'  exact ids needing
+# _claude_enmaas_discover), newest Claude per tier, Sonnet default. Overrides:
+#   CLAUDE_ENMAAS_MODEL                         default model
+#   CLAUDE_ENMAAS_{OPUS,SONNET,HAIKU,FABLE}_MODEL  per-tier
+#   CLAUDE_ENMAAS_MODEL_DIALECTS='id=responses other=chat'  exact ids needing
 #     a dialect (anthropic -> /v1/messages, chat -> /v1/chat/completions,
 #     responses -> /v1/responses); confirm gateway support first.
 # A catalog entry is a selectable candidate, not proof of entitlement.
 #
 # Lifecycle: first launch starts the proxy, later launches reuse it; session
 # exit leaves it running. Private runtime dir
-# /tmp/claude-enmass-proxy-<uid>-<port> (0700/0600); config references
+# /tmp/claude-enmaas-proxy-<uid>-<port> (0700/0600); config references
 # os.environ/ENMAAS_API_KEY and Claude children only get the local token.
 # Gateway/key/dependency/route changes fail with a restart instruction
-# instead of disrupting active sessions. claude-enmass-kill stops only the
+# instead of disrupting active sessions. claude-enmaas-kill stops only the
 # recorded, birth-time-verified proxy process group (disconnects every
 # session using it).
-source "${${(%):-%N}:A:h}/enmass-proxy.zsh"
+source "${${(%):-%N}:A:h}/enmaas-proxy.zsh"
 
-_claude_enmass_root() {
+_claude_enmaas_root() {
     python3 - "$1" <<'PY'
 import sys
 from urllib.parse import urlsplit
@@ -53,13 +53,13 @@ try:
         raise ValueError()
     print(f'{u.scheme}://{u.netloc}')
 except (ValueError, UnicodeError):
-    print('claude-enmass: invalid ENMAAS_API_BASE_URL; use an HTTPS gateway root or /v1 endpoint (HTTP only on loopback), without credentials, query, or fragment.', file=sys.stderr)
+    print('claude-enmaas: invalid ENMAAS_API_BASE_URL; use an HTTPS gateway root or /v1 endpoint (HTTP only on loopback), without credentials, query, or fragment.', file=sys.stderr)
     sys.exit(1)
 PY
 }
 
-_claude_enmass_port() {
-    python3 - "${CLAUDE_ENMASS_PROXY_PORT-}" <<'PY'
+_claude_enmaas_port() {
+    python3 - "${CLAUDE_ENMAAS_PROXY_PORT-}" <<'PY'
 import socket, sys
 explicit = sys.argv[1]
 try:
@@ -69,14 +69,14 @@ try:
     # startup controller, not this validator, checks listener ownership.
     print(int(explicit) if explicit else 4146)
 except ValueError:
-    print('claude-enmass: CLAUDE_ENMASS_PROXY_PORT must be an integer from 1 to 65535.', file=sys.stderr)
+    print('claude-enmaas: CLAUDE_ENMAAS_PROXY_PORT must be an integer from 1 to 65535.', file=sys.stderr)
     sys.exit(1)
 PY
 }
 
 # Secrets go through curl's stdin config, not its argv or a saved config file.
 # Do not follow redirects: discovery must not disclose the gateway key elsewhere.
-_claude_enmass_discover() {
+_claude_enmaas_discover() {
     local dialect="$1" root="$2" key="$3" endpoint='/v1/models'
     # The beta gateway's /v1/models inventory omits OpenAI. Its Responses
     # passthrough reaches the same key's upstream catalog with this raw path;
@@ -87,28 +87,28 @@ _claude_enmass_discover() {
         print -r -- 'header = "anthropic-version: 2023-06-01"'
     else
         print -r -- "header = $(print -rn -- "Authorization: Bearer $key" | jq -Rs .)"
-    fi | command curl --silent --fail --connect-timeout 10 --max-time "${CLAUDE_ENMASS_DISCOVERY_TIMEOUT:-15}" \
-        --retry "${CLAUDE_ENMASS_DISCOVERY_RETRIES:-2}" --retry-delay 1 --retry-max-time 40 --path-as-is \
+    fi | command curl --silent --fail --connect-timeout 10 --max-time "${CLAUDE_ENMAAS_DISCOVERY_TIMEOUT:-15}" \
+        --retry "${CLAUDE_ENMAAS_DISCOVERY_RETRIES:-2}" --retry-delay 1 --retry-max-time 40 --path-as-is \
         --proto '=http,https' --config - "${root}${endpoint}" 2>/dev/null
 }
 
-_claude_enmass_models() {
+_claude_enmaas_models() {
     local anthropic_json="$1" bearer_json="$2" responses_json="${3-}"
     [[ -n "$responses_json" ]] || responses_json='{"data":[]}'
     jq -nc --argjson a "$anthropic_json" --argjson b "$bearer_json" --argjson r "$responses_json" '
         def rows: (.data // [])[] | select(.id? | type == "string")
           | select(.id | test("^[A-Za-z0-9][A-Za-z0-9._:/@+\\[\\]-]*$"));
-        ([($a | rows | . + {_enmass_anthropic: true}),
-          ($b | rows | . + {_enmass_anthropic: false}),
+        ([($a | rows | . + {_enmaas_anthropic: true}),
+          ($b | rows | . + {_enmaas_anthropic: false}),
           ($r | rows | select(.id | test("^(gpt-|chatgpt-|o[0-9])"))
             | select(.id | test("audio|realtime|transcribe|tts|image|embedding|moderation|search|instruct|diarize"; "i") | not)
             | select(.id | test("-[0-9]{4}(-[0-9]{2}-[0-9]{2})?$|-[0-9]{8}$") | not)
-            | . + {_enmass_anthropic: false, api_dialect: "responses"})]
+            | . + {_enmaas_anthropic: false, api_dialect: "responses"})]
          | group_by(.id)
          | map(.[0] + {
-             _enmass_anthropic: any(.[]; ._enmass_anthropic),
+             _enmaas_anthropic: any(.[]; ._enmaas_anthropic),
              display_name: ([.[] | .display_name? | strings | select(length > 0)] | first // .[0].id),
-             _enmass_metadata_dialect: ([.[] | (.api_dialect // .dialect) | strings
+             _enmaas_metadata_dialect: ([.[] | (.api_dialect // .dialect) | strings
                | select(. == "anthropic" or . == "chat" or . == "responses")] | first // null)
            })) as $models
         | {data: $models}'
@@ -117,12 +117,12 @@ _claude_enmass_models() {
 # Build JSON (also valid YAML) so model ids/labels/URLs cannot inject config.
 # Anthropic-compatible IDs are deliberately determined by discovery membership,
 # explicit dialect metadata/overrides, or Claude-family naming; never owned_by.
-# Optional _claude_enmass_fallback_from/_to name a text-only model and the
+# Optional _claude_enmaas_fallback_from/_to name a text-only model and the
 # multimodal model LiteLLM retries it on after an upstream error (e.g. images).
-_claude_enmass_config() {
+_claude_enmaas_config() {
     local root="$1" token="$2" models="$3"; shift 3
     jq -nc --arg root "$root" --arg token "$token" \
-        --arg fb_from "${_claude_enmass_fallback_from-}" --arg fb_to "${_claude_enmass_fallback_to-}" \
+        --arg fb_from "${_claude_enmaas_fallback_from-}" --arg fb_to "${_claude_enmaas_fallback_to-}" \
         --argjson models "$models" --args '
         def claude: test("(^|/)claude([/_.-]|$)"; "i");
         def provider($d; $id):
@@ -135,8 +135,8 @@ _claude_enmass_config() {
         ($models.data | map({key: .id, value: .}) | from_entries) as $known
         | ($ARGS.positional | unique | map(. as $id
             | ($known[$id] // {}) as $m
-            | ($m._enmass_dialect // $m._enmass_metadata_dialect //
-                (if $m._enmass_anthropic or ($id | claude) or $id == "rits/zai-org/glm-5-3"
+            | ($m._enmaas_dialect // $m._enmaas_metadata_dialect //
+                (if $m._enmaas_anthropic or ($id | claude) or $id == "rits/zai-org/glm-5-3"
                  then "anthropic" else "chat" end)) as $d
             | entry($id; $d))) as $entries
         | {model_list: ([entry("*"; "chat")] + $entries),
@@ -150,16 +150,16 @@ _claude_enmass_config() {
 }
 
 # Session cleanup only stops its Claude child; the shared proxy persists.
-_claude_enmass_cleanup() {
-    if [[ "${_claude_enmass_claude_pid-}" == <-> ]]; then
-        kill -TERM "$_claude_enmass_claude_pid" 2>/dev/null
-        wait "$_claude_enmass_claude_pid" 2>/dev/null
+_claude_enmaas_cleanup() {
+    if [[ "${_claude_enmaas_claude_pid-}" == <-> ]]; then
+        kill -TERM "$_claude_enmaas_claude_pid" 2>/dev/null
+        wait "$_claude_enmaas_claude_pid" 2>/dev/null
     fi
-    [[ -n "${_claude_enmass_tmp-}" ]] && command rm -rf -- "$_claude_enmass_tmp"
+    [[ -n "${_claude_enmaas_tmp-}" ]] && command rm -rf -- "$_claude_enmaas_tmp"
     return 0
 }
 
-claude-enmass() (
+claude-enmaas() (
     emulate -L zsh
     setopt localtraps
     # Keep invocation-owned children in the foreground terminal process group;
@@ -169,33 +169,33 @@ claude-enmass() (
     local dep
     for dep in python3 jq curl uv claude lsof; do
         command -v "$dep" &>/dev/null || {
-            print -ru2 -- "claude-enmass: missing dependency: ${dep}."
+            print -ru2 -- "claude-enmaas: missing dependency: ${dep}."
             return 1
         }
     done
     for dep in _claude_copilot_latest_model _claude_picker_args _claude_copilot_unset_env; do
         (( $+functions[$dep] )) || {
-            print -ru2 -- 'claude-enmass: source zsh/functions/claude/load.zsh, not this provider file alone.'
+            print -ru2 -- 'claude-enmaas: source zsh/functions/claude/load.zsh, not this provider file alone.'
             return 1
         }
     done
     [[ -n "${ENMAAS_API_BASE_URL-}" && -n "${ENMAAS_API_KEY-}" ]] || {
-        print -ru2 -- 'claude-enmass: set ENMAAS_API_BASE_URL and ENMAAS_API_KEY in your environment.'
+        print -ru2 -- 'claude-enmaas: set ENMAAS_API_BASE_URL and ENMAAS_API_KEY in your environment.'
         return 1
     }
     # Reject control characters before handing the key to curl config parsing.
     [[ "$ENMAAS_API_KEY" != *[[:cntrl:]]* ]] || {
-        print -ru2 -- 'claude-enmass: ENMAAS_API_KEY contains an invalid control character.'
+        print -ru2 -- 'claude-enmaas: ENMAAS_API_KEY contains an invalid control character.'
         return 1
     }
     local root port
-    root=$(_claude_enmass_root "$ENMAAS_API_BASE_URL") || return 1
-    port=$(_claude_enmass_port) || return 1
+    root=$(_claude_enmaas_root "$ENMAAS_API_BASE_URL") || return 1
+    port=$(_claude_enmaas_port) || return 1
 
-    local _claude_enmass_tmp="" _claude_enmass_claude_pid=""
-    _claude_enmass_tmp=$(command mktemp -d "${TMPDIR:-/tmp}/claude-enmass.XXXXXXXX") || return 1
-    trap '_claude_enmass_cleanup' EXIT
-    command chmod 700 "$_claude_enmass_tmp" || return 1
+    local _claude_enmaas_tmp="" _claude_enmaas_claude_pid=""
+    _claude_enmaas_tmp=$(command mktemp -d "${TMPDIR:-/tmp}/claude-enmaas.XXXXXXXX") || return 1
+    trap '_claude_enmaas_cleanup' EXIT
+    command chmod 700 "$_claude_enmaas_tmp" || return 1
     trap 'exit 130' INT
     trap 'exit 143' TERM
     trap 'exit 129' HUP
@@ -208,7 +208,7 @@ claude-enmass() (
         case "$1" in
             --settings)
                 (( $# >= 2 )) || {
-                    print -ru2 -- 'claude-enmass: --settings requires a file or JSON object.'
+                    print -ru2 -- 'claude-enmaas: --settings requires a file or JSON object.'
                     return 1
                 }
                 settings_source="$2"; settings_seen=1; shift 2 ;;
@@ -225,24 +225,24 @@ claude-enmass() (
             caller_settings=$(jq -ce 'select(type == "object")' <<< "$settings_source" 2>/dev/null)
         fi
         [[ -n "$caller_settings" ]] || {
-            print -ru2 -- 'claude-enmass: --settings must contain a valid JSON object or name a readable JSON file.'
+            print -ru2 -- 'claude-enmaas: --settings must contain a valid JSON object or name a readable JSON file.'
             return 1
         }
     fi
 
     local a='{"data":[]}' b='{"data":[]}' r='{"data":[]}' payload models
-    payload=$(_claude_enmass_discover anthropic "$root" "$ENMAAS_API_KEY")
+    payload=$(_claude_enmaas_discover anthropic "$root" "$ENMAAS_API_KEY")
     if jq -e '(.data | type == "array")' <<< "$payload" &>/dev/null; then a="$payload"; fi
-    payload=$(_claude_enmass_discover chat "$root" "$ENMAAS_API_KEY")
+    payload=$(_claude_enmaas_discover chat "$root" "$ENMAAS_API_KEY")
     if jq -e '(.data | type == "array")' <<< "$payload" &>/dev/null; then b="$payload"; fi
-    payload=$(_claude_enmass_discover responses "$root" "$ENMAAS_API_KEY")
+    payload=$(_claude_enmaas_discover responses "$root" "$ENMAAS_API_KEY")
     if jq -e '(.data | type == "array")' <<< "$payload" &>/dev/null; then
         r="$payload"
     else
-        print -ru2 -- 'claude-enmass: OpenAI catalog discovery unavailable; GPT models may be omitted. Exact supported IDs can still be pinned with CLAUDE_ENMASS_MODEL_DIALECTS.'
+        print -ru2 -- 'claude-enmaas: OpenAI catalog discovery unavailable; GPT models may be omitted. Exact supported IDs can still be pinned with CLAUDE_ENMAAS_MODEL_DIALECTS.'
     fi
-    models=$(_claude_enmass_models "$a" "$b" "$r") || return 1
-    local selected="${CLAUDE_ENMASS_MODEL-}" cli_model="" arg previous="" mapping id dialect
+    models=$(_claude_enmaas_models "$a" "$b" "$r") || return 1
+    local selected="${CLAUDE_ENMAAS_MODEL-}" cli_model="" arg previous="" mapping id dialect
     local cli_seen=0
     for arg in "$@"; do
         if [[ "$previous" == --model ]]; then cli_model="$arg"; cli_seen=1; fi
@@ -250,14 +250,14 @@ claude-enmass() (
         previous="$arg"
     done
     if [[ "$previous" == --model || ( "$cli_seen" == 1 && "$cli_model" == "" ) ]]; then
-        print -ru2 -- 'claude-enmass: --model requires a model id.'
+        print -ru2 -- 'claude-enmaas: --model requires a model id.'
         return 1
     fi
     local opus sonnet haiku fable fallback
-    sonnet="${CLAUDE_ENMASS_SONNET_MODEL:-$(_claude_copilot_latest_model sonnet "$models")}"
-    opus="${CLAUDE_ENMASS_OPUS_MODEL:-$(_claude_copilot_latest_model opus "$models")}"
-    haiku="${CLAUDE_ENMASS_HAIKU_MODEL:-$(_claude_copilot_latest_model haiku "$models")}"
-    fable="${CLAUDE_ENMASS_FABLE_MODEL:-$(_claude_copilot_latest_model fable "$models")}"
+    sonnet="${CLAUDE_ENMAAS_SONNET_MODEL:-$(_claude_copilot_latest_model sonnet "$models")}"
+    opus="${CLAUDE_ENMAAS_OPUS_MODEL:-$(_claude_copilot_latest_model opus "$models")}"
+    haiku="${CLAUDE_ENMAAS_HAIKU_MODEL:-$(_claude_copilot_latest_model haiku "$models")}"
+    fable="${CLAUDE_ENMAAS_FABLE_MODEL:-$(_claude_copilot_latest_model fable "$models")}"
     fallback="${selected:-${sonnet:-${opus:-${haiku:-${fable:-$(jq -r '.data[0].id // empty' <<< "$models")}}}}}"
     # Catalogs are advisory: an exact CLI model works even if discovery is empty.
     case "$cli_model" in
@@ -265,11 +265,11 @@ claude-enmass() (
         *) fallback="${fallback:-$cli_model}" ;;
     esac
     if [[ -z "$fallback" ]]; then
-        print -ru2 -- 'claude-enmass: no usable models discovered; set CLAUDE_ENMASS_MODEL or --model to a confirmed gateway model id.'
+        print -ru2 -- 'claude-enmaas: no usable models discovered; set CLAUDE_ENMAAS_MODEL or --model to a confirmed gateway model id.'
         return 1
     fi
     if ! jq -e '.data | length > 0' <<< "$models" &>/dev/null; then
-        print -ru2 -- 'claude-enmass: model discovery is unavailable or empty; using explicit model configuration.'
+        print -ru2 -- 'claude-enmaas: model discovery is unavailable or empty; using explicit model configuration.'
     fi
     selected="${selected:-$fallback}"
     opus="${opus:-$fallback}" sonnet="${sonnet:-$fallback}"
@@ -288,25 +288,25 @@ claude-enmass() (
     # GLM is text-only: image/PDF requests it rejects are retried on a Claude
     # Sonnet. Resolved from discovery, not $sonnet, which a GLM session remaps
     # to GLM itself and the shared proxy freezes whichever launch started it.
-    local vision_fallback="${CLAUDE_ENMASS_VISION_FALLBACK_MODEL:-$(_claude_copilot_latest_model sonnet "$models")}"
+    local vision_fallback="${CLAUDE_ENMAAS_VISION_FALLBACK_MODEL:-$(_claude_copilot_latest_model sonnet "$models")}"
     local -a ids pairs reply
     ids=("${(@f)$(jq -r '.data[].id' <<< "$models")}" "$selected" "$opus" "$sonnet" "$haiku" "$fable" "$glm" "$vision_fallback")
     ids=("${(@)ids:#}")
-    for mapping in ${=CLAUDE_ENMASS_MODEL_DIALECTS}; do
+    for mapping in ${=CLAUDE_ENMAAS_MODEL_DIALECTS}; do
         id="${mapping%=*}" dialect="${mapping##*=}"
         if [[ "$mapping" != *=* || "$id" == "" || "$dialect" != (anthropic|chat|responses) ]]; then
-            print -ru2 -- 'claude-enmass: CLAUDE_ENMASS_MODEL_DIALECTS must contain space-separated id=anthropic, id=chat, or id=responses mappings.'
+            print -ru2 -- 'claude-enmaas: CLAUDE_ENMAAS_MODEL_DIALECTS must contain space-separated id=anthropic, id=chat, or id=responses mappings.'
             return 1
         fi
         ids+=("$id")
         models=$(jq -c --arg id "$id" --arg dialect "$dialect" '
-            if any(.data[]; .id == $id) then .data |= map(if .id == $id then ._enmass_dialect = $dialect else . end)
-            else .data += [{id: $id, _enmass_dialect: $dialect}] end' <<< "$models") || return 1
+            if any(.data[]; .id == $id) then .data |= map(if .id == $id then ._enmaas_dialect = $dialect else . end)
+            else .data += [{id: $id, _enmaas_dialect: $dialect}] end' <<< "$models") || return 1
     done
     ids=("${(@u)ids}")
     for id in "${ids[@]}"; do
         if ! jq -en --arg id "$id" '$id | test("^[A-Za-z0-9][A-Za-z0-9._:/@+\\[\\]-]*$")' &>/dev/null; then
-            print -ru2 -- 'claude-enmass: an override or CLI model id contains unsupported characters.'
+            print -ru2 -- 'claude-enmaas: an override or CLI model id contains unsupported characters.'
             return 1
         fi
     done
@@ -338,18 +338,18 @@ claude-enmass() (
     local token base="http://127.0.0.1:${port}" config service
     local litellm_version="${CLAUDE_OPENAI_PROXY_LITELLM_VERSION:-1.97.0}"
     local fastapi_version="${CLAUDE_OPENAI_PROXY_FASTAPI_VERSION:-0.136.3}"
-    local timeout="${CLAUDE_ENMASS_PROXY_START_TIMEOUT:-60}"
+    local timeout="${CLAUDE_ENMAAS_PROXY_START_TIMEOUT:-60}"
     [[ "$timeout" == <-> && "$timeout" -gt 0 && "$timeout" -le 600 ]] || {
-        print -ru2 -- 'claude-enmass: CLAUDE_ENMASS_PROXY_START_TIMEOUT must be 1 through 600 seconds.'
+        print -ru2 -- 'claude-enmaas: CLAUDE_ENMAAS_PROXY_START_TIMEOUT must be 1 through 600 seconds.'
         return 1
     }
-    config=$(_claude_enmass_fallback_from="$glm" _claude_enmass_fallback_to="$vision_fallback" \
-        _claude_enmass_config "$root" '' "$models" "${ids[@]}") || return 1
-    _claude_enmass_proxy_program > "${_claude_enmass_tmp}/proxy.py" || return 1
+    config=$(_claude_enmaas_fallback_from="$glm" _claude_enmaas_fallback_to="$vision_fallback" \
+        _claude_enmaas_config "$root" '' "$models" "${ids[@]}") || return 1
+    _claude_enmaas_proxy_program > "${_claude_enmaas_tmp}/proxy.py" || return 1
     export ENMAAS_API_KEY
-    service=$(print -rn -- "$config" | python3 "${_claude_enmass_tmp}/proxy.py" ensure \
+    service=$(print -rn -- "$config" | python3 "${_claude_enmaas_tmp}/proxy.py" ensure \
         "$port" "$litellm_version" "$fastapi_version" "$timeout" "$selected" "$opus" "$sonnet" "$haiku" "$fable" "$glm" \
-        ${${=CLAUDE_ENMASS_MODEL_DIALECTS}%=*}) || return 1
+        ${${=CLAUDE_ENMAAS_MODEL_DIALECTS}%=*}) || return 1
     token=$(jq -er '.token' <<< "$service") || return 1
     # A running proxy's frozen routes win over newly discovered dialects.
     settings=$(jq -c --argjson supported "$(jq -c '.models' <<< "$service")" '
@@ -376,27 +376,30 @@ claude-enmass() (
     # Preserve the terminal input while waiting on an owned child so TERM/HUP
     # traps run immediately even when Claude is still running interactively.
     _claude_invoke --settings "$settings" "$@" <&0 &
-    _claude_enmass_claude_pid=$!
+    _claude_enmaas_claude_pid=$!
     local result=0
-    wait "$_claude_enmass_claude_pid" || result=$?
-    _claude_enmass_claude_pid=''
+    wait "$_claude_enmaas_claude_pid" || result=$?
+    _claude_enmaas_claude_pid=''
     return "$result"
 )
 
-# Live shells may still carry the pre-rename claude-enmass-kill alias, which
-# would expand in the definition below and redefine kill-enmass-api instead.
-unalias claude-enmass-kill 2>/dev/null || true
-claude-enmass-kill() (
+# Live shells may still carry the pre-rename claude-enmaas-kill alias, which
+# would expand in the definition below and redefine kill-enmaas-api instead.
+unalias claude-enmaas-kill 2>/dev/null || true
+claude-enmaas-kill() (
     emulate -L zsh
     umask 077
     local port tmp result=0
-    port=$(_claude_enmass_port) || return 1
-    tmp=$(command mktemp -d "${TMPDIR:-/tmp}/enmass-kill.XXXXXXXX") || return 1
+    port=$(_claude_enmaas_port) || return 1
+    tmp=$(command mktemp -d "${TMPDIR:-/tmp}/enmaas-kill.XXXXXXXX") || return 1
     trap 'command rm -rf -- "$tmp"' EXIT
-    _claude_enmass_proxy_program > "$tmp/proxy.py" || return 1
+    _claude_enmaas_proxy_program > "$tmp/proxy.py" || return 1
     python3 "$tmp/proxy.py" stop "$port" || result=$?
     return "$result"
 )
 
-# Pre-rename name -- claude-enmass-kill is the current name.
-alias kill-enmass-api='claude-enmass-kill'
+# Pre-rename names -- claude-enmaas-kill is the current name (enmass -> enmaas).
+alias kill-enmaas-api='claude-enmaas-kill'
+alias kill-enmass-api='claude-enmaas-kill'
+alias claude-enmass='claude-enmaas'
+alias claude-enmass-kill='claude-enmaas-kill'

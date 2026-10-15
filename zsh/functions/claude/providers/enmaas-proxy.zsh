@@ -1,6 +1,6 @@
 # One-shot lifecycle controller for the standard shared LiteLLM CLI proxy.
 # No request server, tenant registry or session leases live here.
-_claude_enmass_proxy_program() {
+_claude_enmaas_proxy_program() {
     command cat <<'PY'
 import fcntl
 import hashlib
@@ -20,7 +20,7 @@ import urllib.request
 
 
 def runtime(port):
-    root = Path('/tmp') / ('claude-enmass-proxy-%s-%s' % (os.getuid(), port))
+    root = Path('/tmp') / ('claude-enmaas-proxy-%s-%s' % (os.getuid(), port))
     root.mkdir(mode=0o700, exist_ok=True)
     st = root.lstat()
     if not stat.S_ISDIR(st.st_mode) or st.st_uid != os.getuid() or st.st_mode & 0o077:
@@ -108,18 +108,18 @@ def ensure(root, port, config, versions, timeout, required):
     key = os.environ['ENMAAS_API_KEY']
     if owned(info):
         if not ready(info, root):
-            raise RuntimeError('recorded proxy is not ready; run claude-enmass-kill before relaunching')
+            raise RuntimeError('recorded proxy is not ready; run claude-enmaas-kill before relaunching')
         old = read_private(root / 'config.json')
         if (info['versions'] != versions or info['key_signature'] != signature(key, info['token'])
                 or old['model_list'][0]['litellm_params']['api_base'] != config['model_list'][0]['litellm_params']['api_base']):
-            raise RuntimeError('shared gateway/key or dependency settings changed; run claude-enmass-kill and relaunch')
+            raise RuntimeError('shared gateway/key or dependency settings changed; run claude-enmaas-kill and relaunch')
         previous = {r['model_name']: r['litellm_params'] for r in old['model_list']}
         proposed = {r['model_name']: r['litellm_params'] for r in config['model_list']}
         for model in required:
             want = proposed[model]
             actual = previous.get(model, dict(previous['*'], model=previous['*']['model'].replace('*', model)))
             if actual != want:
-                raise RuntimeError('model routing changed or is not loaded; run claude-enmass-kill and relaunch')
+                raise RuntimeError('model routing changed or is not loaded; run claude-enmaas-kill and relaunch')
         # Frozen routes remain authoritative; do not rewrite or restart a proxy
         # merely because discovery or one session's selected tier changed.
         return dict(info, models=[model for model, want in proposed.items()
@@ -132,7 +132,7 @@ def ensure(root, port, config, versions, timeout, required):
             probe.bind(('127.0.0.1', port))
         except OSError:
             raise RuntimeError('proxy port is occupied; refusing to adopt or stop its listener')
-    token = 'sk-enmass-' + secrets.token_hex(32)
+    token = 'sk-enmaas-' + secrets.token_hex(32)
     config['general_settings']['master_key'] = token
     write_private(root / 'config.json', config)
     args = ['uv', 'tool', 'run', '--with', 'fastapi==' + versions[1],
@@ -183,7 +183,7 @@ if __name__ == '__main__':
             else:
                 raise RuntimeError('invalid proxy operation')
     except Exception as error:
-        print('claude-enmass: ' + (str(error) if isinstance(error, RuntimeError) else 'proxy operation failed'), file=sys.stderr)
+        print('claude-enmaas: ' + (str(error) if isinstance(error, RuntimeError) else 'proxy operation failed'), file=sys.stderr)
         sys.exit(1)
 PY
 }

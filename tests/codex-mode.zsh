@@ -9,7 +9,7 @@ trap 'rm -rf "$tmp"' EXIT
 
 export XDG_CONFIG_HOME="$tmp/config"
 export CLAUDE_PROVIDER_CREDENTIALS_FILE="$tmp/secrets.zsh"
-export ENMAAS_API_KEY="test-enmass-key"
+export ENMAAS_API_KEY="test-enmaas-key"
 export CODEX_NATIVE_BINARY="$tmp/bin/codex"
 export PATH="$tmp/bin:$PATH"
 
@@ -26,18 +26,18 @@ source "$repo/zsh/functions/codex.zsh"
 
 fail() { print -ru2 -- "FAIL: $*"; exit 1; }
 
-codex-mode enmass >/dev/null
-[[ "$(<"$_codex_mode_file")" == enmass ]] || fail "enmass mode was not persisted"
+codex-mode enmaas >/dev/null
+[[ "$(<"$_codex_mode_file")" == enmaas ]] || fail "enmaas mode was not persisted"
 
 export CODEX_MODE_TEST_LOG="$tmp/version.log"
 codex --version >/dev/null
 [[ "$(<"$tmp/version.log")" == --version ]] || fail "version bypass changed arguments"
 
-CODEX_MODE_TEST_LOG="$tmp/enmass.log"
+CODEX_MODE_TEST_LOG="$tmp/enmaas.log"
 codex hello >/dev/null
-grep -q 'model_provider=enmaas' "$tmp/enmass.log" || fail "enmass mode did not set provider"
-grep -q 'model=rits/zai-org/glm-5-3' "$tmp/enmass.log" || fail "enmass mode did not set model"
-grep -q -- 'hello' "$tmp/enmass.log" || fail "enmass mode dropped caller arguments"
+grep -q 'model_provider=enmaas' "$tmp/enmaas.log" || fail "enmaas mode did not set provider"
+grep -q 'model=rits/zai-org/glm-5-3' "$tmp/enmaas.log" || fail "enmaas mode did not set model"
+grep -q -- 'hello' "$tmp/enmaas.log" || fail "enmaas mode dropped caller arguments"
 
 codex-mode native >/dev/null
 [[ "$(<"$_codex_mode_file")" == native ]] || fail "native mode was not persisted"

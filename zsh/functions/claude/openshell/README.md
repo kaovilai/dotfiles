@@ -1,6 +1,6 @@
 # Claude Code in an OpenShell sandbox
 
-`openshell-copilot`, `openshell-vertex`, `openshell-enmass` and
+`openshell-copilot`, `openshell-vertex`, `openshell-enmaas` and
 `openshell-openai` run the matching `claude-<backend>` wrapper with Claude Code
 inside an [NVIDIA OpenShell](https://github.com/NVIDIA/OpenShell) sandbox.
 Implementation: `../providers/openshell.zsh`.
@@ -100,7 +100,7 @@ e.g. for a hung session.
 - **Gateway quirks.** It caps sandbox names at 19 characters, hence
   `cl-<backend>-<id>` plus labels. `openshell status` exits 0 even for an
   unknown gateway.
-- **Tested end to end:** copilot, vertex and enmass in print mode; under a
+- **Tested end to end:** copilot, vertex and enmaas in print mode; under a
   pseudo-terminal; TERM mid-session (patch saved, sandbox deleted, exit 143);
   KEEP plus clean; the gitignored-file report; the NO_UPLOAD discard notice;
   refusal of non-git directories and unlabeled clean targets.
@@ -128,8 +128,8 @@ e.g. for a hung session.
   Switching them to `_claude_invoke` makes them wrappable. vertex-native-adc
   has no proxy, so it would need Vertex endpoints and ADC in the sandbox
   instead.
-- **Proxy keys as provider profiles:** the `sk-enmass-*` key is the local
-  proxy's per-start master key (`enmass-proxy.zsh`). The real
+- **Proxy keys as provider profiles:** the `sk-enmaas-*` key is the local
+  proxy's per-start master key (`enmaas-proxy.zsh`). The real
   `ENMAAS_API_KEY` never enters the sandbox, and the key travels in the
   0600 settings file rather than on argv. A provider profile would
   additionally hide it from processes inside the sandbox, but it needs L7

@@ -163,7 +163,7 @@ After importing:
 
 ##### Claude provider launchers
 
-T3 Code's Claude provider instances don't run `claude` directly. Each instance's `binaryPath` in `~/.t3/userdata/settings.json` points at `~/.local/bin/claude-t3-<backend>` (`copilot`, `vertex`, `openai`, or `enmass`), a symlink to `scripts/claude-provider.zsh` in this repo. The script takes the backend from the link name, reads keys from `~/secrets.zsh`, sets up that backend's gateway or proxy, then starts Claude Code from `~/.local/bin/claude`.
+T3 Code's Claude provider instances don't run `claude` directly. Each instance's `binaryPath` in `~/.t3/userdata/settings.json` points at `~/.local/bin/claude-t3-<backend>` (`copilot`, `vertex`, `openai`, or `enmaas`), a symlink to `scripts/claude-provider.zsh` in this repo. The script takes the backend from the link name, reads keys from `~/secrets.zsh`, sets up that backend's gateway or proxy, then starts Claude Code from `~/.local/bin/claude`.
 
 Git doesn't track these links and `export-t3-data` doesn't include them. On the new laptop, after installing Claude Code (above):
 
@@ -179,7 +179,7 @@ verify-claude-t3-launchers
 `verify-t3-migration` also warns about any enabled provider whose absolute `binaryPath` in `settings.json` doesn't exist, and `verify-migration` counts that as a failed check.
 
 Every backend needs `python3` and `jq` from the Brewfile. Beyond that:
-- `enmass`: `ENMAAS_API_BASE_URL` and `ENMAAS_API_KEY` in `~/secrets.zsh`, and `uv` for the local LiteLLM proxy
+- `enmaas`: `ENMAAS_API_BASE_URL` and `ENMAAS_API_KEY` in `~/secrets.zsh`, and `uv` for the local LiteLLM proxy
 - `openai`: `OPENAI_API_KEY` in `~/secrets.zsh`, or the key `codex login --with-api-key` saves to `~/.codex/auth.json`, and `uv`
 - `vertex`: `CLOUD_ML_REGION` and `ANTHROPIC_VERTEX_PROJECT_ID` in `~/secrets.zsh`, `gcloud auth application-default login`, and `uv`
 - `copilot`: the copilot-api gateway checkout (`git clone -b dev https://github.com/kaovilai/copilot-api ~/git/copilot-api`) and `bun`. Its GitHub login in `~/.local/share/copilot-api` isn't migrated, so sign in again with `bun run --cwd ~/git/copilot-api ./src/main.ts auth`.

@@ -49,7 +49,7 @@ _claude_fixture() {
 claude-copilot() { _claude_fixture copilot "$@"; }
 claude-vertex() { ( _claude_fixture vertex "$@" ); }
 claude-openai() { _claude_fixture openai "$@"; }
-claude-enmass() ( _claude_fixture enmass "$@" )
+claude-enmaas() ( _claude_fixture enmaas "$@" )
 ''')
         self.native = self.root / "bin/native"
         self.native.write_text('''#!/usr/bin/env python3
@@ -97,7 +97,7 @@ print loaded > "$FIXTURE_BOOTSTRAPPED"
                               capture_output=True, timeout=15)
 
     def test_four_backends_merge_and_forward(self):
-        for backend in ("copilot", "vertex", "openai", "enmass"):
+        for backend in ("copilot", "vertex", "openai", "enmaas"):
             with self.subTest(backend=backend):
                 result = self.invoke(backend, "--model", "t3-sonnet", "--settings",
                     '{"sdk":true,"env":{"KEEP":"yes","ANTHROPIC_AUTH_TOKEN":"wrong"}}',
@@ -127,10 +127,10 @@ print loaded > "$FIXTURE_BOOTSTRAPPED"
         self.assertLess(time.monotonic() - before, 4)
 
     def test_prepare_only_and_file_settings(self):
-        result = self.invoke("enmass", "--prepare")
+        result = self.invoke("enmaas", "--prepare")
         self.assertEqual(result.returncode, 0, result.stderr)
         data = json.loads(result.stdout)
-        self.assertEqual(data["backend"], "enmass")
+        self.assertEqual(data["backend"], "enmaas")
         self.assertNotIn("fixture-local-token", result.stdout)
         file = self.root / "caller.json"
         file.write_text('{"sdk":"file"}')

@@ -30,7 +30,7 @@ done
 
 # Re-running changes nothing
 out=$(link-claude-t3-launchers 2>&1) || fail "second link run failed"
-[[ "$out" == *"claude-t3-enmass already linked"* ]] || fail "second run did not report existing links: $out"
+[[ "$out" == *"claude-t3-enmaas already linked"* ]] || fail "second run did not report existing links: $out"
 
 # A stale or dangling symlink is repointed
 ln -sfn "$tmp/nowhere" "$tmp/bin/claude-t3-vertex"
@@ -49,7 +49,7 @@ link-claude-t3-launchers >/dev/null 2>&1 || fail "relink after removing the regu
 
 # Verification runs each launcher's --version through the stub
 verify-claude-t3-launchers >/dev/null 2>&1 || fail "verify failed with every launcher linked"
-"$tmp/bin/claude-t3-enmass" --version | grep -q '9.9.9' || fail "launcher did not exec the native binary"
+"$tmp/bin/claude-t3-enmaas" --version | grep -q '9.9.9' || fail "launcher did not exec the native binary"
 
 # Codex launchers: same contract, codex-t3-<backend> -> codex-provider.zsh
 export CODEX_PROVIDER_NATIVE_BINARY="$tmp/codex"
@@ -82,10 +82,10 @@ link-claude-t3-launchers >/dev/null 2>&1 || fail "relink failed"
 mkdir -p "$tmp/t3/userdata"
 cat > "$tmp/t3/userdata/settings.json" <<EOF
 {"providerInstances": {
-  "claude_enmass": {"enabled": true, "config": {"binaryPath": "$tmp/bin/claude-t3-enmass"}},
-  "claude_twin":   {"config": {"binaryPath": "$tmp/bin/claude-t3-enmass"}},
+  "claude_enmaas": {"enabled": true, "config": {"binaryPath": "$tmp/bin/claude-t3-enmaas"}},
+  "claude_twin":   {"config": {"binaryPath": "$tmp/bin/claude-t3-enmaas"}},
   "codex":         {"config": {"binaryPath": "codex"}},
-  "codex_enmass":  {"enabled": true, "config": {"binaryPath": "$tmp/bin/codex-t3-enmass"}},
+  "codex_enmaas":  {"enabled": true, "config": {"binaryPath": "$tmp/bin/codex-t3-enmaas"}},
   "disabled":      {"enabled": false, "config": {"binaryPath": "$tmp/never-installed"}},
   "no_config":     {}
 }}
@@ -94,14 +94,14 @@ _t3_check_provider_binaries >/dev/null 2>&1 || fail "provider check failed with 
 
 cat > "$tmp/t3/userdata/settings.json" <<EOF
 {"providerInstances": {
-  "claude_old_home": {"config": {"binaryPath": "/Users/someone-else/.local/bin/claude-t3-enmass"}},
-  "codex_old_home":  {"config": {"binaryPath": "/Users/someone-else/.local/bin/codex-t3-enmass"}},
+  "claude_old_home": {"config": {"binaryPath": "/Users/someone-else/.local/bin/claude-t3-enmaas"}},
+  "codex_old_home":  {"config": {"binaryPath": "/Users/someone-else/.local/bin/codex-t3-enmaas"}},
   "native":          {"config": {"binaryPath": "$tmp/missing-claude"}}
 }}
 EOF
 if out=$(_t3_check_provider_binaries 2>&1); then fail "provider check passed with missing binaries"; fi
-[[ "$out" == *"claude-t3-enmass missing (run link-claude-t3-launchers"* ]] || fail "launcher hint missing: $out"
-[[ "$out" == *"codex-t3-enmass missing (run link-codex-t3-launchers"* ]] || fail "codex launcher hint missing: $out"
+[[ "$out" == *"claude-t3-enmaas missing (run link-claude-t3-launchers"* ]] || fail "launcher hint missing: $out"
+[[ "$out" == *"codex-t3-enmaas missing (run link-codex-t3-launchers"* ]] || fail "codex launcher hint missing: $out"
 [[ "$out" == *"missing-claude missing (install it"* ]] || fail "generic hint missing: $out"
 [[ "$out" == *"✗"* ]] || fail "default reporter is not error: $out"
 

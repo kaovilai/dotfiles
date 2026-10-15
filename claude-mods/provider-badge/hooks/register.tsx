@@ -5,7 +5,7 @@ import { classify } from './classify'
 const COLORS: Record<string, string> = {
   copilot: '#6E40C9',
   openai: '#10A37F',
-  enmass: '#EE0000',
+  enmaas: '#EE0000',
   vertex: '#1A73E8',
   'vertex-native-adc': '#0B8043',
   'glm-only': '#3E5FF9',
@@ -28,7 +28,7 @@ export const register: Register = on => {
       copilotPort: await $.env.get('COPILOT_API_PORT'),
       vertexProxyPort: await $.env.get('CLAUDE_VERTEX_PROXY_PORT'),
       openaiPort: await $.env.get('CLAUDE_OPENAI_PROXY_PORT'),
-      enmassPort: await $.env.get('CLAUDE_ENMASS_PROXY_PORT'),
+      enmaasPort: await $.env.get('CLAUDE_ENMAAS_PROXY_PORT'),
       glmPort: await $.env.get('GLM_HYBRID_CLAUDE_PROXY_PORT'),
       ollamaHost: await $.env.get('OLLAMA_HOST'),
     })

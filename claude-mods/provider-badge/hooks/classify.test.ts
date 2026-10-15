@@ -14,7 +14,7 @@ test('maps each launcher by its full base url', () => {
   expect(classify({ baseUrl: 'http://localhost:4141' })).toBe('copilot')
   expect(classify({ baseUrl: 'http://127.0.0.1:4142' })).toBe('vertex')
   expect(classify({ baseUrl: 'http://127.0.0.1:4145' })).toBe('openai')
-  expect(classify({ baseUrl: 'http://127.0.0.1:4146' })).toBe('enmass')
+  expect(classify({ baseUrl: 'http://127.0.0.1:4146' })).toBe('enmaas')
   expect(classify({ baseUrl: 'http://localhost:11434' })).toBe('ollama')
 })
 
@@ -28,7 +28,7 @@ test('the shared GLM proxy splits by the classifier tier', () => {
 test('honors overridden ports', () => {
   expect(classify({ baseUrl: 'http://localhost:5555', copilotPort: '5555' })).toBe('copilot')
   expect(classify({ baseUrl: 'http://127.0.0.1:6000', vertexProxyPort: '6000' })).toBe('vertex')
-  expect(classify({ baseUrl: 'http://127.0.0.1:7000', enmassPort: '7000' })).toBe('enmass')
+  expect(classify({ baseUrl: 'http://127.0.0.1:7000', enmaasPort: '7000' })).toBe('enmaas')
   expect(classify({ baseUrl: 'http://127.0.0.1:8000', openaiPort: '8000' })).toBe('openai')
   expect(classify({ baseUrl: 'http://127.0.0.1:9000', glmPort: '9000', model: 'm', sonnetModel: 'r' })).toBe('glm-hybrid')
 })

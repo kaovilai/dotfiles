@@ -2,7 +2,7 @@
 # Real LiteLLM regression test with a loopback gateway and stub Claude client.
 # Cache the pinned uv dependencies first; UV_OFFLINE=1 prevents network installs.
 emulate -LR zsh
-export ENMASS_TEST_REPO="${0:A:h:h}"
+export ENMAAS_TEST_REPO="${0:A:h:h}"
 python3 - <<'PY'
 import concurrent.futures
 import json
@@ -55,7 +55,7 @@ class Gateway(BaseHTTPRequestHandler):
         records.append({'path': self.path, 'model': body.get('model'),
                         'auth': self.headers.get('x-api-key') if native else self.headers.get('Authorization'),
                         'version': self.headers.get('anthropic-version'), 'stream': body.get('stream', False),
-                        'credential_in_body': any(secret in json.dumps(body) for secret in ('offline-key-a', 'sk-enmass-'))})
+                        'credential_in_body': any(secret in json.dumps(body) for secret in ('offline-key-a', 'sk-enmaas-'))})
         if body.get('model') == 'offline-error':
             return self.json({'error': {'message': 'fixture failure', 'type': 'invalid_request_error'}}, 400)
         if native:
@@ -100,7 +100,7 @@ from pathlib import Path
 base = os.environ['ANTHROPIC_BASE_URL']
 token = os.environ['ANTHROPIC_AUTH_TOKEN']
 print('SESSION_BASE:' + base, flush=True)
-Path(os.environ['ENMASS_TEST_CLIENT_CAPTURE']).write_text(json.dumps({'base': base, 'token': token, 'settings': json.loads(__import__('sys').argv[2])}))
+Path(os.environ['ENMAAS_TEST_CLIENT_CAPTURE']).write_text(json.dumps({'base': base, 'token': token, 'settings': json.loads(__import__('sys').argv[2])}))
 try:
     urllib.request.urlopen(urllib.request.Request(base + '/v1/models', headers={'Authorization': 'Bearer sk-invalid-token'}))
     raise AssertionError('unknown token accepted')
@@ -128,9 +128,9 @@ try:
 except urllib.error.HTTPError as e:
     assert e.code == 400, e.code
 print('PASS: all dialects, Messages/Chat streaming, tool conversion and HTTP error propagation', flush=True)
-if os.environ['ENMASS_TEST_CLIENT_INDEX'] == '1':
+if os.environ['ENMAAS_TEST_CLIENT_INDEX'] == '1':
     deadline = time.monotonic() + 30
-    while not Path(os.environ['ENMASS_TEST_FIRST_EXIT']).exists():
+    while not Path(os.environ['ENMAAS_TEST_FIRST_EXIT']).exists():
         assert time.monotonic() < deadline, 'first client did not exit'
         time.sleep(.1)
     with request('offline-chat') as response:
@@ -138,38 +138,38 @@ if os.environ['ENMASS_TEST_CLIENT_INDEX'] == '1':
     print('PASS: remaining Claude client works after its peer exits', flush=True)
 '''
 
-repo = Path(os.environ['ENMASS_TEST_REPO'])
+repo = Path(os.environ['ENMAAS_TEST_REPO'])
 gateway = ThreadingHTTPServer(('127.0.0.1', 0), Gateway)
 threading.Thread(target=gateway.serve_forever, daemon=True).start()
 try:
-    with tempfile.TemporaryDirectory(prefix='enmass-real-tests-') as tmp:
+    with tempfile.TemporaryDirectory(prefix='enmaas-real-tests-') as tmp:
         client = Path(tmp) / 'claude'
         client.write_text(stub)
         client.chmod(0o700)
         env = dict(os.environ)
         for key in list(env):
-            if key.startswith(('ENMASS', 'CLAUDE_ENMASS')):
+            if key.startswith(('ENMAAS', 'CLAUDE_ENMAAS')):
                 env.pop(key)
         import socket
         with socket.socket() as probe:
             probe.bind(('127.0.0.1', 0))
             proxy_port = probe.getsockname()[1]
-        env.update({'PATH': tmp + ':' + env['PATH'], 'ENMASS_TEST_REPO': str(repo),
-                    'CLAUDE_ENMASS_PROXY_PORT': str(proxy_port),
+        env.update({'PATH': tmp + ':' + env['PATH'], 'ENMAAS_TEST_REPO': str(repo),
+                    'CLAUDE_ENMAAS_PROXY_PORT': str(proxy_port),
                     'ENMAAS_API_BASE_URL': f'http://127.0.0.1:{gateway.server_port}/v1', 'ENMAAS_API_KEY': 'offline-key-a',
-                    'CLAUDE_ENMASS_MODEL_DIALECTS': 'offline-responses=responses offline-error=chat', 'UV_OFFLINE': '1',
+                    'CLAUDE_ENMAAS_MODEL_DIALECTS': 'offline-responses=responses offline-error=chat', 'UV_OFFLINE': '1',
                     'ANTHROPIC_AUTH_TOKEN': 'parent-token', 'ANTHROPIC_API_KEY': 'parent-key',
                     'CLAUDE_CODE_USE_VERTEX': '1', 'CLAUDE_CODE_USE_BEDROCK': '1'})
-        script = '''source "$ENMASS_TEST_REPO/zsh/functions/claude/load.zsh"
-claude-enmass
+        script = '''source "$ENMAAS_TEST_REPO/zsh/functions/claude/load.zsh"
+claude-enmaas
 result=$?
 [[ $ANTHROPIC_AUTH_TOKEN == parent-token && $ANTHROPIC_API_KEY == parent-key && $CLAUDE_CODE_USE_VERTEX == 1 && $CLAUDE_CODE_USE_BEDROCK == 1 ]] || exit 99
 exit $result
 '''
         def launch(index):
-            client_env = dict(env, ENMASS_TEST_CLIENT_INDEX=str(index),
-                              ENMASS_TEST_FIRST_EXIT=str(Path(tmp) / 'first-exited'))
-            client_env['ENMASS_TEST_CLIENT_CAPTURE'] = str(Path(tmp) / ('client-%s.json' % index))
+            client_env = dict(env, ENMAAS_TEST_CLIENT_INDEX=str(index),
+                              ENMAAS_TEST_FIRST_EXIT=str(Path(tmp) / 'first-exited'))
+            client_env['ENMAAS_TEST_CLIENT_CAPTURE'] = str(Path(tmp) / ('client-%s.json' % index))
             result = subprocess.run(['zsh', '-f', '-c', script], env=client_env, text=True,
                                     stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=180)
             if index == 0:
@@ -192,7 +192,7 @@ exit $result
             with urllib.request.urlopen(urllib.request.Request(capture['base'] + '/v1/models',
                  headers={'Authorization': 'Bearer ' + capture['token']}), timeout=2) as response:
                 assert response.status == 200, 'client exit stopped shared proxy'
-        runtime = Path('/tmp') / ('claude-enmass-proxy-%s-%s' % (os.getuid(), proxy_port))
+        runtime = Path('/tmp') / ('claude-enmaas-proxy-%s-%s' % (os.getuid(), proxy_port))
         info = json.loads((runtime / 'proxy.json').read_text())
         assert info['port'] == proxy_port and (runtime.stat().st_mode & 0o777) == 0o700
         assert not any('offline-key-' in p.read_text() for p in runtime.iterdir() if p.is_file())
@@ -207,12 +207,12 @@ exit $result
         for model, endpoint in expected.items():
             assert any(r['model'] == model and r['path'] == endpoint for r in records), (model, endpoint)
         print('PASS: exact model IDs, per-model dialect authentication, shared standard proxy and parent environment isolation')
-        stop = subprocess.run(['zsh', '-f', '-c', 'source "$ENMASS_TEST_REPO/zsh/functions/claude/providers/enmass.zsh"; claude-enmass-kill'],
+        stop = subprocess.run(['zsh', '-f', '-c', 'source "$ENMAAS_TEST_REPO/zsh/functions/claude/providers/enmaas.zsh"; claude-enmaas-kill'],
                               env=env, text=True, capture_output=True, timeout=30)
         assert stop.returncode == 0, stop.stderr
 finally:
     if 'env' in locals():
-        subprocess.run(['zsh', '-f', '-c', 'source "$ENMASS_TEST_REPO/zsh/functions/claude/providers/enmass.zsh"; claude-enmass-kill'],
+        subprocess.run(['zsh', '-f', '-c', 'source "$ENMAAS_TEST_REPO/zsh/functions/claude/providers/enmaas.zsh"; claude-enmaas-kill'],
                        env=env, text=True, capture_output=True, timeout=30)
     gateway.shutdown()
 PY

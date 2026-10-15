@@ -5,7 +5,7 @@ emulate -LR zsh
 setopt err_exit pipe_fail
 umask 077
 local repo="${0:A:h:h}" tmp run_pid=''
-tmp=$(mktemp -d "${TMPDIR:-/tmp}/claude-enmass-tests.XXXXXXXX")
+tmp=$(mktemp -d "${TMPDIR:-/tmp}/claude-enmaas-tests.XXXXXXXX")
 trap '[[ -n "$run_pid" ]] && kill -TERM "$run_pid" 2>/dev/null; rm -rf -- "$tmp"' EXIT
 
 # Load actual shared helpers without unrelated wrapper startup configuration.
@@ -17,10 +17,10 @@ for name in ('_claude_copilot_latest_model', '_claude_picker_args', '_claude_cop
 print(re.search(r'^typeset -ga _claude_copilot_env_names=\(\n.*?^\)', s, re.M | re.S).group())
 PY
 )
-source "$repo/zsh/functions/claude/providers/enmass.zsh"
+source "$repo/zsh/functions/claude/providers/enmaas.zsh"
 # Preserve the real emitted helper for isolated Python tests, then replace the
-# launcher seam before any claude-enmass call can reach an actual daemon.
-_claude_enmass_program > "$tmp/actual-daemon.py"
+# launcher seam before any claude-enmaas call can reach an actual daemon.
+_claude_enmaas_program > "$tmp/actual-daemon.py"
 
 python3 - "$tmp" <<'PY'
 from pathlib import Path
@@ -29,20 +29,20 @@ p = Path(sys.argv[1]); (p/'bin').mkdir()
 files = {
 'mock-daemon.py': r'''import json, os, sys, time
 from pathlib import Path
-p = Path(os.environ['ENMASS_TEST_CAPTURE'])
+p = Path(os.environ['ENMAAS_TEST_CAPTURE'])
 op = sys.argv[1]
 if op == 'ensure':
  (p/'ensure.json').write_text(json.dumps({'argv':sys.argv[2:]}))
  (p/'session-path').write_text(str(Path(__file__).parent))
  (p/'program-mode').write_text(oct(Path(__file__).stat().st_mode & 0o777))
  (p/'directory-mode').write_text(oct(Path(__file__).parent.stat().st_mode & 0o777))
- if os.environ.get('ENMASS_TEST_ENSURE_FAIL') == '1': sys.exit(51)
+ if os.environ.get('ENMAAS_TEST_ENSURE_FAIL') == '1': sys.exit(51)
  print(p/'runtime')
 elif op == 'lease':
  registration = json.load(sys.stdin)
  (p/'lease.pid').write_text(str(os.getpid()))
  (p/'owner.pid').write_text(str(os.getppid())+'\n')
- if os.environ.get('ENMASS_TEST_LEASE_FAIL') == '1': sys.exit(52)
+ if os.environ.get('ENMAAS_TEST_LEASE_FAIL') == '1': sys.exit(52)
  (p/'registration.tmp').write_text(json.dumps(registration))
  (p/'registration.tmp').replace(p/'registration.json')
  while True: time.sleep(.1)
@@ -56,7 +56,7 @@ exit 99
 'bin/curl': r'''#!/usr/bin/env python3
 import json, os, sys
 from pathlib import Path
-p = Path(os.environ['ENMASS_TEST_ROOT']); c = Path(os.environ['ENMASS_TEST_CAPTURE'])
+p = Path(os.environ['ENMAAS_TEST_ROOT']); c = Path(os.environ['ENMAAS_TEST_CAPTURE'])
 args = sys.argv[1:]; endpoint = args[-1]
 headers = sys.stdin.read() if '--config' in args else ''
 if not endpoint.startswith('http://127.0.0.1:58123'):
@@ -67,14 +67,14 @@ if not endpoint.startswith('http://127.0.0.1:58123'):
  if headers:
   if expected not in headers: sys.exit(22)
  elif args[args.index('-H')+1] != expected: sys.exit(22)
- marker = 'wrong-tenant-marker' if os.environ.get('ENMASS_TEST_WRONG_MARKER') == '1' else r['marker']
+ marker = 'wrong-tenant-marker' if os.environ.get('ENMAAS_TEST_WRONG_MARKER') == '1' else r['marker']
  print(json.dumps({'data':[{'id':marker}]})); sys.exit(0)
 native = 'x-api-key: upstream-test-secret' in headers and 'anthropic-version: 2023-06-01' in headers
 bearer = 'Authorization: Bearer upstream-test-secret' in headers
 path = endpoint.removeprefix('http://127.0.0.1:58123')
 with (p/'discovery.jsonl').open('a') as f:
  f.write(json.dumps({'native':native, 'bearer':bearer, 'path':path, 'argv':args})+'\n')
-if not (native or bearer) or os.environ.get('ENMASS_TEST_TRANSPORT_FAIL') == '1': sys.exit(22)
+if not (native or bearer) or os.environ.get('ENMAAS_TEST_TRANSPORT_FAIL') == '1': sys.exit(22)
 a = [
  {'id':'claude-sonnet-4-5-20250929', 'display_name':'Claude Sonnet 4.5'},
  {'id':'claude-sonnet-4-6', 'display_name':'Claude Sonnet 4.6'},
@@ -96,48 +96,48 @@ print(json.dumps({'data':[] if (p/'catalog-empty').exists() else data}))
 'bin/claude': r'''#!/usr/bin/env python3
 import json, os, sys, time
 from pathlib import Path
-p = Path(os.environ['ENMASS_TEST_CAPTURE'])
+p = Path(os.environ['ENMAAS_TEST_CAPTURE'])
 (p/'claude.json').write_text(json.dumps({'argv':sys.argv[1:], 'env':dict(os.environ)}))
 (p/'claude.pid').write_text(str(os.getpid()))
-if os.environ.get('ENMASS_TEST_CLAUDE_WAIT') == '1':
+if os.environ.get('ENMAAS_TEST_CLAUDE_WAIT') == '1':
  while True: time.sleep(.1)
-sys.exit(int(os.environ.get('ENMASS_TEST_CLAUDE_STATUS','0')))
+sys.exit(int(os.environ.get('ENMAAS_TEST_CLAUDE_STATUS','0')))
 '''
 }
 for name, text in files.items():
     f = p/name; f.write_text(text)
     if name.startswith('bin/'): f.chmod(0o700)
 PY
-_claude_enmass_program() { print -r -- "$(<"$tmp/mock-daemon.py")"; }
+_claude_enmaas_program() { print -r -- "$(<"$tmp/mock-daemon.py")"; }
 export ENMAAS_API_BASE_URL='http://127.0.0.1:58123/v1/messages' ENMAAS_API_KEY='upstream-test-secret'
-export PATH="$tmp/bin:$PATH" ENMASS_TEST_ROOT="$tmp" ENMASS_TEST_CAPTURE="$tmp/capture" CLAUDE_ENMASS_PROXY_START_TIMEOUT=3
-mkdir "$ENMASS_TEST_CAPTURE"
+export PATH="$tmp/bin:$PATH" ENMAAS_TEST_ROOT="$tmp" ENMAAS_TEST_CAPTURE="$tmp/capture" CLAUDE_ENMAAS_PROXY_START_TIMEOUT=3
+mkdir "$ENMAAS_TEST_CAPTURE"
 
-_claude_enmass_assert() {
+_claude_enmaas_assert() {
     local description="$1"; shift
     if "$@"; then print -r -- "ok - $description"
     else print -ru2 -- "FAIL - $description"; exit 1; fi
 }
 
-_claude_enmass_assert 'gateway root normalization' test "$(_claude_enmass_root "$ENMAAS_API_BASE_URL")" = 'http://127.0.0.1:58123'
+_claude_enmaas_assert 'gateway root normalization' test "$(_claude_enmaas_root "$ENMAAS_API_BASE_URL")" = 'http://127.0.0.1:58123'
 for endpoint in '' '/v1/' '/v1/models' '/v1/messages' '/v1/chat/completions' '/v1/responses'; do
-    _claude_enmass_assert 'HTTPS endpoint normalization' test "$(_claude_enmass_root "https://gateway.example${endpoint}")" = 'https://gateway.example'
+    _claude_enmaas_assert 'HTTPS endpoint normalization' test "$(_claude_enmaas_root "https://gateway.example${endpoint}")" = 'https://gateway.example'
 done
 for bad in 'http://example.com' 'https://user:secret@example.com/v1' 'https://example.com/v1?key=secret' 'https://example.com/#fragment' 'https://example.com/unexpected' 'https://example.com:99999' 'file:///etc/passwd' 'https://example.com\@elsewhere' $'https://example.com\n'; do
-    if _claude_enmass_root "$bad" >/dev/null 2>&1; then print -ru2 -- 'FAIL - rejected URL accepted'; exit 1; fi
+    if _claude_enmaas_root "$bad" >/dev/null 2>&1; then print -ru2 -- 'FAIL - rejected URL accepted'; exit 1; fi
 done
 print 'ok - untrusted URLs rejected'
-unset CLAUDE_ENMASS_PROXY_PORT
-_claude_enmass_assert 'shared default port is 4146 without probing a listener' test "$(_claude_enmass_port)" = 4146
+unset CLAUDE_ENMAAS_PROXY_PORT
+_claude_enmaas_assert 'shared default port is 4146 without probing a listener' test "$(_claude_enmaas_port)" = 4146
 for port in 1 65535 05123; do
-    export CLAUDE_ENMASS_PROXY_PORT="$port"
-    _claude_enmass_assert 'valid explicit port normalized' test "$(_claude_enmass_port)" -eq "$port"
+    export CLAUDE_ENMAAS_PROXY_PORT="$port"
+    _claude_enmaas_assert 'valid explicit port normalized' test "$(_claude_enmaas_port)" -eq "$port"
 done
 for port in 0 65536 -1 '1.5' ' 4146' abc '１２３'; do
-    export CLAUDE_ENMASS_PROXY_PORT="$port"
-    if _claude_enmass_port >/dev/null 2>&1; then print -ru2 -- 'FAIL - invalid port accepted'; exit 1; fi
+    export CLAUDE_ENMAAS_PROXY_PORT="$port"
+    if _claude_enmaas_port >/dev/null 2>&1; then print -ru2 -- 'FAIL - invalid port accepted'; exit 1; fi
 done
-unset CLAUDE_ENMASS_PROXY_PORT
+unset CLAUDE_ENMAAS_PROXY_PORT
 print 'ok - invalid ports rejected'
 
 # Inherited wrapper values must not leak into the EnMaaS child or mutate parent.
@@ -146,14 +146,14 @@ export CLAUDE_CODE_USE_VERTEX=1 CLAUDE_CODE_USE_BEDROCK=1 CLAUDE_CODE_USE_FOUNDR
 export ANTHROPIC_FOUNDRY_API_KEY='foundry-secret' CLAUDE_CODE_API_KEY_HELPER='parent-helper'
 typeset -g _cop_base='parent-cop-base' _cop_master_key='parent-cop-key'
 local parent_snapshot="$(typeset -p ANTHROPIC_BASE_URL ANTHROPIC_AUTH_TOKEN ANTHROPIC_API_KEY CLAUDE_CODE_USE_VERTEX CLAUDE_CODE_USE_BEDROCK CLAUDE_CODE_USE_FOUNDRY ANTHROPIC_CUSTOM_HEADERS ANTHROPIC_FOUNDRY_API_KEY CLAUDE_CODE_API_KEY_HELPER _cop_base _cop_master_key)"
-export ENMASS_TEST_CLAUDE_STATUS=37
+export ENMAAS_TEST_CLAUDE_STATUS=37
 local rc=0
-claude-enmass --model=gemini-3-pro --print 'argument with spaces' >"$tmp/stdout" 2>"$tmp/stderr" || rc=$?
+claude-enmaas --model=gemini-3-pro --print 'argument with spaces' >"$tmp/stdout" 2>"$tmp/stderr" || rc=$?
 if [[ "$rc" != 37 ]]; then
     print -ru2 -- "FAIL - first launcher returned $rc: $(<"$tmp/stderr")"
 fi
-_claude_enmass_assert 'Claude exit status retained' test "$rc" = 37
-_claude_enmass_assert 'parent environment and shared state unchanged' test "$parent_snapshot" = "$(typeset -p ANTHROPIC_BASE_URL ANTHROPIC_AUTH_TOKEN ANTHROPIC_API_KEY CLAUDE_CODE_USE_VERTEX CLAUDE_CODE_USE_BEDROCK CLAUDE_CODE_USE_FOUNDRY ANTHROPIC_CUSTOM_HEADERS ANTHROPIC_FOUNDRY_API_KEY CLAUDE_CODE_API_KEY_HELPER _cop_base _cop_master_key)"
+_claude_enmaas_assert 'Claude exit status retained' test "$rc" = 37
+_claude_enmaas_assert 'parent environment and shared state unchanged' test "$parent_snapshot" = "$(typeset -p ANTHROPIC_BASE_URL ANTHROPIC_AUTH_TOKEN ANTHROPIC_API_KEY CLAUDE_CODE_USE_VERTEX CLAUDE_CODE_USE_BEDROCK CLAUDE_CODE_USE_FOUNDRY ANTHROPIC_CUSTOM_HEADERS ANTHROPIC_FOUNDRY_API_KEY CLAUDE_CODE_API_KEY_HELPER _cop_base _cop_master_key)"
 python3 - "$tmp" <<'PY'
 import json, os, sys
 from pathlib import Path
@@ -183,7 +183,7 @@ opts=settings['modelPicker']['options']; ids=[r['model'] for r in opts]; assert 
 assert any('GLM 5.3' in row['label'] for row in opts)
 assert any(row['label'].startswith('Claude Sonnet 4.6') for row in opts if row['model']=='claude-sonnet-4-6')
 assert any(row['label'].startswith('GPT-6.1 Sol') for row in opts if row['model']=='gpt-6.1-sol')
-assert '_claude-enmass-ready-' not in json.dumps(opts)
+assert '_claude-enmaas-ready-' not in json.dumps(opts)
 e=launch['env']; assert e['ANTHROPIC_MODEL']=='gemini-3-pro'
 assert e['ANTHROPIC_DEFAULT_SONNET_MODEL']=='claude-sonnet-4-6'
 assert e['ANTHROPIC_DEFAULT_OPUS_MODEL']=='claude-opus-4-6'
@@ -212,24 +212,24 @@ assert 'upstream-test-secret' not in (p/'stdout').read_text()+(p/'stderr').read_
 assert json.loads((c/'ensure.json').read_text())['argv']==['4146','1.97.0','0.136.3','3']
 print('ok - routing, discovery union, settings, auth, argv, modes and lease-only cleanup')
 PY
-local first_token=$(jq -r '.token' "$ENMASS_TEST_CAPTURE/registration.json")
-local config=$(_claude_enmass_config 'https://gateway.example' 'test-token' '{"data":[]}' 'test-marker' 'custom')
-_claude_enmass_assert 'config enables explicit Chat conversion' test "$(jq -r '.litellm_settings.use_chat_completions_url_for_anthropic_messages' <<< "$config")" = true
-_claude_enmass_assert 'config contains no literal upstream credential' test "$(jq -r '.model_list | all(.litellm_params.api_key == "os.environ/ENMAAS_API_KEY")' <<< "$config")" = true
+local first_token=$(jq -r '.token' "$ENMAAS_TEST_CAPTURE/registration.json")
+local config=$(_claude_enmaas_config 'https://gateway.example' 'test-token' '{"data":[]}' 'test-marker' 'custom')
+_claude_enmaas_assert 'config enables explicit Chat conversion' test "$(jq -r '.litellm_settings.use_chat_completions_url_for_anthropic_messages' <<< "$config")" = true
+_claude_enmaas_assert 'config contains no literal upstream credential' test "$(jq -r '.model_list | all(.litellm_params.api_key == "os.environ/ENMAAS_API_KEY")' <<< "$config")" = true
 
-export ENMASS_TEST_CLAUDE_STATUS=0
+export ENMAAS_TEST_CLAUDE_STATUS=0
 touch "$tmp/openai-unavailable"
-claude-enmass >"$tmp/stdout" 2>"$tmp/stderr"
-_claude_enmass_assert 'OpenAI outage warns without losing other catalogs' grep -q 'GPT models may be omitted' "$tmp/stderr"
+claude-enmaas >"$tmp/stdout" 2>"$tmp/stderr"
+_claude_enmaas_assert 'OpenAI outage warns without losing other catalogs' grep -q 'GPT models may be omitted' "$tmp/stderr"
 rm "$tmp/openai-unavailable"
 
 # Exact unknown CLI IDs and tier aliases can be pinned with explicit dialects.
-export CLAUDE_ENMASS_MODEL='default-exact'
-export CLAUDE_ENMASS_OPUS_MODEL='custom-opus' CLAUDE_ENMASS_SONNET_MODEL='custom-sonnet'
-export CLAUDE_ENMASS_HAIKU_MODEL='custom-haiku' CLAUDE_ENMASS_FABLE_MODEL='custom-fable'
-export CLAUDE_ENMASS_MODEL_DIALECTS='unknown-exact=responses custom-opus=chat default-exact=anthropic ambiguous=chat'
-claude-enmass --model unknown-exact --print 'exact id' >"$tmp/stdout" 2>"$tmp/stderr"
-python3 - "$ENMASS_TEST_CAPTURE" "$first_token" <<'PY'
+export CLAUDE_ENMAAS_MODEL='default-exact'
+export CLAUDE_ENMAAS_OPUS_MODEL='custom-opus' CLAUDE_ENMAAS_SONNET_MODEL='custom-sonnet'
+export CLAUDE_ENMAAS_HAIKU_MODEL='custom-haiku' CLAUDE_ENMAAS_FABLE_MODEL='custom-fable'
+export CLAUDE_ENMAAS_MODEL_DIALECTS='unknown-exact=responses custom-opus=chat default-exact=anthropic ambiguous=chat'
+claude-enmaas --model unknown-exact --print 'exact id' >"$tmp/stdout" 2>"$tmp/stderr"
+python3 - "$ENMAAS_TEST_CAPTURE" "$first_token" <<'PY'
 import json, sys
 from pathlib import Path
 p=Path(sys.argv[1]); reg=json.loads((p/'registration.json').read_text()); m={row['model_name']:row['litellm_params'] for row in reg['model_list']}
@@ -243,13 +243,13 @@ assert reg['token']!=sys.argv[2]
 assert e['ANTHROPIC_BASE_URL']=='http://127.0.0.1:4146'
 print('ok - exact dialect overrides, tier overrides, separated --model and per-launch auth')
 PY
-claude-enmass --model opus >"$tmp/stdout" 2>"$tmp/stderr"
-_claude_enmass_assert 'CLI family aliases preserve selected tier' test "$(jq -r '.env.ANTHROPIC_MODEL' "$ENMASS_TEST_CAPTURE/claude.json")" = custom-opus
-unset CLAUDE_ENMASS_MODEL CLAUDE_ENMASS_OPUS_MODEL CLAUDE_ENMASS_SONNET_MODEL CLAUDE_ENMASS_HAIKU_MODEL CLAUDE_ENMASS_FABLE_MODEL CLAUDE_ENMASS_MODEL_DIALECTS
+claude-enmaas --model opus >"$tmp/stdout" 2>"$tmp/stderr"
+_claude_enmaas_assert 'CLI family aliases preserve selected tier' test "$(jq -r '.env.ANTHROPIC_MODEL' "$ENMAAS_TEST_CAPTURE/claude.json")" = custom-opus
+unset CLAUDE_ENMAAS_MODEL CLAUDE_ENMAAS_OPUS_MODEL CLAUDE_ENMAAS_SONNET_MODEL CLAUDE_ENMAAS_HAIKU_MODEL CLAUDE_ENMAAS_FABLE_MODEL CLAUDE_ENMAAS_MODEL_DIALECTS
 
 # Merge a caller's final settings layer, preserving wrapper-owned transport.
-claude-enmass --settings '{"effortLevel":"low","env":{"KEEP_ME":"yes","ANTHROPIC_BASE_URL":"https://other.example","CLAUDE_CODE_USE_VERTEX":"1"},"modelSettings":{"custom":{"effortLevel":"low"},"rits/zai-org/glm-5-3":{"effortLevel":"high"}}}' --print 'settings test' >"$tmp/stdout" 2>"$tmp/stderr"
-python3 - "$ENMASS_TEST_CAPTURE" <<'PY'
+claude-enmaas --settings '{"effortLevel":"low","env":{"KEEP_ME":"yes","ANTHROPIC_BASE_URL":"https://other.example","CLAUDE_CODE_USE_VERTEX":"1"},"modelSettings":{"custom":{"effortLevel":"low"},"rits/zai-org/glm-5-3":{"effortLevel":"high"}}}' --print 'settings test' >"$tmp/stdout" 2>"$tmp/stderr"
+python3 - "$ENMAAS_TEST_CAPTURE" <<'PY'
 import json, sys
 from pathlib import Path
 p=Path(sys.argv[1]); launch=json.loads((p/'claude.json').read_text()); args=launch['argv']
@@ -264,93 +264,93 @@ assert s['modelPicker']['options']
 print('ok - caller settings merge preserves isolation, picker and GLM effort')
 PY
 print -r -- '{"effortLevel":"high","env":{"FROM_FILE":"yes"}}' > "$tmp/caller-settings.json"
-claude-enmass --settings '{"earlier":"ignored"}' "--settings=$tmp/caller-settings.json" >"$tmp/stdout" 2>"$tmp/stderr"
-_claude_enmass_assert 'final settings file preserved' test "$(jq -r '.argv[1] | fromjson | .env.FROM_FILE' "$ENMASS_TEST_CAPTURE/claude.json")" = yes
-_claude_enmass_assert 'earlier settings occurrence ignored like Claude' test "$(jq -r '.argv[1] | fromjson | has("earlier")' "$ENMASS_TEST_CAPTURE/claude.json")" = false
+claude-enmaas --settings '{"earlier":"ignored"}' "--settings=$tmp/caller-settings.json" >"$tmp/stdout" 2>"$tmp/stderr"
+_claude_enmaas_assert 'final settings file preserved' test "$(jq -r '.argv[1] | fromjson | .env.FROM_FILE' "$ENMAAS_TEST_CAPTURE/claude.json")" = yes
+_claude_enmaas_assert 'earlier settings occurrence ignored like Claude' test "$(jq -r '.argv[1] | fromjson | has("earlier")' "$ENMAAS_TEST_CAPTURE/claude.json")" = false
 for invalid in '' 'not-json' '[]'; do
-    rc=0; claude-enmass --settings "$invalid" >"$tmp/stdout" 2>"$tmp/stderr" || rc=$?
-    _claude_enmass_assert 'invalid caller settings fail' test "$rc" = 1
+    rc=0; claude-enmaas --settings "$invalid" >"$tmp/stdout" 2>"$tmp/stderr" || rc=$?
+    _claude_enmaas_assert 'invalid caller settings fail' test "$rc" = 1
 done
-rc=0; claude-enmass --settings >"$tmp/stdout" 2>"$tmp/stderr" || rc=$?
-_claude_enmass_assert 'missing caller settings fail' test "$rc" = 1
+rc=0; claude-enmaas --settings >"$tmp/stdout" 2>"$tmp/stderr" || rc=$?
+_claude_enmaas_assert 'missing caller settings fail' test "$rc" = 1
 
-export CLAUDE_ENMASS_PROXY_PORT=5143
-claude-enmass >"$tmp/stdout" 2>"$tmp/stderr"
-_claude_enmass_assert 'port override forwarded to controller' test "$(jq -r '.argv[0]' "$ENMASS_TEST_CAPTURE/ensure.json")" = 5143
-_claude_enmass_assert 'port override used in child transport' test "$(jq -r '.env.ANTHROPIC_BASE_URL' "$ENMASS_TEST_CAPTURE/claude.json")" = 'http://127.0.0.1:5143'
-unset CLAUDE_ENMASS_PROXY_PORT
+export CLAUDE_ENMAAS_PROXY_PORT=5143
+claude-enmaas >"$tmp/stdout" 2>"$tmp/stderr"
+_claude_enmaas_assert 'port override forwarded to controller' test "$(jq -r '.argv[0]' "$ENMAAS_TEST_CAPTURE/ensure.json")" = 5143
+_claude_enmaas_assert 'port override used in child transport' test "$(jq -r '.env.ANTHROPIC_BASE_URL' "$ENMAAS_TEST_CAPTURE/claude.json")" = 'http://127.0.0.1:5143'
+unset CLAUDE_ENMAAS_PROXY_PORT
 
 # Controller/lease/readiness failures never call Claude. All seams are mocks.
 for failure in ENSURE_FAIL LEASE_FAIL WRONG_MARKER; do
-    rm -f "$ENMASS_TEST_CAPTURE/claude.json" "$ENMASS_TEST_CAPTURE/registration.json"
-    export "ENMASS_TEST_${failure}=1" CLAUDE_ENMASS_PROXY_START_TIMEOUT=1
-    rc=0; claude-enmass >"$tmp/stdout" 2>"$tmp/stderr" || rc=$?
-    _claude_enmass_assert "$failure propagated" test "$rc" = 1
-    _claude_enmass_assert "$failure does not launch Claude" test ! -e "$ENMASS_TEST_CAPTURE/claude.json"
-    _claude_enmass_assert "$failure removes private session files" test ! -e "$(<"$ENMASS_TEST_CAPTURE/session-path")"
-    unset "ENMASS_TEST_${failure}"
+    rm -f "$ENMAAS_TEST_CAPTURE/claude.json" "$ENMAAS_TEST_CAPTURE/registration.json"
+    export "ENMAAS_TEST_${failure}=1" CLAUDE_ENMAAS_PROXY_START_TIMEOUT=1
+    rc=0; claude-enmaas >"$tmp/stdout" 2>"$tmp/stderr" || rc=$?
+    _claude_enmaas_assert "$failure propagated" test "$rc" = 1
+    _claude_enmaas_assert "$failure does not launch Claude" test ! -e "$ENMAAS_TEST_CAPTURE/claude.json"
+    _claude_enmaas_assert "$failure removes private session files" test ! -e "$(<"$ENMAAS_TEST_CAPTURE/session-path")"
+    unset "ENMAAS_TEST_${failure}"
 done
-export CLAUDE_ENMASS_PROXY_START_TIMEOUT=3
+export CLAUDE_ENMAAS_PROXY_START_TIMEOUT=3
 for bad in 'bad=not-a-dialect' 'bad' '=chat'; do
-    export CLAUDE_ENMASS_MODEL_DIALECTS="$bad"
-    rc=0; claude-enmass >"$tmp/stdout" 2>"$tmp/stderr" || rc=$?
-    _claude_enmass_assert 'malformed dialect override fails' test "$rc" = 1
+    export CLAUDE_ENMAAS_MODEL_DIALECTS="$bad"
+    rc=0; claude-enmaas >"$tmp/stdout" 2>"$tmp/stderr" || rc=$?
+    _claude_enmaas_assert 'malformed dialect override fails' test "$rc" = 1
 done
-unset CLAUDE_ENMASS_MODEL_DIALECTS
+unset CLAUDE_ENMAAS_MODEL_DIALECTS
 for invalid in '--model=' '--model'; do
-    rc=0; claude-enmass "$invalid" >"$tmp/stdout" 2>"$tmp/stderr" || rc=$?
-    _claude_enmass_assert 'empty or missing CLI model fails' test "$rc" = 1
+    rc=0; claude-enmaas "$invalid" >"$tmp/stdout" 2>"$tmp/stderr" || rc=$?
+    _claude_enmaas_assert 'empty or missing CLI model fails' test "$rc" = 1
 done
 for timeout in 0 601 abc; do
-    export CLAUDE_ENMASS_PROXY_START_TIMEOUT="$timeout"
-    rc=0; claude-enmass >"$tmp/stdout" 2>"$tmp/stderr" || rc=$?
-    _claude_enmass_assert 'invalid startup timeout fails' test "$rc" = 1
+    export CLAUDE_ENMAAS_PROXY_START_TIMEOUT="$timeout"
+    rc=0; claude-enmaas >"$tmp/stdout" 2>"$tmp/stderr" || rc=$?
+    _claude_enmaas_assert 'invalid startup timeout fails' test "$rc" = 1
 done
-export CLAUDE_ENMASS_PROXY_START_TIMEOUT=3
+export CLAUDE_ENMAAS_PROXY_START_TIMEOUT=3
 
 # Discovery is advisory; exact selections still work with an empty/broken catalog.
 for catalog in empty unavailable; do
     touch "$tmp/catalog-$catalog"
-    rc=0; claude-enmass >"$tmp/stdout" 2>"$tmp/stderr" || rc=$?
-    _claude_enmass_assert "$catalog catalog without explicit model fails" test "$rc" = 1
-    claude-enmass --model undiscovered-exact >"$tmp/stdout" 2>"$tmp/stderr"
-    _claude_enmass_assert "$catalog catalog accepts exact CLI model" test "$(jq -r '.env.ANTHROPIC_MODEL' "$ENMASS_TEST_CAPTURE/claude.json")" = undiscovered-exact
-    export CLAUDE_ENMASS_MODEL='rits/zai-org/glm-5-3'
-    claude-enmass >"$tmp/stdout" 2>"$tmp/stderr"
-    _claude_enmass_assert "$catalog catalog accepts configured model" test "$(jq -r '.env.ANTHROPIC_MODEL' "$ENMASS_TEST_CAPTURE/claude.json")" = rits/zai-org/glm-5-3
-    unset CLAUDE_ENMASS_MODEL
+    rc=0; claude-enmaas >"$tmp/stdout" 2>"$tmp/stderr" || rc=$?
+    _claude_enmaas_assert "$catalog catalog without explicit model fails" test "$rc" = 1
+    claude-enmaas --model undiscovered-exact >"$tmp/stdout" 2>"$tmp/stderr"
+    _claude_enmaas_assert "$catalog catalog accepts exact CLI model" test "$(jq -r '.env.ANTHROPIC_MODEL' "$ENMAAS_TEST_CAPTURE/claude.json")" = undiscovered-exact
+    export CLAUDE_ENMAAS_MODEL='rits/zai-org/glm-5-3'
+    claude-enmaas >"$tmp/stdout" 2>"$tmp/stderr"
+    _claude_enmaas_assert "$catalog catalog accepts configured model" test "$(jq -r '.env.ANTHROPIC_MODEL' "$ENMAAS_TEST_CAPTURE/claude.json")" = rits/zai-org/glm-5-3
+    unset CLAUDE_ENMAAS_MODEL
     rm "$tmp/catalog-$catalog"
 done
-export ENMASS_TEST_TRANSPORT_FAIL=1
-claude-enmass --model offline-exact >"$tmp/stdout" 2>"$tmp/stderr"
-_claude_enmass_assert 'transport failure accepts explicit selection' test "$(jq -r '.env.ANTHROPIC_MODEL' "$ENMASS_TEST_CAPTURE/claude.json")" = offline-exact
-unset ENMASS_TEST_TRANSPORT_FAIL
+export ENMAAS_TEST_TRANSPORT_FAIL=1
+claude-enmaas --model offline-exact >"$tmp/stdout" 2>"$tmp/stderr"
+_claude_enmaas_assert 'transport failure accepts explicit selection' test "$(jq -r '.env.ANTHROPIC_MODEL' "$ENMAAS_TEST_CAPTURE/claude.json")" = offline-exact
+unset ENMAAS_TEST_TRANSPORT_FAIL
 for credential in ENMAAS_API_KEY ENMAAS_API_BASE_URL; do
     rc=0
-    (unset "$credential"; claude-enmass) >"$tmp/stdout" 2>"$tmp/stderr" || rc=$?
-    _claude_enmass_assert "missing $credential fails" test "$rc" = 1
+    (unset "$credential"; claude-enmaas) >"$tmp/stdout" 2>"$tmp/stderr" || rc=$?
+    _claude_enmaas_assert "missing $credential fails" test "$rc" = 1
 done
 rc=0
-( export ENMAAS_API_KEY=$'invalid\nkey'; claude-enmass ) >"$tmp/stdout" 2>"$tmp/stderr" || rc=$?
-_claude_enmass_assert 'control characters in key rejected' test "$rc" = 1
+( export ENMAAS_API_KEY=$'invalid\nkey'; claude-enmaas ) >"$tmp/stdout" 2>"$tmp/stderr" || rc=$?
+_claude_enmaas_assert 'control characters in key rejected' test "$rc" = 1
 
 # TERM only reaches invocation-owned mock lease/client children, never a daemon.
 mkdir "$tmp/signal-capture"
-export ENMASS_TEST_CAPTURE="$tmp/signal-capture" ENMASS_TEST_CLAUDE_WAIT=1
-claude-enmass >"$tmp/stdout" 2>"$tmp/stderr" &
+export ENMAAS_TEST_CAPTURE="$tmp/signal-capture" ENMAAS_TEST_CLAUDE_WAIT=1
+claude-enmaas >"$tmp/stdout" 2>"$tmp/stderr" &
 run_pid=$!
-for i in {1..80}; do [[ -s "$ENMASS_TEST_CAPTURE/claude.json" ]] && break; sleep 0.1; done
-if [[ ! -s "$ENMASS_TEST_CAPTURE/claude.json" ]]; then
+for i in {1..80}; do [[ -s "$ENMAAS_TEST_CAPTURE/claude.json" ]] && break; sleep 0.1; done
+if [[ ! -s "$ENMAAS_TEST_CAPTURE/claude.json" ]]; then
     print -ru2 -- "FAIL - signal fixture did not launch Claude: $(<"$tmp/stderr")"
     exit 1
 fi
 local owner_pid=''
-IFS= read -r owner_pid < "$ENMASS_TEST_CAPTURE/owner.pid"
+IFS= read -r owner_pid < "$ENMAAS_TEST_CAPTURE/owner.pid"
 kill -TERM "$owner_pid"
 rc=0; wait "$run_pid" || rc=$?
 run_pid=''
-_claude_enmass_assert 'TERM interrupts running Claude with status 143' test "$rc" = 143
-python3 - "$ENMASS_TEST_CAPTURE" <<'PY'
+_claude_enmaas_assert 'TERM interrupts running Claude with status 143' test "$rc" = 143
+python3 - "$ENMAAS_TEST_CAPTURE" <<'PY'
 import os, sys
 from pathlib import Path
 p=Path(sys.argv[1])
@@ -361,7 +361,7 @@ for name in ('claude.pid','lease.pid'):
 assert not Path((p/'session-path').read_text()).exists()
 print('ok - TERM removes only mock Claude, lease and private files')
 PY
-unset ENMASS_TEST_CLAUDE_WAIT
+unset ENMAAS_TEST_CLAUDE_WAIT
 
 # Exercise actual emitted controller functions with patched sockets/processes.
 # Never invoke serve/shutdown, and never touch a real runtime or listener.
@@ -462,4 +462,4 @@ assert len(sockets)==1
 assert sockets[0].sent[0]==dict(registration, op='register', instance=g['metadata'](root)['instance'])
 print('ok - real helper identity/version checks, occupied-port refusal, sanitized spawn and stdin lease (all mocked)')
 PY
-print 'All claude-enmass unit/launcher tests passed.'
+print 'All claude-enmaas unit/launcher tests passed.'

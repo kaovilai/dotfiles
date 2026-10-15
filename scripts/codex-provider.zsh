@@ -1,5 +1,5 @@
 #!/bin/zsh -f
-# Symlink as codex-t3-enmass, codex-t3-glm-hybrid or codex-t3-glm-only. Never load .zshrc.
+# Symlink as codex-t3-enmaas, codex-t3-glm-hybrid or codex-t3-glm-only. Never load .zshrc.
 #
 # Executable launcher for apps (e.g. T3 Code) that need a binary path instead
 # of an interactive shell function. Fixed backend per symlink, independent of
@@ -10,7 +10,7 @@
 # travels in T3's per-instance launchArgs as `-c` config overrides, the same
 # mechanism T3's own managed Codex runtime uses.
 #
-# enmass: adds nothing but credentials. Codex talks to the gateway directly
+# enmaas: adds nothing but credentials. Codex talks to the gateway directly
 # (Responses API); no local proxy.
 #
 # glm-hybrid: GLM on EnMaaS as the main model, an OpenAI model (default
@@ -31,7 +31,7 @@
 # `codex-glm-only` (zsh/functions/codex.zsh).
 #
 #   codex-provider.zsh glm-hybrid --stop-proxy   (also glm-only; same proxy)
-#   codex-t3-enmass --version   bypasses credentials entirely
+#   codex-t3-enmaas --version   bypasses credentials entirely
 emulate -L zsh
 unsetopt xtrace verbose
 typeset backend="${0:t}"
@@ -40,9 +40,10 @@ if [[ "$backend" == codex-provider.zsh ]]; then
     backend="${1-}"
     (( $# )) && shift
 fi
+[[ "$backend" == enmass ]] && backend=enmaas   # pre-rename launcher name
 case "$backend" in
-    enmass|glm-hybrid|glm-only) ;;
-    *) print -ru2 -- 'Usage: codex-provider.zsh <enmass|glm-hybrid|glm-only> [Codex arguments]'; exit 2 ;;
+    enmaas|glm-hybrid|glm-only) ;;
+    *) print -ru2 -- 'Usage: codex-provider.zsh <enmaas|glm-hybrid|glm-only> [Codex arguments]'; exit 2 ;;
 esac
 typeset native="${CODEX_PROVIDER_NATIVE_BINARY:-$HOME/.local/bin/codex}"
 [[ -x "$native" && "${native:A}" != "${0:A}" ]] || {
@@ -72,7 +73,7 @@ fi
     exit 1
 }
 
-if [[ "$backend" == enmass ]]; then
+if [[ "$backend" == enmaas ]]; then
     export ENMAAS_API_KEY
     exec "$native" "$@"
 fi

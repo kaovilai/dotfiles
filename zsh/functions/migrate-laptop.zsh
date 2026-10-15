@@ -235,7 +235,7 @@ export ANTHROPIC_API_KEY=""
 export CLOUD_ML_REGION=""
 export ANTHROPIC_VERTEX_PROJECT_ID=""
 
-# EnMaaS gateway (claude-enmass and T3 Code's claude-t3-enmass launcher)
+# EnMaaS gateway (claude-enmaas and T3 Code's claude-t3-enmaas launcher)
 export ENMAAS_API_BASE_URL=""
 export ENMAAS_API_KEY=""
 

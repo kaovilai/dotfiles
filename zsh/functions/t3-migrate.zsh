@@ -44,12 +44,16 @@ typeset -g _T3_DOTFILES_ROOT=${${(%):-%x}:A:h:h:h}
 # Each claude-t3-<backend> launcher is a symlink to scripts/claude-provider.zsh,
 # which takes its backend from the link name. Keep this list in sync with the
 # backends that script accepts.
-typeset -ga _T3_CLAUDE_BACKENDS=(copilot vertex openai enmass glm-hybrid glm-only)
+typeset -ga _T3_CLAUDE_BACKENDS=(copilot vertex openai enmaas glm-hybrid glm-only)
 
 # Each codex-t3-<backend> launcher is a symlink to scripts/codex-provider.zsh,
 # same link-name dispatch. Keep this list in sync with the backends that
 # script accepts.
-typeset -ga _T3_CODEX_BACKENDS=(enmass glm-hybrid glm-only)
+typeset -ga _T3_CODEX_BACKENDS=(enmaas glm-hybrid glm-only)
+
+# Pre-rename launcher names (enmass -> enmaas). Linked, not verified: exported
+# T3 settings.json files still point at claude-t3-enmass / codex-t3-enmass.
+typeset -ga _T3_LEGACY_BACKENDS=(enmass)
 
 _t3_userdata_excludes=(
     --exclude='logs/'
@@ -371,7 +375,7 @@ link-claude-t3-launchers() {
     mkdir -p "$T3_CLAUDE_LAUNCHER_DIR" || { error "Failed to create $T3_CLAUDE_LAUNCHER_DIR"; return 1; }
 
     local backend link failed=0
-    for backend in $_T3_CLAUDE_BACKENDS; do
+    for backend in $_T3_CLAUDE_BACKENDS $_T3_LEGACY_BACKENDS; do
         link="$T3_CLAUDE_LAUNCHER_DIR/claude-t3-$backend"
         if [[ -L "$link" && "${link:A}" == "${target:A}" ]]; then
             success "claude-t3-$backend already linked"
@@ -431,7 +435,7 @@ link-codex-t3-launchers() {
     mkdir -p "$T3_CLAUDE_LAUNCHER_DIR" || { error "Failed to create $T3_CLAUDE_LAUNCHER_DIR"; return 1; }
 
     local backend link failed=0
-    for backend in $_T3_CODEX_BACKENDS; do
+    for backend in $_T3_CODEX_BACKENDS $_T3_LEGACY_BACKENDS; do
         link="$T3_CLAUDE_LAUNCHER_DIR/codex-t3-$backend"
         if [[ -L "$link" && "${link:A}" == "${target:A}" ]]; then
             success "codex-t3-$backend already linked"

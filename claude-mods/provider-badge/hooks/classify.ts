@@ -6,7 +6,7 @@ export type Env = {
   copilotPort?: string
   vertexProxyPort?: string
   openaiPort?: string
-  enmassPort?: string
+  enmaasPort?: string
   glmPort?: string
   ollamaHost?: string
 }
@@ -43,7 +43,7 @@ export function classify(env: Env): string {
   const copilot = env.copilotPort || '4141'
   const vertex = env.vertexProxyPort || '4142'
   const openai = env.openaiPort || '4145'
-  const enmass = env.enmassPort || '4146'
+  const enmaas = env.enmaasPort || '4146'
   const glm = env.glmPort || '4148'
   const ollama = hostPort(`http://${env.ollamaHost || 'localhost:11434'}`)
 
@@ -53,7 +53,7 @@ export function classify(env: Env): string {
     if (hp.host === 'localhost' && hp.port === copilot) return 'copilot'
     if (hp.host === '127.0.0.1' && hp.port === vertex) return 'vertex'
     if (hp.host === '127.0.0.1' && hp.port === openai) return 'openai'
-    if (hp.host === '127.0.0.1' && hp.port === enmass) return 'enmass'
+    if (hp.host === '127.0.0.1' && hp.port === enmaas) return 'enmaas'
     if (hp.host === '127.0.0.1' && hp.port === glm) {
       return env.sonnetModel !== undefined && env.sonnetModel !== env.model ? 'glm-hybrid' : 'glm-only'
     }

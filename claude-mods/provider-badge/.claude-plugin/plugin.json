@@ -1,5 +1,5 @@
 {
   "name": "provider-badge",
   "version": "0.3.0",
-  "description": "Colored band above the prompt naming the provider this Claude Code session actually runs on (copilot, openai, enmass, vertex, vertex-native-adc, glm-only, glm-hybrid, ollama). Yields the AbovePrompt slot to other mods; the always-on surface is the statusLine segment in ~/.claude/scripts/provider-statusline.sh."
+  "description": "Colored band above the prompt naming the provider this Claude Code session actually runs on (copilot, openai, enmaas, vertex, vertex-native-adc, glm-only, glm-hybrid, ollama). Yields the AbovePrompt slot to other mods; the always-on surface is the statusLine segment in ~/.claude/scripts/provider-statusline.sh."
 }

@@ -10,7 +10,7 @@
 #   codex   127.0.0.1:${GLM_HYBRID_CODEX_PROXY_PORT:-4147}   GLM -> openai/ Responses
 #           passthrough on EnMaaS /v1. Used by scripts/codex-provider.zsh glm-hybrid.
 #   claude  127.0.0.1:${GLM_HYBRID_CLAUDE_PROXY_PORT:-4148}  GLM -> anthropic/
-#           Messages on the EnMaaS root, same as claude-enmass. Used by
+#           Messages on the EnMaaS root, same as claude-enmaas. Used by
 #           claude-glm-hybrid (zsh/functions/claude/providers/glm-hybrid.zsh).
 # Both load glm_hybrid_hooks.py (GLM only): strips the grammar vLLM rejects
 # from Codex's apply_patch, and disables GLM's default reasoning on Messages

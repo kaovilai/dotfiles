@@ -67,20 +67,20 @@ claude-provider-prepare() {
     fi
     # Cache credential-free catalog data briefly so the three EnMaaS inventories
     # don't consume every SDK initialization probe's deadline.
-    if [[ "$backend" == enmass ]]; then
+    if [[ "$backend" == enmaas ]]; then
         if [[ "${CLAUDE_PROVIDER_PREPARATION_ONLY-}" != 1 ]]; then
-            export CLAUDE_ENMASS_DISCOVERY_TIMEOUT="${CLAUDE_ENMASS_DISCOVERY_TIMEOUT:-6}"
-            export CLAUDE_ENMASS_DISCOVERY_RETRIES="${CLAUDE_ENMASS_DISCOVERY_RETRIES:-0}"
+            export CLAUDE_ENMAAS_DISCOVERY_TIMEOUT="${CLAUDE_ENMAAS_DISCOVERY_TIMEOUT:-6}"
+            export CLAUDE_ENMAAS_DISCOVERY_RETRIES="${CLAUDE_ENMAAS_DISCOVERY_RETRIES:-0}"
         fi
-        functions[_claude_provider_enmass_discover]="${functions[_claude_enmass_discover]}"
-        _claude_enmass_discover() {
+        functions[_claude_provider_enmaas_discover]="${functions[_claude_enmaas_discover]}"
+        _claude_enmaas_discover() {
             local identity catalog
             identity=$(_claude_proxy_fp "$@")
             if catalog=$(python3 "$CLAUDE_PROVIDER_CAPTURE_SCRIPT" --catalog-read "$identity"); then
                 print -r -- "$catalog"
                 return 0
             fi
-            catalog=$(_claude_provider_enmass_discover "$@") || return $?
+            catalog=$(_claude_provider_enmaas_discover "$@") || return $?
             print -rn -- "$catalog" |
                 python3 "$CLAUDE_PROVIDER_CAPTURE_SCRIPT" --catalog-write "$identity" || return 1
             print -r -- "$catalog"

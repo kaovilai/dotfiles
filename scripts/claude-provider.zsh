@@ -1,5 +1,5 @@
 #!/bin/zsh -f
-# Symlink as claude-t3-{copilot,vertex,openai,enmass,glm-hybrid,glm-only}. Never load .zshrc.
+# Symlink as claude-t3-{copilot,vertex,openai,enmaas,glm-hybrid,glm-only}. Never load .zshrc.
 #
 # Executable launcher for apps (e.g. T3 Code) that need a binary path instead
 # of the interactive claude-<backend> shell functions. Fixed backend per
@@ -27,9 +27,10 @@ if [[ "$backend" == claude-provider.zsh ]]; then
     backend="${1-}"
     (( $# )) && shift
 fi
+[[ "$backend" == enmass ]] && backend=enmaas   # pre-rename launcher name
 case "$backend" in
-    copilot|vertex|openai|enmass|glm-hybrid|glm-only) ;;
-    *) print -ru2 -- 'Usage: claude-provider.zsh <copilot|vertex|openai|enmass|glm-hybrid|glm-only> [Claude arguments | --prepare]'; exit 2 ;;
+    copilot|vertex|openai|enmaas|glm-hybrid|glm-only) ;;
+    *) print -ru2 -- 'Usage: claude-provider.zsh <copilot|vertex|openai|enmaas|glm-hybrid|glm-only> [Claude arguments | --prepare]'; exit 2 ;;
 esac
 typeset native="${CLAUDE_PROVIDER_NATIVE_BINARY:-$HOME/.local/bin/claude}"
 [[ -x "$native" && "${native:A}" != "${0:A}" ]] || {

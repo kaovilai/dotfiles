@@ -223,7 +223,7 @@ def main():
                                  stderr=log, start_new_session=True)
             return 0
         backend, native, *args = sys.argv[1:]
-        if backend not in ("copilot", "vertex", "openai", "enmass", "glm-hybrid", "glm-only"):
+        if backend not in ("copilot", "vertex", "openai", "enmaas", "glm-hybrid", "glm-only"):
             raise ValueError("invalid provider")
         return run(backend, native, args)
     except (ValueError, OSError, KeyError, json.JSONDecodeError):

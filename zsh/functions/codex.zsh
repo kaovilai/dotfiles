@@ -10,18 +10,18 @@ _codex_mode_get() {
     [[ -r "$_codex_mode_file" ]] && IFS= read -r mode < "$_codex_mode_file"
     case "$mode" in
         native) print -r -- native ;;
-        enmass) print -r -- enmass ;;
+        enmaas) print -r -- enmaas ;;
         *)      print -r -- native ;;
     esac
 }
 
 codex-mode() {
     if (( $# > 1 )); then
-        echo "Usage: codex-mode [native|enmass]" >&2
+        echo "Usage: codex-mode [native|enmaas]" >&2
         return 1
     fi
     case "$1" in
-        native|enmass)
+        native|enmaas)
             if ! mkdir -p "${_codex_mode_file:h}" ||
                ! print -r -- "$1" >| "$_codex_mode_file"; then
                 echo "❌ Failed to persist codex mode in ${_codex_mode_file}" >&2
@@ -31,16 +31,16 @@ codex-mode() {
             ;;
         "")
             echo "codex mode: $(_codex_mode_get)"
-            echo "usage: codex-mode [native|enmass]"
+            echo "usage: codex-mode [native|enmaas]"
             ;;
         *)
-            echo "Usage: codex-mode [native|enmass]" >&2
+            echo "Usage: codex-mode [native|enmaas]" >&2
             return 1
             ;;
     esac
 }
 
-codex-enmass() {
+codex-enmaas() {
     emulate -L zsh
     local native="${CODEX_NATIVE_BINARY:-$(whence -p codex)}"
 
@@ -54,14 +54,14 @@ codex-enmass() {
         [[ -r "$credentials" ]] && source "$credentials" >/dev/null
     fi
     [[ -n "${ENMAAS_API_KEY:-}" ]] || {
-        print -ru2 -- 'codex-enmass: ENMAAS_API_KEY is not set and no credential file provided it.'
+        print -ru2 -- 'codex-enmaas: ENMAAS_API_KEY is not set and no credential file provided it.'
         return 1
     }
 
     local base_url="${ENMAAS_API_BASE_URL:-https://api.enmaas.devshift.net/v1}"
     [[ "$base_url" == */v1 ]] || base_url="${base_url%/}/v1"
-    local model="${CODEX_ENMASS_MODEL:-rits/zai-org/glm-5-3}"
-    local effort="${CODEX_ENMASS_REASONING_EFFORT:-high}"
+    local model="${CODEX_ENMAAS_MODEL:-rits/zai-org/glm-5-3}"
+    local effort="${CODEX_ENMAAS_REASONING_EFFORT:-high}"
 
     "$native" \
         -c model_provider=enmaas \
@@ -74,6 +74,7 @@ codex-enmass() {
         -c model_reasoning_effort="$effort" \
         "$@"
 }
+alias codex-enmass='codex-enmaas'   # pre-rename name
 
 # codex-glm-only: GLM for everything (auto-review included) through the local
 # GLM hybrid proxy; see scripts/codex-provider.zsh (backend glm-only) for the
@@ -87,9 +88,9 @@ codex-glm-only() {
 unalias codex 2>/dev/null || true
 function codex {
     local mode="$(_codex_mode_get)"
-    echo "codex mode: ${mode} (switch: codex-mode native|enmass)" >&2
+    echo "codex mode: ${mode} (switch: codex-mode native|enmaas)" >&2
     case "$mode" in
-        enmass) codex-enmass "$@" ;;
+        enmaas) codex-enmaas "$@" ;;
         *)      command codex "$@" ;;
     esac
 }

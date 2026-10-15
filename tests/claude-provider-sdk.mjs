@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { n as query } from '/Applications/T3 Code (Alpha).app/Contents/Resources/app.asar/apps/server/dist/claudeHistoryWorker-Cod2UZ5a.mjs';
 
 const backend = process.argv[2];
-if (!['copilot', 'vertex', 'openai', 'enmass'].includes(backend)) process.exit(2);
+if (!['copilot', 'vertex', 'openai', 'enmaas'].includes(backend)) process.exit(2);
 const cwd = await mkdtemp(join(tmpdir(), 'claude-sdk-bridge-'));
 const abort = new AbortController();
 let q;

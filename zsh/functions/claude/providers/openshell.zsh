@@ -1,5 +1,5 @@
 # ---------------------------------------------------------------------------
-# openshell-copilot / openshell-vertex / openshell-enmass / openshell-openai:
+# openshell-copilot / openshell-vertex / openshell-enmaas / openshell-openai:
 # the matching claude-<backend> wrapper, with Claude Code running inside an
 # NVIDIA OpenShell sandbox instead of on the host.
 #
@@ -19,7 +19,7 @@
 #   2. snapshots the upload into a hidden git dir, /sandbox/.claude-openshell;
 #   3. uploads a 0600 settings file there carrying the provider's transport
 #      env (localhost/127.0.0.1 rewritten to host.openshell.internal, also in
-#      a caller --settings env block, where claude-enmass pins it), so no
+#      a caller --settings env block, where claude-enmaas pins it), so no
 #      token appears on any process argv, then runs
 #      `claude --bare --settings <that file>` via `sandbox exec`;
 #   4. on exit saves claude's changes as a patch under
@@ -289,7 +289,7 @@ _claude_openshell_invoke() {
     emulate -L zsh
     setopt localtraps
     # The exec child must stay in the terminal's process group (same reason
-    # as claude-enmass) while this shell waits on it interruptibly.
+    # as claude-enmaas) while this shell waits on it interruptibly.
     unsetopt monitor
     zmodload zsh/datetime zsh/system || return 1
     local backend="${_claude_openshell_backend:-claude}"
@@ -478,7 +478,8 @@ _claude_openshell_wrap() {
 
 openshell-copilot() { _claude_openshell_wrap copilot "$@"; }
 openshell-vertex()  { _claude_openshell_wrap vertex "$@"; }
-openshell-enmass()  { _claude_openshell_wrap enmass "$@"; }
+openshell-enmaas()  { _claude_openshell_wrap enmaas "$@"; }
+alias openshell-enmass='openshell-enmaas'   # pre-rename name
 openshell-openai()  { _claude_openshell_wrap openai "$@"; }
 
 # openshell-claude-ls: list sandboxes these wrappers created and saved patches.

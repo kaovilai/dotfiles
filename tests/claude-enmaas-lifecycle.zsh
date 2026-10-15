@@ -1,7 +1,7 @@
 #!/bin/zsh
 # One standard LiteLLM service, tested on fixture-owned ports with cached deps.
 emulate -LR zsh
-export ENMASS_TEST_REPO="${0:A:h:h}"
+export ENMAAS_TEST_REPO="${0:A:h:h}"
 python3 - <<'PY'
 import concurrent.futures
 import json
@@ -16,7 +16,7 @@ import time
 import urllib.error
 import urllib.request
 
-repo = Path(os.environ['ENMASS_TEST_REPO'])
+repo = Path(os.environ['ENMAAS_TEST_REPO'])
 env = dict(os.environ, UV_OFFLINE='1', ENMAAS_API_KEY='offline-lifecycle-key')
 
 
@@ -29,11 +29,11 @@ def wait_for(check, description, timeout=15):
     raise AssertionError(description)
 
 
-with tempfile.TemporaryDirectory(prefix='enmass-lifecycle-') as tmp:
+with tempfile.TemporaryDirectory(prefix='enmaas-lifecycle-') as tmp:
     program = Path(tmp) / 'proxy.py'
     emitted = subprocess.run(['zsh', '-f', '-c',
-        'source "$ENMASS_TEST_REPO/zsh/functions/claude/providers/enmass-proxy.zsh"; _claude_enmass_proxy_program'],
-        env=dict(env, ENMASS_TEST_REPO=str(repo)), text=True, capture_output=True, check=True)
+        'source "$ENMAAS_TEST_REPO/zsh/functions/claude/providers/enmaas-proxy.zsh"; _claude_enmaas_proxy_program'],
+        env=dict(env, ENMAAS_TEST_REPO=str(repo)), text=True, capture_output=True, check=True)
     program.write_text(emitted.stdout)
     program.chmod(0o600)
     helper = runpy.run_path(str(program))
@@ -63,7 +63,7 @@ with tempfile.TemporaryDirectory(prefix='enmass-lifecycle-') as tmp:
     with socket.socket() as probe:
         probe.bind(('127.0.0.1', 0))
         port = probe.getsockname()[1]
-    root = Path('/tmp') / ('claude-enmass-proxy-%s-%s' % (os.getuid(), port))
+    root = Path('/tmp') / ('claude-enmaas-proxy-%s-%s' % (os.getuid(), port))
     info = None
     try:
         with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
