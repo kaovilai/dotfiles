@@ -44,7 +44,12 @@ typeset -g _T3_DOTFILES_ROOT=${${(%):-%x}:A:h:h:h}
 # Each claude-t3-<backend> launcher is a symlink to scripts/claude-provider.zsh,
 # which takes its backend from the link name. Keep this list in sync with the
 # backends that script accepts.
-typeset -ga _T3_CLAUDE_BACKENDS=(copilot vertex openai enmass)
+typeset -ga _T3_CLAUDE_BACKENDS=(copilot vertex openai enmass glm-hybrid)
+
+# Each codex-t3-<backend> launcher is a symlink to scripts/codex-provider.zsh,
+# same link-name dispatch. Keep this list in sync with the backends that
+# script accepts.
+typeset -ga _T3_CODEX_BACKENDS=(enmass glm-hybrid)
 
 _t3_userdata_excludes=(
     --exclude='logs/'
@@ -330,7 +335,10 @@ _t3_check_provider_binaries() {
             continue
         fi
         hint="install it, or fix binaryPath in settings.json"
-        [[ "${bin:t}" == claude-t3-* ]] && hint="run link-claude-t3-launchers, or fix binaryPath in settings.json if your home path changed"
+        case "${bin:t}" in
+            claude-t3-*) hint="run link-claude-t3-launchers, or fix binaryPath in settings.json if your home path changed" ;;
+            codex-t3-*)  hint="run link-codex-t3-launchers, or fix binaryPath in settings.json if your home path changed" ;;
+        esac
         $report "Provider binary $bin missing ($hint)"
         failed=1
     done
@@ -397,6 +405,66 @@ verify-claude-t3-launchers() {
             failed=1
         else
             success "claude-t3-$backend starts Claude Code"
+        fi
+    done
+    return $failed
+}
+
+# What the codex launchers need at run time that neither git nor the T3
+# archive carries. Warnings only.
+_t3_codex_launcher_prereqs() {
+    local native="${CODEX_PROVIDER_NATIVE_BINARY:-$HOME/.local/bin/codex}"
+    [[ -x "$native" ]] \
+        || warning "Codex CLI not found at $native (install: npm i -g @openai/codex, or codex update for the standalone tree)"
+
+    local credentials="${CLAUDE_PROVIDER_CREDENTIALS_FILE:-$HOME/secrets.zsh}"
+    [[ -r "$credentials" ]] \
+        || warning "$credentials not found; the launchers read provider keys from it (see docs/LAPTOP_MIGRATION.md)"
+}
+
+# Point each codex-t3-<backend> launcher at this checkout's
+# scripts/codex-provider.zsh. Existing symlinks are repointed; anything else
+# at a launcher path is left alone and reported.
+link-codex-t3-launchers() {
+    local target="$_T3_DOTFILES_ROOT/scripts/codex-provider.zsh"
+    [[ -x "$target" ]] || { error "Launcher script missing or not executable: $target"; return 1; }
+    mkdir -p "$T3_CLAUDE_LAUNCHER_DIR" || { error "Failed to create $T3_CLAUDE_LAUNCHER_DIR"; return 1; }
+
+    local backend link failed=0
+    for backend in $_T3_CODEX_BACKENDS; do
+        link="$T3_CLAUDE_LAUNCHER_DIR/codex-t3-$backend"
+        if [[ -L "$link" && "${link:A}" == "${target:A}" ]]; then
+            success "codex-t3-$backend already linked"
+        elif [[ -e "$link" && ! -L "$link" ]]; then
+            error "$link exists and is not a symlink; leaving it untouched"
+            failed=1
+        elif ln -sfn "$target" "$link"; then
+            success "Linked $link -> $target"
+        else
+            error "Failed to link $link"
+            failed=1
+        fi
+    done
+
+    _t3_codex_launcher_prereqs
+    return $failed
+}
+
+# Check each codex launcher resolves to this checkout and starts the Codex
+# CLI. `--version` skips credentials, so this is safe to run any time.
+verify-codex-t3-launchers() {
+    local target="$_T3_DOTFILES_ROOT/scripts/codex-provider.zsh"
+    local backend link failed=0
+    for backend in $_T3_CODEX_BACKENDS; do
+        link="$T3_CLAUDE_LAUNCHER_DIR/codex-t3-$backend"
+        if [[ ! -L "$link" || "${link:A}" != "${target:A}" ]]; then
+            error "codex-t3-$backend is not linked to $target (run link-codex-t3-launchers)"
+            failed=1
+        elif ! "$link" --version >/dev/null 2>&1; then
+            error "codex-t3-$backend --version failed (is the Codex CLI installed?)"
+            failed=1
+        else
+            success "codex-t3-$backend starts the Codex CLI"
         fi
     done
     return $failed

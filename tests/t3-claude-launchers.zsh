@@ -18,7 +18,7 @@ source "$repo/zsh/functions/migrate-laptop.zsh"
 
 fail() { print -ru2 -- "FAIL: $*"; exit 1; }
 local target="$repo/scripts/claude-provider.zsh" out b l
-(( ${#_T3_CLAUDE_BACKENDS} == 4 )) || fail "expected four backends, got $_T3_CLAUDE_BACKENDS"
+(( ${#_T3_CLAUDE_BACKENDS} == 5 )) || fail "expected five backends, got $_T3_CLAUDE_BACKENDS"
 [[ "$_T3_DOTFILES_ROOT" == "${repo:A}" ]] || fail "dotfiles root resolved to $_T3_DOTFILES_ROOT"
 
 # A fresh directory gets every link, each resolving to this checkout
@@ -51,6 +51,24 @@ link-claude-t3-launchers >/dev/null 2>&1 || fail "relink after removing the regu
 verify-claude-t3-launchers >/dev/null 2>&1 || fail "verify failed with every launcher linked"
 "$tmp/bin/claude-t3-enmass" --version | grep -q '9.9.9' || fail "launcher did not exec the native binary"
 
+# Codex launchers: same contract, codex-t3-<backend> -> codex-provider.zsh
+export CODEX_PROVIDER_NATIVE_BINARY="$tmp/codex"
+print -r -- $'#!/bin/sh\necho "codex-cli 9.9.9"' > "$tmp/codex"
+chmod +x "$tmp/codex"
+(( ${#_T3_CODEX_BACKENDS} == 2 )) || fail "expected two codex backends, got $_T3_CODEX_BACKENDS"
+local codex_target="$repo/scripts/codex-provider.zsh"
+link-codex-t3-launchers >/dev/null 2>&1 || fail "codex link run failed"
+for b in $_T3_CODEX_BACKENDS; do
+    l="$tmp/bin/codex-t3-$b"
+    [[ -L "$l" && "${l:A}" == "${codex_target:A}" ]] || fail "codex-t3-$b not linked to $codex_target"
+    "$l" --version | grep -q 'codex-cli 9.9.9' || fail "codex-t3-$b did not exec the native binary"
+done
+verify-codex-t3-launchers >/dev/null 2>&1 || fail "codex verify failed with every launcher linked"
+
+chmod -x "$tmp/codex"
+if verify-codex-t3-launchers >/dev/null 2>&1; then fail "codex verify passed without a runnable Codex CLI"; fi
+chmod +x "$tmp/codex"
+
 chmod -x "$tmp/claude"
 if verify-claude-t3-launchers >/dev/null 2>&1; then fail "verify passed without a runnable Claude Code"; fi
 chmod +x "$tmp/claude"
@@ -67,6 +85,7 @@ cat > "$tmp/t3/userdata/settings.json" <<EOF
   "claude_enmass": {"enabled": true, "config": {"binaryPath": "$tmp/bin/claude-t3-enmass"}},
   "claude_twin":   {"config": {"binaryPath": "$tmp/bin/claude-t3-enmass"}},
   "codex":         {"config": {"binaryPath": "codex"}},
+  "codex_enmass":  {"enabled": true, "config": {"binaryPath": "$tmp/bin/codex-t3-enmass"}},
   "disabled":      {"enabled": false, "config": {"binaryPath": "$tmp/never-installed"}},
   "no_config":     {}
 }}
@@ -76,11 +95,13 @@ _t3_check_provider_binaries >/dev/null 2>&1 || fail "provider check failed with 
 cat > "$tmp/t3/userdata/settings.json" <<EOF
 {"providerInstances": {
   "claude_old_home": {"config": {"binaryPath": "/Users/someone-else/.local/bin/claude-t3-enmass"}},
+  "codex_old_home":  {"config": {"binaryPath": "/Users/someone-else/.local/bin/codex-t3-enmass"}},
   "native":          {"config": {"binaryPath": "$tmp/missing-claude"}}
 }}
 EOF
 if out=$(_t3_check_provider_binaries 2>&1); then fail "provider check passed with missing binaries"; fi
 [[ "$out" == *"claude-t3-enmass missing (run link-claude-t3-launchers"* ]] || fail "launcher hint missing: $out"
+[[ "$out" == *"codex-t3-enmass missing (run link-codex-t3-launchers"* ]] || fail "codex launcher hint missing: $out"
 [[ "$out" == *"missing-claude missing (install it"* ]] || fail "generic hint missing: $out"
 [[ "$out" == *"✗"* ]] || fail "default reporter is not error: $out"
 

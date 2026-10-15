@@ -14,6 +14,7 @@ _safe_source ~/git/dotfiles/zsh/aliases/ibmcloud.zsh
 _safe_source ~/git/dotfiles/zsh/aliases/velero.zsh
 _safe_source ~/git/dotfiles/zsh/aliases/misc.zsh
 _safe_source ~/git/dotfiles/zsh/functions/claude/load.zsh
+_safe_source ~/git/dotfiles/zsh/functions/codex.zsh
 _safe_source ~/git/dotfiles/zsh/aliases/omnigent.zsh
 
 # Linux dev environments (lazy-loaded — ~756 lines only parsed when first used)
@@ -51,6 +52,8 @@ for func in \
     verify-t3-migration \
     link-claude-t3-launchers \
     verify-claude-t3-launchers \
+    link-codex-t3-launchers \
+    verify-codex-t3-launchers \
     update-brewfile \
     brewfile-cleanup; do
     functions[$func]="_lazy_load_migrate || return 1; ${func} \"\$@\""
