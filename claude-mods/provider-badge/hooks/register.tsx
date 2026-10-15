@@ -4,9 +4,12 @@ import { classify } from './classify'
 
 const COLORS: Record<string, string> = {
   copilot: '#6E40C9',
+  openai: '#10A37F',
   enmass: '#EE0000',
   vertex: '#1A73E8',
   'vertex-native-adc': '#0B8043',
+  'glm-only': '#3E5FF9',
+  'glm-hybrid': '#3E5FF9',
   ollama: '#F0AB00',
   anthropic: '#D97757',
 }
@@ -20,23 +23,27 @@ export const register: Register = on => {
     const mode = classify({
       useVertex: await $.env.get('CLAUDE_CODE_USE_VERTEX'),
       baseUrl: await $.env.get('ANTHROPIC_BASE_URL'),
+      model: await $.env.get('ANTHROPIC_MODEL'),
+      sonnetModel: await $.env.get('ANTHROPIC_DEFAULT_SONNET_MODEL'),
       copilotPort: await $.env.get('COPILOT_API_PORT'),
       vertexProxyPort: await $.env.get('CLAUDE_VERTEX_PROXY_PORT'),
+      openaiPort: await $.env.get('CLAUDE_OPENAI_PROXY_PORT'),
       enmassPort: await $.env.get('CLAUDE_ENMASS_PROXY_PORT'),
+      glmPort: await $.env.get('GLM_HYBRID_CLAUDE_PROXY_PORT'),
       ollamaHost: await $.env.get('OLLAMA_HOST'),
     })
     const model = (await $.env.get('ANTHROPIC_MODEL')) ?? ''
     resolved = { mode, model }
 
-    // The status line is the reliable surface: unlike the AbovePrompt band
-    // (one slot, first tree wins), it cannot be taken over by another mod.
-    $.ui.status(`● ${mode.toUpperCase()}${model ? ` · ${model}` : ''}`)
-
     return next(e)
   })
 
-  // Fallback band: drawn only when no other mod holds the AbovePrompt slot,
-  // so it never hides (or is hidden by) e.g. review-inbox.
+  // The always-on surface is the bottom statusLine segment
+  // (~/.claude/scripts/provider-statusline.sh); $.ui.status is NOT used: the
+  // engine renders every plugin status line with a fixed "⚠ <plugin>: "
+  // attribution prefix that cannot be styled away. This band is the
+  // supplement: drawn only when no other mod holds the AbovePrompt slot, so
+  // it never hides (or is hidden by) e.g. review-inbox.
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     if (e.props.hasSurvey || resolved === undefined) {
       return next(e)
