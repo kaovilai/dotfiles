@@ -13,4 +13,5 @@ source "${${(%):-%N}:A:h}/providers/enmaas.zsh"
 source "${${(%):-%N}:A:h}/providers/glm-hybrid.zsh"
 # Sandboxed variants of the wrappers above (openshell-copilot etc.).
 source "${${(%):-%N}:A:h}/providers/openshell.zsh"
+source "${${(%):-%N}:A:h}/proxies.zsh"
 source "${${(%):-%N}:A:h}/mode.zsh"

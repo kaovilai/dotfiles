@@ -1,0 +1,595 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>llm-usage</title>
+<style>
+/* Palette: validated categorical order (adjacent CVD ΔE ≥ 8.4, normal-vision ≥ 19.3), light/dark selected separately. */
+:root {
+  color-scheme: light;
+  --page: #f9f9f7; --surface: #fcfcfb; --ink: #0b0b0b; --ink-2: #52514e; --muted: #898781;
+  --grid: #e1e0d9; --axis: #c3c2b7; --border: rgba(11,11,11,.10); --wash: rgba(11,11,11,.05);
+  --s1: #2a78d6; --s2: #eb6834; --s3: #1baf7a; --s4: #eda100; --s5: #e87ba4; --s6: #008300; --s7: #6250d6; --s8: #e34948;
+  --other: #a9a79f;
+  --good: #006300; --warn: #8a5a00; --crit: #d03b3b; --reroute: #6250d6;
+}
+@media (prefers-color-scheme: dark) {
+  :root:where(:not([data-theme="light"])) {
+    color-scheme: dark;
+    --page: #0d0d0d; --surface: #1a1a19; --ink: #f0efec; --ink-2: #c3c2b7; --muted: #898781;
+    --grid: #2c2c2a; --axis: #383835; --border: rgba(255,255,255,.10); --wash: rgba(255,255,255,.06);
+    --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500; --s5: #d55181; --s6: #008300; --s7: #9085e9; --s8: #e66767;
+    --other: #6b6a65; --good: #0ca30c; --warn: #fab219; --crit: #ec835a; --reroute: #9085e9;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --page: #0d0d0d; --surface: #1a1a19; --ink: #f0efec; --ink-2: #c3c2b7; --muted: #898781;
+  --grid: #2c2c2a; --axis: #383835; --border: rgba(255,255,255,.10); --wash: rgba(255,255,255,.06);
+  --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500; --s5: #d55181; --s6: #008300; --s7: #9085e9; --s8: #e66767;
+  --other: #6b6a65; --good: #0ca30c; --warn: #fab219; --crit: #ec835a; --reroute: #9085e9;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--page); color: var(--ink); font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+main { max-width: 1280px; margin: 0 auto; padding: 20px 20px 48px; }
+h1 { font-size: 18px; margin: 0; font-weight: 600; }
+h2 { font-size: 14px; margin: 0; font-weight: 600; }
+.sub { color: var(--ink-2); font-size: 12px; }
+header { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; margin-bottom: 14px; }
+.filters { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 10px; }
+.seg { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; background: var(--surface); }
+.seg button { border: 0; background: none; color: var(--ink-2); padding: 6px 11px; font: inherit; cursor: pointer; }
+.seg button:hover { background: var(--wash); }
+.seg button[aria-pressed="true"] { color: var(--ink); font-weight: 600; background: var(--wash); }
+.seg button[aria-pressed="true"]::before { content: "✓ "; font-weight: 700; }
+select, .btn { background: var(--surface); color: var(--ink); border: 1px solid var(--border); border-radius: 8px; padding: 6px 10px; font: inherit; cursor: pointer; }
+label.chk { color: var(--ink-2); display: inline-flex; gap: 6px; align-items: center; cursor: pointer; }
+:focus-visible { outline: 2px solid var(--s1); outline-offset: 2px; }
+.chips { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 14px; align-items: center; }
+.chips .lead { color: var(--ink-2); font-size: 12px; margin-right: 2px; }
+.chip { display: inline-flex; align-items: center; gap: 7px; border: 1px solid var(--border); background: var(--surface); color: var(--ink); border-radius: 999px; padding: 3px 11px 3px 9px; font: inherit; cursor: pointer; }
+.chip i { width: 10px; height: 10px; border-radius: 3px; display: inline-block; }
+.chip[aria-pressed="false"] { color: var(--muted); text-decoration: line-through; }
+.chip[aria-pressed="false"] i { opacity: .35; }
+.status { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 14px; }
+.pill { border: 1px solid var(--border); background: var(--surface); border-radius: 8px; padding: 4px 10px; font-size: 12px; color: var(--ink-2); }
+.pill b { color: var(--ink); font-weight: 600; }
+.pill .ok { color: var(--good); } .pill .warn { color: var(--warn); } .pill .off { color: var(--muted); }
+.banner { border: 1px solid var(--border); border-left: 3px solid var(--warn); background: var(--surface); border-radius: 8px; padding: 8px 12px; margin-bottom: 14px; color: var(--ink-2); font-size: 13px; }
+.kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin-bottom: 14px; }
+.tile { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px; }
+.tile .l { color: var(--ink-2); font-size: 12px; }
+.tile .v { font-size: 26px; font-weight: 600; line-height: 1.2; margin-top: 2px; }
+.tile .d { color: var(--ink-2); font-size: 12px; margin-top: 2px; }
+.grid { display: grid; grid-template-columns: repeat(12, 1fr); gap: 14px; }
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px 12px; min-width: 0; grid-column: span 12; transition: opacity .15s; }
+.card.half { grid-column: span 6; }
+@media (max-width: 900px) { .card.half { grid-column: span 12; } }
+.card-h { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; margin-bottom: 8px; flex-wrap: wrap; }
+.card-h .tools { display: flex; gap: 8px; align-items: center; }
+.linkish { background: none; border: 0; color: var(--ink-2); font: inherit; font-size: 12px; cursor: pointer; padding: 2px 4px; text-decoration: underline dotted; }
+.linkish[aria-pressed="true"] { color: var(--ink); font-weight: 600; }
+.loading .card, .loading .tile { opacity: .6; }
+svg text { fill: var(--muted); font-size: 11px; font-family: inherit; }
+.chart { width: 100%; position: relative; }
+.chart svg { display: block; width: 100%; overflow: visible; }
+.empty { color: var(--muted); padding: 28px 8px; text-align: center; }
+table { border-collapse: collapse; width: 100%; font-size: 12.5px; }
+th { text-align: left; color: var(--ink-2); font-weight: 600; border-bottom: 1px solid var(--axis); padding: 5px 8px; white-space: nowrap; }
+td { padding: 5px 8px; border-bottom: 1px solid var(--grid); white-space: nowrap; }
+th.r, td.r { text-align: right; font-variant-numeric: tabular-nums; }
+tbody tr:hover td { background: var(--wash); }
+.scroll { overflow-x: auto; }
+.tag { display: inline-flex; gap: 4px; align-items: center; border-radius: 6px; padding: 0 7px; font-size: 11.5px; font-weight: 600; border: 1px solid currentColor; }
+.tag.re { color: var(--reroute); } .tag.d { color: var(--muted); font-weight: 400; } .tag.bad { color: var(--crit); }
+.sw { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 6px; vertical-align: -1px; }
+.bars .row { display: grid; grid-template-columns: 150px 1fr; gap: 10px; align-items: center; padding: 3px 0; }
+.bars .name { color: var(--ink-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bars .track { display: flex; align-items: center; gap: 8px; min-height: 22px; }
+.bars .bar { height: 18px; border-radius: 0 4px 4px 0; min-width: 2px; }
+.bars .val { font-variant-numeric: tabular-nums; color: var(--ink); }
+.tip { position: fixed; z-index: 10; pointer-events: none; background: var(--surface); color: var(--ink); border: 1px solid var(--axis); border-radius: 8px; padding: 8px 10px; font-size: 12px; box-shadow: 0 4px 16px rgba(0,0,0,.18); display: none; max-width: 340px; }
+.tip .t { color: var(--ink-2); margin-bottom: 4px; }
+.tip .r { display: flex; gap: 8px; align-items: center; padding: 1px 0; }
+.tip .k { width: 12px; height: 2px; border-radius: 1px; flex: none; }
+.tip .n { color: var(--ink-2); }
+.tip strong { font-variant-numeric: tabular-nums; }
+.tip .z { opacity: .45; }
+</style>
+</head>
+<body>
+<main id="app">
+  <header>
+    <h1>llm-usage</h1>
+    <span class="sub" id="meta"></span>
+  </header>
+
+  <div class="filters" role="group" aria-label="Filters">
+    <div class="seg" id="range" role="group" aria-label="Time range"></div>
+    <label class="sub">Source
+      <select id="source" aria-label="Data source">
+        <option value="auto">auto</option>
+        <option value="proxy">proxy log</option>
+        <option value="claude">Claude transcripts</option>
+        <option value="codex">Codex transcripts</option>
+        <option value="all">all combined</option>
+      </select>
+    </label>
+    <label class="chk"><input type="checkbox" id="auto" checked> Auto-refresh</label>
+    <button class="btn" id="theme" type="button" aria-label="Toggle theme">Theme: auto</button>
+  </div>
+
+  <div class="chips" id="chips" aria-label="Models (click to hide or show)"></div>
+  <div class="status" id="status"></div>
+  <div id="banner"></div>
+  <div class="kpis" id="kpis"></div>
+
+  <div class="grid" id="grid">
+    <section class="card" id="c-time">
+      <div class="card-h"><h2 id="t-time">Traffic over time</h2>
+        <div class="tools">
+          <div class="seg" id="metric" role="group" aria-label="Metric"></div>
+          <button class="linkish" data-table="time" aria-pressed="false">Table</button>
+        </div></div>
+      <div class="chart" id="ch-time"></div><div class="scroll" id="tb-time" hidden></div>
+    </section>
+
+    <section class="card half" id="c-share">
+      <div class="card-h"><h2>Model share <span class="sub">requests</span></h2>
+        <div class="tools"><button class="linkish" data-table="share" aria-pressed="false">Table</button></div></div>
+      <div class="bars" id="ch-share"></div><div class="scroll" id="tb-share" hidden></div>
+    </section>
+
+    <section class="card half" id="c-ctx">
+      <div class="card-h"><h2>Context size per request <span class="sub">&gt;200k means a 1M-window model</span></h2>
+        <div class="tools"><button class="linkish" data-table="ctx" aria-pressed="false">Table</button></div></div>
+      <div class="chart" id="ch-ctx"></div><div class="scroll" id="tb-ctx" hidden></div>
+    </section>
+
+    <section class="card half" id="c-lat">
+      <div class="card-h"><h2>Latency p50 <span class="sub">per model, proxy log only</span></h2>
+        <div class="tools"><button class="linkish" data-table="lat" aria-pressed="false">Table</button></div></div>
+      <div class="chart" id="ch-lat"></div><div class="scroll" id="tb-lat" hidden></div>
+    </section>
+
+    <section class="card half" id="c-err">
+      <div class="card-h"><h2>Errors</h2></div>
+      <div class="scroll" id="tb-err"></div>
+    </section>
+
+    <section class="card" id="c-routes">
+      <div class="card-h"><h2>Routes <span class="sub">requested → served; reroutes are flagged</span></h2></div>
+      <div class="scroll" id="tb-routes"></div>
+    </section>
+
+    <section class="card" id="c-models">
+      <div class="card-h"><h2>Models</h2></div>
+      <div class="scroll" id="tb-models"></div>
+    </section>
+
+    <section class="card" id="c-clients">
+      <div class="card-h"><h2>Proxy / client / role</h2></div>
+      <div class="scroll" id="tb-clients"></div>
+    </section>
+
+    <section class="card" id="c-recent">
+      <div class="card-h"><h2>Recent requests</h2></div>
+      <div class="scroll" id="tb-recent"></div>
+    </section>
+  </div>
+</main>
+<div class="tip" id="tip" role="tooltip"></div>
+
+<script>
+"use strict";
+const NS = "http://www.w3.org/2000/svg";
+const RANGES = ["15m", "1h", "6h", "24h", "7d", "30d"];
+const METRICS = { req: "Requests", out: "Output tokens", ctx: "Context tokens", err: "Errors" };
+const st = { since: "24h", source: "auto", metric: "req", hide: new Set(), auto: true, theme: "auto" };
+let D = null;
+const tables = {};
+
+/* ---------- helpers: every dynamic string goes through textContent ---------- */
+function html(tag, props, ...kids) {
+  const n = document.createElement(tag);
+  for (const k in props || {}) {
+    if (k === "class") n.className = props[k];
+    else if (k === "style") Object.assign(n.style, props[k]);
+    else if (k.startsWith("on")) n.addEventListener(k.slice(2), props[k]);
+    else n.setAttribute(k, props[k]);
+  }
+  for (const kid of kids.flat()) if (kid != null) n.append(kid.nodeType ? kid : document.createTextNode(String(kid)));
+  return n;
+}
+function svg(tag, attrs, parent, text) {
+  const n = document.createElementNS(NS, tag);
+  for (const k in attrs || {}) n.setAttribute(k, attrs[k]);
+  if (text != null) n.textContent = text;
+  if (parent) parent.appendChild(n);
+  return n;
+}
+const human = (n) => {
+  if (n == null) return "-";
+  const a = Math.abs(n);
+  if (a >= 1e9) return (n / 1e9).toFixed(1) + "B";
+  if (a >= 1e6) return (n / 1e6).toFixed(1) + "M";
+  if (a >= 1e3) return (n / 1e3).toFixed(a >= 1e4 ? 0 : 1) + "k";
+  return String(Math.round(n));
+};
+const ms = (n) => (n == null ? "-" : n >= 1000 ? (n / 1000).toFixed(1) + "s" : Math.round(n) + "ms");
+const pctf = (x) => (x == null ? "-" : Math.round(x * 100) + "%");
+const colorOf = (m) => (m === "Other" || D.colors[m] == null || D.colors[m] === 0 ? "var(--other)" : `var(--s${D.colors[m]})`);
+
+function nice(max, integer) {
+  if (!(max > 0)) return { max: 1, ticks: [0, 1] };
+  const exp = Math.pow(10, Math.floor(Math.log10(max / 4)));
+  const f = max / 4 / exp;
+  let step = (f <= 1 ? 1 : f <= 2 ? 2 : f <= 5 ? 5 : 10) * exp;
+  if (integer) step = Math.max(1, Math.round(step));
+  const top = Math.ceil(max / step) * step, ticks = [];
+  for (let v = 0; v <= top + 1e-9; v += step) ticks.push(v);
+  return { max: top, ticks };
+}
+function xFormat(t) {
+  const d = new Date(t * 1000), p = (x) => String(x).padStart(2, "0");
+  if (D.bucket >= 86400) return `${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+  if (D.buckets.length * D.bucket > 86400 * 1.5) return `${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:00`;
+  return `${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+function fullTime(t) {
+  const d = new Date(t * 1000);
+  const end = new Date((t + D.bucket) * 1000);
+  const f = (x) => x.toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+  return D.bucket >= 86400 ? d.toLocaleDateString([], { weekday: "short", month: "short", day: "numeric" }) : `${f(d)} – ${end.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
+}
+
+/* ---------- tooltip ---------- */
+const tip = document.getElementById("tip");
+function showTip(clientX, clientY, title, rows) {
+  tip.replaceChildren(html("div", { class: "t" }, title));
+  for (const r of rows) {
+    const key = html("span", { class: "k", style: { background: r.color } });
+    tip.append(html("div", { class: "r" + (r.zero ? " z" : "") }, key, html("strong", {}, r.value), html("span", { class: "n" }, r.name)));
+  }
+  tip.style.display = "block";
+  const w = tip.offsetWidth, h = tip.offsetHeight;
+  let x = clientX + 14, y = clientY + 14;
+  if (x + w > innerWidth - 8) x = clientX - w - 14;
+  if (y + h > innerHeight - 8) y = innerHeight - h - 8;
+  tip.style.left = Math.max(8, x) + "px";
+  tip.style.top = Math.max(8, y) + "px";
+}
+const hideTip = () => { tip.style.display = "none"; };
+
+/* ---------- charts ---------- */
+const M = { l: 46, r: 14, t: 8, b: 26 };
+
+function frame(host, height, ymax, integer, yfmt) {
+  host.replaceChildren();
+  const W = Math.max(host.clientWidth, 280), H = height;
+  const root = svg("svg", { viewBox: `0 0 ${W} ${H}`, height: H, role: "img" }, host);
+  const sc = nice(ymax, integer);
+  const pw = W - M.l - M.r, ph = H - M.t - M.b;
+  const y = (v) => M.t + ph - (v / sc.max) * ph;
+  for (const v of sc.ticks) {
+    svg("line", { x1: M.l, x2: W - M.r, y1: y(v), y2: y(v), stroke: v === 0 ? "var(--axis)" : "var(--grid)", "stroke-width": 1 }, root);
+    svg("text", { x: M.l - 8, y: y(v) + 4, "text-anchor": "end" }, root, yfmt(v));
+  }
+  return { root, W, H, pw, ph, y, sc };
+}
+
+function xAxis(f, n, slot, label) {
+  const every = Math.max(1, Math.ceil(78 / slot));
+  for (let i = 0; i < n; i += every) {
+    const x = M.l + slot * (i + 0.5);
+    svg("text", { x, y: f.H - 8, "text-anchor": "middle" }, f.root, label(i));
+  }
+}
+
+function columns(host, o) {
+  M.r = 14;
+  const totals = Array.from({ length: o.n }, (_, i) => o.models.reduce((a, m) => a + o.val(m, i), 0));
+  const f = frame(host, o.height || 240, Math.max(...totals, 0), o.integer, o.yfmt);
+  const slot = f.pw / o.n, bw = Math.min(24, Math.max(2, slot - 3));
+  const GAP = 2;
+  for (let i = 0; i < o.n; i++) {
+    const cx = M.l + slot * (i + 0.5);
+    let cum = 0;
+    const segs = o.models.map((m) => ({ m, v: o.val(m, i) })).filter((s) => s.v > 0);
+    segs.forEach((s, k) => {
+      const y1 = f.y(cum + s.v), y0 = f.y(cum);
+      cum += s.v;
+      const h = y0 - y1 - (k < segs.length - 1 ? GAP : 0) ;
+      if (h < 1) return;
+      const top = k === segs.length - 1, r = top ? Math.min(4, h / 2, bw / 2) : 0;
+      const x = cx - bw / 2, yy = y0 - (k < segs.length - 1 ? GAP : 0) - h;
+      const d = r ? `M${x},${yy + h}V${yy + r}Q${x},${yy} ${x + r},${yy}H${x + bw - r}Q${x + bw},${yy} ${x + bw},${yy + r}V${yy + h}Z`
+                  : `M${x},${yy}H${x + bw}V${yy + h}H${x}Z`;
+      const p = svg("path", { d }, f.root);
+      p.style.fill = colorOf(s.m);
+    });
+  }
+  xAxis(f, o.n, slot, o.xlabel);
+  const cross = svg("line", { y1: M.t, y2: M.t + f.ph, stroke: "var(--ink-2)", "stroke-width": 1, visibility: "hidden" }, f.root);
+  for (let i = 0; i < o.n; i++) {
+    const hit = svg("rect", { x: M.l + slot * i, y: M.t, width: slot, height: f.ph, fill: "transparent", tabindex: 0, "aria-label": `${o.xtitle(i)}: ${o.fmt(totals[i])} total` }, f.root);
+    const show = (cx, cy) => {
+      const x = M.l + slot * (i + 0.5);
+      cross.setAttribute("x1", x); cross.setAttribute("x2", x); cross.setAttribute("visibility", "visible");
+      const rows = o.models.map((m) => ({ color: colorOf(m), value: o.fmt(o.val(m, i)), name: m, zero: o.val(m, i) === 0 }));
+      if (o.models.length > 1) rows.push({ color: "var(--ink-2)", value: o.fmt(totals[i]), name: "total" });
+      showTip(cx, cy, o.xtitle(i), rows);
+    };
+    hit.addEventListener("pointermove", (e) => show(e.clientX, e.clientY));
+    hit.addEventListener("focus", () => { const b = hit.getBoundingClientRect(); show(b.left + b.width / 2, b.top + 20); });
+    hit.addEventListener("pointerleave", () => { cross.setAttribute("visibility", "hidden"); hideTip(); });
+    hit.addEventListener("blur", () => { cross.setAttribute("visibility", "hidden"); hideTip(); });
+  }
+}
+
+function lines(host, o) {
+  M.r = o.models.length <= 4 ? 118 : 14; // room for direct end labels
+  const all = o.models.flatMap((m) => o.val(m).filter((v) => v != null));
+  if (!all.length) { host.replaceChildren(html("div", { class: "empty" }, o.empty)); return; }
+  const f = frame(host, o.height || 240, Math.max(...all), false, o.yfmt);
+  const slot = f.pw / o.n, X = (i) => M.l + slot * (i + 0.5);
+  const ends = [];
+  for (const m of o.models) {
+    const vals = o.val(m);
+    let d = "", pen = false, last = -1;
+    vals.forEach((v, i) => {
+      if (v == null) { pen = false; return; }
+      d += `${pen ? "L" : "M"}${X(i)},${f.y(v)}`; pen = true; last = i;
+    });
+    if (last < 0) continue;
+    const p = svg("path", { d, fill: "none", "stroke-width": 2, "stroke-linejoin": "round", "stroke-linecap": "round" }, f.root);
+    p.style.stroke = colorOf(m);
+    const dot = svg("circle", { cx: X(last), cy: f.y(vals[last]), r: 4, "stroke-width": 2 }, f.root);
+    dot.style.fill = colorOf(m); dot.style.stroke = "var(--surface)";
+    ends.push({ m, x: X(last), y: f.y(vals[last]) });
+  }
+  if (o.models.length <= 4) { // direct end labels; skip any that would collide
+    let prev = -99;
+    for (const e of ends.sort((a, b) => a.y - b.y)) {
+      if (e.y - prev < 13) continue;
+      prev = e.y;
+      svg("text", { x: e.x + 9, y: e.y + 4, "text-anchor": "start", style: "fill:var(--ink-2)" }, f.root, e.m);
+    }
+  }
+  xAxis(f, o.n, slot, o.xlabel);
+  const cross = svg("line", { y1: M.t, y2: M.t + f.ph, stroke: "var(--ink-2)", "stroke-width": 1, visibility: "hidden" }, f.root);
+  for (let i = 0; i < o.n; i++) {
+    const hit = svg("rect", { x: M.l + slot * i, y: M.t, width: slot, height: f.ph, fill: "transparent", tabindex: 0 }, f.root);
+    const show = (cx, cy) => {
+      cross.setAttribute("x1", X(i)); cross.setAttribute("x2", X(i)); cross.setAttribute("visibility", "visible");
+      showTip(cx, cy, o.xtitle(i), o.models.map((m) => { const v = o.val(m)[i]; return { color: colorOf(m), value: v == null ? "-" : o.fmt(v), name: m, zero: v == null }; }));
+    };
+    hit.addEventListener("pointermove", (e) => show(e.clientX, e.clientY));
+    hit.addEventListener("focus", () => { const b = hit.getBoundingClientRect(); show(b.left + b.width / 2, b.top + 20); });
+    const off = () => { cross.setAttribute("visibility", "hidden"); hideTip(); };
+    hit.addEventListener("pointerleave", off); hit.addEventListener("blur", off);
+  }
+}
+
+function shareBars(host) {
+  host.replaceChildren();
+  const rows = D.model_table;
+  if (!rows.length) { host.append(html("div", { class: "empty" }, "No data in this range.")); return; }
+  const max = Math.max(...rows.map((r) => r.n));
+  for (const r of rows) {
+    const bar = html("div", { class: "bar", style: { width: `${Math.max(1, (r.n / max) * 100)}%`, background: colorOf(D.colors[r.model] != null ? r.model : "Other"), maxWidth: "calc(100% - 64px)" } });
+    const track = html("div", { class: "track", tabindex: 0 }, bar, html("span", { class: "val" }, human(r.n)));
+    const tipRows = [
+      { color: colorOf(r.model), value: human(r.n), name: "requests" },
+      { color: "var(--muted)", value: human(r.out), name: "output tokens" },
+      { color: "var(--muted)", value: pctf(r.hit), name: "cache hit" },
+      { color: "var(--muted)", value: human(r.ctxmax), name: "largest context" },
+    ];
+    const on = (e) => showTip(e.clientX ?? track.getBoundingClientRect().left + 40, e.clientY ?? track.getBoundingClientRect().top, r.model, tipRows);
+    track.addEventListener("pointermove", on); track.addEventListener("focus", on);
+    track.addEventListener("pointerleave", hideTip); track.addEventListener("blur", hideTip);
+    host.append(html("div", { class: "row" }, html("div", { class: "name", title: r.model }, r.model), track));
+  }
+}
+
+/* ---------- tables ---------- */
+function table(host, headers, rows, aligns) {
+  const t = html("table", {}, html("thead", {}, html("tr", {}, headers.map((h, i) => html("th", { class: aligns && aligns[i] === "r" ? "r" : "" }, h)))),
+    html("tbody", {}, rows.map((r) => html("tr", {}, r.map((c, i) => html("td", { class: aligns && aligns[i] === "r" ? "r" : "" }, c))))));
+  host.replaceChildren(rows.length ? t : html("div", { class: "empty" }, "Nothing here."));
+}
+const sw = (m) => html("span", {}, html("span", { class: "sw", style: { background: colorOf(m) } }), m);
+
+function renderTables() {
+  table(document.getElementById("tb-models"),
+    ["Model", "Reqs", "Err", "In", "Out", "Cache", "Hit", "Ctx max", ">200k", "p50", "p95", "tok/s", "Cost"],
+    D.model_table.map((r) => [sw(D.colors[r.model] != null ? r.model : "Other"), r.n, r.err || "-", human(r.in), human(r.out), human(r.cread), pctf(r.hit), human(r.ctxmax), r.long || "-", ms(r.p50), ms(r.p95), r.tps ? Math.round(r.tps) : "-", r.cost ? "$" + r.cost.toFixed(2) : "-"]),
+    ["l", "r", "r", "r", "r", "r", "r", "r", "r", "r", "r", "r", "r"]);
+
+  const routes = D.routes.filter((r) => r.requested !== "-");
+  const rt = document.getElementById("tb-routes");
+  if (!routes.length) rt.replaceChildren(html("div", { class: "empty" }, "No routing data. Transcripts only record the model that answered; restart the LiteLLM proxies so they log requested → served (see proxy status above)."));
+  else table(rt, ["Proxy", "Requested", "", "Served", "Upstream", "Kind", "Reqs", "Err", "In", "Out", "p50"],
+    routes.map((r) => [r.proxy, r.requested, "→", r.served, r.upstream,
+      r.rerouted ? html("span", { class: "tag re" }, "⇄ rerouted") : html("span", { class: "tag d" }, "direct"),
+      r.n, r.err || "-", human(r.in), human(r.out), ms(r.p50)]),
+    ["l", "l", "l", "l", "l", "l", "r", "r", "r", "r", "r"]);
+
+  table(document.getElementById("tb-clients"), ["Proxy", "Client", "Role", "Reqs", "Err", "In", "Out", "Cache", "p50", "p95"],
+    D.clients.map((r) => [r.proxy, r.client, r.role, r.n, r.err || "-", human(r.in), human(r.out), human(r.cread), ms(r.p50), ms(r.p95)]),
+    ["l", "l", "l", "r", "r", "r", "r", "r", "r", "r"]);
+
+  table(document.getElementById("tb-err"), ["Count", "Error"], D.errors.map((e) => [e.count, e.error]), ["r", "l"]);
+
+  table(document.getElementById("tb-recent"), ["Time", "Proxy", "Client", "Route", "Status", "Context", "Out", "Latency", "Notes"],
+    D.recent.map((r) => {
+      const notes = [r.role, r.fallback ? "fallback" : null, r.ctx > 200000 ? "1M-ctx" : null, r.error].filter(Boolean).join(" · ");
+      const route = r.rerouted ? html("span", {}, r.requested, " ", html("span", { class: "tag re" }, "⇄"), " ", r.served) : r.served;
+      return [new Date(r.t * 1000).toLocaleTimeString(), r.proxy, r.client || "?", route,
+        r.ok ? "ok" : html("span", { class: "tag bad" }, "✕ error"), human(r.ctx), human(r.out), ms(r.ms), notes];
+    }), ["l", "l", "l", "l", "l", "r", "r", "r", "l"]);
+}
+
+/* ---------- top-level render ---------- */
+function renderStatus() {
+  const box = document.getElementById("status");
+  box.replaceChildren();
+  const label = { logging: ["●", "ok", "logging"], idle: ["●", "ok", "logging, idle"], "not-logging": ["⚠", "warn", "up, not logging: run llm-proxy-restart"],
+    down: ["○", "off", "down"], "not-litellm": ["○", "off", "no hook (transcripts only)"], unknown: ["⚠", "warn", "up, unknown"] };
+  for (const p of D.status) {
+    const [icon, cls, text] = label[p.code] || ["?", "off", p.code];
+    box.append(html("span", { class: "pill", title: p.models.join(", ") }, html("span", { class: cls }, icon), " ", html("b", {}, p.name), " :" + p.port + " ", html("span", { class: cls }, text)));
+  }
+}
+
+function renderChips() {
+  const box = document.getElementById("chips");
+  box.replaceChildren(html("span", { class: "lead" }, "Models"));
+  const names = D.chips;
+  for (const m of names) {
+    box.append(html("button", { class: "chip", type: "button", "aria-pressed": String(!st.hide.has(m)), onclick: () => { st.hide.has(m) ? st.hide.delete(m) : st.hide.add(m); persist(); load(); } },
+      html("i", { style: { background: colorOf(m) } }), m));
+  }
+  if (D.models.includes("Other")) box.append(html("span", { class: "chip", style: { cursor: "default" } }, html("i", { style: { background: "var(--other)" } }), "Other"));
+}
+
+function renderKpis() {
+  const k = D.kpi, box = document.getElementById("kpis");
+  box.replaceChildren();
+  if (!k) return;
+  const tile = (l, v, d) => box.append(html("div", { class: "tile" }, html("div", { class: "l" }, l), html("div", { class: "v" }, v), html("div", { class: "d" }, d)));
+  tile("Requests", human(k.n), k.err ? `${k.err} errors (${Math.round((k.err / k.n) * 100)}%)` : "no errors");
+  tile("Output tokens", human(k.out), `${human(k.in)} fresh in · ${human(k.cread)} cached`);
+  tile("Cache hit", pctf(k.hit), "cached / (fresh + cached) input");
+  tile("Latency p50", ms(k.p50), k.p95 != null ? `p95 ${ms(k.p95)}${k.tps ? " · " + Math.round(k.tps) + " tok/s" : ""}` : "needs proxy log");
+  tile("Rerouted", k.n ? pctf(k.reroutes / k.n) : "-", k.reroutes ? `${k.reroutes} requests served by another model` : "none (or no proxy log)");
+  tile("1M-context requests", String(k.long), `context > 200k · largest ${human(k.ctxmax)}`);
+  if (k.classifier) tile("Classifier calls", String(k.classifier), "auto-mode safety checks");
+  if (k.cost) tile("Cost", "$" + k.cost.toFixed(2), "per LiteLLM pricing");
+}
+
+function renderCharts() {
+  const n = D.buckets.length, metric = st.metric, models = D.models;
+  document.getElementById("t-time").textContent = `${METRICS[metric]} over time`;
+  const fmt = metric === "req" || metric === "err" ? (v) => String(Math.round(v)) : human;
+  const yfmt = metric === "req" || metric === "err" ? (v) => String(Math.round(v)) : human;
+  const timeOpts = { n, models, val: (m, i) => D.series[m][metric][i], fmt, yfmt, integer: metric === "req" || metric === "err",
+    xlabel: (i) => xFormat(D.buckets[i]), xtitle: (i) => fullTime(D.buckets[i]) };
+  const host = document.getElementById("ch-time");
+  if (!D.kpi) host.replaceChildren(html("div", { class: "empty" }, "No events in this range."));
+  else columns(host, timeOpts);
+
+  const ctxHost = document.getElementById("ch-ctx");
+  if (!D.kpi) ctxHost.replaceChildren(html("div", { class: "empty" }, "No events in this range."));
+  else columns(ctxHost, { n: D.ctx_bins.length, models, val: (m, i) => D.ctx_hist[m][i], fmt: (v) => String(Math.round(v)), yfmt: (v) => String(Math.round(v)),
+    integer: true, height: 220, xlabel: (i) => D.ctx_bins[i], xtitle: (i) => `Context ${D.ctx_bins[i]}` });
+
+  lines(document.getElementById("ch-lat"), { n, models: models.filter((m) => D.series[m].p50.some((v) => v != null)), val: (m) => D.series[m].p50,
+    fmt: ms, yfmt: ms, height: 220, xlabel: (i) => xFormat(D.buckets[i]), xtitle: (i) => fullTime(D.buckets[i]),
+    empty: "No latency data. Transcripts carry none; it comes from the LiteLLM proxy log." });
+
+  shareBars(document.getElementById("ch-share"));
+
+  // table views of the plotted data
+  tables.time = () => table(document.getElementById("tb-time"), ["Bucket", ...models, "Total"],
+    D.buckets.map((t, i) => [fullTime(t), ...models.map((m) => fmt(D.series[m][metric][i])), fmt(models.reduce((a, m) => a + D.series[m][metric][i], 0))]),
+    ["l", ...models.map(() => "r"), "r"]);
+  tables.share = () => table(document.getElementById("tb-share"), ["Model", "Requests", "Output tokens"], D.model_table.map((r) => [r.model, r.n, human(r.out)]), ["l", "r", "r"]);
+  tables.ctx = () => table(document.getElementById("tb-ctx"), ["Model", ...D.ctx_bins], models.map((m) => [m, ...D.ctx_hist[m]]), ["l", ...D.ctx_bins.map(() => "r")]);
+  tables.lat = () => table(document.getElementById("tb-lat"), ["Bucket", ...models], D.buckets.map((t, i) => [fullTime(t), ...models.map((m) => ms(D.series[m].p50[i]))]), ["l", ...models.map(() => "r")]);
+  for (const key in tables) if (!document.getElementById("tb-" + key).hidden) tables[key]();
+}
+
+function render() {
+  if (!D) return;
+  document.getElementById("meta").textContent = `${D.events.toLocaleString()} events · source: ${D.source} · bucket ${D.bucket >= 3600 ? D.bucket / 3600 + "h" : D.bucket / 60 + "m"} · updated ${new Date().toLocaleTimeString()}`;
+  const banner = document.getElementById("banner");
+  banner.replaceChildren();
+  if (D.source.startsWith("transcripts")) banner.append(html("div", { class: "banner" }, "Showing Claude Code / Codex transcripts: only the answering model, no requested → served routing, no latency. Restart the LiteLLM proxies marked “not logging” below (llm-proxy-restart) to capture those."));
+  else if (D.source.startsWith("merged")) banner.append(html("div", { class: "banner" }, "Mixed data: " + D.source.replace(/^merged \(|\)$/g, "") + ". Transcript rows have no routing or latency."));
+  renderStatus(); renderChips(); renderKpis(); renderCharts(); renderTables();
+}
+
+/* ---------- state, fetch, controls ---------- */
+function persist() {
+  const p = new URLSearchParams({ since: st.since, source: st.source, metric: st.metric });
+  if (st.hide.size) p.set("hide", [...st.hide].join(","));
+  history.replaceState(null, "", "#" + p);
+}
+function restore() {
+  const p = new URLSearchParams(location.hash.slice(1));
+  if (RANGES.includes(p.get("since")) || p.get("since") === "today" || p.get("since") === "all") st.since = p.get("since");
+  if (p.get("source")) st.source = p.get("source");
+  if (METRICS[p.get("metric")]) st.metric = p.get("metric");
+  if (p.get("hide")) st.hide = new Set(p.get("hide").split(",").filter(Boolean));
+  st.theme = localStorage.getItem("llm-usage-theme") || "auto";
+}
+
+let inflight = 0, lastSig = "";
+async function load(force = true) {
+  const my = ++inflight;
+  const q = new URLSearchParams({ since: st.since, source: st.source });
+  if (st.hide.size) q.set("hide", [...st.hide].join(","));
+  document.getElementById("app").classList.add("loading");
+  try {
+    const res = await fetch("/api/data?" + q);
+    const text = await res.text();
+    if (my !== inflight) return;
+    // "now"/"since" move on every request; skip the redraw (and its flicker) when nothing else changed.
+    const sig = q + text.replace(/"now":[0-9.e+]+,"since":[0-9.e+-]+,/, "");
+    if (!force && sig === lastSig) { document.getElementById("meta").textContent = document.getElementById("meta").textContent.replace(/updated .*$/, "updated " + new Date().toLocaleTimeString()); return; }
+    lastSig = sig;
+    const data = JSON.parse(text);
+    if (data.error) throw new Error(data.error);
+    D = data;
+    hideTip();
+    render();
+  } catch (err) {
+    document.getElementById("meta").textContent = "error: " + err.message;
+  } finally {
+    if (my === inflight) document.getElementById("app").classList.remove("loading");
+  }
+}
+
+function buildControls() {
+  const range = document.getElementById("range");
+  for (const r of [...RANGES, "all"]) range.append(html("button", { type: "button", "data-v": r, onclick: () => { st.since = r; syncControls(); persist(); load(); } }, r));
+  const metric = document.getElementById("metric");
+  for (const k in METRICS) metric.append(html("button", { type: "button", "data-v": k, onclick: () => { st.metric = k; syncControls(); persist(); if (D) renderCharts(); } }, METRICS[k]));
+  document.getElementById("source").addEventListener("change", (e) => { st.source = e.target.value; persist(); load(); });
+  document.getElementById("auto").addEventListener("change", (e) => { st.auto = e.target.checked; });
+  document.getElementById("theme").addEventListener("click", () => {
+    st.theme = { auto: "light", light: "dark", dark: "auto" }[st.theme];
+    localStorage.setItem("llm-usage-theme", st.theme);
+    syncControls();
+    if (D) renderCharts();
+  });
+  for (const b of document.querySelectorAll("[data-table]")) {
+    b.addEventListener("click", () => {
+      const key = b.dataset.table, box = document.getElementById("tb-" + key);
+      box.hidden = !box.hidden;
+      b.setAttribute("aria-pressed", String(!box.hidden));
+      if (!box.hidden && tables[key]) tables[key]();
+    });
+  }
+}
+function syncControls() {
+  for (const b of document.querySelectorAll("#range button")) b.setAttribute("aria-pressed", String(b.dataset.v === st.since));
+  for (const b of document.querySelectorAll("#metric button")) b.setAttribute("aria-pressed", String(b.dataset.v === st.metric));
+  document.getElementById("source").value = st.source;
+  document.getElementById("theme").textContent = "Theme: " + st.theme;
+  if (st.theme === "auto") document.documentElement.removeAttribute("data-theme");
+  else document.documentElement.setAttribute("data-theme", st.theme);
+}
+
+restore();
+buildControls();
+syncControls();
+load();
+setInterval(() => { if (st.auto && !document.hidden) load(false); }, 5000);
+let resizeTimer;
+new ResizeObserver(() => { clearTimeout(resizeTimer); resizeTimer = setTimeout(() => { if (D) renderCharts(); }, 120); }).observe(document.getElementById("app"));
+</script>
+</body>
+</html>

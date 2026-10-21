@@ -1,0 +1,888 @@
+#!/usr/bin/env python3
+"""llm-usage: visibility into which providers/models your LLM traffic really uses.
+
+Data sources (all local, nothing leaves the machine):
+  proxy   JSONL written by scripts/litellm_usage_log.py inside each LiteLLM
+          proxy (requested model, served model, upstream, tokens, latency,
+          errors, reroutes). Only requests made after a proxy restarts with the
+          callback are present. See `llm-usage status`.
+  claude  Claude Code transcripts (~/.claude/projects). History from day one,
+          but only the model that answered, no requested->served routing and
+          no latency.
+  codex   Codex rollouts (~/.codex/sessions). Same caveats as claude.
+
+Token columns follow Anthropic semantics: `in` is the fresh prompt, cache
+read/write are separate, context = in + cache_read + cache_write. A request
+with context > 200k can only have run on a 1M-window model.
+
+Stdlib only; no state besides the logs.
+"""
+
+import argparse
+import glob
+import json
+import os
+import re
+import statistics
+import subprocess
+import sys
+import time
+import urllib.request
+from collections import defaultdict
+from datetime import datetime, timedelta, timezone
+
+STATE = os.environ.get("LLM_USAGE_DIR") or os.path.join(
+    os.environ.get("XDG_STATE_HOME") or os.path.expanduser("~/.local/state"), "llm-usage")
+UID = os.getuid()
+LONG_CTX = 200_000
+
+# port -> (name, config path or None). LLM_USAGE_PORT_NAMES="4150=foo,4151=bar" adds/overrides names.
+PROXIES = {
+    "4141": ("copilot-api", None),
+    "4142": ("vertex", os.path.expanduser("~/.config/claude-vertex-proxy.yaml")),
+    "4145": ("openai", os.path.expanduser("~/.config/claude-openai-proxy.yaml")),
+    "4146": ("enmaas", f"/tmp/claude-enmaas-proxy-{UID}-4146/config.json"),
+    "4147": ("codex-glm-hybrid", os.path.expanduser("~/.local/state/glm-hybrid-codex-4147/config.yaml")),
+    "4148": ("claude-glm-hybrid", os.path.expanduser("~/.local/state/glm-hybrid-claude-4148/config.yaml")),
+}
+for pair in filter(None, os.environ.get("LLM_USAGE_PORT_NAMES", "").split(",")):
+    if "=" in pair:
+        port, name = pair.split("=", 1)
+        PROXIES[port.strip()] = (name.strip(), PROXIES.get(port.strip(), (None, None))[1])
+
+TTY = sys.stdout.isatty()
+
+
+def color(text, code):
+    return f"\033[{code}m{text}\033[0m" if TTY else text
+
+
+# --------------------------------------------------------------------------- model naming
+
+def strip_model(model):
+    """Display name: lowercase, provider/org prefixes and [1m] dropped."""
+    if not model:
+        return "?"
+    m = str(model).lower().replace("[1m]", "")
+    if "glm" in m:
+        return "glm-5.3" if re.search(r"5[-.]3", m) else m.split("/")[-1]
+    for prefix in ("anthropic/", "vertex_ai/", "openai/", "bedrock/", "github_copilot/", "copilot/"):
+        if m.startswith(prefix):
+            m = m[len(prefix):]
+    return m
+
+
+def family(model):
+    m = strip_model(model)
+    for fam in ("opus", "sonnet", "haiku", "fable"):
+        if fam in m:
+            return fam
+    if "glm" in m:
+        return "glm"
+    if "luna" in m:
+        return "luna"
+    if m.startswith(("gpt", "o1", "o3", "o4")):
+        return "gpt"
+    if "gemini" in m:
+        return "gemini"
+    return m
+
+
+def route_label(ev):
+    req, srv = ev.get("requested"), ev.get("served")
+    if req and family(req) != family(srv):
+        return f"{family(req)}->{strip_model(srv)}"
+    return strip_model(srv)
+
+
+def is_reroute(ev):
+    return bool(ev.get("requested")) and family(ev["requested"]) != family(ev["served"])
+
+
+# --------------------------------------------------------------------------- loading
+
+def parse_ts(value):
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return None
+
+
+def parse_since(text):
+    now = time.time()
+    if text in (None, "all"):
+        return 0.0
+    if text == "today":
+        return datetime.now().replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
+    match = re.fullmatch(r"(\d+)\s*([smhdw])", text)
+    if match:
+        unit = {"s": 1, "m": 60, "h": 3600, "d": 86400, "w": 604800}[match.group(2)]
+        return now - int(match.group(1)) * unit
+    ts = parse_ts(text)
+    if ts is None:
+        sys.exit(f"llm-usage: bad --since {text!r} (use 30m, 24h, 7d, today, all, or an ISO time)")
+    return ts
+
+
+def load_proxy(since):
+    events = []
+    for path in sorted(glob.glob(os.path.join(STATE, "events-*.jsonl"))):
+        if os.path.getmtime(path) < since:
+            continue
+        with open(path, errors="replace") as handle:
+            for line in handle:
+                try:
+                    ev = json.loads(line)
+                except ValueError:
+                    continue
+                ts = parse_ts(ev.get("ts"))
+                if ts is None or ts < since:
+                    continue
+                ev["t"] = ts
+                ev["source"] = "proxy"
+                events.append(ev)
+    return events
+
+
+_FILE_CACHE = {}  # (kind, path) -> (mtime, size, events); only filled by `serve`
+CACHE_FILES = False
+
+
+def parse_cached(kind, path, parser):
+    """Parse one transcript file; `serve` keeps results until the file changes."""
+    try:
+        st = os.stat(path)
+    except OSError:
+        return []
+    if CACHE_FILES:
+        hit = _FILE_CACHE.get((kind, path))
+        if hit and hit[0] == st.st_mtime and hit[1] == st.st_size:
+            return hit[2]
+    try:
+        with open(path, errors="replace") as handle:
+            events = parser(handle, path)
+    except OSError:
+        return []
+    if CACHE_FILES:
+        _FILE_CACHE[(kind, path)] = (st.st_mtime, st.st_size, events)
+    return events
+
+
+def parse_claude_file(handle, path):
+    by_id = {}
+    for line in handle:
+        if '"usage"' not in line:
+            continue
+        try:
+            obj = json.loads(line)
+        except ValueError:
+            continue
+        msg = obj.get("message") or {}
+        usage = msg.get("usage")
+        model = msg.get("model")
+        if obj.get("type") != "assistant" or not usage or not model or model.startswith("<"):
+            continue
+        ts = parse_ts(obj.get("timestamp"))
+        if ts is None:
+            continue
+        # Streamed messages are written several times; the last copy is final.
+        key = msg.get("id") or obj.get("uuid") or len(by_id)
+        by_id[key] = {
+            "id": key, "t": ts, "source": "claude", "client": "claude-code", "port": "transcript",
+            "served": model, "ok": True,
+            "in": usage.get("input_tokens") or 0, "out": usage.get("output_tokens") or 0,
+            "cache_read": usage.get("cache_read_input_tokens") or 0,
+            "cache_write": usage.get("cache_creation_input_tokens") or 0,
+            "reasoning": (usage.get("output_tokens_details") or {}).get("thinking_tokens") or 0,
+            "session": obj.get("sessionId"),
+        }
+    return list(by_id.values())
+
+
+def parse_codex_file(handle, path):
+    events, model, last_total = [], None, -1
+    for line in handle:
+        if '"turn_context"' not in line and '"token_count"' not in line:
+            continue
+        try:
+            obj = json.loads(line)
+        except ValueError:
+            continue
+        payload = obj.get("payload") or {}
+        if obj.get("type") == "turn_context":
+            model = payload.get("model") or model
+            continue
+        info = payload.get("info") if payload.get("type") == "token_count" else None
+        if not info:
+            continue
+        total = (info.get("total_token_usage") or {}).get("total_tokens", 0)
+        if total <= last_total:
+            continue  # token_count is re-emitted without a new request
+        last_total = total
+        last = info.get("last_token_usage") or {}
+        ts = parse_ts(obj.get("timestamp"))
+        if ts is None or not model:
+            continue
+        cached = last.get("cached_input_tokens") or 0
+        events.append({
+            "t": ts, "source": "codex", "client": "codex", "port": "transcript",
+            "served": model, "ok": True,
+            "in": max((last.get("input_tokens") or 0) - cached, 0),
+            "out": last.get("output_tokens") or 0, "cache_read": cached,
+            "cache_write": last.get("cache_write_input_tokens") or 0,
+            "reasoning": last.get("reasoning_output_tokens") or 0,
+        })
+    return events
+
+
+def load_transcripts(kind, env, default, parser, since):
+    roots = [os.path.expanduser(p) for p in os.environ.get(env, default).split(":")]
+    events, seen = [], set()
+    for root in roots:
+        for path in glob.glob(os.path.join(root, "**", "*.jsonl"), recursive=True):
+            try:
+                if os.path.getmtime(path) < since:
+                    continue
+            except OSError:
+                continue
+            for e in parse_cached(kind, path, parser):
+                if e["t"] < since:
+                    continue
+                if "id" in e:  # resumed sessions copy history into new files
+                    if e["id"] in seen:
+                        continue
+                    seen.add(e["id"])
+                events.append(e)
+    return events
+
+
+def load_claude(since):
+    return load_transcripts("claude", "LLM_USAGE_CLAUDE_DIRS", "~/.claude/projects", parse_claude_file, since)
+
+
+def load_codex(since):
+    return load_transcripts("codex", "LLM_USAGE_CODEX_DIRS", "~/.codex/sessions", parse_codex_file, since)
+
+
+def load_auto(since):
+    """Proxy log where it exists; transcripts fill the rest.
+
+    Transcripts cover history from before the proxies logged, and any model the
+    proxy log has never seen (traffic through a proxy that is not logging yet,
+    e.g. copilot-api). Transcript calls for models the proxy log does cover are
+    dropped after logging began, so nothing is counted twice.
+    """
+    proxy_all = load_proxy(0)
+    transcripts = load_claude(since) + load_codex(since)
+    if not proxy_all:
+        return transcripts, "transcripts (no proxy events yet; run `llm-usage status`)"
+    first = min(e["t"] for e in proxy_all)
+    seen = {strip_model(e.get("served")) for e in proxy_all}
+    extra = [e for e in transcripts if e["t"] < first or strip_model(e.get("served")) not in seen]
+    events = [e for e in proxy_all if e["t"] >= since] + extra
+    when = datetime.fromtimestamp(first).strftime("%b %d %H:%M")
+    return events, f"merged (proxy log since {when}; transcripts for earlier history and models not in the proxy log)"
+
+
+def load(since, source):
+    if source == "auto":
+        return load_auto(since)
+    if source == "all":
+        return load_proxy(since) + load_claude(since) + load_codex(since), "proxy+claude+codex"
+    events = []
+    for name in source.split(","):
+        loader = {"proxy": load_proxy, "claude": load_claude, "codex": load_codex}.get(name)
+        if loader is None:
+            sys.exit(f"llm-usage: unknown source {name!r} (proxy, claude, codex, auto, all)")
+        events += loader(since)
+    return events, source
+
+
+# --------------------------------------------------------------------------- aggregation
+
+def ctx_of(ev):
+    return (ev.get("in") or 0) + (ev.get("cache_read") or 0) + (ev.get("cache_write") or 0)
+
+
+def proxy_name(ev):
+    port = ev.get("port")
+    if port == "transcript":
+        return ev.get("source", "transcript")
+    return PROXIES.get(str(port), (f":{port}" if port else "?", None))[0]
+
+
+KEYS = {
+    "model": lambda e: strip_model(e.get("served")),
+    "requested": lambda e: strip_model(e.get("requested")) if e.get("requested") else "-",
+    "route": route_label,
+    "proxy": proxy_name,
+    "client": lambda e: e.get("client") or "?",
+    "role": lambda e: e.get("role") or "main",
+    "upstream": lambda e: e.get("upstream") or "-",
+    "provider": lambda e: e.get("provider") or "-",
+    "dialect": lambda e: e.get("call_type") or "-",
+    "status": lambda e: "ok" if e.get("ok", True) else "error",
+    "source": lambda e: e.get("source", "?"),
+    "day": lambda e: datetime.fromtimestamp(e["t"]).strftime("%Y-%m-%d"),
+    "hour": lambda e: datetime.fromtimestamp(e["t"]).strftime("%m-%d %H:00"),
+    "ctx": lambda e: ">200k (1M)" if ctx_of(e) > LONG_CTX else "<=200k",
+}
+
+
+def pct(values, p):
+    if not values:
+        return None
+    values = sorted(values)
+    return values[min(len(values) - 1, int(round(p / 100 * (len(values) - 1))))]
+
+
+def human(n):
+    if n is None:
+        return "-"
+    n = float(n)
+    for unit, div in (("B", 1e9), ("M", 1e6), ("k", 1e3)):
+        if abs(n) >= div:
+            return f"{n / div:.1f}{unit}"
+    return f"{int(n)}"
+
+
+def ms(n):
+    if n is None:
+        return "-"
+    return f"{n / 1000:.1f}s" if n >= 1000 else f"{int(n)}ms"
+
+
+def aggregate(events, keyfns):
+    groups = defaultdict(list)
+    for ev in events:
+        groups[tuple(fn(ev) for fn in keyfns)].append(ev)
+    rows = []
+    for key, evs in groups.items():
+        lat = [e["ms"] for e in evs if e.get("ms") is not None]
+        ttft = [e["ttft_ms"] for e in evs if e.get("ttft_ms") is not None]
+        speeds = [e["out"] / ((e["ms"] - (e.get("ttft_ms") or 0)) / 1000)
+                  for e in evs if e.get("ms") and e.get("out", 0) >= 20 and e["ms"] - (e.get("ttft_ms") or 0) > 200]
+        cin = sum(e.get("in", 0) for e in evs)
+        cread = sum(e.get("cache_read", 0) for e in evs)
+        cost = sum(e["cost"] for e in evs if isinstance(e.get("cost"), (int, float)))
+        rows.append({
+            "key": key, "n": len(evs), "err": sum(1 for e in evs if not e.get("ok", True)),
+            "in": cin, "out": sum(e.get("out", 0) for e in evs), "cread": cread,
+            "hit": cread / (cin + cread) if cin + cread else None,
+            "ctxmax": max(ctx_of(e) for e in evs), "long": sum(1 for e in evs if ctx_of(e) > LONG_CTX),
+            "p50": pct(lat, 50), "p95": pct(lat, 95), "ttft": pct(ttft, 50),
+            "tps": statistics.median(speeds) if speeds else None, "cost": cost,
+            "reroutes": sum(1 for e in evs if is_reroute(e)),
+        })
+    if any(fn in (KEYS["day"], KEYS["hour"]) for fn in keyfns):
+        return sorted(rows, key=lambda r: r["key"])
+    return sorted(rows, key=lambda r: -r["n"])
+
+
+def render(headers, rows, aligns=None):
+    widths = [max(len(h), *(len(strip_ansi(str(r[i]))) for r in rows)) if rows else len(h) for i, h in enumerate(headers)]
+    aligns = aligns or ["l"] * len(headers)
+
+    def fmt(cells, bold=False):
+        out = []
+        for i, c in enumerate(cells):
+            pad = widths[i] - len(strip_ansi(str(c)))
+            out.append((" " * pad + str(c)) if aligns[i] == "r" else (str(c) + " " * pad))
+        line = "  ".join(out).rstrip()
+        return color(line, "1") if bold else line
+
+    lines = [fmt(headers, True)] + [fmt(r) for r in rows]
+    return "\n".join(lines)
+
+
+def strip_ansi(text):
+    return re.sub(r"\033\[[0-9;]*m", "", text)
+
+
+def stats_table(events, by):
+    keyfns = [KEYS[k] for k in by]
+    rows = aggregate(events, keyfns)
+    has_latency = any(r["p50"] is not None for r in rows)
+    headers = [k.upper() for k in by] + ["REQS", "ERR", "IN", "OUT", "CACHE", "HIT%", "CTX-MAX", ">200K"]
+    aligns = ["l"] * len(by) + ["r"] * 8
+    if has_latency:
+        headers += ["P50", "P95", "TTFT", "TOK/S"]
+        aligns += ["r"] * 4
+    if any(r["cost"] for r in rows):
+        headers += ["COST"]
+        aligns += ["r"]
+    body = []
+    for r in rows:
+        key = list(r["key"])
+        if r["reroutes"]:
+            key[0] = color(key[0], "35")
+        line = key + [r["n"], color(r["err"], "31") if r["err"] else "0", human(r["in"]), human(r["out"]),
+                      human(r["cread"]), f"{r['hit'] * 100:.0f}" if r["hit"] is not None else "-",
+                      human(r["ctxmax"]), r["long"] or "-"]
+        if has_latency:
+            line += [ms(r["p50"]), ms(r["p95"]), ms(r["ttft"]), f"{r['tps']:.0f}" if r["tps"] else "-"]
+        if any(x["cost"] for x in rows):
+            line += [f"${r['cost']:.2f}" if r["cost"] else "-"]
+        body.append(line)
+    total = aggregate(events, [lambda e: "TOTAL"])
+    if len(rows) > 1 and total:
+        t = total[0]
+        line = ["TOTAL"] + [""] * (len(by) - 1) + [t["n"], t["err"], human(t["in"]), human(t["out"]), human(t["cread"]),
+                f"{t['hit'] * 100:.0f}" if t["hit"] is not None else "-", human(t["ctxmax"]), t["long"] or "-"]
+        if has_latency:
+            line += [ms(t["p50"]), ms(t["p95"]), ms(t["ttft"]), f"{t['tps']:.0f}" if t["tps"] else "-"]
+        if any(x["cost"] for x in rows):
+            line += [f"${t['cost']:.2f}" if t["cost"] else "-"]
+        body.append(line)
+    return render(headers, body, aligns)
+
+
+# --------------------------------------------------------------------------- commands
+
+def cmd_summary(args):
+    events, used = load(parse_since(args.since), args.source)
+    by = [b.strip() for b in args.by.split(",")]
+    for b in by:
+        if b not in KEYS:
+            sys.exit(f"llm-usage: --by {b!r} unknown; choose from {', '.join(KEYS)}")
+    if args.json:
+        print(json.dumps([{**{k: v for k, v in r.items() if k != "key"}, "key": dict(zip(by, r["key"]))}
+                          for r in aggregate(events, [KEYS[b] for b in by])], indent=2))
+        return
+    print(color(f"llm-usage  since {args.since}  by {','.join(by)}  source: {used}  events: {len(events)}", "2"))
+    if not events:
+        print("no events")
+        return
+    print(stats_table(events, by))
+    if used.startswith(("transcripts", "merged")):
+        print(color("note: transcript rows show the answering model only; requested->served reroutes and latency need the proxy log.", "2"))
+
+
+def cmd_routes(args):
+    events, used = load(parse_since(args.since), args.source)
+    events = [e for e in events if e.get("requested")]
+    print(color(f"llm-usage routes  since {args.since}  source: {used}", "2"))
+    if not events:
+        print("no proxy events with a requested model (transcripts do not record it)")
+        return
+    rows = aggregate(events, [KEYS["proxy"], KEYS["requested"], lambda e: strip_model(e.get("served")), KEYS["upstream"]])
+    body = []
+    for r in rows:
+        proxy, req, srv, up = r["key"]
+        flag = color("REROUTED", "35") if family(req) != family(srv) else "direct"
+        body.append([proxy, req, "->", srv, up, flag, r["n"], r["err"] or "-", human(r["in"]), human(r["out"]), ms(r["p50"])])
+    print(render(["PROXY", "REQUESTED", "", "SERVED", "UPSTREAM", "KIND", "REQS", "ERR", "IN", "OUT", "P50"], body,
+                 ["l", "l", "l", "l", "l", "l", "r", "r", "r", "r", "r"]))
+    fallbacks = sum(1 for e in events if e.get("fallback"))
+    if fallbacks:
+        print(color(f"{fallbacks} request(s) were served by a router fallback after a failed first attempt", "33"))
+
+
+def event_line(ev):
+    when = datetime.fromtimestamp(ev["t"]).strftime("%H:%M:%S")
+    arrow = route_label(ev)
+    if ev.get("requested") and not is_reroute(ev):
+        arrow = strip_model(ev["served"])
+    elif is_reroute(ev):
+        arrow = color(arrow, "35")
+    status = "ok " if ev.get("ok", True) else color("ERR", "31")
+    extra = []
+    if ev.get("role"):
+        extra.append(ev["role"])
+    if ev.get("fallback"):
+        extra.append("fallback")
+    if ctx_of(ev) > LONG_CTX:
+        extra.append("1M-ctx")
+    if ev.get("error"):
+        extra.append(ev["error"][:80].replace("\n", " "))
+    return (f"{when} {proxy_name(ev):<18} {ev.get('client', '?'):<11} {arrow:<28} {status} "
+            f"ctx {human(ctx_of(ev)):>6} out {human(ev.get('out', 0)):>5} {ms(ev.get('ms')):>7}  {' '.join(extra)}").rstrip()
+
+
+def cmd_tail(args):
+    seen = set()
+    since = time.time() - 3600 if args.follow else parse_since(args.since)
+
+    def fresh():
+        events = [e for e in load_proxy(since) if (e["t"], e.get("start"), e.get("served"), e.get("out")) not in seen]
+        events.sort(key=lambda e: e["t"])
+        return events
+
+    events = fresh()
+    for ev in events[-args.n:]:
+        print(event_line(ev))
+    for ev in events:
+        seen.add((ev["t"], ev.get("start"), ev.get("served"), ev.get("out")))
+    if not args.follow:
+        if not events:
+            print("no proxy events (restart proxies with the usage callback: llm-usage status)")
+        return
+    try:
+        while True:
+            time.sleep(1)
+            for ev in fresh():
+                seen.add((ev["t"], ev.get("start"), ev.get("served"), ev.get("out")))
+                print(event_line(ev), flush=True)
+    except KeyboardInterrupt:
+        pass
+
+
+def cmd_errors(args):
+    events, used = load(parse_since(args.since), "proxy")
+    bad = sorted((e for e in events if not e.get("ok", True)), key=lambda e: e["t"])
+    print(color(f"llm-usage errors  since {args.since}  proxy events: {len(events)}  failed: {len(bad)}", "2"))
+    for ev in bad[-args.n:]:
+        print(event_line(ev))
+    if bad:
+        by_error = defaultdict(int)
+        for ev in bad:
+            by_error[re.sub(r"\d{4,}", "N", (ev.get("error") or "?")[:90])] += 1
+        print("\n" + render(["COUNT", "ERROR"], [[n, e] for e, n in sorted(by_error.items(), key=lambda x: -x[1])[:10]], ["r", "l"]))
+
+
+def probe(port):
+    try:
+        urllib.request.urlopen(f"http://127.0.0.1:{port}/health/liveliness", timeout=1.5)
+        return True
+    except Exception as err:
+        # A non-LiteLLM listener (copilot-api) answers some other status: still up.
+        return getattr(err, "code", None) is not None
+
+
+def listener_pid(port):
+    try:
+        out = subprocess.run(["lsof", "-ti", f"tcp:{port}", "-sTCP:LISTEN"], capture_output=True, text=True, timeout=3).stdout.split()
+        return out[0] if out else None
+    except Exception:
+        return None
+
+
+def config_models(path):
+    if not path or not os.path.exists(path):
+        return None, None
+    text = open(path, errors="replace").read()
+    names = re.findall(r'"?model_name"?\s*:\s*"?([^"\s,}]+)', text)
+    logging_on = "litellm_usage_log" in text
+    return sorted(set(names)), logging_on
+
+
+def status_rows():
+    events = load_proxy(time.time() - 7 * 86400)
+    last_seen, counts = {}, defaultdict(int)
+    for ev in events:
+        port = str(ev.get("port"))
+        last_seen[port] = max(last_seen.get(port, 0), ev["t"])
+        counts[port] += 1
+    rows = []
+    for port, (name, config) in sorted(PROXIES.items()):
+        up = probe(port)
+        models, logging_on = config_models(config)
+        if name == "copilot-api":
+            code = "not-litellm" if up else "down"
+        elif not up:
+            code = "down"
+        elif logging_on is False:
+            code = "not-logging"
+        elif port in last_seen:
+            code = "logging"
+        else:
+            code = "idle" if logging_on else "unknown"
+        rows.append({"port": port, "name": name, "up": up, "pid": listener_pid(port) if up else None,
+                     "models": models or [], "code": code, "requests_7d": counts.get(port, 0),
+                     "last_seen": last_seen.get(port)})
+    return rows, events
+
+
+STATE_TEXT = {
+    "not-litellm": "not LiteLLM (no callback hook; use --source claude)",
+    "not-logging": "up, NOT logging (run: llm-proxy-restart)",
+    "idle": "logging enabled, no requests yet",
+    "unknown": "up, unknown (config unreadable)",
+    "down": "-",
+}
+
+
+def cmd_status(args):
+    status, events = status_rows()
+    rows = []
+    for r in status:
+        if r["code"] == "logging":
+            state = color("logging", "32") + f" ({r['requests_7d']} reqs/7d, last {ms((time.time() - r['last_seen']) * 1000)} ago)"
+        else:
+            state = STATE_TEXT[r["code"]]
+            if r["code"] == "not-logging":
+                state = color(state, "33")
+        rows.append([r["port"], r["name"], color("up", "32") if r["up"] else color("down", "2"), r["pid"] or "-",
+                     ",".join(r["models"]) or "-", state])
+    print(render(["PORT", "PROXY", "STATE", "PID", "MODELS", "USAGE LOG"], rows))
+    files = sorted(glob.glob(os.path.join(STATE, "events-*.jsonl")))
+    size = sum(os.path.getsize(f) for f in files)
+    print(color(f"\nlog dir {STATE}: {len(files)} file(s), {human(size)}B, {len(events)} events in last 7d", "2"))
+
+
+def cmd_top(args):
+    window = parse_since(args.since)
+    span = time.time() - window
+    try:
+        while True:
+            since = time.time() - span
+            events = load_proxy(since)
+            out = [color(f"llm-usage top  last {args.since}  {datetime.now():%H:%M:%S}  (ctrl-c to quit)", "1")]
+            ups = [f"{PROXIES[p][0]}:{color('up', '32') if probe(p) else color('down', '2')}" for p in sorted(PROXIES)]
+            out.append("  ".join(ups))
+            if not events:
+                out.append("\nno proxy events yet in this window. `llm-usage status` shows which proxies log.")
+            else:
+                out.append("\n" + stats_table(events, ["route"]))
+                out.append("\n" + stats_table(events, ["proxy", "client"]))
+                bad = [e for e in events if not e.get("ok", True)]
+                out.append("\nrecent:")
+                out += [event_line(e) for e in sorted(events, key=lambda e: e["t"])[-args.n:]]
+                if bad:
+                    out.append(color(f"\n{len(bad)} errors in window; latest: {(bad[-1].get('error') or '')[:100]}", "31"))
+            sys.stdout.write("\033[H\033[J" + "\n".join(out) + "\n")
+            sys.stdout.flush()
+            time.sleep(args.interval)
+    except KeyboardInterrupt:
+        pass
+
+
+# --------------------------------------------------------------------------- web dashboard
+
+SLOTS = 8  # categorical colors in the dataviz palette; beyond that models fold into "Other"
+CTX_BINS = [(0, "<8k"), (8_000, "8-32k"), (32_000, "32-128k"), (128_000, "128-200k"), (200_000, "200-500k"), (500_000, ">500k")]
+BUCKETS = [60, 300, 900, 1800, 3600, 10800, 21600, 86400]
+
+
+def model_colors(by_volume):
+    """Stable model -> palette slot (1..8), persisted so filters never repaint a model."""
+    path = os.path.join(STATE, "colors.json")
+    try:
+        with open(path) as handle:
+            colors = json.load(handle)
+    except (OSError, ValueError):
+        colors = {}
+    changed = False
+    for model in by_volume:
+        if model not in colors and len(colors) < SLOTS:
+            colors[model] = len(colors) + 1
+            changed = True
+    if changed:
+        os.makedirs(STATE, mode=0o700, exist_ok=True)
+        with open(path, "w") as handle:
+            json.dump(colors, handle)
+    return colors
+
+
+def row_json(r, keys):
+    return {**dict(zip(keys, r["key"])), **{k: v for k, v in r.items() if k != "key"}}
+
+
+def dashboard_data(since_text, source, hide):
+    now = time.time()
+    since = parse_since(since_text)
+    events, used = load(since, source)
+    volume = defaultdict(int)
+    for ev in events:
+        volume[strip_model(ev.get("served"))] += 1
+    colors = model_colors(sorted(volume, key=lambda m: -volume[m]))
+    if hide:
+        events = [e for e in events if strip_model(e.get("served")) not in hide]
+    if since <= 0:
+        since = min((e["t"] for e in events), default=now - 3600)
+    span = max(now - since, 60)
+    size = next((b for b in BUCKETS if span / b <= 72), BUCKETS[-1])
+    start = int(since // size) * size
+    count = int((now - start) // size) + 1
+    buckets = [start + i * size for i in range(count)]
+
+    def label(ev):
+        m = strip_model(ev.get("served"))
+        return m if m in colors else "Other"
+
+    series = {}
+    lat = defaultdict(list)
+    for ev in events:
+        m = label(ev)
+        i = min(max(int((ev["t"] - start) // size), 0), count - 1)
+        s = series.setdefault(m, {k: [0] * count for k in ("req", "out", "ctx", "err")})
+        s["req"][i] += 1
+        s["out"][i] += ev.get("out", 0)
+        s["ctx"][i] += ctx_of(ev)
+        s["err"][i] += 0 if ev.get("ok", True) else 1
+        if ev.get("ms") is not None:
+            lat[(m, i)].append(ev["ms"])
+    for m, s in series.items():
+        s["p50"] = [pct(lat.get((m, i), []), 50) for i in range(count)]
+        s["p95"] = [pct(lat.get((m, i), []), 95) for i in range(count)]
+    order = sorted(series, key=lambda m: (m == "Other", -sum(series[m]["req"])))
+
+    ctx_hist = {m: [0] * len(CTX_BINS) for m in order}
+    for ev in events:
+        c = ctx_of(ev)
+        idx = max(i for i, (lo, _) in enumerate(CTX_BINS) if c >= lo)
+        ctx_hist[label(ev)][idx] += 1
+
+    total = aggregate(events, [lambda e: "all"])
+    kp = total[0] if total else None
+    status, _ = status_rows()
+    recent = sorted(events, key=lambda e: -e["t"])[:40]
+    bad = defaultdict(int)
+    for ev in events:
+        if not ev.get("ok", True):
+            bad[re.sub(r"\d{4,}", "N", (ev.get("error") or "?")[:120])] += 1
+
+    return {
+        "now": now, "since": since, "bucket": size, "source": used, "events": len(events),
+        "buckets": buckets, "models": order, "chips": [m for m in sorted(volume, key=lambda m: -volume[m]) if m in colors], "colors": {**colors, "Other": 0}, "series": series,
+        "ctx_bins": [name for _, name in CTX_BINS], "ctx_hist": ctx_hist,
+        "kpi": ({"n": kp["n"], "err": kp["err"], "in": kp["in"], "out": kp["out"], "cread": kp["cread"], "hit": kp["hit"],
+                 "p50": kp["p50"], "p95": kp["p95"], "tps": kp["tps"], "cost": kp["cost"], "long": kp["long"],
+                 "reroutes": kp["reroutes"], "classifier": sum(1 for e in events if e.get("role") == "classifier"),
+                 "ctxmax": kp["ctxmax"]} if kp else None),
+        "model_table": [row_json(r, ["model"]) for r in aggregate(events, [KEYS["model"]])],
+        "routes": [{**row_json(r, ["proxy", "requested", "served", "upstream"]),
+                    "rerouted": r["key"][1] != "-" and family(r["key"][1]) != family(r["key"][2])}
+                   for r in aggregate(events, [KEYS["proxy"], KEYS["requested"], lambda e: strip_model(e.get("served")), KEYS["upstream"]])],
+        "clients": [row_json(r, ["proxy", "client", "role"]) for r in aggregate(events, [KEYS["proxy"], KEYS["client"], KEYS["role"]])],
+        "errors": [{"count": n, "error": e} for e, n in sorted(bad.items(), key=lambda x: -x[1])[:10]],
+        "recent": [{"t": e["t"], "proxy": proxy_name(e), "client": e.get("client"), "requested": strip_model(e["requested"]) if e.get("requested") else None,
+                    "served": strip_model(e.get("served")), "rerouted": is_reroute(e), "ok": e.get("ok", True), "ctx": ctx_of(e),
+                    "out": e.get("out", 0), "ms": e.get("ms"), "role": e.get("role"), "fallback": bool(e.get("fallback")),
+                    "error": (e.get("error") or "")[:160] or None} for e in recent],
+        "status": status,
+    }
+
+
+def cmd_serve(args):
+    import threading
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    from urllib.parse import parse_qs, urlparse
+    global CACHE_FILES
+    CACHE_FILES = True
+    if args.reset_colors:
+        try:
+            os.remove(os.path.join(STATE, "colors.json"))
+        except OSError:
+            pass
+    page = os.path.join(os.path.dirname(os.path.realpath(__file__)), "llm-usage-dashboard.html")
+    cache, lock = {}, threading.Lock()
+    allowed = {f"127.0.0.1:{args.port}", f"localhost:{args.port}", f"[::1]:{args.port}"}
+
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, *a):
+            pass
+
+        def send(self, code, body, kind):
+            self.send_response(code)
+            self.send_header("content-type", kind)
+            self.send_header("content-length", str(len(body)))
+            self.send_header("cache-control", "no-store")
+            self.send_header("x-content-type-options", "nosniff")
+            self.end_headers()
+            self.wfile.write(body)
+
+        def do_GET(self):
+            if self.headers.get("host") not in allowed:  # blocks DNS rebinding
+                return self.send(403, b"forbidden", "text/plain")
+            url = urlparse(self.path)
+            if url.path == "/favicon.ico":
+                return self.send(204, b"", "image/x-icon")
+            if url.path == "/":
+                try:
+                    with open(page, "rb") as handle:
+                        return self.send(200, handle.read(), "text/html; charset=utf-8")
+                except OSError:
+                    return self.send(500, b"llm-usage-dashboard.html missing", "text/plain")
+            if url.path == "/api/data":
+                q = parse_qs(url.query)
+                since = (q.get("since") or ["24h"])[0]
+                source = (q.get("source") or ["auto"])[0]
+                hide = tuple(sorted(filter(None, (q.get("hide") or [""])[0].split(","))))
+                key = (since, source, hide)
+                try:
+                    with lock:
+                        hit = cache.get(key)
+                        if not hit or time.time() - hit[0] > args.cache:
+                            hit = (time.time(), json.dumps(dashboard_data(since, source, set(hide)), separators=(",", ":"), default=str).encode())
+                            cache[key] = hit
+                            for k in [k for k, v in cache.items() if time.time() - v[0] > 60]:
+                                del cache[k]
+                    return self.send(200, hit[1], "application/json")
+                except SystemExit as err:
+                    return self.send(400, json.dumps({"error": str(err)}).encode(), "application/json")
+            self.send(404, b"not found", "text/plain")
+
+    try:
+        server = ThreadingHTTPServer((args.host, args.port), Handler)
+    except OSError as err:
+        sys.exit(f"llm-usage: cannot listen on {args.host}:{args.port}: {err}")
+    url = f"http://127.0.0.1:{args.port}/"
+    print(f"llm-usage dashboard: {url}  (ctrl-c to stop)", flush=True)
+    if args.open:
+        subprocess.run(["open", url], check=False)
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        pass
+
+
+def main():
+    parser = argparse.ArgumentParser(prog="llm-usage", description=__doc__.split("\n\n")[0])
+    sub = parser.add_subparsers(dest="cmd")
+
+    def common(p, since="24h", source="auto"):
+        p.add_argument("--since", default=since, help="30m, 24h, 7d, today, all, or ISO time (default %(default)s)")
+        p.add_argument("--source", default=source, help="auto|proxy|claude|codex|all or comma list (default %(default)s)")
+
+    p = sub.add_parser("summary", help="usage table grouped by --by (default model)")
+    common(p)
+    p.add_argument("--by", default="model", help=f"comma list of: {', '.join(KEYS)}")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(fn=cmd_summary)
+
+    p = sub.add_parser("routes", help="requested -> served model matrix; flags reroutes (e.g. sonnet->glm-5.3)")
+    common(p, source="proxy")
+    p.set_defaults(fn=cmd_routes)
+
+    p = sub.add_parser("tail", help="recent requests; -f to follow live")
+    p.add_argument("-f", "--follow", action="store_true")
+    p.add_argument("-n", type=int, default=20)
+    p.add_argument("--since", default="24h")
+    p.set_defaults(fn=cmd_tail)
+
+    p = sub.add_parser("errors", help="failed requests grouped by message")
+    p.add_argument("--since", default="24h")
+    p.add_argument("-n", type=int, default=20)
+    p.set_defaults(fn=cmd_errors)
+
+    p = sub.add_parser("top", help="live dashboard")
+    p.add_argument("--since", default="30m")
+    p.add_argument("-n", type=int, default=8)
+    p.add_argument("--interval", type=float, default=2.0)
+    p.set_defaults(fn=cmd_top)
+
+    p = sub.add_parser("status", help="which proxies are up and whether they log usage")
+    p.set_defaults(fn=cmd_status)
+
+    p = sub.add_parser("serve", help="browser dashboard with graphs (localhost only)")
+    p.add_argument("--port", type=int, default=int(os.environ.get("LLM_USAGE_PORT", "4150")))
+    p.add_argument("--host", default="127.0.0.1", help="bind address; only loopback Host headers are accepted")
+    p.add_argument("--open", action="store_true", help="open in the default browser")
+    p.add_argument("--cache", type=float, default=3.0, help="seconds to reuse a computed payload")
+    p.add_argument("--reset-colors", action="store_true", help="forget the stored model -> color assignments")
+    p.set_defaults(fn=cmd_serve)
+
+    args = parser.parse_args()
+    if not args.cmd:
+        args = parser.parse_args(["summary"])
+    args.fn(args)
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except BrokenPipeError:
+        pass

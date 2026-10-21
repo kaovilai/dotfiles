@@ -63,9 +63,12 @@ _claude_invoke() {
     command claude "$@"
 }
 
+typeset -g _CLAUDE_SCRIPTS_DIR="${${(%):-%x}:A:h:h:h:h}/scripts"
+
 _claude_proxy_start() {
     local log="$1"; shift
-    ("$@" >> "$log" 2>&1 &)
+    # scripts/ on PYTHONPATH lets configs load litellm_usage_log (llm-usage).
+    (PYTHONPATH="$_CLAUDE_SCRIPTS_DIR${PYTHONPATH:+:$PYTHONPATH}" "$@" >> "$log" 2>&1 &)
 }
 
 # Builds a `--settings` arg (into $reply) so the /model picker lists only the

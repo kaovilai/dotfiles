@@ -131,6 +131,8 @@ _claude_openai_proxy_config_text() {
         print -r -- "litellm_settings:"
         print -r -- "  drop_params: true"
         print -r -- "  master_key: \"${master_key}\""
+        # Per-request usage log for `llm-usage` (module found via PYTHONPATH).
+        print -r -- '  callbacks: ["litellm_usage_log.proxy_handler_instance"]'
     }
 }
 

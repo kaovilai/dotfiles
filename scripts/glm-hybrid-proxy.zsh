@@ -23,6 +23,8 @@
 # gets them; clients get the local token ${GLM_HYBRID_PROXY_TOKEN:-glm-hybrid-local}.
 # GLM-only launchers (claude-glm-only, codex-glm-only) use the same proxies with
 # GLM as the reviewer too, and need no OpenAI key.
+# litellm_usage_log.py also loads (all models): per-request JSONL for
+# `llm-usage` (requested vs served model, tokens, latency, errors).
 # Other knobs: GLM_HYBRID_MODEL, GLM_HYBRID_REVIEW_MODEL,
 # GLM_HYBRID_ENMAAS_BASE_URL (gateway root; default $ENMAAS_API_BASE_URL),
 # GLM_HYBRID_LITELLM_VERSION,
@@ -76,7 +78,7 @@ $glm_params
       api_key: os.environ/OPENAI_API_KEY"
     print -r -- "litellm_settings:
   drop_params: true"
-    print -r -- '  callbacks: ["glm_hybrid_hooks.proxy_handler_instance"]'
+    print -r -- '  callbacks: ["glm_hybrid_hooks.proxy_handler_instance", "litellm_usage_log.proxy_handler_instance"]'
     print -r -- "general_settings:
   master_key: os.environ/GLM_HYBRID_PROXY_TOKEN"
 }
@@ -94,6 +96,7 @@ _glm_hybrid_proxy_ensure() {
     local litellm_version="${GLM_HYBRID_LITELLM_VERSION:-1.97.0}"
     local fastapi_version="${GLM_HYBRID_FASTAPI_VERSION:-0.136.3}"
     local hooks="$_GLM_HYBRID_SCRIPTS/glm_hybrid_hooks.py"
+    local usage_log="$_GLM_HYBRID_SCRIPTS/litellm_usage_log.py"
     [[ -n "${ENMAAS_API_KEY-}" ]] || { print -ru2 -- 'glm-hybrid: ENMAAS_API_KEY is not set.'; return 1; }
     local openai_key="${OPENAI_API_KEY-}" auth="${GLM_HYBRID_OPENAI_AUTH_FILE:-$HOME/.codex/auth.json}"
     if [[ -z "$openai_key" && -r "$auth" ]]; then
@@ -107,10 +110,11 @@ _glm_hybrid_proxy_ensure() {
     }
     command -v uv >/dev/null || { print -ru2 -- 'glm-hybrid: uv not found.'; return 1; }
     [[ -r "$hooks" ]] || { print -ru2 -- "glm-hybrid: missing $hooks"; return 1; }
+    [[ -r "$usage_log" ]] || { print -ru2 -- "glm-hybrid: missing $usage_log"; return 1; }
 
     local config fp hooks_text
     config=$(_glm_hybrid_proxy_config)
-    hooks_text="$(<"$hooks")"
+    hooks_text="$(<"$hooks")$(<"$usage_log")"
     fp=$(print -rn -- "$config"$'\x1f'"$hooks_text"$'\x1f'"$ENMAAS_API_KEY"$'\x1f'"$openai_key"$'\x1f'"$_ghp_token"$'\x1f'"$litellm_version $fastapi_version" \
         | shasum -a 256 | cut -d' ' -f1)
 
@@ -131,6 +135,7 @@ _glm_hybrid_proxy_ensure() {
         else
             print -r -- "$config" >| "$_ghp_runtime/config.yaml" || return 1
             cp -f "$hooks" "$_ghp_runtime/glm_hybrid_hooks.py" || return 1
+            cp -f "$usage_log" "$_ghp_runtime/litellm_usage_log.py" || return 1
             rm -f "$_ghp_runtime/fingerprint"
             ENMAAS_API_KEY="$ENMAAS_API_KEY" OPENAI_API_KEY="$openai_key" GLM_HYBRID_PROXY_TOKEN="$_ghp_token" LITELLM_LOG="${GLM_HYBRID_LITELLM_LOG:-ERROR}" \
                 python3 "$_GLM_HYBRID_SCRIPTS/claude-provider.py" --background "$_ghp_runtime/proxy.log" \

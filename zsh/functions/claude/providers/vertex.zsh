@@ -163,6 +163,8 @@ EOF
         done
         echo "litellm_settings:"
         echo "  master_key: \"${master_key}\""
+        # Per-request usage log for `llm-usage` (module found via PYTHONPATH).
+        echo '  callbacks: ["litellm_usage_log.proxy_handler_instance"]'
     } >| "$_claude_vertex_proxy_config"
 }
 
