@@ -23,6 +23,10 @@
 # thinking:disabled removes its reasoning entirely, and it takes images, which
 # subagents (screenshots, UI checks) may need
 # (docs/notes/deepseek-v41-flash-vs-glm.md). Values: glm, deepseek, or an id.
+# HOSTED_ONLY_CLIENT_MAX_RETRIES (default 3) sets CLAUDE_CODE_MAX_RETRIES (Claude
+# Code default 10). Per-minute limits reach it as 503 + retry-after 60, which it
+# sleeps through, so 10 retries stall a turn ~10 min before T3 sees the limit;
+# 3 caps that near 3 min. It also bounds retries of real 5xx errors.
 # CLAUDE_CODE_AUTO_MODE_SERVER=0 keeps auto-mode review client-side, where
 # the classifier model above applies.
 #
@@ -52,10 +56,12 @@ _claude_hosted_launch() (
     _claude_picker_args "${picks[@]}"
     local settings='{}'
     (( ${#reply} )) && settings="$reply[2]"
-    settings=$(jq -c --arg glm "$glm" --arg ds "$ds" --arg small "$small" --arg sub "$subagent" '. + {
+    local max_retries="${HOSTED_ONLY_CLIENT_MAX_RETRIES:-${GLM_HYBRID_CLIENT_MAX_RETRIES:-3}}"
+    settings=$(jq -c --arg glm "$glm" --arg ds "$ds" --arg small "$small" --arg sub "$subagent" --arg retries "$max_retries" '. + {
         apiKeyHelper: "",
         env: {ANTHROPIC_CUSTOM_HEADERS: "", CLAUDE_CODE_USE_VERTEX: "0", CLAUDE_CODE_USE_BEDROCK: "0",
           CLAUDE_CODE_USE_FOUNDRY: "0", CLAUDE_CODE_AUTO_MODE_SERVER: "0",
+          CLAUDE_CODE_MAX_RETRIES: $retries,
           ANTHROPIC_SMALL_FAST_MODEL: $small, CLAUDE_CODE_SUBAGENT_MODEL: $sub,
           CLAUDE_CODE_SUBAGENT_MODEL_FORCE: "1", CLAUDE_CODE_WORKFLOW_SUBAGENT_MODEL: $sub},
         modelSettings: {($glm): {effortLevel: "medium"}, ($ds): {effortLevel: "medium"}}

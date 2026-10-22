@@ -56,15 +56,28 @@ retired GLM_HYBRID_* name as a fallback.
      Claude Code only emits `rate_limit_event` for claude.ai subscription
      auth, not for a gateway/API-key 429, so the native path is unavailable.
      Waits over HOSTED_ONLY_CLIENT_RETRY_MAX_SECONDS (default 60) also get
-     `x-should-retry: false` so Claude Code stops retrying (its SDK would
-     sleep for as long as `retry-after`, up to ~24 days); T3 holds and
-     resumes. Shorter waits stay retryable inside Claude Code.
+     `x-should-retry: false`. Claude Code's main loop already gives up when
+     retry-after > 60 s (`api_request_retry_after_too_long`), so the header
+     matters for its SDK-level retries (side queries), which would otherwise
+     honor retry-after up to ~24.8 days on a 503. T3 holds and resumes.
+     Waits <= 60 s stay retryable: Claude Code sleeps retry-after (exactly 60
+     still sleeps) up to 10 times (~10 min) before the error surfaces.
    - Codex (/v1/responses): 429 `usage_limit_reached` plus
      `x-codex-primary-{used-percent,window-minutes,reset-at}` headers, which
      Codex 0.163.0 (codex-api api_bridge.rs/rate_limits.rs) turns into
      UsageLimitReached + an `account/rateLimits/updated` snapshot with
      resetsAt, the input of T3's codexUsageLimitResetAt. Codex does not retry
-     that error.
+     that error. The 429 body also carries `error.resets_at` (epoch s, copied
+     from the reset-at header by ResetAfterHeaders): Codex reads only that
+     field from the body for its "Try again at <date>" text.
+   - OpenAI chat (/v1/chat/completions, OpenCode via the AI SDK): per-minute
+     limits stay 429 + `retry-after` seconds (OpenCode waits that long, up to 5
+     retries). The monthly quota becomes HTTP 402 `insufficient_quota`, message
+     "Monthly token budget exhausted. Quota resets <ISO>.", no `retry-after`:
+     the AI SDK retries every 429 and would sleep the ~9-day retry-after, and
+     only a non-retryable status stops it. The text avoids OpenCode's retry
+     regexes (session/retry.ts: 429/500/502/503/504/524, rate limit, try again,
+     overloaded, resource exhausted, at capacity).
 """
 
 import email.utils
@@ -231,6 +244,22 @@ def rewrite_limit(exc, request_data, now=None):
             except AttributeError:
                 pass
         return HTTPException(status_code=503, detail=message)
+    if monthly and "/v1/chat/completions" in url:
+        # OpenAI-compatible clients (OpenCode via @ai-sdk/openai-compatible)
+        # retry every 429 and sleep `retry-after` for up to 24 days, and do not
+        # read `insufficient_quota` from an HTTP error; a 402 is not retryable
+        # there. Keep the text free of what OpenCode's retry regexes match
+        # (429/500/502/503/504/524, "try again", "rate limit", ...). No
+        # retry-after header either.
+        stamp = datetime.fromtimestamp(reset, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        out = HTTPException(
+            status_code=402,
+            detail=f"Monthly token budget exhausted. Quota resets {stamp}.",
+        )
+        # litellm builds the body from `type` and takes `code` from the status
+        # (proxy/common_request_processing.py:2758-2764), so code reads "402".
+        out.type = "insufficient_quota"
+        return out
     window = (
         round((month_bounds(now)[1] - month_bounds(now)[0]) / 60)
         if monthly
@@ -263,16 +292,46 @@ def reset_after_seconds(body):
     return (h * 3600 + m * 60 + s) or None
 
 
+def add_resets_at(start, message):
+    """(start, message) for a 429 rewrite_limit wrote for /v1/responses, with
+    `error.resets_at` (epoch s) added to the JSON body, copied from the
+    x-codex-primary-reset-at header: Codex reads only that field from the body
+    for its "Try again at <date>" text. Content-length follows the new body.
+    Anything that is not our rewrite (no such header, other `type`, body that
+    does not parse) comes back untouched."""
+    headers = start.get("headers") or []
+    try:
+        reset = int(
+            next(v for k, v in headers if k.lower() == b"x-codex-primary-reset-at")
+        )
+        data = json.loads(message.get("body") or b"")
+        err = data["error"]
+        if err.get("type") != "usage_limit_reached":
+            return start, message
+    except (StopIteration, KeyError, ValueError, TypeError, AttributeError):
+        return start, message
+    err["resets_at"] = reset
+    body = json.dumps(data, separators=(",", ":")).encode()
+    headers = [
+        (k, str(len(body)).encode() if k.lower() == b"content-length" else v)
+        for k, v in headers
+    ]
+    return {**start, "headers": headers}, {**message, "body": body}
+
+
 class ResetAfterHeaders:
     """ASGI wrapper adding `retry-after` (and, for long waits,
     `x-should-retry: false`) to the 503 written by rewrite_limit on
     /v1/messages, where litellm gives hooks no way to set response headers.
+    It also adds `error.resets_at` to our rewritten 429 `usage_limit_reached`
+    bodies (add_resets_at); every other response passes through unchanged.
     Waits up to HOSTED_ONLY_CLIENT_RETRY_MAX_SECONDS (default 60) stay
-    retryable: Claude Code's SDK sleeps `retry-after` and retries, so short
-    per-minute bursts never stop the turn, and if its retries run out the final
-    error still carries "reset after". Longer waits get `x-should-retry: false`
-    so Claude Code fails at once instead of sleeping for days; T3 Code then
-    holds the thread and resumes at the reset time."""
+    retryable: Claude Code's main loop sleeps `retry-after` and retries, so
+    short per-minute bursts never stop the turn, and if its retries run out the
+    final error still carries "reset after". Longer waits get
+    `x-should-retry: false`: the main loop already fails at once above 60 s,
+    and the header stops its SDK-level retries (side queries) from sleeping for
+    days; T3 Code then holds the thread and resumes at the reset time."""
 
     def __init__(self, app):
         self.app = app
@@ -284,13 +343,19 @@ class ResetAfterHeaders:
 
         async def wrapped(message):
             nonlocal held
-            if message["type"] == "http.response.start" and message["status"] == 503:
+            if message["type"] == "http.response.start" and message["status"] in (429, 503):
                 held = message
                 return
             if held is not None:
                 start, held = held, None
                 if message["type"] == "http.response.body" and not message.get("more_body"):
-                    seconds = reset_after_seconds(message.get("body") or b"")
+                    if start["status"] == 429:
+                        start, message = add_resets_at(start, message)
+                    seconds = (
+                        reset_after_seconds(message.get("body") or b"")
+                        if start["status"] == 503
+                        else None
+                    )
                     if seconds:
                         extra = [(b"retry-after", str(seconds).encode())]
                         if seconds > CLIENT_RETRY_MAX_SECONDS:

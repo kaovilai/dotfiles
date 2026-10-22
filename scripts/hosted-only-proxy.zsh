@@ -22,7 +22,10 @@
 # can auto-resume a limited thread (see hosted_only_hooks.py item 5;
 # HOSTED_ONLY_LIMIT_REWRITE=0 disables, per-minute default wait
 # HOSTED_ONLY_RATE_LIMIT_DEFAULT_RETRY_SECONDS (60), waits longer than
-# HOSTED_ONLY_CLIENT_RETRY_MAX_SECONDS (60) fail fast to T3).
+# HOSTED_ONLY_CLIENT_RETRY_MAX_SECONDS (60) fail fast to T3). Monthly quota on
+# the OpenAI chat route (/v1/chat/completions, OpenCode) becomes HTTP 402
+# insufficient_quota without retry-after, since OpenCode retries every 429.
+# LiteLLM's own upstream retries are off (HOSTED_ONLY_UPSTREAM_RETRIES, 0).
 # litellm_usage_log.py also loads (all models): per-request JSONL for
 # `llm-usage` (requested vs served model, tokens, latency, errors).
 #
@@ -37,7 +40,9 @@
 # rits/deepseek-ai/DeepSeek-V4.1-Flash-1017), HOSTED_ONLY_ENMAAS_BASE_URL
 # (gateway root; default $ENMAAS_API_BASE_URL), HOSTED_ONLY_LITELLM_VERSION,
 # HOSTED_ONLY_FASTAPI_VERSION, HOSTED_ONLY_LITELLM_LOG (default ERROR; INFO logs
-# each routed model). HOSTED_ONLY_MODEL (main model pick), HOSTED_ONLY_REVIEW_MODEL,
+# each routed model). HOSTED_ONLY_UPSTREAM_RETRIES (default 0; router_settings
+# num_retries). HOSTED_ONLY_CLIENT_MAX_RETRIES (Claude Code only) is read by
+# the claude launcher, not here. HOSTED_ONLY_MODEL (main model pick), HOSTED_ONLY_REVIEW_MODEL,
 # HOSTED_ONLY_CLASSIFIER_MODEL, HOSTED_ONLY_SMALL_FAST_MODEL are read by the
 # launchers, not here.
 #
@@ -82,6 +87,7 @@ _hosted_only_proxy_vars() {
     typeset -g _hop_limit_rewrite="$(_hosted_only_knob LIMIT_REWRITE 1)"
     typeset -g _hop_limit_retry="$(_hosted_only_knob RATE_LIMIT_DEFAULT_RETRY_SECONDS 60)"
     typeset -g _hop_client_retry="$(_hosted_only_knob CLIENT_RETRY_MAX_SECONDS 60)"
+    typeset -g _hop_upstream_retries="$(_hosted_only_knob UPSTREAM_RETRIES 0)"
 }
 
 _hosted_only_proxy_config() {
@@ -116,6 +122,21 @@ $glm_params
     print -r -- "litellm_settings:
   drop_params: true"
     print -r -- '  callbacks: ["hosted_only_hooks.proxy_handler_instance", "litellm_usage_log.proxy_handler_instance"]'
+    # LiteLLM retries every failed upstream call (default 2, so each 429 costs 3
+    # upstream hits and ~2.7 s) and the clients retry on their own. Verified in
+    # litellm 1.97.0: router_settings keys become Router.__init__ args
+    # (proxy/proxy_server.py:5170-5189, valid keys from router.py:807-815);
+    # num_retries sets Router.num_retries (router.py:641-646, default 2 =
+    # openai.DEFAULT_MAX_RETRIES), which async_function_with_retries uses when the
+    # request carries none (router.py:6511-6516). /v1/chat/completions
+    # (acompletion, router.py:2044), /v1/responses (aresponses ->
+    # _ageneric_api_call_with_fallbacks, router.py:4645) and the /v1/messages
+    # passthrough (anthropic_messages, router.py:5806-5832 ->
+    # _ageneric_api_call_with_fallbacks) all reach it via
+    # async_function_with_fallbacks. A per-deployment litellm_params.num_retries
+    # would only apply when the request sets none (router.py:6540-6547).
+    print -r -- "router_settings:
+  num_retries: $_hop_upstream_retries"
     print -r -- "general_settings:
   master_key: os.environ/HOSTED_ONLY_PROXY_TOKEN"
 }
@@ -137,7 +158,7 @@ _hosted_only_proxy_ensure() {
     local config fp hooks_text
     config=$(_hosted_only_proxy_config)
     hooks_text="$(<"$hooks")$(<"$usage_log")"
-    fp=$(print -rn -- "$config"$'\x1f'"$hooks_text"$'\x1f'"$ENMAAS_API_KEY"$'\x1f'"$_hop_token"$'\x1f'"$litellm_version $fastapi_version $_hop_vision_fallback $_hop_limit_rewrite $_hop_limit_retry $_hop_client_retry" \
+    fp=$(print -rn -- "$config"$'\x1f'"$hooks_text"$'\x1f'"$ENMAAS_API_KEY"$'\x1f'"$_hop_token"$'\x1f'"$litellm_version $fastapi_version $_hop_vision_fallback $_hop_limit_rewrite $_hop_limit_retry $_hop_client_retry $_hop_upstream_retries" \
         | shasum -a 256 | cut -d' ' -f1)
 
     local old_umask=$(umask) lockfd result=0
