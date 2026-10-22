@@ -190,7 +190,7 @@ claude-mlx() {
     [[ -n "$CLAUDE_MLX_FULL_CONTEXT" && "$CLAUDE_MLX_FULL_CONTEXT" != 0 ]] && bare_flag=()
     export "${envs[@]}"
     _claude_picker_args opus="${_cmx_model}" sonnet="${_cmx_model}" haiku="${_cmx_model}"
-    command claude "${reply[@]}" "${bare_flag[@]}" "$@"
+    _claude_invoke "${reply[@]}" "${bare_flag[@]}" "$@"
 }
 
 # claude-mlx-kill: stop both local processes claude-mlx starts -- the

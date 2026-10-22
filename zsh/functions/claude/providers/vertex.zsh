@@ -29,7 +29,7 @@ claude-vertex-native-adc() {
         export ANTHROPIC_MODEL="${ANTHROPIC_MODEL:-claude-sonnet-5[1m]}"
         export ANTHROPIC_DEFAULT_OPUS_MODEL="${ANTHROPIC_DEFAULT_OPUS_MODEL:-claude-opus-4-8[1m]}"
         export ANTHROPIC_DEFAULT_SONNET_MODEL="${ANTHROPIC_DEFAULT_SONNET_MODEL:-claude-sonnet-5[1m]}"
-        command claude "$@"
+        _claude_invoke "$@"
     )
 }
 

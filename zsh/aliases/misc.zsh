@@ -168,7 +168,7 @@ _claude_container_anthropic_env_build() {
         local url="$ANTHROPIC_BASE_URL"
         url="${url/localhost/host.containers.internal}"
         url="${url/127.0.0.1/host.containers.internal}"
-        _claude_container_anthropic_env_args+=(-e "ANTHROPIC_BASE_URL=${url}")
+        _claude_container_anthropic_env_args+=(-e "ANTHROPIC_BASE_URL=${url}" -e CLAUDE_CODE_AUTO_MODE_SERVER=0)  # gateway: keep auto-mode review client-side
     fi
     [[ -n "$ANTHROPIC_AUTH_TOKEN" ]] && _claude_container_anthropic_env_args+=(-e ANTHROPIC_AUTH_TOKEN)
     [[ -n "$ANTHROPIC_MODEL" ]] && _claude_container_anthropic_env_args+=(-e ANTHROPIC_MODEL)

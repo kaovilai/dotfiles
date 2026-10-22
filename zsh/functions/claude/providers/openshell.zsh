@@ -62,6 +62,7 @@ typeset -ga _claude_openshell_env_names=(
     ANTHROPIC_DEFAULT_SONNET_MODEL
     ANTHROPIC_DEFAULT_HAIKU_MODEL
     ANTHROPIC_DEFAULT_FABLE_MODEL
+    CLAUDE_CODE_AUTO_MODE_SERVER
     ENABLE_TOOL_SEARCH
     CLAUDE_CODE_USE_VERTEX
     CLAUDE_CODE_USE_BEDROCK
@@ -287,6 +288,7 @@ _claude_openshell_finish() {
 # that already exported its transport env.
 _claude_openshell_invoke() {
     emulate -L zsh
+    _claude_endpoint_guard
     setopt localtraps
     # The exec child must stay in the terminal's process group (same reason
     # as claude-enmaas) while this shell waits on it interruptibly.

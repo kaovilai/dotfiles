@@ -59,7 +59,19 @@ _claude_copilot_unset_env() {
 
 # Machine-facing bridges can replace this final invocation to prepare a
 # transport without launching a CLI. Interactive wrappers keep normal behavior.
+# Every provider that overrides the endpoint (ANTHROPIC_BASE_URL) must keep
+# auto-mode review client-side: without CLAUDE_CODE_AUTO_MODE_SERVER=0 Claude
+# Code tries its server-side classifier path, which a gateway cannot serve
+# (and the session is billed as before). One choke point for every wrapper,
+# the T3 capture bridge and the openshell invoke; a non-zero inherited value
+# is overridden on purpose.
+_claude_endpoint_guard() {
+    [[ -n "${ANTHROPIC_BASE_URL-}" || -n "${ANTHROPIC_VERTEX_BASE_URL-}" ]] && export CLAUDE_CODE_AUTO_MODE_SERVER=0
+    return 0
+}
+
 _claude_invoke() {
+    _claude_endpoint_guard
     command claude "$@"
 }
 

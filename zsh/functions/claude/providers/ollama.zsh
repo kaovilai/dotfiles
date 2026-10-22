@@ -566,7 +566,7 @@ claude-ollama() {
     local -a picker_extras
     picker_extras=(${(f)"$(curl -sf --max-time 5 "$(_claude_ollama_base)/api/tags" 2>/dev/null | jq -r '.models[].name' 2>/dev/null | _claude_picker_extras)"})
     _claude_picker_args opus="${opus}" sonnet="${sonnet}" haiku="${haiku}" "${picker_extras[@]}"
-    command claude "${reply[@]}" "${bare_flag[@]}" "$@"
+    _claude_invoke "${reply[@]}" "${bare_flag[@]}" "$@"
 }
 
 # claude-ollama-kill: stop the detached `ollama serve` process started by

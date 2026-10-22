@@ -33,6 +33,7 @@ claude-provider-prepare() {
     # The final invocation becomes a secure preparation result. Inline settings
     # travel on stdin, not a subprocess command line; Claude's stdin is untouched.
     _claude_invoke() {
+        _claude_endpoint_guard
         local arg
         for arg in "$@"; do print -rn -- "$arg"$'\0'; done |
             python3 "$CLAUDE_PROVIDER_CAPTURE_SCRIPT" --capture "$CLAUDE_PROVIDER_PROFILE"
