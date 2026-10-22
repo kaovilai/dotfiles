@@ -214,6 +214,266 @@ assert any(r["rerouted"] and r["served"] == "deepseek-v4.1-flash" for r in d["ro
 PY
 kill $server 2>/dev/null
 
+# menubar-data: one JSON endpoint for the menubar helper (synthetic state dirs, no probing, no real transcripts).
+local mbjson="$tmp/mbjson"
+mkdir -p "$mbjson"
+python3 - "$usage" "$tmp" "$mbjson" <<'PY' || fail "menubar-data scenarios"
+import datetime as dt, http.server, json, os, subprocess, sys, tempfile, threading
+usage, tmp, outdir = sys.argv[1:4]
+now = dt.datetime.now(dt.timezone.utc)
+def ts(sec_ago): return (now - dt.timedelta(seconds=sec_ago)).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+GLM, DS, SON = "rits/zai-org/glm-5-3", "rits/deepseek-ai/DeepSeek-V4.1-Flash-1017", "claude-sonnet-5-5"
+def ev(sec_ago, port="4148", **kw):
+    base = {"ts": ts(sec_ago), "port": port, "client": "claude-code", "requested": GLM, "served": GLM, "ok": True, "status": 200, "ms": 500, "in": 5, "out": 5}
+    return {**base, **kw}
+def err(sec_ago, code=429, **kw):
+    return ev(sec_ago, **{"ok": False, "status": code, "upstream_status": code, "error": "boom", **kw})
+copilot_server = {}
+def run(name, events=(), up="4141,4147,4148", extra_env=None, inflight=None, transcripts=None, raw_lines=None, state=None):
+    state = state or tempfile.mkdtemp(dir=tmp)
+    os.makedirs(state, exist_ok=True)
+    lines = [json.dumps(e) for e in events] + list(raw_lines or [])
+    if lines:
+        with open(f"{state}/events-{now:%Y-%m}.jsonl", "w") as h: h.write("\n".join(lines) + "\n")
+    for fname, doc in (inflight or {}).items():
+        with open(f"{state}/{fname}", "w") as h: json.dump(doc, h)
+    claude = tempfile.mkdtemp(dir=tmp)
+    if transcripts:
+        os.makedirs(f"{claude}/proj")
+        with open(f"{claude}/proj/s.jsonl", "w") as h:
+            for i, (sec_ago, model, out) in enumerate(transcripts):
+                h.write(json.dumps({"type": "assistant", "timestamp": ts(sec_ago), "uuid": f"u{i}", "sessionId": "s",
+                    "message": {"id": f"m{i}", "model": model, "usage": {"input_tokens": 10, "output_tokens": out, "cache_read_input_tokens": 1000}}}) + "\n")
+    env = {**os.environ, "LLM_USAGE_DIR": state, "LLM_USAGE_CLAUDE_DIRS": claude, "LLM_USAGE_CODEX_DIRS": tempfile.mkdtemp(dir=tmp),
+           "LLM_USAGE_COPILOT_URL": "http://127.0.0.1:9/usage", **(extra_env or {})}
+    res = subprocess.run([sys.executable, usage, "menubar-data", "--up-ports", up], capture_output=True, text=True, env=env, timeout=60)
+    assert res.returncode == 0, (name, res.stderr)
+    d = json.loads(res.stdout)
+    json.dump(d, open(f"{outdir}/{name}.json", "w"))
+    return d
+def proxy(d, port): return next(p for p in d["proxies"] if p["port"] == port)
+
+# normal
+d = run("normal", [ev(30), ev(60), ev(120, port="4147"), err(200, 500)])
+assert d["version"] == 2 and d["throttled"] is None and not d["spike"]["active"] and not d["any_down"], d
+assert proxy(d, 4148)["m15"]["requests"] == 3 and proxy(d, 4148)["m15"]["errors"]["5xx"] == 1, proxy(d, 4148)
+assert proxy(d, 4148)["state"] == "up" and proxy(d, 4142)["state"] == "down" and not proxy(d, 4142)["expected"]
+assert d["totals"]["m15"]["requests"] == 4 and d["top_models"][0] == {"model": "glm-5.3", "requests": 4}, d["top_models"]
+assert d["last_error"]["status"] == "500" and d["last_error"]["proxy"] == "claude-hosted-only", d["last_error"]
+assert len(d["series"]["requests"]) == 60 and sum(d["series"]["requests"]) == 4 and sum(d["series"]["e5xx"]) == 1
+assert d["reroutes"] == [] and d["reroutes_15m"] == 0 and d["by_model"][0]["reroutes"] == 0
+
+# throttled: 429 with retry_after still in the future (estimate = event time + retry_after)
+d = run("throttled", [ev(100), err(30, 429, retry_after=300, rewritten=True)])
+t = d["throttled"]
+assert t and t["kind"] == "rate-limit" and t["basis"] == "retry_after" and t["estimate"] and t["model"] == "glm-5.3", t
+assert 265 <= t["seconds_left"] <= 271 and t["proxy"] == "claude-hosted-only", t
+# a later success on the same proxy+model proves it is not blocked; an expired reset is not throttled either
+assert run("throttled-cleared", [err(30, 429, retry_after=300), ev(10)])["throttled"] is None
+assert run("throttled-expired", [err(600, 429, retry_after=60)])["throttled"] is None
+t = run("throttled-assumed", [err(20, 429)])["throttled"]
+assert t["basis"] == "assumed-60s" and 36 <= t["seconds_left"] <= 41, t
+
+# quota 429 without retry_after: next UTC month start; with retry_after: that wins
+d = run("quota", [err(60, 429, quota=True, error="token budget exhausted")])
+nxt = (now.replace(day=1, hour=0, minute=0, second=0, microsecond=0) + dt.timedelta(days=32)).replace(day=1)
+t = d["throttled"]
+assert t["kind"] == "quota" and t["basis"] == "next-month-utc" and t["reset_at"] == nxt.strftime("%Y-%m-%dT%H:%M:%SZ"), t
+t = run("quota-retry", [err(60, 503, upstream_status=429, quota=True, retry_after=3723)])["throttled"]
+assert t["kind"] == "quota" and t["basis"] == "retry_after" and 3600 < t["seconds_left"] < 3700, t
+
+# spike: 12 failures inside one minute; an old burst is not active
+sparse = lambda *secs: [err(x, 500) for x in secs]  # single failures set the baseline the burst stands out from
+d = run("spike", [ev(300 + i) for i in range(5)] + sparse(1500, 1200, 900, 700) + [err(10 + i % 3, 500) for i in range(12)])
+assert d["spike"]["active"] and d["spike"]["errors"] >= 12, d["spike"]
+d = run("spike-old", sparse(3500, 3300, 3000, 2800) + [err(2400 + i % 3, 500) for i in range(12)] + [ev(10)])
+assert d["spike"]["windows"] == 1 and not d["spike"]["active"], d["spike"]
+
+# proxy down: expected (logged this week) vs never seen
+d = run("down", [ev(60), ev(60, port="4147")], up="4141,4147")
+assert proxy(d, 4148)["state"] == "down" and proxy(d, 4148)["expected"] and d["any_down"], proxy(d, 4148)
+assert not proxy(d, 4146)["expected"], "never-seen proxy must not count as down"
+assert not run("not-expected", [], up="4141")["any_down"]
+
+# throwaway test proxy on an ad-hoc port: its 429 / errors must not raise throttled, spike or down alarms
+d = run("adhoc-port", [ev(100), err(30, 429, port="4157", retry_after=300), err(20, 500, port="4157"), err(10, 500, port="4157")], up="4141,4147,4148")
+assert d["throttled"] is None and not d["any_down"] and all(p["port"] != 4157 for p in d["proxies"]), d["proxies"]
+
+# empty log (state dir does not even exist) and all proxies down
+d = run("empty", state=os.path.join(tmp, "does-not-exist"), up="")
+assert d["totals"]["m15"]["requests"] == 0 and d["throttled"] is None and d["last_error"] is None and d["top_models"] == [] and not d["any_down"], d
+assert d["inflight"]["available"] is False and d["inflight"]["count"] == 0 and d["copilot"]["quota"] is None, d["inflight"]
+
+# old events: no status/upstream_status/retry_after/port/served fields, junk lines
+old = [{"ts": ts(60), "port": "4148", "served": GLM, "ok": True},
+       {"ts": ts(50), "port": "4148", "served": GLM, "ok": False, "error": "litellm.RateLimitError: OpenAIException - token budget exhausted"},
+       {"ts": ts(40), "ok": True}, {"ts": ts(30), "port": "4147", "served": GLM, "ok": False}]
+d = run("old", old, raw_lines=["not json", "{}", '{"ts": "garbage"}'])
+assert d["throttled"] and d["throttled"]["kind"] == "quota" and d["throttled"]["basis"] == "next-month-utc", d["throttled"]
+assert proxy(d, 4148)["h1"]["errors"]["429"] == 1 and proxy(d, 4147)["h1"]["errors"]["other"] == 1, (proxy(d, 4148), proxy(d, 4147))
+
+# reroutes: alias (fake sonnet + classifier tier), vision, fallback, none
+d = run("reroute-alias", [ev(60, requested=SON), ev(50, requested=SON), ev(40, requested="claude-sonnet-5-5", served=DS, role="classifier"), ev(30)])
+kinds = {(r["from"], r["to"], r["kind"]): r["count"] for r in d["reroutes"]}
+assert kinds == {("sonnet", "glm-5.3", "alias"): 2, ("sonnet", "deepseek-v4.1-flash", "alias"): 1}, kinds
+assert d["reroutes_15m"] == 3 and next(m for m in d["by_model"] if m["model"] == "glm-5.3")["reroutes"] == 2, d["by_model"]
+d = run("reroute-vision", [ev(60, served=DS), ev(30)])
+assert [(r["from"], r["to"], r["kind"], r["count"]) for r in d["reroutes"]] == [("glm-5.3", "deepseek-v4.1-flash", "vision", 1)], d["reroutes"]
+d = run("reroute-fallback", [ev(60, fallback=True), ev(30, served=SON, requested=SON, fallback=True), ev(20)])
+assert {r["kind"] for r in d["reroutes"]} == {"fallback"} and sum(r["count"] for r in d["reroutes"]) == 2, d["reroutes"]
+d = run("reroute-none", [ev(60), ev(30, port="4147", requested="gpt-6-luna", served="gpt-6-luna")])
+assert d["reroutes"] == [] and d["reroutes_15m"] == 0
+assert d["by_proxy"][0]["models"], d["by_proxy"]
+d = run("reroute-other", [ev(60, requested="gemini-3", served="gpt-6-luna")])
+assert d["reroutes"][0]["kind"] == "other", d["reroutes"]
+
+# in-flight: live entries counted, oldest reported; stale (>15m) and dead-pid entries evicted
+dead = subprocess.Popen(["true"]); dead.wait()
+t0 = now.timestamp()
+fl = {
+    "inflight-4148-%d.json" % os.getppid(): {"pid": os.getppid(), "port": "4148", "updated": t0, "requests": {
+        "a": {"t": t0 - 42, "model": GLM, "requested": SON}, "b": {"t": t0 - 5, "model": DS},
+        "stale": {"t": t0 - 1200, "model": GLM}}},
+    "inflight-4147-%d.json" % dead.pid: {"pid": dead.pid, "port": "4147", "updated": t0, "requests": {"x": {"t": t0 - 3, "model": GLM}}},
+}
+d = run("inflight", [ev(30)], inflight=fl)
+f = d["inflight"]
+assert f["available"] and f["count"] == 2 and 41 <= f["oldest_s"] <= 45, f
+assert f["oldest"]["model"] == "glm-5.3" and f["oldest"]["proxy"] == "claude-hosted-only" and f["by_model"] == {"glm-5.3": 1, "deepseek-v4.1-flash": 1}, f
+assert proxy(d, 4148)["inflight"]["count"] == 2 and proxy(d, 4147)["inflight"] is None, (proxy(d, 4148)["inflight"], proxy(d, 4147)["inflight"])
+assert proxy(d, 4141)["inflight"] is None and d["copilot"]["inflight"] is None, "copilot in-flight must be n/a, never invented"
+assert run("inflight-none", [ev(30)])["inflight"]["available"] is False
+
+# copilot: transcript-derived usage (models absent from the proxy log), quota from /usage when reachable
+tr = [(60, "claude-opus-5-5", 100), (120, "claude-opus-5-5", 50), (1800, "claude-opus-5-5", 25), (30, "zai-org/GLM-5.3", 999)]
+d = run("copilot-noquota", [ev(30)], transcripts=tr)
+c = d["copilot"]
+assert c["source"] == "transcript" and c["m15"]["requests"] == 2 and c["h1"]["requests"] == 3, c
+assert c["m15"]["tokens"]["out"] == 150 and c["models"] == [{"model": "claude-opus-5-5", "requests": 3}], c
+assert c["quota"] is None and "unavailable" in c["quota_note"], c  # honest: no /usage endpoint, no quota invented
+assert proxy(d, 4141)["source"] == "transcript" and proxy(d, 4141)["m15"]["requests"] == 2
+assert any(p["proxy"] == "copilot-api" and p["source"] == "transcript" for p in d["by_proxy"]), d["by_proxy"]
+assert any(m["model"] == "claude-opus-5-5" and m["sources"] == ["transcript"] for m in d["by_model"]), d["by_model"]
+assert next(m for m in d["by_model"] if m["model"] == "glm-5.3")["requests"] == 1, "glm transcript call is already in the proxy log"
+assert run("copilot-down", [ev(30)], transcripts=tr, up="4148")["copilot"]["quota_note"] == "copilot-api (:4141) is down"
+usage_doc = {"copilot_plan": "enterprise", "quota_reset_date_utc": "2026-11-01T00:00:00.000Z", "token_based_billing": False,
+             "quota_snapshots": {"premium_interactions": {"unlimited": False, "remaining": 120, "entitlement": 300, "percent_remaining": 40.0,
+                                                          "credits_used": 0, "overage_count": 0}}}
+class H(http.server.BaseHTTPRequestHandler):
+    def log_message(self, *a): pass
+    def do_GET(self):
+        body = json.dumps(copilot_server["doc"]).encode()
+        self.send_response(200); self.send_header("content-length", str(len(body))); self.end_headers(); self.wfile.write(body)
+srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), H)
+threading.Thread(target=srv.serve_forever, daemon=True).start()
+url = f"http://127.0.0.1:{srv.server_address[1]}/usage"
+copilot_server["doc"] = usage_doc
+q = run("copilot-quota", [ev(30)], transcripts=tr, extra_env={"LLM_USAGE_COPILOT_URL": url})["copilot"]["quota"]
+assert q and not q["unlimited"] and q["remaining"] == 120 and q["entitlement"] == 300 and q["reset_date"].startswith("2026-11-01") and q["source"] == "copilot-api /usage", q
+copilot_server["doc"] = {"copilot_plan": "enterprise", "token_based_billing": True, "quota_reset_date": "2026-11-01",
+                         "quota_snapshots": {"premium_interactions": {"unlimited": True, "credits_used": 301558, "percent_remaining": 100}}}
+q = run("copilot-unlimited", [ev(30)], extra_env={"LLM_USAGE_COPILOT_URL": url})["copilot"]["quota"]
+assert q["unlimited"] and q["credits_used"] == 301558 and q["token_based_billing"], q
+copilot_server["doc"] = {"unexpected": "shape"}  # reachable but no premium_interactions: no quota, not a crash
+c = run("copilot-badshape", [ev(30)], extra_env={"LLM_USAGE_COPILOT_URL": url})["copilot"]
+assert c["quota"] is None and c["quota_note"], c
+srv.shutdown()
+
+# in-flight tracking in the proxy logger (stub litellm so it runs without the proxy venv)
+state = tempfile.mkdtemp(dir=tmp)
+os.environ["LLM_USAGE_DIR"] = state
+sys.path.insert(0, os.path.join(os.path.dirname(usage)))
+import types, time
+for name in ("litellm", "litellm.integrations", "litellm.integrations.custom_logger"):
+    sys.modules[name] = types.ModuleType(name)
+sys.modules["litellm"].callbacks = []
+class CustomLogger:
+    def __init__(self, *a, **k): pass
+sys.modules["litellm.integrations.custom_logger"].CustomLogger = CustomLogger
+sys.argv = ["litellm", "--port", "4999"]
+import litellm_usage_log as u
+dead_file = f"{state}/inflight-4999-{dead.pid}.json"
+open(dead_file, "w").write("{}")
+log = u.UsageLog()
+assert not os.path.exists(dead_file), "dead-pid in-flight file of this port must be cleaned at startup"
+path = f"{state}/inflight-4999-{os.getpid()}.json"
+kw = {"litellm_call_id": "call-1", "litellm_params": {"metadata": {"model_group": "claude-sonnet-5-5"}}}
+log.log_pre_api_call("glm", [], kw)
+log.log_pre_api_call("glm", [], {"litellm_call_id": "call-2"})
+doc = json.load(open(path))
+assert set(doc["requests"]) == {"call-1", "call-2"} and doc["requests"]["call-1"]["requested"] == "claude-sonnet-5-5" and doc["pid"] == os.getpid(), doc
+assert oct(os.stat(path).st_mode & 0o777) == "0o600"
+log.log_success_event({"litellm_call_id": "call-1", "model": "glm"}, None, now, now)
+assert set(json.load(open(path))["requests"]) == {"call-2"}, "success must clear the id"
+log.log_failure_event({"standard_logging_object": {"id": "call-2"}, "model": "glm"}, None, now, now)
+assert json.load(open(path))["requests"] == {}, "failure (id from standard_logging_object) must clear the id"
+log._inflight["old"] = {"t": time.time() - u.INFLIGHT_STALE_S - 5, "model": "glm", "requested": "glm"}
+log.log_pre_api_call("glm", [], {"litellm_call_id": "call-3"})
+assert set(json.load(open(path))["requests"]) == {"call-3"}, "entries older than the stale limit are pruned on write"
+log.log_pre_api_call("glm", [], None)  # malformed hook args never raise
+PY
+
+# Swift helper: compiles, and --dump-menu renders every scenario without a GUI.
+if [[ -x /usr/bin/swiftc ]] || command -v swiftc >/dev/null; then
+    local mbdir="$tmp/mbbin"
+    LLM_USAGE_MENUBAR_DIR="$mbdir" $usage menubar build >/dev/null || fail "swiftc build of llm-usage-menubar"
+    local mb="$mbdir/llm-usage-menubar" dump
+    [[ -x "$mb" ]] || fail "menubar binary missing"
+    LLM_USAGE_MENUBAR_DIR="$mbdir" $usage menubar build | grep -q "up to date" || fail "menubar rebuilt although source is unchanged"
+    dump_of() { "$mb" --dump-menu --data-file "$mbjson/$1.json" "${@:2}"; }
+    dump=$(dump_of normal)
+    [[ "$dump" == "title: ● 4"$'\n'* ]] || fail "normal title: ${dump%%$'\n'*}"
+    [[ "$dump" == *"PROXIES (15m / 1h)"* && "$dump" == *"claude-hosted-only :4148  up"* && "$dump" == *"Copy restart command: claude-hosted-only-restart"* ]] || fail "proxy rows/submenu missing: $dump"
+    [[ "$dump" == *"[chart] requests/min"* && "$dump" == *"[chart] by model"* && "$dump" == *"[chart] by proxy"* ]] || fail "charts missing: $dump"
+    [[ "$(dump_of normal --no-charts)" != *"[chart]"* && "$(dump_of normal --no-charts)" == *"Top models (1h): glm-5.3"* ]] || fail "--no-charts"
+    [[ "$dump" == *"Open dashboard"* && "$dump" == *"Open logs folder"* && "$dump" == *"Refresh now"* && "$dump" == *"Copy status"* && "$dump" == *"Copy last error"* && "$dump" == *Quit* ]] || fail "actions missing"
+    [[ "$dump" == *"Notifications"* && "$dump" == *"Launch at login"* ]] || fail "toggles/login row missing"
+    [[ "$dump" == *"REROUTES (1h)"*"none"* ]] || fail "no-reroute row: $dump"
+    dump=$(dump_of throttled)
+    [[ "${dump%%$'\n'*}" == "title: ⚠ 429 5m" ]] || fail "throttled title: ${dump%%$'\n'*}"
+    [[ "$dump" == *THROTTLED* && "$dump" == *"resets in 4m"* && "$dump" == *"ESTIMATE"* ]] || fail "throttled section: $dump"
+    [[ "$(dump_of quota | head -1)" == "title: ⚠ 429 "[0-9]*d ]] || fail "quota title: $(dump_of quota | head -1)"
+    [[ "$(dump_of quota)" == *"assumed next UTC month start"* ]] || fail "quota estimate label"
+    [[ "$(dump_of spike | head -1)" == "title: ⚠ spike" ]] || fail "spike title: $(dump_of spike | head -1)"
+    [[ "$(dump_of spike)" == *"Error spike"* ]] || fail "spike warning row"
+    [[ "$(dump_of down | head -1)" == "title: ✖" ]] || fail "down title: $(dump_of down | head -1)"
+    [[ "$(dump_of down)" == *"DOWN"* ]] || fail "down row"
+    [[ "$(dump_of empty | head -1)" == "title: ● 0" && "$(dump_of empty)" == *"Last error: none logged"* ]] || fail "empty title/menu: $(dump_of empty | head -3)"
+    [[ "$(dump_of old | head -1)" == "title: ⚠ 429 "* ]] || fail "old-events title: $(dump_of old | head -1)"
+    dump=$(dump_of inflight)
+    [[ "${dump%%$'\n'*}" == "title: ● 1 ⏳2" ]] || fail "in-flight title: ${dump%%$'\n'*}"
+    [[ "$dump" == *"2 in flight · oldest glm-5.3 waiting 4"* ]] || fail "in-flight row: $dump"
+    [[ "$(dump_of normal)" == *"n/a · no proxy reports in-flight"* ]] || fail "in-flight n/a row"
+    dump=$(dump_of reroute-alias)
+    [[ "${dump%%$'\n'*}" == "title: ● 4 ↪3" ]] || fail "reroute title: ${dump%%$'\n'*}"
+    [[ "$dump" == *"sonnet→glm-5.3 ×2 alias"* && "$dump" == *"sonnet→deepseek-v4.1-flash ×1 alias"* ]] || fail "alias rows: $dump"
+    [[ "$(dump_of reroute-vision)" == *"glm-5.3→deepseek-v4.1-flash ×1 vision"* ]] || fail "vision row"
+    [[ "$(dump_of reroute-fallback)" == *"fallback 2"* ]] || fail "fallback row"
+    dump=$(dump_of copilot-quota)
+    [[ "$dump" == *"COPILOT-API (:4141) · TRANSCRIPT-DERIVED"* && "$dump" == *"premium: 120/300 left (40%)"* && "$dump" == *"resets 2026-11-01"* && "$dump" == *"in flight: n/a"* ]] || fail "copilot section: $dump"
+    [[ "$(dump_of copilot-unlimited)" == *"premium: unlimited · 301.6k credits used"* ]] || fail "copilot unlimited row"
+    [[ "$(dump_of copilot-noquota)" == *"quota: unavailable"* ]] || fail "copilot no-endpoint row"
+    # bad / missing data: error row, non-zero exit, no crash
+    print -r -- 'not json' > "$tmp/bad.json"
+    dump=$("$mb" --dump-menu --data-file "$tmp/bad.json") && fail "invalid JSON should exit non-zero"
+    [[ "$dump" == "title: ?"* && "$dump" == *"poll failed"* && "$dump" == *Quit* ]] || fail "error menu: $dump"
+    # single instance: a second helper exits at once while the first holds the lock (perl alarm = hang guard)
+    local lockdir="$tmp/lock"; mkdir -p "$lockdir"
+    python3 -c 'import fcntl,os,sys,time
+fd=os.open(sys.argv[1]+"/menubar.lock",os.O_RDWR|os.O_CREAT,0o600);fcntl.flock(fd,fcntl.LOCK_EX);open(sys.argv[1]+"/ready","w").close();time.sleep(4)' "$lockdir" &
+    local holder=$!
+    local i; for i in {1..40}; do [[ -e "$lockdir/ready" ]] && break; sleep 0.1; done
+    [[ "$(LLM_USAGE_DIR=$lockdir perl -e 'alarm 8; exec @ARGV' $mb 2>&1)" == *"already running"* ]] || { kill $holder 2>/dev/null; fail "second instance not refused"; }
+    kill $holder 2>/dev/null
+else
+    print -r -- "swiftc not found: skipping llm-usage-menubar compile/dump checks"
+fi
+# install/uninstall only describe themselves under --dry-run and never touch launchd
+out=$($usage menubar install --dry-run)
+[[ "$out" == *"RunAtLoad"*"<true/>"* && "$out" == *"com.kaovilai.llm-usage-menubar"* && "$out" == *"would run: launchctl bootstrap"* && "$out" == *"menubar.log"* ]] || fail "install --dry-run: $out"
+[[ "$($usage menubar uninstall --dry-run)" == *"would run: launchctl bootout"* ]] || fail "uninstall --dry-run"
+[[ "$(LLM_USAGE_MENUBAR_DIR=$tmp/none $usage menubar status)" == *"built:     no"* ]] || fail "menubar status"
+
 # Wiring: hosted-only proxy config and vertex/openai generators load the usage callback.
 source "$repo/scripts/hosted-only-proxy.zsh"
 local flavor

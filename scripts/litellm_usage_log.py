@@ -28,6 +28,13 @@ Token fields use Anthropic semantics so every source lines up: `in` is the
 fresh (uncached) prompt, `cache_read`/`cache_write` are separate, and the full
 context size is in + cache_read + cache_write.
 
+In-flight requests: log_pre_api_call records (litellm_call_id, start, model) in
+${state dir}/inflight-<port>-<pid>.json (atomic rewrite, 0600, one file per
+proxy process so workers never race); the success/failure callback removes the
+id. `llm-usage menubar-data` reads these files and ignores entries older than
+INFLIGHT_STALE_S or owned by a dead pid, so a crash or restart leaves nothing
+behind for long. Only proxies started with this version report in-flight.
+
 Logging must never break a request: every failure is swallowed.
 """
 
@@ -43,6 +50,7 @@ from urllib.parse import urlparse
 
 from litellm.integrations.custom_logger import CustomLogger
 
+INFLIGHT_STALE_S = 900  # entries older than this are leftovers (crash, client gone), not requests
 CLASSIFIER_MARKER = "security monitor for autonomous AI coding agents"
 
 
@@ -297,12 +305,87 @@ def build_event(kwargs, response_obj, start_time, end_time, ok):
     return {k: v for k, v in event.items() if v is not None}
 
 
+def _pid_alive(pid):
+    try:
+        os.kill(int(pid), 0)
+    except ProcessLookupError:
+        return False
+    except (PermissionError, ValueError, TypeError):
+        return True
+    return True
+
+
 class UsageLog(CustomLogger):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._lock = threading.Lock()
+        self._inflight = {}
+        self._inflight_dir = None
+        self._cleanup_inflight()
+
+    # -- in-flight table ------------------------------------------------------
+    def _inflight_path(self):
+        return os.path.join(_state_dir(), f"inflight-{_proxy_port() or 'unknown'}-{os.getpid()}.json")
+
+    def _cleanup_inflight(self):
+        """Drop in-flight files left by dead proxy processes on this port (and any older instance of this pid)."""
+        try:
+            import glob
+            for path in glob.glob(os.path.join(_state_dir(), f"inflight-{_proxy_port() or 'unknown'}-*.json")):
+                pid = path.rsplit("-", 1)[-1].split(".")[0]
+                if pid == str(os.getpid()) or not _pid_alive(pid):
+                    os.remove(path)
+        except Exception:
+            pass
+
+    def _inflight_flush(self):
+        """Caller holds self._lock."""
+        now = time.time()
+        self._inflight = {k: v for k, v in self._inflight.items() if now - v["t"] <= INFLIGHT_STALE_S}
+        directory = _state_dir()
+        os.makedirs(directory, mode=0o700, exist_ok=True)
+        path = self._inflight_path()
+        tmp = f"{path}.tmp"
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        try:
+            os.write(fd, json.dumps({"pid": os.getpid(), "port": _proxy_port(), "updated": now, "requests": self._inflight},
+                                    separators=(",", ":")).encode())
+        finally:
+            os.close(fd)
+        os.replace(tmp, path)
+
+    def _inflight_start(self, call_id, model, requested):
+        try:
+            if not call_id:
+                return
+            with self._lock:
+                self._inflight[str(call_id)] = {"t": time.time(), "model": model, "requested": requested}
+                self._inflight_flush()
+        except Exception:
+            pass
+
+    def _inflight_end(self, kwargs):
+        try:
+            slo = kwargs.get("standard_logging_object") or {}
+            call_id = kwargs.get("litellm_call_id") or slo.get("id")
+            if not call_id:
+                return
+            with self._lock:
+                if self._inflight.pop(str(call_id), None) is not None:
+                    self._inflight_flush()
+        except Exception:
+            pass
+
+    def log_pre_api_call(self, model, messages, kwargs):
+        try:
+            params = (kwargs or {}).get("litellm_params") or {}
+            requested = (params.get("metadata") or {}).get("model_group") or model
+            self._inflight_start((kwargs or {}).get("litellm_call_id"), model, requested)
+        except Exception:
+            pass
 
     def _write(self, kwargs, response_obj, start_time, end_time, ok):
+        self._inflight_end(kwargs)
         try:
             event = build_event(kwargs, response_obj, start_time, end_time, ok)
             # LiteLLM also reports its internal MCP tool listing/calls here; not LLM traffic.

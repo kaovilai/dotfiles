@@ -420,12 +420,19 @@ function renderTables() {
     D.model_table.map((r) => [sw(D.colors[r.model] != null ? r.model : "Other"), r.n, r.err || "-", r.e429 || "-", r.e5xx || "-", r.err ? pctf(r.err_rate) : "-", human(r.in), human(r.out), human(r.cread), pctf(r.hit), human(r.ctxmax), r.long || "-", ms(r.p50), ms(r.p95), r.tps ? Math.round(r.tps) : "-", r.cost ? "$" + r.cost.toFixed(2) : "-"]),
     ["l", "r", "r", "r", "r", "r", "r", "r", "r", "r", "r", "r", "r", "r", "r", "r"]);
 
+  // alias = Claude name served by GLM/DeepSeek, vision = glm→deepseek image fallback, fallback = router retry.
+  // Older servers send no `kinds`; fall back to the plain rerouted/direct tag.
+  const kindTag = (r) => {
+    const kinds = Object.entries(r.kinds || {});
+    if (kinds.length) return html("span", {}, ...kinds.flatMap(([k, n]) => [html("span", { class: "tag re", title: `${n} request(s)` }, `⇄ ${k} ×${n}`), " "]));
+    return r.rerouted ? html("span", { class: "tag re" }, "⇄ rerouted") : html("span", { class: "tag d" }, "direct");
+  };
   const routes = D.routes.filter((r) => r.requested !== "-");
   const rt = document.getElementById("tb-routes");
   if (!routes.length) rt.replaceChildren(html("div", { class: "empty" }, "No routing data. Transcripts only record the model that answered; restart the LiteLLM proxies so they log requested → served (see proxy status above)."));
   else table(rt, ["Proxy", "Requested", "", "Served", "Upstream", "Kind", "Reqs", "Err", "In", "Out", "p50"],
     routes.map((r) => [r.proxy, r.requested, "→", r.served, r.upstream,
-      r.rerouted ? html("span", { class: "tag re" }, "⇄ rerouted") : html("span", { class: "tag d" }, "direct"),
+      kindTag(r),
       r.n, r.err || "-", human(r.in), human(r.out), ms(r.p50)]),
     ["l", "l", "l", "l", "l", "l", "r", "r", "r", "r", "r"]);
 
@@ -443,7 +450,7 @@ function renderTables() {
 
   table(document.getElementById("tb-recent"), ["Time", "Proxy", "Client", "Route", "Status", "Context", "Out", "Latency", "Notes"],
     D.recent.map((r) => {
-      const notes = [r.role, r.fallback ? "fallback" : null, r.ctx > 200000 ? "1M-ctx" : null, r.error].filter(Boolean).join(" · ");
+      const notes = [r.role, r.kind ? r.kind : (r.fallback ? "fallback" : null), r.ctx > 200000 ? "1M-ctx" : null, r.error].filter(Boolean).join(" · ");
       const route = r.rerouted ? html("span", {}, r.requested, " ", html("span", { class: "tag re" }, "⇄"), " ", r.served) : r.served;
       return [new Date(r.t * 1000).toLocaleTimeString(), r.proxy, r.client || "?", route,
         r.ok ? "ok" : html("span", { class: "tag bad" }, "✕ error"), human(r.ctx), human(r.out), ms(r.ms), notes];

@@ -23,7 +23,9 @@ import glob
 import json
 import math
 import os
+import plistlib
 import re
+import shutil
 import statistics
 import subprocess
 import sys
@@ -274,6 +276,14 @@ def load_codex(since):
     return load_transcripts("codex", "LLM_USAGE_CODEX_DIRS", "~/.codex/sessions", parse_codex_file, since)
 
 
+def merge_transcripts(proxy_all, transcripts, since):
+    """Proxy log where it exists; transcripts fill the rest (see load_auto)."""
+    first = min(e["t"] for e in proxy_all)
+    seen = {strip_model(e.get("served")) for e in proxy_all}
+    extra = [e for e in transcripts if e["t"] < first or strip_model(e.get("served")) not in seen]
+    return [e for e in proxy_all if e["t"] >= since] + extra, first
+
+
 def load_auto(since):
     """Proxy log where it exists; transcripts fill the rest.
 
@@ -286,10 +296,7 @@ def load_auto(since):
     transcripts = load_claude(since) + load_codex(since)
     if not proxy_all:
         return transcripts, "transcripts (no proxy events yet; run `llm-usage status`)"
-    first = min(e["t"] for e in proxy_all)
-    seen = {strip_model(e.get("served")) for e in proxy_all}
-    extra = [e for e in transcripts if e["t"] < first or strip_model(e.get("served")) not in seen]
-    events = [e for e in proxy_all if e["t"] >= since] + extra
+    events, first = merge_transcripts(proxy_all, transcripts, since)
     when = datetime.fromtimestamp(first).strftime("%b %d %H:%M")
     return events, f"merged (proxy log since {when}; transcripts for earlier history and models not in the proxy log)"
 
@@ -866,9 +873,422 @@ def cmd_top(args):
         pass
 
 
+# --------------------------------------------------------------------------- menubar
+
+MB_LABEL = "com.kaovilai.llm-usage-menubar"
+MB_RECENT, MB_HOUR, MB_WEEK = 900, 3600, 7 * 86400
+MB_ASSUMED_RESET = 60  # rate-limit 429 with no retry_after: guess a minute
+
+
+def iso_utc(t):
+    return datetime.fromtimestamp(t, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def next_month_utc(t):
+    d = datetime.fromtimestamp(t, timezone.utc)
+    nxt = d.replace(year=d.year + (d.month == 12), month=d.month % 12 + 1, day=1, hour=0, minute=0, second=0, microsecond=0)
+    return nxt.timestamp()
+
+
+def throttle_of(ev):
+    """(reset epoch, kind, basis) a 429 implies; every value is an estimate from the log, not from the provider."""
+    kind = "quota" if err_kind(ev).startswith("quota") else "rate-limit"
+    if ev.get("retry_after"):
+        return ev["t"] + float(ev["retry_after"]), kind, "retry_after"
+    if kind == "quota":
+        return next_month_utc(ev["t"]), kind, "next-month-utc"
+    return ev["t"] + MB_ASSUMED_RESET, kind, f"assumed-{MB_ASSUMED_RESET}s"
+
+
+def active_throttle(events, now):
+    """The 429 whose reset is furthest in the future, or None. A later success on the same proxy+model proves it is not blocked."""
+    ok_after = {}
+    for ev in events:
+        if ev.get("ok", True):
+            key = (str(ev.get("port")), strip_model(ev.get("served")))
+            ok_after[key] = max(ok_after.get(key, 0), ev["t"])
+    best = None
+    for ev in events:
+        if err_class(ev) != "429":
+            continue
+        reset, kind, basis = throttle_of(ev)
+        key = (str(ev.get("port")), strip_model(ev.get("served")))
+        if reset <= now or ok_after.get(key, 0) > ev["t"]:
+            continue
+        if best is None or reset > best[0]:
+            best = (reset, kind, basis, ev)
+    if not best:
+        return None
+    reset, kind, basis, ev = best
+    return {"proxy": proxy_name(ev), "port": str(ev.get("port")), "model": strip_model(ev.get("served")), "kind": kind,
+            "at": iso_utc(ev["t"]), "reset_at": iso_utc(reset), "seconds_left": int(math.ceil(reset - now)),
+            "estimate": True, "basis": basis}
+
+
+CLAUDE_FAMILIES = ("opus", "sonnet", "haiku", "fable")
+INFLIGHT_STALE_S = 900  # keep in step with litellm_usage_log.INFLIGHT_STALE_S
+
+
+def reroute_kind(ev):
+    """None for a direct call, else why the served model differs from the requested one.
+
+    alias     a Claude name (sonnet, T3's claude-sonnet-5-5, the classifier tier) served by GLM/DeepSeek
+    vision    glm requested, deepseek served (image input fallback)
+    fallback  the router retried on another deployment after a failed first attempt
+    other     any other requested != served
+    """
+    req, srv = ev.get("requested"), ev.get("served")
+    if ev.get("fallback"):
+        return "fallback"
+    if not req or family(req) == family(srv):
+        return None
+    if family(req) == "glm" and family(srv) == "deepseek":
+        return "vision"
+    if family(req) in CLAUDE_FAMILIES and family(srv) in ("glm", "deepseek"):
+        return "alias"
+    return "other"
+
+
+def read_inflight(now):
+    """Live in-flight requests from the proxies' inflight-<port>-<pid>.json files.
+
+    Skips files of dead pids and entries older than INFLIGHT_STALE_S (crash/restart leftovers).
+    Returns (entries, ports that report in-flight at all).
+    """
+    entries, reporting = [], set()
+    for path in glob.glob(os.path.join(STATE, "inflight-*.json")):
+        try:
+            with open(path) as handle:
+                doc = json.load(handle)
+            os.kill(int(doc["pid"]), 0)
+        except ProcessLookupError:
+            continue
+        except PermissionError:
+            pass
+        except (OSError, ValueError, KeyError, TypeError):
+            continue
+        port = str(doc.get("port") or "")
+        reporting.add(port)
+        for rid, req in (doc.get("requests") or {}).items():
+            try:
+                age = max(0.0, now - float(req["t"]))
+            except (KeyError, TypeError, ValueError):
+                continue
+            if age <= INFLIGHT_STALE_S:
+                entries.append({"port": port, "model": strip_model(req.get("model") or req.get("requested")), "seconds": int(age)})
+    return entries, reporting
+
+
+def copilot_quota(now):
+    """premium-interaction quota from copilot-api's /usage (GitHub copilot_internal/user); cached 5 min, failures 1 min."""
+    url = os.environ.get("LLM_USAGE_COPILOT_URL", "http://127.0.0.1:4141/usage")
+    cache = os.path.join(STATE, "copilot-quota.json")
+    try:
+        with open(cache) as handle:
+            hit = json.load(handle)
+        if hit.get("url") == url and now - hit["at"] < (300 if hit.get("ok") else 60):
+            return hit.get("quota"), hit.get("note")
+    except (OSError, ValueError, KeyError):
+        pass
+    quota, note = None, None
+    try:
+        with urllib.request.urlopen(url, timeout=2.5) as resp:
+            doc = json.load(resp)
+        snap = (doc.get("quota_snapshots") or {}).get("premium_interactions")
+        if not isinstance(snap, dict):
+            raise ValueError("no premium_interactions in /usage")
+        quota = {"plan": doc.get("copilot_plan"), "reset_date": doc.get("quota_reset_date_utc") or doc.get("quota_reset_date"),
+                 "unlimited": bool(snap.get("unlimited")), "remaining": snap.get("remaining"), "entitlement": snap.get("entitlement"),
+                 "percent_remaining": snap.get("percent_remaining"), "credits_used": snap.get("credits_used"),
+                 "overage_count": snap.get("overage_count"), "token_based_billing": bool(doc.get("token_based_billing")),
+                 "source": "copilot-api /usage", "fetched_at": iso_utc(now)}
+    except Exception as err:
+        note = f"copilot-api /usage unavailable ({type(err).__name__})"
+    try:
+        os.makedirs(STATE, mode=0o700, exist_ok=True)
+        with open(cache, "w") as handle:
+            json.dump({"url": url, "at": now, "ok": quota is not None, "quota": quota, "note": note}, handle)
+    except OSError:
+        pass
+    return quota, note
+
+
+def menubar_data(now=None, up_ports=None):
+    """One compact JSON document for the menubar helper (and anything else that wants a status line)."""
+    now = now or time.time()
+    month = datetime.fromtimestamp(now, timezone.utc).replace(day=1, hour=0, minute=0, second=0, microsecond=0).timestamp()
+    proxy_all = load_proxy(0)
+    events = sorted((e for e in proxy_all if e["t"] >= min(now - MB_WEEK, month)), key=lambda e: e["t"])  # month start keeps an earlier quota 429 visible
+    # Only the named proxies (PROXIES, plus LLM_USAGE_PORT_NAMES): throwaway test proxies on ad-hoc ports must
+    # not raise down / throttled / spike alarms in the menubar.
+    events = [e for e in events if str(e.get("port")) in PROXIES]
+    recent = [e for e in events if e["t"] >= now - MB_HOUR]
+    # Same merge as `serve`: transcript calls for models the proxy log never saw (copilot-api has no callback).
+    transcripts = load_claude(now - MB_HOUR) + load_codex(now - MB_HOUR)
+    if proxy_all:
+        merged, _ = merge_transcripts(proxy_all, transcripts, now - MB_HOUR)
+        extra = [e for e in merged if e.get("source") != "proxy"]
+    else:
+        extra = transcripts
+    for e in extra:
+        e["port"], e["via"] = "4141", "transcript"  # attributed to copilot-api: the only proxy without a usage log
+    ports = dict.fromkeys(PROXIES)
+    ports.update(dict.fromkeys(str(e.get("port")) for e in recent if str(e.get("port")) not in ports and e.get("port")))
+    if up_ports is None:
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=len(ports)) as pool:
+            up = dict(zip(ports, pool.map(probe, ports)))
+    else:
+        up = {p: p in up_ports for p in ports}
+    flights, reporting = read_inflight(now)
+
+    def counts(evs, window):
+        sel = [e for e in evs if e["t"] >= now - window]
+        c = Counter(err_class(e) for e in sel if err_class(e))
+        err = sum(c.values())
+        out = {"requests": len(sel), "errors": {"429": c["429"], "5xx": c["5xx"], "other": c["oth"]},
+               "error_rate": round(err / len(sel), 4) if sel else 0.0}
+        if sel and sel[0].get("via") == "transcript":
+            out["tokens"] = {k: sum(e.get(k, 0) for e in sel) for k in ("in", "out", "cache_read", "cache_write")}
+        return out
+
+    seen_week = {str(e.get("port")): e["t"] for e in events if e["t"] >= now - MB_WEEK}
+    proxies = []
+    for port in ports:
+        evs = [e for e in recent if str(e.get("port")) == port]
+        source = "proxy-log"
+        if port == "4141":
+            evs, source = extra, "transcript"
+        mine = [f for f in flights if f["port"] == port]
+        name = PROXIES.get(port, (f":{port}", None))[0]
+        row = {"port": int(port) if port.isdigit() else port, "name": name, "state": "up" if up[port] else "down", "source": source,
+               "expected": port in seen_week or (port == "4141" and bool(extra)),
+               "last_seen_s": int(now - seen_week[port]) if port in seen_week else None,
+               "inflight": ({"count": len(mine), "oldest_s": max((f["seconds"] for f in mine), default=0)} if port in reporting else None),
+               "m15": counts(evs, MB_RECENT), "h1": counts(evs, MB_HOUR)}
+        proxies.append(row)
+
+    buckets = error_buckets(recent, 60)
+    windows, _ = spike_windows(buckets, 60)
+    live = [w for w in windows if w["end"] >= now - 600]  # a flagged minute in the last 10 minutes
+    spike = {"active": bool(live), "windows": len(windows),
+             "errors": sum(w["n"] for w in live), "since": iso_utc(live[0]["start"]) if live else None}
+
+    # Usage by model / proxy and reroutes over the hour; transcript rows are flagged by `source`.
+    hour = recent + extra
+    by_model = defaultdict(lambda: {"requests": 0, "reroutes": 0, "sources": set()})
+    by_proxy = defaultdict(lambda: {"requests": 0, "models": Counter()})
+    reroutes = defaultdict(lambda: {"count": 0, "count_15m": 0})
+    for e in hour:
+        model, pname = strip_model(e.get("served")), proxy_name({**e, "port": e.get("port")}) if e.get("via") != "transcript" else "copilot-api"
+        kind = reroute_kind(e)
+        bm = by_model[model]
+        bm["requests"] += 1
+        bm["reroutes"] += bool(kind)
+        bm["sources"].add("transcript" if e.get("via") == "transcript" else "proxy-log")
+        bp = by_proxy[pname]
+        bp["requests"] += 1
+        bp["models"][model] += 1
+        if kind:
+            frm = family(e["requested"]) if family(e["requested"]) in CLAUDE_FAMILIES else strip_model(e["requested"])
+            r = reroutes[(frm, model, kind, pname)]
+            r["count"] += 1
+            r["count_15m"] += e["t"] >= now - MB_RECENT
+    total = len(hour) or 1
+    minute0 = int(now // 60) * 60 - 59 * 60
+    series = {k: [0] * 60 for k in ("requests", "e429", "e5xx", "eother")}
+    for e in recent:  # proxy log only: transcripts carry no errors and would swamp the chart
+        i = int((e["t"] - minute0) // 60)
+        if 0 <= i < 60:
+            series["requests"][i] += 1
+            cls = err_class(e)
+            if cls:
+                series[{"429": "e429", "5xx": "e5xx", "oth": "eother"}[cls]][i] += 1
+    last_bad = [e for e in events if not e.get("ok", True)]
+    last = last_bad[-1] if last_bad else None
+    mine_inflight = [f for f in flights]
+    oldest = max(mine_inflight, key=lambda f: f["seconds"], default=None)
+    by_flight = Counter(f["model"] for f in flights)
+
+    copilot_up = up.get("4141", False)
+    quota, quota_note = copilot_quota(now) if copilot_up else (None, "copilot-api (:4141) is down")
+    cop = next(p for p in proxies if p["port"] == 4141)
+    return {
+        "version": 2, "generated_at": iso_utc(now), "log_dir": STATE,
+        "dashboard_port": int(os.environ.get("LLM_USAGE_PORT", "4150")),
+        "proxies": proxies,
+        "any_down": any(p["state"] == "down" and p["expected"] for p in proxies),
+        "totals": {w: {k: v for k, v in counts(recent + extra, win).items() if k != "tokens"}
+                   for w, win in (("m15", MB_RECENT), ("h1", MB_HOUR))},  # proxy logs + copilot (transcript-derived)
+        "throttled": active_throttle(events, now), "spike": spike,
+        "inflight": {"available": bool(reporting), "count": len(flights), "oldest_s": oldest["seconds"] if oldest else 0,
+                     "oldest": ({"proxy": PROXIES.get(oldest["port"], (f":{oldest['port']}", None))[0], "model": oldest["model"],
+                                 "seconds": oldest["seconds"]} if oldest else None),
+                     "by_model": dict(by_flight.most_common()),
+                     "note": None if reporting else "no proxy reports in-flight yet (restart proxies with the updated usage callback: llm-proxy-restart); copilot-api cannot report it"},
+        "by_model": [{"model": m, "requests": v["requests"], "share": round(v["requests"] / total, 3), "reroutes": v["reroutes"],
+                      "sources": sorted(v["sources"])} for m, v in sorted(by_model.items(), key=lambda x: -x[1]["requests"])[:8]],
+        "by_proxy": [{"proxy": n, "requests": v["requests"], "source": "transcript" if n == "copilot-api" else "proxy-log",
+                      "models": [{"model": m, "requests": c} for m, c in v["models"].most_common(4)]}
+                     for n, v in sorted(by_proxy.items(), key=lambda x: -x[1]["requests"])],
+        "reroutes": [{"from": f, "to": t, "kind": k, "proxy": pr, **v}
+                     for (f, t, k, pr), v in sorted(reroutes.items(), key=lambda x: -x[1]["count"])],
+        "series": {"bucket_s": 60, "start": iso_utc(minute0), **series},
+        "reroutes_15m": sum(v["count_15m"] for v in reroutes.values()),
+        "copilot": {"state": "up" if copilot_up else "down", "source": "transcript",
+                    "attribution": "Claude Code/Codex transcript calls for models absent from the proxy log; approximates copilot-api traffic (may include direct-API sessions)",
+                    "m15": cop["m15"], "h1": cop["h1"],
+                    "models": [{"model": m, "requests": c} for m, c in Counter(strip_model(e.get("served")) for e in extra).most_common(5)],
+                    "inflight": None, "inflight_note": "n/a (copilot-api has no usage callback)",
+                    "quota": quota, "quota_note": quota_note},
+        "top_models": [{"model": m["model"], "requests": m["requests"]} for m in sorted(
+            ({"model": k, "requests": v["requests"]} for k, v in by_model.items()), key=lambda x: -x["requests"])[:5]],
+        "last_error": ({"at": iso_utc(last["t"]), "ago_s": int(now - last["t"]), "proxy": proxy_name(last), "model": strip_model(last.get("served")),
+                        "status": err_status_label(last), "kind": err_kind(last),
+                        "message": " ".join((last.get("error") or last.get("error_type") or "").split())[:160]} if last else None),
+    }
+
+
+def cmd_menubar_data(args):
+    up = None if args.up_ports is None else set(filter(None, args.up_ports.split(",")))
+    print(json.dumps(menubar_data(up_ports=up), separators=(",", ":")))
+
+
+MB_SRC = os.path.join(os.path.dirname(os.path.realpath(__file__)), "llm-usage-menubar", "main.swift")
+MB_PLIST = os.path.expanduser(f"~/Library/LaunchAgents/{MB_LABEL}.plist")
+
+
+def mb_bin():
+    base = os.environ.get("LLM_USAGE_MENUBAR_DIR") or os.path.expanduser("~/.local/share/llm-usage")
+    return os.path.join(base, "llm-usage-menubar")
+
+
+def mb_running():
+    """pid of the running helper (it holds an flock on STATE/menubar.lock), else None."""
+    import fcntl
+    try:
+        fd = os.open(os.path.join(STATE, "menubar.lock"), os.O_RDWR)
+    except OSError:
+        return None
+    try:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            try:
+                return int(os.pread(fd, 32, 0).split()[0])
+            except (OSError, ValueError, IndexError):
+                return -1
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        return None
+    finally:
+        os.close(fd)
+
+
+def mb_stale():
+    out = mb_bin()
+    return not os.path.exists(out) or os.path.getmtime(out) < os.path.getmtime(MB_SRC)
+
+
+def mb_build(force=False):
+    out = mb_bin()
+    if not os.path.exists(MB_SRC):
+        sys.exit(f"llm-usage: menubar source missing: {MB_SRC}")
+    if not force and not mb_stale():
+        print(f"menubar: up to date: {out}")
+        return out
+    swiftc = shutil.which("swiftc") or "/usr/bin/swiftc"
+    if not os.access(swiftc, os.X_OK):
+        sys.exit("llm-usage: swiftc not found (install Xcode Command Line Tools: xcode-select --install)")
+    os.makedirs(os.path.dirname(out), exist_ok=True)
+    tmp = out + ".tmp"
+    res = subprocess.run([swiftc, "-O", "-swift-version", "5", "-o", tmp, MB_SRC], capture_output=True, text=True)
+    if res.returncode:
+        sys.exit(f"llm-usage: swiftc failed:\n{res.stderr.strip()}")
+    os.replace(tmp, out)
+    print(f"menubar: built {out}")
+    return out
+
+
+def mb_env():
+    env = {"LLM_USAGE_BIN": os.path.realpath(__file__),
+           "PATH": "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:" + os.path.expanduser("~/.local/bin")}
+    for key in ("LLM_USAGE_DIR", "LLM_USAGE_PORT", "LLM_USAGE_PORT_NAMES"):
+        if os.environ.get(key):
+            env[key] = os.environ[key]
+    return env
+
+
+def mb_log_path():
+    return os.path.join(STATE, "menubar.log")
+
+
+def cmd_menubar(args):
+    action = args.action
+    if action == "build":
+        mb_build(args.force)
+    elif action == "run":
+        pid = mb_running()
+        if pid:
+            print(f"menubar: already running (pid {pid})")
+            return
+        out = mb_build()
+        os.makedirs(STATE, mode=0o700, exist_ok=True)
+        log = open(mb_log_path(), "ab")
+        proc = subprocess.Popen([out], stdin=subprocess.DEVNULL, stdout=log, stderr=log, start_new_session=True,
+                                env={**os.environ, **mb_env()})
+        for _ in range(30):
+            time.sleep(0.1)
+            if mb_running():
+                break
+        print(f"menubar: started (pid {proc.pid}); log {mb_log_path()}")
+    elif action == "install":
+        plist = {"Label": MB_LABEL, "ProgramArguments": [mb_bin()], "RunAtLoad": True, "KeepAlive": False,
+                 "EnvironmentVariables": mb_env(), "StandardOutPath": mb_log_path(), "StandardErrorPath": mb_log_path(),
+                 "AbandonProcessGroup": True, "LimitLoadToSessionType": "Aqua", "ProcessType": "Interactive"}
+        target = f"gui/{UID}"
+        steps = [["launchctl", "bootout", f"{target}/{MB_LABEL}"], ["launchctl", "bootstrap", target, MB_PLIST]]
+        if args.dry_run:
+            print(f"would build {mb_bin()} from {MB_SRC} if stale ({'stale' if mb_stale() else 'up to date'})")
+            print(f"would write {MB_PLIST}:")
+            sys.stdout.write(plistlib.dumps(plist).decode())
+            for step in steps:
+                print("would run: " + " ".join(step))
+            return
+        mb_build()
+        os.makedirs(STATE, mode=0o700, exist_ok=True)
+        os.makedirs(os.path.dirname(MB_PLIST), exist_ok=True)
+        with open(MB_PLIST, "wb") as handle:
+            plistlib.dump(plist, handle)
+        subprocess.run(steps[0], capture_output=True)  # not loaded yet is fine
+        res = subprocess.run(steps[1], capture_output=True, text=True)
+        if res.returncode:
+            sys.exit(f"llm-usage: launchctl bootstrap failed: {res.stderr.strip()}")
+        print(f"menubar: installed {MB_PLIST} and started it (RunAtLoad: it also starts at login)")
+    elif action == "uninstall":
+        step = ["launchctl", "bootout", f"gui/{UID}/{MB_LABEL}"]
+        if args.dry_run:
+            print("would run: " + " ".join(step))
+            print(f"would remove {MB_PLIST} ({'present' if os.path.exists(MB_PLIST) else 'absent'})")
+            return
+        subprocess.run(step, capture_output=True)
+        try:
+            os.remove(MB_PLIST)
+            print(f"menubar: removed {MB_PLIST}")
+        except OSError:
+            print("menubar: no LaunchAgent plist to remove")
+    elif action == "status":
+        out = mb_bin()
+        built = os.path.exists(out)
+        print(f"built:     {'yes' if built else 'no'}  {out}" + (" (older than source: run `llm-usage menubar build`)" if built and mb_stale() else ""))
+        pid = mb_running()
+        print(f"running:   {'yes (pid %s)' % pid if pid else 'no'}")
+        loaded = subprocess.run(["launchctl", "print", f"gui/{UID}/{MB_LABEL}"], capture_output=True).returncode == 0
+        print(f"installed: {'yes' if os.path.exists(MB_PLIST) else 'no'}  {MB_PLIST}" + (" (loaded)" if loaded else ""))
+
+
 # --------------------------------------------------------------------------- web dashboard
 
-SLOTS = 8  # categorical colors in the dataviz palette; beyond that models fold into "Other"
+SLOTS = 8 # categorical colors in the dataviz palette; beyond that models fold into "Other"
 CTX_BINS = [(0, "<8k"), (8_000, "8-32k"), (32_000, "32-128k"), (128_000, "128-200k"), (200_000, "200-500k"), (500_000, ">500k")]
 BUCKETS = [60, 300, 900, 1800, 3600, 10800, 21600, 86400]
 
@@ -959,6 +1379,14 @@ def dashboard_data(since_text, source, hide):
     err_map = {t: [err_series[c][i] for c in ERR_CLASSES] for i, t in enumerate(buckets)}
     windows, limit = spike_windows(err_map, size)
 
+    # why a route's served model differs (alias / vision / fallback / other), counted per route row
+    route_kinds = defaultdict(Counter)
+    for ev in events:
+        kind = reroute_kind(ev)
+        if kind:
+            route_kinds[(proxy_name(ev), strip_model(ev["requested"]) if ev.get("requested") else "-", strip_model(ev.get("served")),
+                         ev.get("upstream") or "-")][kind] += 1
+
     return {
         "now": now, "since": since, "bucket": size, "source": used, "events": len(events),
         "buckets": buckets, "models": order, "chips": [m for m in sorted(volume, key=lambda m: -volume[m]) if m in colors], "colors": {**colors, "Other": 0}, "series": series,
@@ -969,7 +1397,8 @@ def dashboard_data(since_text, source, hide):
                  "ctxmax": kp["ctxmax"]} if kp else None),
         "model_table": [row_json(r, ["model"]) for r in aggregate(events, [KEYS["model"]])],
         "routes": [{**row_json(r, ["proxy", "requested", "served", "upstream"]),
-                    "rerouted": r["key"][1] != "-" and family(r["key"][1]) != family(r["key"][2])}
+                    "rerouted": r["key"][1] != "-" and family(r["key"][1]) != family(r["key"][2]),
+                    "kinds": route_kinds.get(r["key"], {})}
                    for r in aggregate(events, [KEYS["proxy"], KEYS["requested"], lambda e: strip_model(e.get("served")), KEYS["upstream"]])],
         "clients": [row_json(r, ["proxy", "client", "role"]) for r in aggregate(events, [KEYS["proxy"], KEYS["client"], KEYS["role"]])],
         "errors": [{"count": n, "status": st, "kind": kind, "error": e} for (st, kind, e), n in sorted(bad.items(), key=lambda x: -x[1])[:10]],
@@ -977,7 +1406,7 @@ def dashboard_data(since_text, source, hide):
         "spikes": [{"start": w["start"], "end": w["end"], "n": w["n"], "e429": w["counts"][0], "e5xx": w["counts"][1], "eoth": w["counts"][2], "peak": w["peak"]} for w in windows],
         "recent": [{"t": e["t"], "proxy": proxy_name(e), "client": e.get("client"), "requested": strip_model(e["requested"]) if e.get("requested") else None,
                     "served": strip_model(e.get("served")), "rerouted": is_reroute(e), "ok": e.get("ok", True), "status": err_status_label(e) if not e.get("ok", True) else None, "ctx": ctx_of(e),
-                    "out": e.get("out", 0), "ms": e.get("ms"), "role": e.get("role"), "fallback": bool(e.get("fallback")),
+                    "out": e.get("out", 0), "ms": e.get("ms"), "role": e.get("role"), "fallback": bool(e.get("fallback")), "kind": reroute_kind(e),
                     "error": (e.get("error") or "")[:160] or None} for e in recent],
         "status": status,
     }
@@ -1103,6 +1532,16 @@ def main():
     p.add_argument("--cache", type=float, default=3.0, help="seconds to reuse a computed payload")
     p.add_argument("--reset-colors", action="store_true", help="forget the stored model -> color assignments")
     p.set_defaults(fn=cmd_serve)
+
+    p = sub.add_parser("menubar-data", help="compact JSON for the menubar helper: proxies, 15m/1h counts, throttle, spike")
+    p.add_argument("--up-ports", help=argparse.SUPPRESS)  # tests: comma list of ports to treat as up (no probing)
+    p.set_defaults(fn=cmd_menubar_data)
+
+    p = sub.add_parser("menubar", help="macOS menubar monitor (native Swift helper): build|run|install|uninstall|status")
+    p.add_argument("action", choices=["build", "run", "install", "uninstall", "status"])
+    p.add_argument("--force", action="store_true", help="build: rebuild even when up to date")
+    p.add_argument("--dry-run", action="store_true", help="install/uninstall: print what would happen, change nothing")
+    p.set_defaults(fn=cmd_menubar)
 
     args = parser.parse_args()
     if not args.cmd:
