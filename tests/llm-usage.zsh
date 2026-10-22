@@ -216,6 +216,18 @@ assert any(r["rerouted"] and r["served"] == "deepseek-v4.1-flash" for r in d["ro
 PY
 kill $server 2>/dev/null
 
+# errors: closing "Code needs updating" block when the proxy logger attached drift notes (absent field = no block)
+local driftdir="$tmp/driftstate"
+mkdir -p "$driftdir"
+cat > "$driftdir/events-$month.jsonl" <<JSON
+{"ts":"$now","port":"4148","served":"rits/zai-org/glm-5-3","ok":false,"status":429,"upstream_status":429,"error":"rate limited","retry_after":30,"reset_at":$(date +%s),"reset_source":"upstream-header:retry-after","drift":[{"kind":"unhandled_header","detail":"x-new-reset","hint":"parse x-new-reset in hosted_only_hooks.py"}]}
+{"ts":"$now","port":"4148","served":"rits/zai-org/glm-5-3","ok":false,"status":500,"error":"boom","drift":[{"kind":"unhandled_header","detail":"x-new-reset","hint":"parse x-new-reset in hosted_only_hooks.py"}, "junk", {"kind":"x"}]}
+JSON
+out=$(LLM_USAGE_DIR=$driftdir $usage errors --since 1h --source proxy)
+[[ "$out" == *"Code needs updating"*"unhandled_header  x-new-reset  x2"*"hint: parse x-new-reset in hosted_only_hooks.py"* ]] || fail "errors drift block: $out"
+out=$($usage errors --since 1h)
+[[ "$out" != *"Code needs updating"* ]] || fail "no drift field -> no block: $out"
+
 # menubar-data: one JSON endpoint for the menubar helper (synthetic state dirs, no probing, no real transcripts).
 local mbjson="$tmp/mbjson"
 mkdir -p "$mbjson"
@@ -231,7 +243,7 @@ def ev(sec_ago, port="4148", **kw):
 def err(sec_ago, code=429, **kw):
     return ev(sec_ago, **{"ok": False, "status": code, "upstream_status": code, "error": "boom", **kw})
 copilot_server = {}
-def run(name, events=(), up="4141,4147,4148", extra_env=None, inflight=None, transcripts=None, raw_lines=None, state=None, cli=()):
+def run(name, events=(), up="4141,4147,4148", extra_env=None, inflight=None, transcripts=None, raw_lines=None, state=None, cli=(), transcript_lines=None):
     state = state or tempfile.mkdtemp(dir=tmp)
     os.makedirs(state, exist_ok=True)
     lines = [json.dumps(e) for e in events] + list(raw_lines or [])
@@ -240,12 +252,14 @@ def run(name, events=(), up="4141,4147,4148", extra_env=None, inflight=None, tra
     for fname, doc in (inflight or {}).items():
         with open(f"{state}/{fname}", "w") as h: json.dump(doc, h)
     claude = tempfile.mkdtemp(dir=tmp)
-    if transcripts:
+    if transcripts or transcript_lines:
         os.makedirs(f"{claude}/proj")
         with open(f"{claude}/proj/s.jsonl", "w") as h:
-            for i, (sec_ago, model, out) in enumerate(transcripts):
+            for i, (sec_ago, model, out) in enumerate(transcripts or []):
                 h.write(json.dumps({"type": "assistant", "timestamp": ts(sec_ago), "uuid": f"u{i}", "sessionId": "s",
                     "message": {"id": f"m{i}", "model": model, "usage": {"input_tokens": 10, "output_tokens": out, "cache_read_input_tokens": 1000}}}) + "\n")
+            for row in transcript_lines or []:
+                h.write(json.dumps(row) + "\n")
     env = {**os.environ, "LLM_USAGE_DIR": state, "LLM_USAGE_CLAUDE_DIRS": claude, "LLM_USAGE_CODEX_DIRS": tempfile.mkdtemp(dir=tmp),
            "LLM_USAGE_COPILOT_URL": "http://127.0.0.1:9/usage", **(extra_env or {})}
     res = subprocess.run([sys.executable, usage, "menubar-data", "--up-ports", up, *cli], capture_output=True, text=True, env=env, timeout=60)
@@ -379,6 +393,128 @@ assert q["unlimited"] and q["credits_used"] == 301558 and q["token_based_billing
 copilot_server["doc"] = {"unexpected": "shape"}  # reachable but no premium_interactions: no quota, not a crash
 c = run("copilot-badshape", [ev(30)], extra_env={"LLM_USAGE_COPILOT_URL": url})["copilot"]
 assert c["quota"] is None and c["quota_note"], c
+
+# throttle spans + series_by_provider + drift. Copilot throttles come from Claude Code transcripts only:
+# type=system/api_error (one per retried attempt, error.status + retryInMs) and type=assistant/isApiErrorMessage.
+def apierr(sec_ago, status, text="upstream rate limited", attempt=1, retry_ms=2000, **kw):
+    return {"type": "system", "subtype": "api_error", "level": "error", "timestamp": ts(sec_ago), "uuid": f"e{sec_ago}-{status}-{attempt}", "sessionId": "s",
+            "retryAttempt": attempt, "maxRetries": 10, "retryInMs": retry_ms,
+            "error": {"status": str(status), "message": f"{status} {text}", "formatted": f"{status} {text}", "rateLimits": None}, **kw}
+trc = [(1800, "claude-opus-5-5", 25), (120, "claude-opus-5-5", 50), (60, "claude-opus-5-5", 100)]  # last model: a Copilot (non-proxy-log) one
+trq = [(1800, "claude-opus-5-5", 25), (300, "claude-opus-5-5", 50)]  # no success after the errors below, so spans are not cut short
+def spans_of(d, provider=None): return [x for x in d["throttle_spans"] if provider in (None, x["provider"])]
+def secs(iso): return dt.datetime.strptime(iso, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=dt.timezone.utc).timestamp()
+epoch = now.timestamp()
+
+# Copilot retry chain (3 consecutive 429s) -> ONE span, ends at the last attempt + retryInMs (an estimate), transcript-derived
+chain = [apierr(600, 429, attempt=1, retry_ms=2000), apierr(598, 429, attempt=2, retry_ms=4000), apierr(594, 429, attempt=3, retry_ms=8000)]
+d = run("throttle-copilot", [ev(30)], transcripts=trc, transcript_lines=chain)
+(cs,) = spans_of(d, "github-copilot")
+assert cs["kind"] == "rate-limit" and cs["count"] == 3 and cs["source"] == "transcript" and cs["end_estimated"] and not cs["active"], cs
+assert abs(secs(cs["start"]) - (epoch - 600)) < 3 and abs(secs(cs["end"]) - (epoch - 586)) < 3, cs
+assert spans_of(d, "enmaas") == [] and "github-copilot" not in d["throttle_notes"] or "transcript-derived" in d["throttle_notes"]["github-copilot"], d["throttle_notes"]
+# still going (retryInMs reaches past now) and no success since: active, end in the future
+d = run("throttle-copilot-live", [ev(30)], transcripts=[(120, "claude-opus-5-5", 50)], transcript_lines=[apierr(20, 429, retry_ms=30000), apierr(18, 429, attempt=2, retry_ms=30000)])
+(cs,) = spans_of(d, "github-copilot")
+assert cs["active"] and cs["count"] == 2 and cs["end_estimated"] and 10 <= secs(cs["end"]) - epoch <= 14, cs
+# a success after the last attempt ends the span at the success (observed, not estimated)
+d = run("throttle-copilot-recovered", [ev(30)], transcripts=[(120, "claude-opus-5-5", 50), (10, "claude-opus-5-5", 50)],
+        transcript_lines=[apierr(60, 429, retry_ms=600000)])
+(cs,) = spans_of(d, "github-copilot")
+assert not cs["end_estimated"] and not cs["active"] and abs(secs(cs["end"]) - (epoch - 10)) < 3, cs
+# 402 = quota; 403 only when the body talks quota/limits; a plain 503 or 403 is not a throttle
+d = run("throttle-copilot-quota", [ev(30)], transcripts=trq, transcript_lines=[apierr(100, 402, "You have exceeded your premium request allowance")])
+(cs,) = spans_of(d, "github-copilot")
+assert cs["kind"] == "quota" and cs["source"] == "transcript" and cs["end_estimated"] and cs["basis"] == "next-month-utc", cs
+d = run("throttle-copilot-nonthrottle", [ev(30)], transcripts=trq, transcript_lines=[apierr(100, 503, "Service Unavailable"), apierr(90, 403, "forbidden"), apierr(80, 500, "boom"),
+        apierr(70, 403, "quota exceeded for this model")])
+assert [x["kind"] for x in spans_of(d, "github-copilot")] == ["quota"], spans_of(d)
+# LiteLLM 429 ("No deployments available") is the hosted-only proxy's, never Copilot: not a Copilot span even when the session model is
+# a Copilot one; the proxy log (4148, EnMaaS) owns it. Same for an untagged 429 whose session model is a proxy-log model (GLM).
+litellm = apierr(100, 429, "No deployments available for selected model, Try again in 5 seconds. Passed model=rits/zai-org/glm-5-3", retry_ms=566)
+d = run("throttle-litellm", [ev(300), err(100, 429, retry_after=60, error="No deployments available")], transcripts=trc, transcript_lines=[litellm])
+assert spans_of(d, "github-copilot") == [] and [x["provider"] for x in spans_of(d)] == ["enmaas"], spans_of(d)
+assert spans_of(d)[0]["source"] == "proxy-log" and spans_of(d)[0]["count"] == 1, spans_of(d)
+assert d["throttle_notes"]["github-copilot"].startswith("no Copilot throttle data"), d["throttle_notes"]
+d = run("throttle-glm-session", [ev(300)], transcripts=tr, transcript_lines=[apierr(100, 429, "Too Many Requests")])
+assert spans_of(d, "github-copilot") == [], "429 in a session whose model the proxy log serves belongs to that proxy, not Copilot"
+# a hard failure after retries are exhausted: assistant + isApiErrorMessage + apiErrorStatus
+hard = {"type": "assistant", "timestamp": ts(40), "uuid": "hard1", "sessionId": "s", "isApiErrorMessage": True, "apiErrorStatus": 429, "error": "rate_limit",
+        "message": {"model": "<synthetic>", "role": "assistant", "content": [{"type": "text", "text": "API Error: 429 Request rejected (429)"}]}}
+d = run("throttle-copilot-hard", [ev(30)], transcripts=trc, transcript_lines=[hard])
+assert [(x["kind"], x["count"]) for x in spans_of(d, "github-copilot")] == [("rate-limit", 1)], spans_of(d)
+# no throttle anywhere: no spans, honest note (no invented Copilot throttle)
+d = run("throttle-none", [ev(30)], transcripts=trc)
+assert d["throttle_spans"] == [] and "no Copilot throttle data" in d["throttle_notes"]["github-copilot"], d["throttle_notes"]
+# EnMaaS quota 429 (until next UTC month) overlapping a Copilot retry chain: two providers, two spans, overlapping in time
+d = run("throttle-overlap", [ev(30, port="4147", requested="gpt-6-luna", served="gpt-6-luna"), err(400, 429, quota=True, error="Monthly token budget exhausted")], transcripts=trq,
+        transcript_lines=[apierr(300, 429, retry_ms=240000), apierr(250, 429, attempt=2, retry_ms=270000)])
+em, co = spans_of(d, "enmaas")[0], spans_of(d, "github-copilot")[0]
+assert em["kind"] == "quota" and em["end_estimated"] and em["active"] and co["active"] and co["kind"] == "rate-limit", (em, co)
+assert secs(em["start"]) < secs(co["start"]) < secs(em["end"]) and secs(co["end"]) < secs(em["end"]), (em, co)
+# success ends a span (same provider + model); an unrelated model's success does not; repeated 429s inside one span merge
+d = run("throttle-success", [err(300, 429, retry_after=3000), ev(200)])
+(sp,) = spans_of(d)
+assert not sp["end_estimated"] and abs(secs(sp["end"]) - (epoch - 200)) < 3 and not sp["active"] and sp["provider"] == "enmaas" and sp["count"] == 1, sp
+d = run("throttle-other-model", [err(300, 429, retry_after=3000), ev(200, requested=DS, served=DS)])
+(sp,) = spans_of(d)
+assert sp["end_estimated"] and sp["active"], sp
+d = run("throttle-merge", [err(300, 429, retry_after=3000), err(200, 429, retry_after=3000), err(100, 429, retry_after=3000)])
+(sp,) = spans_of(d)
+assert sp["count"] == 3 and sp["basis"] == "retry_after" and abs(secs(sp["end"]) - (epoch - 100 + 3000)) < 3, sp
+# different proxies = different providers: two spans, one per provider
+d = run("throttle-two-providers", [err(300, 429, retry_after=900, port="4142", requested=SON, served=SON), err(200, 429, retry_after=900)])
+assert sorted(x["provider"] for x in spans_of(d)) == ["enmaas", "vertex"], spans_of(d)
+# quota vs rate-limit stay separate kinds even on one provider
+d = run("throttle-kinds", [err(300, 429, retry_after=900), err(250, 429, quota=True, error="token budget exhausted", requested=DS, served=DS)])
+assert sorted(x["kind"] for x in spans_of(d)) == ["quota", "rate-limit"], spans_of(d)
+# expired span (reset an hour+ ago, no success) is not reported; throwaway ports never appear
+assert run("throttle-expired-spans", [err(7200, 429, retry_after=60), ev(30)])["throttle_spans"] == []
+assert run("throttle-adhoc", [err(100, 429, port="4157", retry_after=300), ev(30)])["throttle_spans"] == []
+# upstream-reported reset (logger fields reset_at + reset_source): not an estimate; the estimate sources stay estimates
+d = run("throttle-upstream", [err(60, 429, retry_after=30, reset_at=epoch + 900, reset_source="upstream-header:retry-after")])
+t = d["throttled"]
+assert t["reset_source"] == "upstream-header:retry-after" and t["estimated"] is False and 880 <= t["seconds_left"] <= 905, t
+(sp,) = spans_of(d)
+assert sp["end_estimated"] is False and sp["reset_source"] == "upstream-header:retry-after" and sp["basis"] == "upstream-header:retry-after", sp
+d = run("throttle-estimate-source", [err(60, 429, quota=True, reset_at=epoch + 5000, reset_source="estimate:next-month-utc")])
+assert d["throttled"]["estimated"] is True and spans_of(d)[0]["end_estimated"] is True, d["throttled"]
+# logger drift notes: deduplicated per (kind, detail, hint, proxy), counted, newest first; absent field = []
+dr = {"kind": "unhandled_header", "detail": "x-new-reset", "hint": "parse x-new-reset in hosted_only_hooks.py"}
+d = run("drift", [ev(100, drift=[dr]), ev(50, drift=[dr, {"kind": "shape_changed", "detail": "error.type", "hint": "update the 429 body shape check"}]),
+                  ev(40, port="4147", drift=[dr]), ev(8 * 86400, drift=[{"kind": "estimate_mismatch", "detail": "old", "hint": "too old"}]),
+                  ev(30, drift="not a list"), ev(20, drift=[{"kind": "x"}])])
+assert d["drift"][0]["proxy"] == "codex-hosted-only", "newest first"
+assert sorted((x["kind"], x["detail"], x["count"], x["proxy"]) for x in d["drift"]) == [
+    ("shape_changed", "error.type", 1, "claude-hosted-only"), ("unhandled_header", "x-new-reset", 1, "codex-hosted-only"),
+    ("unhandled_header", "x-new-reset", 2, "claude-hosted-only")], d["drift"]
+assert all(x["hint"] and x["last_seen"].endswith("Z") for x in d["drift"]), d["drift"]
+assert run("drift-none", [ev(30)])["drift"] == []
+# series_by_provider: per-minute requests per provider (named proxies + Copilot transcripts), 60 buckets
+d = run("series-providers", [ev(30), ev(40), ev(300, port="4142", requested=SON, served=SON), ev(1200, port="4147", requested="gpt-6-luna", served="gpt-6-luna")], transcripts=trc)
+sbp = d["series_by_provider"]
+rows = {r["key"]: r for r in sbp["providers"]}
+assert sbp["bucket_s"] == 60 and set(rows) == {"enmaas", "vertex", "github-copilot"}, rows.keys()
+assert all(len(r["requests"]) == 60 for r in rows.values()) and sum(rows["enmaas"]["requests"]) == 3 and sum(rows["github-copilot"]["requests"]) == 3, rows
+assert rows["enmaas"]["label"] == "EnMaaS" and [r["key"] for r in sbp["providers"]][-1] == "vertex", sbp["providers"]
+assert sum(sum(v) for v in d["series"]["by_vendor"].values()) == 7, d["series"]["by_vendor"]
+
+# copilot quota used up (copilot-api /usage): premium + 5Hour/Weekly session limits become quota spans with GitHub's reset
+copilot_server["doc"] = {"copilot_plan": "enterprise", "quota_reset_date": "2999-11-01",
+    "quota_snapshots": {"premium_interactions": {"unlimited": False, "remaining": 0, "entitlement": 300, "percent_remaining": 0.0},
+                        "5Hour-Session-RateLimits": {"percent_remaining": 0, "reset_date": "2999-10-30T05:00:00Z", "entitlement": 100},
+                        "Weekly-Session-RateLimits": {"percent_remaining": 40, "reset_date": "2999-11-03T00:00:00Z"}}}
+d = run("throttle-quota-usage", [ev(30)], transcripts=trq, extra_env={"LLM_USAGE_COPILOT_URL": url})
+qs = spans_of(d, "github-copilot")
+assert sorted(x["basis"] for x in qs) == ["copilot-api /usage: 5Hour-Session-RateLimits used up", "copilot-api /usage: premium interactions used up"], qs
+assert all(x["kind"] == "quota" and x["source"] == "quota" and not x["end_estimated"] and x["start_estimated"] and x["active"] for x in qs), qs
+assert {x["end"] for x in qs} == {"2999-11-02T00:00:00Z", "2999-10-30T05:00:00Z"}, qs  # bare date resets at the end of that UTC day
+assert d["copilot"]["quota"]["limits"][1]["percent_remaining"] == 40, d["copilot"]["quota"]
+# a 402 seen in a transcript lasts until GitHub's reset when /usage knows it
+copilot_server["doc"] = {"quota_reset_date": "2999-11-01", "quota_snapshots": {"premium_interactions": {"unlimited": False, "remaining": 5, "entitlement": 300, "percent_remaining": 2}}}
+d = run("throttle-402-reset", [ev(30)], transcripts=trq, transcript_lines=[apierr(100, 402, "premium requests exhausted")], extra_env={"LLM_USAGE_COPILOT_URL": url})
+(cs,) = spans_of(d, "github-copilot")
+assert cs["kind"] == "quota" and not cs["end_estimated"] and cs["end"] == "2999-11-02T00:00:00Z" and cs["reset_source"], cs
 srv.shutdown()
 
 # traffic share (status-item logos): vendors from the served model, providers from the proxy port
@@ -523,6 +659,51 @@ if [[ -x /usr/bin/swiftc ]] || command -v swiftc >/dev/null; then
     [[ "$(stat -f %z "$tmp/notext.png")" != "$(stat -f %z "$tmp/share-single-light.png")" ]] || fail "--no-text should change the render"
     [[ "$("$mb" --status-png "$tmp/x.png" --data-file "$mbjson/throttled.json" | head -1)" == *'state=throttled text="429 '* ]] || fail "throttled status-png state/text"
     "$mb" --status-png "$tmp/bad.png" --data-file "$tmp/bad.json" 2>/dev/null && fail "status-png on invalid JSON should exit non-zero"
+    # floating window: menu items (state flags for the persisted choices), throttle spans/drift rows, headless PNGs per layout
+    dump=$(dump_of normal)
+    [[ "$dump" == *"[ ] Floating Window"* && "$dump" == *"Window Layout"*"[x] Horizontal"*"[ ] Vertical"*"[ ] History"* \
+        && "$dump" == *"Window Graph"*"[ ] Bars = models"*"[ ] Lines = providers"*"[x] Both"* \
+        && "$dump" == *"Window Opacity"*"[x] 100%"*"[ ] 80%"*"[ ] 60%"*"[ ] 40%"* && "$dump" == *"[ ] Window Click-through"* ]] || fail "window menu items: $dump"
+    dump=$(dump_of normal --window-visible --window-layout vertical --window-graph lines --window-opacity 0.6 --window-click-through)
+    [[ "$dump" == *"[x] Floating Window"* && "$dump" == *"[x] Vertical"* && "$dump" == *"[ ] Horizontal"* && "$dump" == *"[x] Lines = providers"* \
+        && "$dump" == *"[x] 60%"* && "$dump" == *"[ ] 100%"* && "$dump" == *"[x] Window Click-through"* ]] || fail "window menu state flags: $dump"
+    dump=$(dump_of throttle-overlap)
+    [[ "$dump" == *"THROTTLE SPANS (last 1h)"* && "$dump" == *"EnMaaS · quota · since"*"(est.)"* && "$dump" == *"GitHub Copilot · rate-limit · ×2"*"[transcript-derived]"* ]] || fail "throttle span rows: $dump"
+    dump=$(dump_of throttle-copilot-quota)
+    [[ "$dump" == *"GitHub Copilot · quota"*"[transcript-derived]"* ]] || fail "copilot quota span row: $dump"
+    dump=$(dump_of throttle-quota-usage)
+    [[ "$dump" == *"GitHub Copilot · quota"*"[copilot-api /usage]"* && "$dump" != *"[transcript-derived]"* ]] || fail "copilot /usage quota rows: $dump"
+    [[ "$(dump_of throttle-none)" == *"THROTTLE SPANS"*"no Copilot throttle data"* ]] || fail "honest no-data note"
+    [[ "$(dump_of throttle-none)" != *"THROTTLED"* ]] || fail "no throttle: no THROTTLED section"
+    dump=$(dump_of drift)
+    [[ "$dump" == *"⚠ code needs updating: parse x-new-reset in hosted_only_hooks.py  (×2)"* && "$dump" == *"update the 429 body shape check"* && "$dump" == *"click to copy the hint"* ]] || fail "drift rows: $dump"
+    [[ "$(dump_of normal)" != *"code needs updating"* ]] || fail "no drift field -> no drift row"
+    dump=$(dump_of throttle-upstream)
+    [[ "$dump" == *THROTTLED* && "$dump" == *"reset reported by upstream (upstream-header:retry-after)"* && "$dump" != *ESTIMATE* ]] || fail "upstream reset: no ESTIMATE label: $dump"
+    [[ "$(dump_of throttle-estimate-source)" == *"ESTIMATE ·"* ]] || fail "estimate:* reset_source keeps the ESTIMATE label"
+    [[ "$(dump_of throttled)" == *"ESTIMATE ·"* ]] || fail "legacy events (no reset_source) stay estimates"
+    local layout
+    local -A sizes=(horizontal 220x120 vertical 120x260 history 220x84)
+    for png in throttle-overlap throttle-copilot throttle-copilot-quota throttle-none throttle-upstream empty spike; do
+        for layout in horizontal vertical history; do
+            "$mb" --window-png "$tmp/win-$png-$layout-light.png" --layout $layout --size ${sizes[$layout]} --data-file "$mbjson/$png.json" >/dev/null || fail "window-png light $png $layout"
+            "$mb" --window-png "$tmp/win-$png-$layout-dark.png" --dark --layout $layout --size ${sizes[$layout]} --data-file "$mbjson/$png.json" >/dev/null || fail "window-png dark $png $layout"
+            read w h <<<"$(python3 -I -c 'import struct,sys;d=open(sys.argv[1],"rb").read(24);assert d[:8]==b"\x89PNG\r\n\x1a\n";print(*struct.unpack(">II",d[16:24]))' "$tmp/win-$png-$layout-light.png")" || fail "window-png $png $layout not a PNG"
+            [[ "${w}x${h}" == "$(python3 -c 'import sys;a,b=sys.argv[1].split("x");print(f"{int(a)*2}x{int(b)*2}")' ${sizes[$layout]})" ]] || fail "window-png $png $layout size ${w}x${h}"
+            cmp -s "$tmp/win-$png-$layout-light.png" "$tmp/win-$png-$layout-dark.png" && fail "window-png $png $layout: light and dark renders are identical"
+        done
+    done
+    # throttle ribbons change the picture; graph modes differ; stale dims; default size/layout come out right
+    cmp -s "$tmp/win-throttle-none-horizontal-light.png" "$tmp/win-throttle-overlap-horizontal-light.png" && fail "throttle spans did not change the render"
+    "$mb" --window-png "$tmp/g-bars.png" --graph bars --data-file "$mbjson/throttle-overlap.json" >/dev/null
+    "$mb" --window-png "$tmp/g-lines.png" --graph lines --data-file "$mbjson/throttle-overlap.json" >/dev/null
+    "$mb" --window-png "$tmp/g-both.png" --graph both --data-file "$mbjson/throttle-overlap.json" >/dev/null
+    cmp -s "$tmp/g-bars.png" "$tmp/g-lines.png" && fail "graph modes bars/lines render identically"
+    cmp -s "$tmp/g-both.png" "$tmp/g-bars.png" && fail "graph modes both/bars render identically"
+    "$mb" --window-png "$tmp/stale.png" --stale --data-file "$mbjson/throttle-overlap.json" >/dev/null
+    cmp -s "$tmp/stale.png" "$tmp/g-both.png" && fail "--stale should dim the window"
+    print -r -- 'not json' > "$tmp/bad.json"
+    "$mb" --window-png "$tmp/bad-win.png" --data-file "$tmp/bad.json" 2>/dev/null && fail "window-png on invalid JSON should exit non-zero"
     # bad / missing data: error row, non-zero exit, no crash
     print -r -- 'not json' > "$tmp/bad.json"
     dump=$("$mb" --dump-menu --data-file "$tmp/bad.json") && fail "invalid JSON should exit non-zero"
@@ -534,6 +715,9 @@ fd=os.open(sys.argv[1]+"/menubar.lock",os.O_RDWR|os.O_CREAT,0o600);fcntl.flock(f
     local holder=$!
     local i; for i in {1..40}; do [[ -e "$lockdir/ready" ]] && break; sleep 0.1; done
     [[ "$(LLM_USAGE_DIR=$lockdir perl -e 'alarm 8; exec @ARGV' $mb 2>&1)" == *"already running"* ]] || { kill $holder 2>/dev/null; fail "second instance not refused"; }
+    LLM_USAGE_DIR=$lockdir $usage menubar window show | grep -q "window show sent" && [[ "$(<$lockdir/menubar-window.cmd)" == show ]] || { kill $holder 2>/dev/null; fail "menubar window show did not write the command file"; }
+    LLM_USAGE_DIR=$lockdir $usage menubar window | grep -q "window toggle sent" && [[ "$(<$lockdir/menubar-window.cmd)" == toggle ]] || { kill $holder 2>/dev/null; fail "menubar window default toggle"; }
+    LLM_USAGE_DIR=$lockdir $usage menubar window bogus 2>/dev/null && { kill $holder 2>/dev/null; fail "bad window action must fail"; }
     kill $holder 2>/dev/null
 else
     print -r -- "swiftc not found: skipping llm-usage-menubar compile/dump checks"

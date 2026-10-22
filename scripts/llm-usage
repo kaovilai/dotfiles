@@ -18,6 +18,7 @@ with context > 200k can only have run on a 1M-window model.
 Stdlib only; no state besides the logs.
 """
 
+import bisect
 import argparse
 import glob
 import json
@@ -726,6 +727,17 @@ def print_spikes(events, bucket_choice):
     print(render(["FROM", "TO", "ERRORS", "429", "5XX", "OTH", f"PEAK/{unit[:3].upper()}", "SHAPE"], rows, ["l", "l", "r", "r", "r", "r", "r", "l"]))
 
 
+def print_drift(events):
+    """Closing block when the proxy logger noticed the provider changed shape (drift notes on events; see collect_drift)."""
+    rows = collect_drift(events, time.time(), window=10 ** 9)  # `events` is already limited by --since
+    if not rows:
+        return
+    print("\n" + color("Code needs updating", "1;33") + color("  (the proxy logger saw upstream behaviour this code does not handle)", "2"))
+    for r in rows:
+        print(f"  {r['kind'] or '?'}  {r['detail'] or ''}  x{r['count']}  last {r['last_seen']}  [{r['proxy']}]")
+        print(f"    hint: {r['hint']}")
+
+
 def cmd_errors(args):
     events, used = load(parse_since(args.since), args.source)
     bad = sorted((e for e in events if not e.get("ok", True)), key=lambda e: e["t"])
@@ -736,6 +748,7 @@ def cmd_errors(args):
     if not bad:
         if used != "proxy":
             print(color("note: transcripts record no status codes; failures only appear in the proxy log (--source proxy).", "2"))
+        print_drift(events)
         return
     for ev in bad[-args.n:]:
         print(event_line(ev))
@@ -753,6 +766,7 @@ def cmd_errors(args):
     spark_row = error_spark_line(events)
     if spark_row:
         print(spark_row)
+    print_drift(events)
 
 
 def probe(port):
@@ -891,8 +905,13 @@ def next_month_utc(t):
 
 
 def throttle_of(ev):
-    """(reset epoch, kind, basis) a 429 implies; every value is an estimate from the log, not from the provider."""
-    kind = "quota" if err_kind(ev).startswith("quota") else "rate-limit"
+    """(reset epoch, kind, basis) a 429 implies; an estimate from the log unless the event carries an upstream `reset_source`."""
+    kind = ev.get("throttle_kind") or ("quota" if err_kind(ev).startswith("quota") else "rate-limit")
+    try:  # the logger records an upstream-reported reset as epoch `reset_at` (+ `reset_source`); it beats every guess
+        if ev.get("reset_at") and float(ev["reset_at"]) > 0:
+            return float(ev["reset_at"]), kind, ev.get("reset_source") or "reset_at"
+    except (TypeError, ValueError):
+        pass
     if ev.get("retry_after"):
         return ev["t"] + float(ev["retry_after"]), kind, "retry_after"
     if kind == "quota":
@@ -922,7 +941,196 @@ def active_throttle(events, now):
     reset, kind, basis, ev = best
     return {"proxy": proxy_name(ev), "port": str(ev.get("port")), "model": strip_model(ev.get("served")), "kind": kind,
             "at": iso_utc(ev["t"]), "reset_at": iso_utc(reset), "seconds_left": int(math.ceil(reset - now)),
-            "estimate": True, "basis": basis}
+            "estimate": reset_estimated(ev), "estimated": reset_estimated(ev), "reset_source": ev.get("reset_source") or None, "basis": basis}
+
+
+def reset_estimated(ev):
+    """False only when the logger recorded an upstream-reported reset (`reset_source` = upstream-header:*/upstream-body:*)."""
+    return not str(ev.get("reset_source") or "").startswith("upstream")
+
+
+def collect_drift(events, now, window=MB_WEEK):
+    """Distinct `drift` notes the logger attached to events (kind, detail, hint) over the window, newest first; absent field = none."""
+    agg = {}
+    for ev in events:
+        if ev["t"] < now - window or not isinstance(ev.get("drift"), list):
+            continue
+        for note in ev["drift"]:
+            if not isinstance(note, dict) or not note.get("hint"):
+                continue
+            proxy = proxy_name(ev)
+            row = agg.setdefault((note.get("kind"), note.get("detail"), note["hint"], proxy),
+                                 {"kind": note.get("kind"), "detail": note.get("detail"), "hint": note["hint"], "count": 0, "last": 0, "proxy": proxy})
+            row["count"] += 1
+            row["last"] = max(row["last"], ev["t"])
+    return [{**{k: v for k, v in r.items() if k != "last"}, "last_seen": iso_utc(r["last"])} for r in sorted(agg.values(), key=lambda r: -r["last"])]
+
+
+THROTTLE_TEXT = re.compile(r"\[429\]|rate_limit|usage_limit_reached|Request rejected \(429\)|API Error: 429|\"status\":\s*429", re.I)
+ROUTED_MODEL = re.compile(r"API Error: \d+ \[([^\]]+)\]")  # "API Error: 503 [rits/zai-org/glm-5-3] [429]": a named proxy answered, already in its log
+LITELLM_TEXT = re.compile(r"No deployments available|litellm", re.I)  # a LiteLLM proxy (hosted-only), never copilot-api
+LAST_MODEL = re.compile(r'"model":\s*"([^"<][^"]*)"')
+QUOTAISH = re.compile(r"quota|exceed|premium|budget|402", re.I)
+
+
+def copilot_throttle_kind(status, text):
+    """'rate-limit' | 'quota' | None: does this client-visible failure look like Copilot throttling (429, 402, 403, 503 upstream rate limited)?"""
+    if status == 402:
+        return "quota"
+    if status == 429:
+        return "quota" if QUOTA_RE.search(text) else "rate-limit"
+    if status == 403 and re.search(r"quota|rate|limit|exceed", text, re.I):
+        return "quota" if QUOTAISH.search(text) else "rate-limit"
+    if status == 503 and re.search(r"rate.?limited", text, re.I):
+        return "rate-limit"
+    return None
+
+
+def parse_claude_throttles(handle, path):
+    """Throttle-looking API failures from a Claude Code transcript.
+
+    Two entry types carry them: type=system subtype=api_error (one per retried attempt: error.status, retryAttempt, maxRetries,
+    retryInMs) and, once retries are exhausted, type=assistant with isApiErrorMessage + apiErrorStatus. Neither names a provider,
+    so `served` is the last real model the session used (backfilled from the next one for a session's first turn); `routed` is
+    set when the text shows a proxy answered (bracketed model tag, LiteLLM wording), which the proxy log already holds.
+    """
+    last_model, out, pending = None, [], []
+    for line in handle:
+        if '"api_error"' not in line and '"isApiErrorMessage"' not in line:
+            if '"assistant"' in line and '"model"' in line:
+                m = LAST_MODEL.search(line)
+                if m:
+                    last_model = m.group(1)
+                    for ev in pending:
+                        ev["served"] = ev["served"] or last_model
+                    pending = []
+            continue
+        try:
+            obj = json.loads(line)
+        except ValueError:
+            continue
+        ts = parse_ts(obj.get("timestamp"))
+        if ts is None:
+            continue
+        err = obj.get("error") if isinstance(obj.get("error"), dict) else {}
+        if obj.get("type") == "system" and obj.get("subtype") == "api_error":
+            text, retry_ms = str(err.get("formatted") or err.get("message") or ""), obj.get("retryInMs")
+            try:
+                status = int(err.get("status"))
+            except (TypeError, ValueError):
+                status = None
+        elif obj.get("isApiErrorMessage"):
+            content = (obj.get("message") or {}).get("content")
+            text = " ".join(b.get("text", "") for b in content if isinstance(b, dict)) if isinstance(content, list) else str(content or "")
+            retry_ms = None
+            status = obj.get("apiErrorStatus") if isinstance(obj.get("apiErrorStatus"), int) else None
+            tagged = re.search(r"\[(\d{3})\]", text)
+            if tagged and status != 429:  # "API Error: 503 [model] [429]": the upstream status wins over the proxy's wrapper
+                status = int(tagged.group(1))
+            if status is None and (obj.get("error") == "rate_limit" or THROTTLE_TEXT.search(text)):
+                status = 429
+        else:
+            continue
+        kind = copilot_throttle_kind(status, text)
+        if kind is None:
+            continue
+        routed = ROUTED_MODEL.search(text)
+        ev = {"id": obj.get("uuid"), "t": ts, "source": "claude", "client": "claude-code", "port": "4141", "via": "transcript",
+              "served": last_model, "routed": routed.group(1) if routed else ("litellm" if LITELLM_TEXT.search(text) else None),
+              "ok": False, "status": status, "upstream_status": status, "throttle_kind": kind,
+              "attempt": obj.get("retryAttempt"), "error": " ".join(text.split())[:200]}
+        if isinstance(retry_ms, (int, float)) and retry_ms > 0 and kind == "rate-limit":
+            ev["retry_after"] = retry_ms / 1000.0  # Claude Code's own backoff: the best end-of-throttle hint a transcript has
+        out.append(ev)
+        if ev["served"] is None:
+            pending.append(ev)
+    return out
+
+
+def load_claude_throttles(since):
+    return load_transcripts("claude-throttle", "LLM_USAGE_CLAUDE_DIRS", "~/.claude/projects", parse_claude_throttles, since)
+
+
+def throttle_spans(events, now, window=MB_HOUR):
+    """Throttle intervals per provider that overlap the last `window` seconds.
+
+    Each 429 opens a span at its time and ends at its reset (an estimate unless `reset_source` is upstream-*) or at the next
+    success of the same provider + model, whichever comes first (a success is observed, so not an estimate). Spans of one
+    provider + kind that overlap merge; different providers (and kinds) stay separate so the chart can overlay them.
+    """
+    overrides = provider_overrides()
+    ok_times = defaultdict(list)
+    for ev in events:
+        if ev.get("ok", True):
+            ok_times[(event_provider(ev, overrides)[0], strip_model(ev.get("served")))].append(ev["t"])
+    for times in ok_times.values():
+        times.sort()
+    raw = []
+    for ev in sorted(events, key=lambda e: e["t"]):
+        if err_class(ev) != "429" and not ev.get("throttle_kind"):
+            continue
+        pkey, plabel = event_provider(ev, overrides)
+        reset, kind, basis = throttle_of(ev)
+        end, est = reset, reset_estimated(ev)
+        times = ok_times[(pkey, strip_model(ev.get("served")))]
+        i = bisect.bisect_right(times, ev["t"])
+        if i < len(times) and times[i] < end:
+            end, est = times[i], False
+        raw.append({"provider": pkey, "label": plabel, "kind": kind, "start": ev["t"], "end": max(end, ev["t"]), "end_estimated": est,
+                    "count": 1, "basis": basis, "reset_source": ev.get("reset_source") or None,
+                    "source": "transcript" if ev.get("via") == "transcript" else "proxy-log"})
+    merged = []
+    for sp in sorted(raw, key=lambda s: (s["provider"], s["kind"], s["start"])):
+        cur = merged[-1] if merged else None
+        # 5s slack: a retry chain logs the next attempt about when the previous retryInMs ran out
+        if cur and cur["provider"] == sp["provider"] and cur["kind"] == sp["kind"] and sp["start"] <= cur["end"] + 5:
+            cur["count"] += 1
+            if sp["end"] >= cur["end"]:
+                cur.update(end=sp["end"], end_estimated=sp["end_estimated"], basis=sp["basis"], reset_source=sp["reset_source"])
+        else:
+            merged.append(sp)
+    return [sp for sp in sorted(merged, key=lambda s: s["start"]) if sp["end"] >= now - window]
+
+
+def parse_reset(raw):
+    """Epoch of a quota reset: ISO datetime as given, a bare date at the end of that UTC day; None if unparseable."""
+    try:
+        raw = str(raw)
+        d = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        if d.tzinfo is None:
+            d = d.replace(tzinfo=timezone.utc)
+        return d.timestamp() + (86400 if len(raw) <= 10 else 0)
+    except (TypeError, ValueError):
+        return None
+
+
+def quota_spans(quota, now, window=MB_HOUR):
+    """Copilot quota used up per copilot-api /usage: premium interactions, plus 5Hour/Weekly session limits when it reports them.
+
+    The real start is unknown (/usage is a snapshot), so the span starts at the window start and says so (`start_estimated`).
+    """
+    if not quota:
+        return []
+    out = []
+    probes = []
+    if not quota.get("unlimited") and quota.get("remaining") is not None:
+        probes.append(("premium interactions", quota["remaining"] <= 0, quota.get("reset_date"), "quota"))
+    for lim in quota.get("limits") or []:
+        pr, rem = lim.get("percent_remaining"), lim.get("remaining")
+        probes.append((lim.get("name") or "session limit", (pr is not None and pr <= 0) or (pr is None and rem is not None and rem <= 0),
+                       lim.get("reset_date"), "quota"))
+    for name, exhausted, raw, kind in probes:
+        if not exhausted:
+            continue
+        reset = parse_reset(raw)
+        est = reset is None
+        reset = reset or next_month_utc(now)
+        if reset < now:
+            continue
+        out.append({"provider": "github-copilot", "label": PROVIDER_LABELS["github-copilot"], "kind": kind, "start": now - window, "start_estimated": True,
+                    "end": reset, "end_estimated": est, "count": 0, "basis": f"copilot-api /usage: {name} used up",
+                    "reset_source": None if est else "upstream-body:reset_date", "source": "quota"})
+    return out
 
 
 CLAUDE_FAMILIES = ("opus", "sonnet", "haiku", "fable")
@@ -1002,6 +1210,13 @@ def copilot_quota(now):
                  "percent_remaining": snap.get("percent_remaining"), "credits_used": snap.get("credits_used"),
                  "overage_count": snap.get("overage_count"), "token_based_billing": bool(doc.get("token_based_billing")),
                  "source": "copilot-api /usage", "fetched_at": iso_utc(now)}
+        limits = []  # 5Hour-/Weekly-Session-RateLimits, when this copilot-api build reports them (Responses API snapshots)
+        for name in ("5Hour-Session-RateLimits", "Weekly-Session-RateLimits"):
+            lim = (doc.get("quota_snapshots") or {}).get(name) or (doc.get("copilot_quota_snapshots") or {}).get(name)
+            if isinstance(lim, dict):
+                limits.append({"name": name, "percent_remaining": lim.get("percent_remaining"), "remaining": lim.get("remaining"),
+                               "entitlement": lim.get("entitlement"), "reset_date": lim.get("reset_date")})
+        quota["limits"] = limits
     except Exception as err:
         note = f"copilot-api /usage unavailable ({type(err).__name__})"
     try:
@@ -1191,6 +1406,23 @@ def menubar_data(now=None, up_ports=None, share_window="15m", share_metric="requ
             cls = err_class(e)
             if cls:
                 series[{"429": "e429", "5xx": "e5xx", "oth": "eother"}[cls]][i] += 1
+    by_vendor = {}  # per-minute requests by model vendor (proxy log + copilot transcripts), for the floating window's stacked bars
+    for e in hour:
+        i = int((e["t"] - minute0) // 60)
+        if 0 <= i < 60:
+            by_vendor.setdefault(model_vendor(e.get("served"))[0], [0] * 60)[i] += 1
+    series["by_vendor"] = by_vendor
+    overrides = provider_overrides()
+    by_provider = {}  # same minutes, split by provider (the floating window draws one rate line per provider)
+    labels = {}
+    for e in hour:
+        i = int((e["t"] - minute0) // 60)
+        if 0 <= i < 60:
+            key, label = event_provider(e, overrides)
+            labels[key] = label
+            by_provider.setdefault(key, [0] * 60)[i] += 1
+    series_by_provider = {"bucket_s": 60, "start": iso_utc(minute0),
+                          "providers": [{"key": k, "label": labels[k], "requests": v} for k, v in sorted(by_provider.items(), key=lambda kv: -sum(kv[1]))]}
     last_bad = [e for e in events if not e.get("ok", True)]
     last = last_bad[-1] if last_bad else None
     mine_inflight = [f for f in flights]
@@ -1200,6 +1432,27 @@ def menubar_data(now=None, up_ports=None, share_window="15m", share_metric="requ
     copilot_up = up.get("4141", False)
     quota, quota_note = copilot_quota(now) if copilot_up else (None, "copilot-api (:4141) is down")
     cop = next(p for p in proxies if p["port"] == 4141)
+
+    # Throttle spans: named-proxy 429s, plus Copilot ones read from Claude Code transcripts (copilot-api has no usage log).
+    first_t = min((e["t"] for e in proxy_all), default=None)
+    seen_models = {strip_model(e.get("served")) for e in proxy_all}
+    cop_thr = [e for e in load_claude_throttles(now - 6 * 3600)
+               if not e.get("routed") and e.get("served") and (first_t is None or e["t"] < first_t or strip_model(e["served"]) not in seen_models)]
+    spans = throttle_spans(events + extra + cop_thr, now)
+    premium_reset = parse_reset(quota.get("reset_date")) if quota else None
+    if premium_reset and premium_reset > now:  # a 402 seen in a transcript lasts until GitHub's quota reset
+        for sp in spans:
+            if sp["provider"] == "github-copilot" and sp["kind"] == "quota" and sp["source"] == "transcript":
+                sp.update(end=max(sp["end"], premium_reset), end_estimated=False, reset_source="upstream-body:quota_reset_date")
+    spans += quota_spans(quota, now)
+    span_rows = [{**sp, "start": iso_utc(sp["start"]), "end": iso_utc(sp["end"]), "active": sp["end"] > now} for sp in spans]
+    notes = {}
+    if not any(sp["provider"] == "github-copilot" for sp in spans):
+        notes["github-copilot"] = ("no Copilot throttle data: copilot-api keeps no usage/error log, and no Claude Code transcript failure "
+                                   "(system api_error / isApiErrorMessage with status 429, 402, 403, 503) is attributable to it in the last 6h" +
+                                   ("" if quota else f", and its quota is unavailable ({quota_note})"))
+    elif any(sp["provider"] == "github-copilot" and sp["source"] == "transcript" for sp in spans):
+        notes["github-copilot"] = "Copilot throttle spans are transcript-derived (Claude Code API-error entries), not logged by copilot-api"
     return {
         "version": 2, "generated_at": iso_utc(now), "log_dir": STATE,
         "dashboard_port": int(os.environ.get("LLM_USAGE_PORT", "4150")),
@@ -1221,6 +1474,9 @@ def menubar_data(now=None, up_ports=None, share_window="15m", share_metric="requ
         "reroutes": [{"from": f, "to": t, "kind": k, "proxy": pr, **v}
                      for (f, t, k, pr), v in sorted(reroutes.items(), key=lambda x: -x[1]["count"])],
         "series": {"bucket_s": 60, "start": iso_utc(minute0), **series},
+        "series_by_provider": series_by_provider,
+        "throttle_spans": span_rows, "throttle_notes": notes,
+        "drift": collect_drift(events, now),
         "reroutes_15m": sum(v["count_15m"] for v in reroutes.values()),
         "share": traffic_share(hour, now, share_window, share_metric),
         "copilot": {"state": "up" if copilot_up else "down", "source": "transcript",
@@ -1408,7 +1664,21 @@ def cmd_menubar(args):
         else:
             logo_list()
         return
-    if action == "build":
+    if action == "window":
+        # no IPC: the helper polls this one-line command file once a second and deletes it after acting
+        cmd = args.logos_action or "toggle"
+        if cmd not in ("show", "hide", "toggle"):
+            sys.exit(f"llm-usage: unknown window action {cmd!r} (show|hide|toggle)")
+        pid = mb_running()
+        if not pid:
+            sys.exit("llm-usage: menubar helper not running (llm-usage menubar run)")
+        os.makedirs(STATE, mode=0o700, exist_ok=True)
+        path = os.path.join(STATE, "menubar-window.cmd")
+        with open(path + ".tmp", "w") as fh:
+            fh.write(cmd + "\n")
+        os.replace(path + ".tmp", path)
+        print(f"menubar: window {cmd} sent to pid {pid}")
+    elif action == "build":
         mb_build(args.force)
     elif action == "run":
         pid = mb_running()
@@ -1723,9 +1993,9 @@ def main():
     p.add_argument("--share-metric", choices=list(SHARE_METRICS), default="requests", help="traffic-share metric (default %(default)s)")
     p.set_defaults(fn=cmd_menubar_data)
 
-    p = sub.add_parser("menubar", help="macOS menubar monitor (native Swift helper): build|run|install|uninstall|status|logos [fetch]")
-    p.add_argument("action", choices=["build", "run", "install", "uninstall", "status", "logos"])
-    p.add_argument("logos_action", nargs="?", help="logos: `fetch` downloads the pinned logo PNGs; omit to list what each key resolves to")
+    p = sub.add_parser("menubar", help="macOS menubar monitor (native Swift helper): build|run|install|uninstall|status|logos [fetch]|window [show|hide|toggle]")
+    p.add_argument("action", choices=["build", "run", "install", "uninstall", "status", "logos", "window"])
+    p.add_argument("logos_action", nargs="?", help="logos: `fetch` downloads the pinned logo PNGs, omit to list what each key resolves to; window: show|hide|toggle (default toggle)")
     p.add_argument("--from-dir", help=argparse.SUPPRESS)  # logos fetch: local checkout of the logo repo instead of the network
     p.add_argument("--no-verify", action="store_true", help=argparse.SUPPRESS)  # logos fetch: tests only (fixture PNGs)
     p.add_argument("--force", action="store_true", help="build: rebuild even when up to date")

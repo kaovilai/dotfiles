@@ -11,6 +11,9 @@
 //   --status-png PATH [--dark]         render the status item image (+ text) to PNG from --data-file (no GUI)
 //                                      [--no-text]; --dump-menu also takes --no-image / --no-text
 //   --list-logos                       which source each logo key resolves to
+//   --window-png PATH [--dark] [--layout horizontal|vertical|history] [--size WxH] [--graph bars|lines|both] [--stale]
+//                                      render the floating monitor window content to PNG (@2x) from --data-file
+//   --dump-menu also takes --window-visible --window-layout L --window-graph G --window-opacity N --window-click-through
 import AppKit
 import Foundation
 
@@ -64,6 +67,13 @@ func parseISO(_ s: String?) -> Date? {
 func clock(_ d: Date) -> String {
     let f = DateFormatter()
     f.dateFormat = "HH:mm:ss"
+    return f.string(from: d)
+}
+
+/// "14:02" today, "Nov 1 00:00" otherwise.
+func shortStamp(_ d: Date) -> String {
+    let f = DateFormatter()
+    f.dateFormat = Calendar.current.isDateInToday(d) ? "HH:mm" : "MMM d HH:mm"
     return f.string(from: d)
 }
 
@@ -544,6 +554,547 @@ func writeStatusPNG(_ d: J, summary: Summary, dark: Bool, showText: Bool, to pat
     print(shareDescription(share))
 }
 
+// MARK: - floating monitor window (Activity Monitor style: always-on-top, all Spaces, history graph + live numbers)
+
+enum MonitorLayout: String, CaseIterable {
+    case horizontal, vertical, history
+    var title: String {
+        switch self { case .horizontal: return "Horizontal"; case .vertical: return "Vertical"; case .history: return "History" }
+    }
+    var defaultSize: NSSize {
+        switch self { case .horizontal: return NSSize(width: 250, height: 132); case .vertical: return NSSize(width: 150, height: 330); case .history: return NSSize(width: 230, height: 90) }
+    }
+    var minSize: NSSize {
+        switch self { case .horizontal: return NSSize(width: 200, height: 104); case .vertical: return NSSize(width: 110, height: 220); case .history: return NSSize(width: 110, height: 52) }
+    }
+}
+
+/// What the history graph draws: bars = requests per minute stacked by model vendor, lines = one rate line per provider.
+enum GraphMode: String, CaseIterable {
+    case bars, lines, both
+    var title: String {
+        switch self { case .bars: return "Bars = models"; case .lines: return "Lines = providers"; case .both: return "Both" }
+    }
+}
+
+func dynamicColor(light: NSColor, dark: NSColor) -> NSColor {
+    NSColor(name: nil) { $0.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? dark : light }
+}
+
+/// Bar colours per model vendor. Claude/GPT/GLM follow the logo brand colours; DeepSeek and Gemini are moved off their
+/// (blue) brand colours so the three stay apart from GLM at a glance.
+let vendorChartColors: [String: NSColor] = [
+    "claude": rgb(0xD97757), "openai": rgb(0x10A37F), "glm": rgb(0x3556E8), "deepseek": rgb(0x9B5DE5), "gemini": rgb(0x1AA6B7), "other": rgb(0x8E8E93),
+]
+func vendorColor(_ key: String) -> NSColor { vendorChartColors[key] ?? vendorChartColors["other"]! }
+
+/// Line and throttle-ribbon colours per provider. Chosen to stay off the bar hues: lines are drawn over the bars.
+func providerColor(_ key: String) -> NSColor {
+    switch key {
+    case "github-copilot": return dynamicColor(light: NSColor(white: 0.36, alpha: 1), dark: NSColor(white: 0.97, alpha: 1))  // white on dark, grey on light
+    case "enmaas": return rgb(0xE5322D)
+    case "vertex": return rgb(0xE84393)
+    case "openai": return rgb(0x10A37F)
+    case "anthropic": return rgb(0xC2410C)
+    default:
+        let palette = [rgb(0xF2B01E), rgb(0x00B8D4), rgb(0xA1887F), rgb(0x66BB6A)]
+        return palette[Int(key.utf8.reduce(UInt32(7)) { $0 &* 31 &+ UInt32($1) } % UInt32(palette.count))]
+    }
+}
+
+let amber429 = rgb(0xFFB000)
+
+struct SpanItem {
+    let provider: String, label: String, kind: String
+    let start: Date, end: Date
+    let endEstimated: Bool, startEstimated: Bool
+    let count: Int
+    let source: String, basis: String, resetSource: String?
+}
+
+struct ProviderSeries { let key: String; let label: String; let values: [Int] }
+struct DriftItem { let kind: String; let detail: String; let hint: String; let count: Int; let proxy: String }
+
+func spanItems(_ d: J) -> [SpanItem] {
+    d["throttle_spans"].arr.compactMap { s in
+        guard let a = parseISO(s["start"].str), let b = parseISO(s["end"].str) else { return nil }
+        let key = s["provider"].str ?? "other"
+        return SpanItem(provider: key, label: s["label"].str ?? key, kind: s["kind"].str ?? "rate-limit", start: a, end: b,
+                        endEstimated: s["end_estimated"].exists ? s["end_estimated"].bool : true, startEstimated: s["start_estimated"].bool,
+                        count: s["count"].int ?? 1, source: s["source"].str ?? "proxy-log", basis: s["basis"].str ?? "", resetSource: s["reset_source"].str)
+    }
+}
+
+func providerSeries(_ d: J) -> [ProviderSeries] {
+    d["series_by_provider"]["providers"].arr.compactMap { p in
+        guard let key = p["key"].str else { return nil }
+        return ProviderSeries(key: key, label: p["label"].str ?? key, values: p["requests"].arr.map { $0.int ?? 0 })
+    }
+}
+
+func driftItems(_ d: J) -> [DriftItem] {
+    d["drift"].arr.compactMap { r in
+        guard let hint = r["hint"].str, !hint.isEmpty else { return nil }
+        return DriftItem(kind: r["kind"].str ?? "?", detail: r["detail"].str ?? "", hint: hint, count: r["count"].int ?? 1, proxy: r["proxy"].str ?? "")
+    }
+}
+
+let bodyFont = NSFont.systemFont(ofSize: 10)
+let valueFont = NSFont.monospacedDigitSystemFont(ofSize: 10, weight: .medium)
+let tinyFont = NSFont.systemFont(ofSize: 8.5)
+let boldFont = NSFont.systemFont(ofSize: 10.5, weight: .semibold)
+
+func drawStr(_ s: String, in rect: NSRect, font: NSFont = bodyFont, color: NSColor = .labelColor, align: NSTextAlignment = .left) {
+    let ps = NSMutableParagraphStyle()
+    ps.lineBreakMode = .byTruncatingTail
+    ps.alignment = align
+    (s as NSString).draw(in: rect, withAttributes: [.font: font, .foregroundColor: color, .paragraphStyle: ps])
+}
+
+/// Narrow-column label ("GitHub Copilot" would truncate everywhere).
+func shortLabel(_ key: String, _ label: String) -> String { key == "github-copilot" ? "Copilot" : (key == "vertex" ? "Vertex" : label) }
+
+func textWidth(_ s: String, _ font: NSFont) -> CGFloat { ceil((s as NSString).size(withAttributes: [.font: font]).width) }
+
+final class MonitorView: NSView {
+    var data: J? { didSet { needsDisplay = true } }
+    var now = Date()
+    var stale = false
+    var layout: MonitorLayout = .horizontal { didSet { needsDisplay = true } }
+    var graphMode: GraphMode = .both { didSet { needsDisplay = true } }
+    var drawsBackground = false  // the panel has its own material; the headless PNG render needs a fill
+    var onCopyHint: ((String) -> Void)?
+    private var hintHit: (NSRect, String)?
+
+    override var isOpaque: Bool { false }
+
+    override func mouseDown(with event: NSEvent) {
+        let p = convert(event.locationInWindow, from: nil)
+        if let (r, hint) = hintHit, r.contains(p) { onCopyHint?(hint) } else { super.mouseDown(with: event) }
+    }
+
+    override func draw(_ dirty: NSRect) {
+        guard let ctx = NSGraphicsContext.current?.cgContext else { return }
+        let b = bounds
+        if drawsBackground { NSColor.windowBackgroundColor.setFill(); b.fill() }
+        hintHit = nil
+        guard let d = data else {
+            drawStr("waiting for data…", in: NSRect(x: 0, y: b.midY - 7, width: b.width, height: 14), color: .secondaryLabelColor, align: .center)
+            return
+        }
+        ctx.saveGState()
+        defer { ctx.restoreGState() }
+        if stale { ctx.setAlpha(0.6) }  // last poll failed: dim, keep the last good numbers
+
+        var summary = summarize(d, now: now, stale: stale)
+        let spans = spanItems(d)
+        let drifts = driftItems(d)
+        let model = GraphModel(d)
+        let live = spans.filter { $0.end > now }
+        if summary.state == "normal" && !live.isEmpty { summary.state = "throttled" }  // e.g. Copilot: only its span says so
+        var area = layout == .history ? b.insetBy(dx: 4, dy: 4) : b.insetBy(dx: 8, dy: 6)
+
+        if layout != .history, let top = drifts.first {  // provider changed shape: say what to update; click copies the hint
+            let r = NSRect(x: area.minX, y: area.minY, width: area.width, height: 12)
+            let amber = dynamicColor(light: rgb(0x9A6700), dark: rgb(0xFFD60A))
+            drawStr("⚠ code needs updating: \(top.hint)", in: r, font: NSFont.systemFont(ofSize: 9, weight: .medium), color: amber)
+            hintHit = (r, top.hint)
+            area.origin.y += 15
+            area.size.height -= 15
+        }
+
+        switch layout {
+        case .history:
+            drawGraph(ctx, rect: area, model: model, spans: spans)
+            drawOverlay(summary: summary, live: live, d: d, in: area)
+        case .horizontal, .vertical:
+            let header = NSRect(x: area.minX, y: area.maxY - 14, width: area.width, height: 14)
+            drawHeader(ctx, summary: summary, live: live, d: d, in: header)
+            let body = NSRect(x: area.minX, y: area.minY, width: area.width, height: area.height - 17)
+            var graphCol: NSRect, stats: NSRect
+            if layout == .horizontal {
+                let sw = min(max(body.width * 0.42, 88), 150)
+                graphCol = NSRect(x: body.minX, y: body.minY, width: body.width - sw - 8, height: body.height)
+                stats = NSRect(x: body.maxX - sw, y: body.minY, width: sw, height: body.height)
+            } else {
+                let gh = min(max(body.height * 0.34, 74), 140)
+                graphCol = NSRect(x: body.minX, y: body.maxY - gh, width: body.width, height: gh)
+                stats = NSRect(x: body.minX, y: body.minY, width: body.width, height: body.height - gh - 6)
+            }
+            drawGraphColumn(ctx, rect: graphCol, model: model, spans: spans, d: d)
+            drawStats(ctx, rect: stats, d: d, spans: spans)
+        }
+    }
+
+    // MARK: header / overlay
+
+    func stateColor(_ s: Summary) -> NSColor {
+        switch s.state { case "throttled", "down": return .systemRed; case "spike": return .systemOrange; case "normal": return .systemGreen; default: return .secondaryLabelColor }
+    }
+
+    func headerText(_ s: Summary, live: [SpanItem], d: J) -> String {
+        switch s.state {
+        case "throttled":
+            var names: [String] = []
+            for sp in live where !names.contains(shortLabel(sp.provider, sp.label)) { names.append(shortLabel(sp.provider, sp.label)) }
+            let until = parseISO(d["throttled"]["reset_at"].str) ?? live.map { $0.end }.max()
+            let left = until.map { compactDuration(Int($0.timeIntervalSince(now).rounded(.up))) }
+            return "429 · " + (names.isEmpty ? (d["throttled"]["proxy"].str ?? "throttled") : names.joined(separator: ", ")) + (left.map { " · \($0)" } ?? "")
+        case "down": return "Proxy down"
+        case "spike": return "Error spike"
+        case "normal": return "OK · \(d["totals"]["m15"]["requests"].int ?? 0) req/15m"
+        default: return s.state
+        }
+    }
+
+    func drawHeader(_ ctx: CGContext, summary: Summary, live: [SpanItem], d: J, in r: NSRect) {
+        stateColor(summary).setFill()
+        NSBezierPath(ovalIn: NSRect(x: r.minX, y: r.midY - 3.5, width: 7, height: 7)).fill()
+        drawStr(headerText(summary, live: live, d: d) + (stale ? " · stale" : ""), in: NSRect(x: r.minX + 11, y: r.minY, width: r.width - 11, height: r.height),
+                font: boldFont, color: summary.state == "normal" ? .labelColor : stateColor(summary))
+    }
+
+    /// History layout: no text rows, so a small pill carries the state (and in-flight count) over the graph.
+    func drawOverlay(summary: Summary, live: [SpanItem], d: J, in r: NSRect) {
+        var parts: [String] = []
+        if summary.state != "normal" { parts.append(headerText(summary, live: live, d: d)) }
+        if let n = d["inflight"]["count"].int, n > 0 { parts.append("⏳\(n)") }
+        if !driftItems(d).isEmpty { parts.append("⚠") }
+        guard !parts.isEmpty else { return }
+        let text = parts.joined(separator: " · ")
+        let font = NSFont.systemFont(ofSize: 9, weight: .semibold)
+        let w = min(textWidth(text, font) + 14, r.width - 8)
+        let laneCount = Set(spanItems(d).map { $0.provider }).count
+        let pill = NSRect(x: r.minX + 4, y: r.maxY - 6 - CGFloat(laneCount) * 3.5 - 13, width: w, height: 13)  // top-left, under the throttle lanes
+        NSColor.windowBackgroundColor.withAlphaComponent(0.8).setFill()
+        NSBezierPath(roundedRect: pill, xRadius: 6.5, yRadius: 6.5).fill()
+        stateColor(summary).setFill()
+        NSBezierPath(ovalIn: NSRect(x: pill.minX + 4, y: pill.midY - 2.5, width: 5, height: 5)).fill()
+        drawStr(text, in: NSRect(x: pill.minX + 12, y: pill.minY + 0.5, width: pill.width - 14, height: 12), font: font)
+    }
+
+    // MARK: graph
+
+    struct GraphModel {
+        var vendors: [(key: String, values: [Int])] = []
+        var providers: [ProviderSeries] = []
+        var e429: [Int] = [], e5: [Int] = [], eo: [Int] = []
+        var n = 60
+        var peak = 3
+        var start: Date?
+        var hasTraffic = false
+
+        init(_ d: J) {
+            let s = d["series"]
+            let req = s["requests"].arr.map { $0.int ?? 0 }
+            n = max(req.count, 1)
+            let bv = s["by_vendor"]
+            if bv.exists {
+                vendors = bv.keys.map { k in (k, bv[k].arr.map { $0.int ?? 0 }) }.sorted { ($0.1.reduce(0, +), $1.0) > ($1.1.reduce(0, +), $0.0) }
+            } else if !req.isEmpty {
+                vendors = [("other", req)]  // older helper JSON: one grey stack from the proxy-log series
+            }
+            if let longest = vendors.map({ $0.values.count }).max() { n = max(n, longest) }
+            providers = providerSeries(d)
+            e429 = s["e429"].arr.map { $0.int ?? 0 }
+            e5 = s["e5xx"].arr.map { $0.int ?? 0 }
+            eo = s["eother"].arr.map { $0.int ?? 0 }
+            start = parseISO(s["start"].str)
+            let totals = totalsPerMinute()
+            hasTraffic = (totals.max() ?? 0) > 0 || providers.contains { ($0.values.max() ?? 0) > 0 }
+            peak = max(totals.max() ?? 0, providers.compactMap { $0.values.max() }.max() ?? 0, 3)
+        }
+
+        func totalsPerMinute() -> [Int] {
+            (0..<n).map { i in vendors.reduce(0) { $0 + (i < $1.values.count ? $1.values[i] : 0) } }
+        }
+    }
+
+    func xFor(_ t: Date, _ r: NSRect, _ start: Date) -> CGFloat {
+        r.minX + CGFloat(min(max(t.timeIntervalSince(start) / 3600, 0), 1)) * r.width
+    }
+
+    /// Graph with its caption above and the throttle legend below.
+    func drawGraphColumn(_ ctx: CGContext, rect: NSRect, model: GraphModel, spans: [SpanItem], d: J) {
+        let capH: CGFloat = 11, legH: CGFloat = spans.isEmpty ? 0 : 12
+        let caption = "req/min · 60m · peak \(model.peak)"
+        drawStr(caption, in: NSRect(x: rect.minX, y: rect.maxY - capH, width: rect.width, height: capH), font: tinyFont, color: .secondaryLabelColor)
+        let g = NSRect(x: rect.minX, y: rect.minY + legH, width: rect.width, height: rect.height - capH - legH - 1)
+        drawGraph(ctx, rect: g, model: model, spans: spans)
+        if !spans.isEmpty { drawSpanLegend(ctx, in: NSRect(x: rect.minX, y: rect.minY, width: rect.width, height: legH - 2)) }
+    }
+
+    func drawGraph(_ ctx: CGContext, rect: NSRect, model: GraphModel, spans: [SpanItem]) {
+        guard rect.width > 8, rect.height > 8 else { return }
+        let clip = NSBezierPath(roundedRect: rect, xRadius: 3, yRadius: 3)
+        NSColor.labelColor.withAlphaComponent(0.06).setFill()
+        clip.fill()
+        ctx.saveGState()
+        clip.addClip()
+        defer { ctx.restoreGState() }
+        NSColor.labelColor.withAlphaComponent(0.10).setFill()
+        NSRect(x: rect.minX, y: rect.midY, width: rect.width, height: 0.5).fill()  // half-scale gridline
+
+        let n = model.n
+        let slot = rect.width / CGFloat(n)
+        let lanes = Array(Set(spans.map { $0.provider })).sorted()
+        let laneStep: CGFloat = 3.5
+        let lanesH = spans.isEmpty ? 0 : CGFloat(lanes.count) * laneStep + 1
+        let plotTop = rect.maxY - lanesH
+        let scale = max(plotTop - rect.minY - 1, 1) / CGFloat(model.peak)
+        let start = model.start ?? now.addingTimeInterval(-3600)
+
+        // throttle washes sit under the bars so the data stays readable; lanes and edges go on top afterwards
+        for sp in spans {
+            let c = providerColor(sp.provider)
+            let x1 = xFor(sp.start, rect, start), x2 = max(xFor(sp.end, rect, start), x1 + 2)
+            let band = NSRect(x: x1, y: rect.minY, width: x2 - x1, height: rect.height)
+            if sp.kind == "quota" {
+                c.withAlphaComponent(0.10).setFill()
+                band.fill()
+                ctx.saveGState()
+                ctx.clip(to: band)
+                c.withAlphaComponent(0.55).setStroke()
+                let hatch = NSBezierPath()
+                hatch.lineWidth = 0.8
+                var x = band.minX - rect.height
+                while x < band.maxX {
+                    hatch.move(to: NSPoint(x: x, y: rect.minY)); hatch.line(to: NSPoint(x: x + rect.height, y: rect.maxY))
+                    x += 4
+                }
+                hatch.stroke()
+                ctx.restoreGState()
+            } else {
+                c.withAlphaComponent(0.22).setFill()
+                band.fill()
+            }
+        }
+
+        if graphMode != .lines {
+            for i in 0..<n {
+                var y = rect.minY
+                let x = rect.minX + CGFloat(i) * slot
+                let w = slot > 2.4 ? slot - 0.6 : slot + 0.3
+                for v in model.vendors where i < v.values.count && v.values[i] > 0 {
+                    let h = max(CGFloat(v.values[i]) * scale, 0.8)
+                    vendorColor(v.key).setFill()
+                    NSRect(x: x, y: y, width: w, height: h).fill()
+                    y += h
+                }
+            }
+        }
+
+        // failures: a wash across the minute plus a cap on top (429 amber, anything else red)
+        for i in 0..<n {
+            let a = i < model.e429.count ? model.e429[i] : 0
+            let r5 = (i < model.e5.count ? model.e5[i] : 0) + (i < model.eo.count ? model.eo[i] : 0)
+            guard a + r5 > 0 else { continue }
+            let c = r5 > 0 ? NSColor.systemRed : amber429
+            let x = rect.minX + CGFloat(i) * slot
+            let w = max(slot, 2.5)
+            c.withAlphaComponent(0.22).setFill()
+            NSRect(x: x - (w - slot) / 2, y: rect.minY, width: w, height: plotTop - rect.minY).fill()
+            let top = (model.totalsPerMinute()[i] > 0 ? CGFloat(model.totalsPerMinute()[i]) * scale : 0) + rect.minY
+            c.setFill()
+            NSRect(x: x - (w - slot) / 2, y: min(top + 0.5, plotTop - 3), width: w, height: 3).fill()
+        }
+
+        if graphMode != .bars {
+            let bg = NSColor.windowBackgroundColor.withAlphaComponent(0.55)
+            for p in model.providers where (p.values.max() ?? 0) > 0 {
+                let path = NSBezierPath()
+                for (i, v) in p.values.enumerated() {
+                    let pt = NSPoint(x: rect.minX + (CGFloat(i) + 0.5) * slot, y: rect.minY + 0.5 + CGFloat(v) * scale)
+                    i == 0 ? path.move(to: pt) : path.line(to: pt)
+                }
+                path.lineJoinStyle = .round
+                path.lineWidth = 3.2
+                bg.setStroke()
+                path.stroke()  // halo so a line stays visible across any bar colour
+                path.lineWidth = 1.5
+                providerColor(p.key).setStroke()
+                path.stroke()
+            }
+        }
+
+        // lanes (one per provider, solid = rate limit, dotted = quota) and end edges (dashed = estimated reset)
+        for sp in spans {
+            let c = providerColor(sp.provider)
+            let lane = CGFloat(lanes.firstIndex(of: sp.provider) ?? 0)
+            let x1 = xFor(sp.start, rect, start), x2 = max(xFor(sp.end, rect, start), x1 + 2)
+            let ly = rect.maxY - laneStep * (lane + 1)
+            let bar = NSBezierPath()
+            bar.lineWidth = 2.5
+            bar.move(to: NSPoint(x: x1, y: ly + 1.25)); bar.line(to: NSPoint(x: x2, y: ly + 1.25))
+            if sp.kind == "quota" { bar.setLineDash([3, 2], count: 2, phase: 0) }
+            c.withAlphaComponent(0.95).setStroke()
+            bar.stroke()
+            if sp.end <= start.addingTimeInterval(3598) {  // an end beyond the graph is open-ended: no edge
+                let edge = NSBezierPath()
+                edge.lineWidth = 1.2
+                edge.move(to: NSPoint(x: x2, y: rect.minY)); edge.line(to: NSPoint(x: x2, y: rect.maxY))
+                if sp.endEstimated { edge.setLineDash([2.5, 2], count: 2, phase: 0) }
+                c.withAlphaComponent(0.95).setStroke()
+                edge.stroke()
+            }
+        }
+
+        if !model.hasTraffic && spans.isEmpty {
+            drawStr("idle", in: NSRect(x: rect.minX, y: rect.midY - 6, width: rect.width, height: 12), font: bodyFont, color: .tertiaryLabelColor, align: .center)
+        }
+    }
+
+    /// Throttle ribbon key: wash = rate-limit 429, hatch = quota, dashed edge = estimated end, solid edge = known end. Items that do not fit drop off the right.
+    func drawSpanLegend(_ ctx: CGContext, in r: NSRect) {
+        let ink = NSColor.secondaryLabelColor
+        var x = r.minX
+        func item(_ label: String, _ sample: (NSRect) -> Void) -> Bool {
+            let w = 10 + textWidth(label, tinyFont) + 5
+            guard x + w <= r.maxX + 2 else { return false }
+            sample(NSRect(x: x, y: r.minY + 1.5, width: 8, height: r.height - 3))
+            drawStr(label, in: NSRect(x: x + 10, y: r.minY, width: w - 10, height: r.height), font: tinyFont, color: ink)
+            x += w
+            return true
+        }
+        _ = item("429") { s in
+            NSColor.labelColor.withAlphaComponent(0.25).setFill(); s.fill()
+            NSColor.labelColor.withAlphaComponent(0.8).setFill(); NSRect(x: s.minX, y: s.maxY - 1.5, width: s.width, height: 1.5).fill()
+        } && item("quota") { s in
+            NSColor.labelColor.withAlphaComponent(0.10).setFill(); s.fill()
+            let h = NSBezierPath(); h.lineWidth = 0.7
+            NSColor.labelColor.withAlphaComponent(0.6).setStroke()
+            var hx = s.minX - s.height
+            while hx < s.maxX { h.move(to: NSPoint(x: max(hx, s.minX), y: hx < s.minX ? s.minY + (s.minX - hx) : s.minY)); h.line(to: NSPoint(x: min(hx + s.height, s.maxX), y: hx + s.height > s.maxX ? s.maxY - (hx + s.height - s.maxX) : s.maxY)); hx += 3.5 }
+            h.stroke()
+        } && item("~end") { s in
+            let e = NSBezierPath(); e.lineWidth = 1.2; e.setLineDash([2, 1.5], count: 2, phase: 0)
+            NSColor.labelColor.withAlphaComponent(0.8).setStroke()
+            e.move(to: NSPoint(x: s.midX, y: s.minY)); e.line(to: NSPoint(x: s.midX, y: s.maxY)); e.stroke()
+        } && item("end") { s in
+            let e = NSBezierPath(); e.lineWidth = 1.2
+            NSColor.labelColor.withAlphaComponent(0.8).setStroke()
+            e.move(to: NSPoint(x: s.midX, y: s.minY)); e.line(to: NSPoint(x: s.midX, y: s.maxY)); e.stroke()
+        }
+    }
+
+    // MARK: stats rows
+
+    func drawStats(_ ctx: CGContext, rect: NSRect, d: J, spans: [SpanItem]) {
+        let rowH: CGFloat = 13
+        var y = rect.maxY
+        var rowsLeft = Int((rect.height + 1) / rowH)
+        func next() -> NSRect? {
+            guard rowsLeft > 0 else { return nil }
+            rowsLeft -= 1
+            y -= rowH
+            return NSRect(x: rect.minX, y: y, width: rect.width, height: rowH)
+        }
+
+        // proxy dots go at the bottom: reserve their rows first
+        let proxies = d["proxies"].arr.filter { $0["state"].str == "up" || $0["expected"].bool }
+        let dotLabel: (J) -> String = { p in
+            let port = p["port"].int.map(String.init) ?? "?"
+            return rect.width < 140 ? String(port.suffix(2)) : port
+        }
+        var dotRows: [[J]] = [[]]
+        var used: CGFloat = 0
+        for p in proxies {
+            let w = 5 + 2 + textWidth(dotLabel(p), tinyFont) + 5
+            if used + w > rect.width + 8, !dotRows[dotRows.count - 1].isEmpty { dotRows.append([]); used = 0 }
+            dotRows[dotRows.count - 1].append(p)
+            used += w
+        }
+        if proxies.isEmpty { dotRows = [] }
+        rowsLeft -= dotRows.count
+        for (i, row) in dotRows.enumerated() {
+            var x = rect.minX
+            let ry = rect.minY + CGFloat(dotRows.count - 1 - i) * rowH
+            for p in row {
+                let up = p["state"].str == "up"
+                (up ? NSColor.systemGreen : NSColor.systemRed).setFill()
+                NSBezierPath(ovalIn: NSRect(x: x, y: ry + 4, width: 5, height: 5)).fill()
+                let label = dotLabel(p)
+                drawStr(label, in: NSRect(x: x + 7, y: ry, width: textWidth(label, tinyFont) + 2, height: rowH), font: tinyFont, color: .secondaryLabelColor)
+                x += 5 + 2 + textWidth(label, tinyFont) + 5
+            }
+        }
+
+        if let r = next() {
+            let fl = d["inflight"]
+            let (value, strong): (String, Bool) = fl["available"].bool
+                ? ((fl["count"].int ?? 0) > 0 ? ("\(fl["count"].int ?? 0) · \(compactDuration(fl["oldest_s"].int ?? 0))", true) : ("0", false)) : ("n/a", false)
+            drawStr("In flight", in: r, color: .secondaryLabelColor)
+            drawStr(value, in: r, font: valueFont, color: strong ? .labelColor : .secondaryLabelColor, align: .right)
+        }
+
+        let models = shareEntries(d["share"]["models"]), providers = shareEntries(d["share"]["providers"])
+        let modelRows = min(models.count, layout == .vertical ? 4 : 3)
+        if modelRows == 0, let r = next() { drawStr("idle · no traffic", in: r, color: .tertiaryLabelColor) }
+        for e in models.prefix(modelRows) {
+            guard let r = next() else { break }
+            drawShareRow(ctx, r, e, marker: graphMode == .lines ? nil : .tick(vendorColor(e.key)), circle: true)
+        }
+        if !providers.isEmpty, rowsLeft >= 2 {
+            if let r = next() { drawStr("Providers · \(d["share"]["window"].str ?? "15m")", in: r, font: tinyFont, color: .secondaryLabelColor) }
+            for e in providers.prefix(min(rowsLeft, layout == .vertical ? 3 : 2)) {
+                guard let r = next() else { break }
+                drawShareRow(ctx, r, e, marker: graphMode == .bars ? nil : .line(providerColor(e.key)), circle: false)
+            }
+        }
+        if let note = d["throttle_notes"]["github-copilot"].str, spans.allSatisfy({ $0.provider != "github-copilot" }), rowsLeft >= 1,
+           providers.contains(where: { $0.key == "github-copilot" }), layout == .vertical, let r = next() {
+            drawStr("Copilot: no throttle data", in: r, font: tinyFont, color: .tertiaryLabelColor)
+            _ = note
+        }
+    }
+
+    enum Marker { case tick(NSColor), line(NSColor) }
+
+    func drawShareRow(_ ctx: CGContext, _ r: NSRect, _ e: ShareEntry, marker: Marker?, circle: Bool) {
+        var x = r.minX
+        switch marker {
+        case .tick(let c)?: c.setFill(); NSBezierPath(roundedRect: NSRect(x: x, y: r.minY + 2, width: 3, height: 9), xRadius: 1.5, yRadius: 1.5).fill(); x += 6
+        case .line(let c)?:
+            let p = NSBezierPath(); p.lineWidth = 1.8; p.lineCapStyle = .round
+            c.setStroke(); p.move(to: NSPoint(x: x + 1, y: r.midY)); p.line(to: NSPoint(x: x + 9, y: r.midY)); p.stroke(); x += 12
+        case nil: break
+        }
+        let logoRect = CGRect(x: x, y: r.minY + 1, width: 11, height: 11)
+        drawLogo(ctx, entry: ShareEntry(key: e.key, label: e.label, share: 1, requests: e.requests, tokens: e.tokens, models: e.models),
+                 rect: logoRect, circle: circle, labelColor: NSColor.labelColor.cgColor)
+        x += 14
+        let pctText = String(format: "%.0f%%", e.share * 100)
+        let pw = textWidth(pctText, valueFont)
+        drawStr(shortLabel(e.key, e.label), in: NSRect(x: x, y: r.minY, width: max(r.maxX - x - pw - 3, 10), height: r.height))
+        drawStr(pctText, in: NSRect(x: r.maxX - pw, y: r.minY, width: pw, height: r.height), font: valueFont, align: .right)
+    }
+}
+
+/// Window content to PNG, @2x, light or dark (debug: no GUI needed).
+func writeWindowPNG(_ d: J, layout: MonitorLayout, size: NSSize, dark: Bool, mode: GraphMode, stale: Bool, to path: String) {
+    let appearance = NSAppearance(named: dark ? .darkAqua : .aqua)!
+    let view = MonitorView(frame: NSRect(origin: .zero, size: size))
+    view.layout = layout
+    view.graphMode = mode
+    view.drawsBackground = true
+    view.stale = stale
+    view.now = parseISO(d["generated_at"].str) ?? Date()
+    view.data = d
+    guard let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: Int(size.width) * 2, pixelsHigh: Int(size.height) * 2,
+                                     bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+                                     colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0) else { return }
+    rep.size = size
+    appearance.performAsCurrentDrawingAppearance {
+        NSGraphicsContext.saveGraphicsState()
+        defer { NSGraphicsContext.restoreGraphicsState() }
+        guard let gc = NSGraphicsContext(bitmapImageRep: rep) else { return }
+        NSGraphicsContext.current = gc
+        view.draw(view.bounds)
+    }
+    if let png = rep.representation(using: .png, properties: [:]) { try? png.write(to: URL(fileURLWithPath: path)) }
+    print("window-png: \(Int(size.width))x\(Int(size.height))pt (\(rep.pixelsWide)x\(rep.pixelsHigh)px) \(dark ? "dark" : "light") layout=\(layout.rawValue) graph=\(mode.rawValue) -> \(path)")
+}
+
 // MARK: - CLI discovery and polling
 
 func findUsageBinary() -> String? {
@@ -609,6 +1160,11 @@ struct MenuContext {
     var showText = true
     var shareWindow = "15m"   // "15m" | "1h"
     var shareMetric = "requests"  // "requests" | "tokens"
+    var windowVisible = false
+    var windowLayout = MonitorLayout.horizontal
+    var windowGraph = GraphMode.both
+    var windowOpacity = 1.0
+    var windowClickThrough = false
 }
 
 final class Builder {
@@ -731,12 +1287,37 @@ final class Builder {
             add(info("resets in \(longDuration(left)) (≈ \(f.string(from: reset)))", dim: false))
             let basis: [String: String] = ["retry_after": "from the logged retry_after", "next-month-utc": "quota 429 with no retry_after: assumed next UTC month start",
                                            "assumed-60s": "rate limit with no retry_after: assumed 60s"]
-            add(info("ESTIMATE · \(basis[th["basis"].str ?? ""] ?? "estimated from the log")", dim: true))
+            if th["estimated"].exists && !th["estimated"].bool {  // the logger recorded an upstream-reported reset: not an estimate
+                add(info("reset reported by upstream (\(th["reset_source"].str ?? th["basis"].str ?? "upstream"))", dim: true))
+            } else {
+                add(info("ESTIMATE · \(basis[th["basis"].str ?? ""] ?? "estimated from the log")", dim: true))
+            }
         }
         let spike = d["spike"]
         if spike["active"].bool {
             menu.addItem(.separator())
             add(info("⚠ Error spike: \(spike["errors"].int ?? 0) errors in the flagged minutes (last 10m)"))
+        }
+
+        // Throttle spans (last hour) and logger drift
+        let spans = spanItems(d)
+        let note = d["throttle_notes"]["github-copilot"].str
+        let copilotSeen = providerSeries(d).contains { $0.key == "github-copilot" }
+        if !spans.isEmpty || (note != nil && copilotSeen) {
+            menu.addItem(.separator()); add(header("THROTTLE SPANS (last 1h)"))
+            for sp in spans {
+                let state = sp.end > c.now ? "until \(shortStamp(sp.end))\(sp.endEstimated ? " (est.)" : "")" : "ended \(shortStamp(sp.end))\(sp.endEstimated ? " (est.)" : "")"
+                let tag = sp.source == "transcript" ? " [transcript-derived]" : (sp.source == "quota" ? " [copilot-api /usage]" : "")
+                add(info("\(sp.label) · \(sp.kind) · \(sp.count > 1 ? "×\(sp.count) · " : "")since \(sp.startEstimated ? "≤" : "")\(shortStamp(sp.start)) · \(state)\(tag)"))
+            }
+            if let n = note, spans.allSatisfy({ $0.provider != "github-copilot" }) { add(info(n, dim: true)) }
+        }
+        for dr in driftItems(d).prefix(3) {  // the logger saw the provider change shape: click copies the hint
+            menu.addItem(.separator())
+            let item = action("⚠ code needs updating: \(dr.hint)\(dr.count > 1 ? "  (×\(dr.count))" : "")", #selector(AppController.copyText(_:)), represented: dr.hint)
+            plain.append(item.title)
+            menu.addItem(item)
+            add(info("\(dr.kind) \(dr.detail)  [\(dr.proxy)]  · click to copy the hint", dim: true))
         }
 
         // In flight
@@ -878,6 +1459,25 @@ final class Builder {
         menu.addItem(action("Show text next to the image", #selector(AppController.toggleText), state: c.showText))
         menu.addItem(action("Show 1h traffic window (off: 15m)", #selector(AppController.toggleWindow), state: c.shareWindow == "1h"))
         menu.addItem(action("Show tokens as traffic metric (off: requests)", #selector(AppController.toggleMetric), state: c.shareMetric == "tokens"))
+        menu.addItem(.separator())
+        menu.addItem(action("Floating Window", #selector(AppController.toggleFloatingWindow), state: c.windowVisible))
+        let layoutItem = NSMenuItem(title: "Window Layout", action: nil, keyEquivalent: "")
+        let layoutMenu = NSMenu(); layoutMenu.autoenablesItems = false
+        for l in MonitorLayout.allCases { layoutMenu.addItem(action(l.title, #selector(AppController.setWindowLayout(_:)), represented: l.rawValue, state: c.windowLayout == l)) }
+        layoutItem.submenu = layoutMenu
+        menu.addItem(layoutItem)
+        let graphItem = NSMenuItem(title: "Window Graph", action: nil, keyEquivalent: "")
+        let graphMenu = NSMenu(); graphMenu.autoenablesItems = false
+        for g in GraphMode.allCases { graphMenu.addItem(action(g.title, #selector(AppController.setWindowGraph(_:)), represented: g.rawValue, state: c.windowGraph == g)) }
+        graphItem.submenu = graphMenu
+        menu.addItem(graphItem)
+        let opacityItem = NSMenuItem(title: "Window Opacity", action: nil, keyEquivalent: "")
+        let opacityMenu = NSMenu(); opacityMenu.autoenablesItems = false
+        for o in [100, 80, 60, 40] { opacityMenu.addItem(action("\(o)%", #selector(AppController.setWindowOpacity(_:)), represented: Double(o) / 100, state: abs(c.windowOpacity - Double(o) / 100) < 0.01)) }
+        opacityItem.submenu = opacityMenu
+        menu.addItem(opacityItem)
+        menu.addItem(action("Window Click-through (menu turns it off)", #selector(AppController.toggleWindowClickThrough), state: c.windowClickThrough))
+        menu.addItem(.separator())
         menu.addItem(action("Notifications (throttled / proxy down)", #selector(AppController.toggleNotifications), state: c.notifications))
         menu.addItem(info("Launch at login: \(c.launchAgentInstalled ? "on (LaunchAgent installed)" : "off (llm-usage menubar install)")", dim: true))
         menu.addItem(.separator())
@@ -896,7 +1496,7 @@ func dump(_ menu: NSMenu, indent: String = "") {
 
 // MARK: - app
 
-final class AppController: NSObject, NSMenuDelegate {
+final class AppController: NSObject, NSMenuDelegate, NSWindowDelegate {
     let defaults = UserDefaults(suiteName: "com.kaovilai.llm-usage-menubar") ?? .standard
     var statusItem: NSStatusItem!
     var data: J?
@@ -917,6 +1517,14 @@ final class AppController: NSObject, NSMenuDelegate {
     var shareWindow: String { defaults.string(forKey: "shareWindow") == "1h" ? "1h" : "15m" }
     var shareMetric: String { defaults.string(forKey: "shareMetric") == "tokens" ? "tokens" : "requests" }
     var appearanceObservation: NSKeyValueObservation?
+    // floating monitor window
+    var panel: NSPanel?
+    let monitorView = MonitorView(frame: .zero)
+    var windowVisible: Bool { defaults.bool(forKey: "windowVisible") }
+    var windowLayout: MonitorLayout { MonitorLayout(rawValue: defaults.string(forKey: "windowLayout") ?? "") ?? .horizontal }
+    var windowGraph: GraphMode { GraphMode(rawValue: defaults.string(forKey: "windowGraph") ?? "") ?? .both }
+    var windowOpacity: Double { defaults.object(forKey: "windowOpacity") as? Double ?? 1.0 }
+    var windowClickThrough: Bool { defaults.bool(forKey: "windowClickThrough") }
 
     func start() {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
@@ -932,16 +1540,22 @@ final class AppController: NSObject, NSMenuDelegate {
         Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in self?.poll() }
         // countdown in the title without hitting the CLI
         Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in self?.tick() }
+        // `llm-usage menubar window show|hide|toggle` drops a one-line command file; no IPC beyond that
+        Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in self?.checkWindowCommand() }
+        if windowVisible { showWindow() }
     }
 
     func context() -> MenuContext {
         MenuContext(data: data, now: Date(), refreshed: lastGood, stale: lastError != nil && data != nil, error: lastError,
                     charts: charts, notifications: notifications,
                     launchAgentInstalled: FileManager.default.fileExists(atPath: NSHomeDirectory() + "/Library/LaunchAgents/com.kaovilai.llm-usage-menubar.plist"),
-                    showImage: showImage, showText: showText, shareWindow: shareWindow, shareMetric: shareMetric)
+                    showImage: showImage, showText: showText, shareWindow: shareWindow, shareMetric: shareMetric,
+                    windowVisible: windowVisible, windowLayout: windowLayout, windowGraph: windowGraph, windowOpacity: windowOpacity,
+                    windowClickThrough: windowClickThrough)
     }
 
     func tick() {
+        updateWindow()
         guard let d = data else { return }
         let c = context()
         let s = summarize(d, now: c.now, stale: c.stale)
@@ -1025,6 +1639,7 @@ final class AppController: NSObject, NSMenuDelegate {
                 } else {
                     self.render(title: Summary(glyph: "?", symbol: "questionmark.circle", text: "", state: "error"), stale: true)
                 }
+                self.updateWindow()
                 if !self.menuOpen { self.rebuildMenu() }
             }
         }
@@ -1059,7 +1674,127 @@ final class AppController: NSObject, NSMenuDelegate {
         try? p.run()
     }
 
+    // MARK: floating window
+    func updateWindow() {
+        guard let p = panel, p.isVisible else { return }
+        monitorView.now = Date()
+        monitorView.stale = lastError != nil && data != nil
+        monitorView.graphMode = windowGraph
+        monitorView.data = data
+    }
+
+    func savedSize(_ l: MonitorLayout) -> NSSize {
+        if let a = defaults.array(forKey: "windowSize.\(l.rawValue)") as? [Double], a.count == 2, a[0] >= l.minSize.width, a[1] >= l.minSize.height {
+            return NSSize(width: a[0], height: a[1])
+        }
+        return l.defaultSize
+    }
+
+    func makePanel() -> NSPanel {
+        let layout = windowLayout
+        let p = NSPanel(contentRect: NSRect(origin: .zero, size: savedSize(layout)),
+                        styleMask: [.titled, .closable, .resizable, .utilityWindow, .nonactivatingPanel], backing: .buffered, defer: false)
+        p.title = "LLM Usage"
+        p.isFloatingPanel = true
+        p.level = .floating
+        p.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        p.hidesOnDeactivate = false
+        p.becomesKeyOnlyIfNeeded = true
+        p.isMovableByWindowBackground = true
+        p.isReleasedWhenClosed = false
+        p.delegate = self
+        let fx = NSVisualEffectView(frame: NSRect(origin: .zero, size: savedSize(layout)))
+        fx.material = .popover
+        fx.blendingMode = .behindWindow
+        fx.state = .active
+        monitorView.frame = fx.bounds
+        monitorView.autoresizingMask = [.width, .height]
+        monitorView.layout = layout
+        monitorView.onCopyHint = { [weak self] hint in self?.copy(hint) }
+        fx.addSubview(monitorView)
+        p.contentView = fx
+        p.contentMinSize = layout.minSize
+        if !p.setFrameAutosaveName("llm-usage-monitor"), let screen = NSScreen.main?.visibleFrame {  // first run: top right of the main screen
+            p.setFrameTopLeftPoint(NSPoint(x: screen.maxX - p.frame.width - 16, y: screen.maxY - 16))
+        }
+        return p
+    }
+
+    func showWindow() {
+        if panel == nil { panel = makePanel() }
+        guard let p = panel else { return }
+        p.alphaValue = CGFloat(windowOpacity)
+        p.ignoresMouseEvents = windowClickThrough
+        defaults.set(true, forKey: "windowVisible")
+        p.orderFrontRegardless()
+        updateWindow()
+        rebuildMenu()
+    }
+
+    func hideWindow() {
+        defaults.set(false, forKey: "windowVisible")
+        panel?.orderOut(nil)
+        rebuildMenu()
+    }
+
+    func windowWillClose(_ notification: Notification) {
+        defaults.set(false, forKey: "windowVisible")
+        rebuildMenu()
+    }
+
+    func windowDidResize(_ notification: Notification) {
+        guard let p = panel, p.isVisible else { return }
+        let size = p.contentRect(forFrameRect: p.frame).size
+        defaults.set([Double(size.width), Double(size.height)], forKey: "windowSize.\(windowLayout.rawValue)")
+    }
+
+    func applyWindowLayout() {
+        guard let p = panel else { return }
+        let l = windowLayout
+        let topLeft = NSPoint(x: p.frame.minX, y: p.frame.maxY)
+        monitorView.layout = l
+        p.contentMinSize = l.minSize
+        p.setContentSize(savedSize(l))
+        p.setFrameTopLeftPoint(topLeft)
+    }
+
+    func checkWindowCommand() {
+        let path = stateDir() + "/menubar-window.cmd"
+        guard let raw = try? String(contentsOfFile: path, encoding: .utf8) else { return }
+        try? FileManager.default.removeItem(atPath: path)
+        switch raw.trimmingCharacters(in: .whitespacesAndNewlines) {
+        case "show": showWindow()
+        case "hide": hideWindow()
+        case "toggle": toggleFloatingWindow()
+        default: break
+        }
+    }
+
     // MARK: actions
+    @objc func toggleFloatingWindow() { if windowVisible && panel?.isVisible == true { hideWindow() } else { showWindow() } }
+    @objc func setWindowLayout(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? String, MonitorLayout(rawValue: raw) != nil else { return }
+        defaults.set(raw, forKey: "windowLayout")
+        applyWindowLayout()
+        rebuildMenu()
+    }
+    @objc func setWindowGraph(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? String, GraphMode(rawValue: raw) != nil else { return }
+        defaults.set(raw, forKey: "windowGraph")
+        updateWindow()
+        rebuildMenu()
+    }
+    @objc func setWindowOpacity(_ sender: NSMenuItem) {
+        guard let v = sender.representedObject as? Double else { return }
+        defaults.set(v, forKey: "windowOpacity")
+        panel?.alphaValue = CGFloat(v)
+        rebuildMenu()
+    }
+    @objc func toggleWindowClickThrough() {
+        defaults.set(!windowClickThrough, forKey: "windowClickThrough")
+        panel?.ignoresMouseEvents = windowClickThrough  // the menubar menu is the way back
+        rebuildMenu()
+    }
     @objc func refreshNow() { poll() }
     @objc func quit() { NSApp.terminate(nil) }
     @objc func toggleCharts() { defaults.set(!charts, forKey: "charts"); rebuildMenu() }
@@ -1125,9 +1860,13 @@ func isListening(port: Int) -> Bool {
 
 // MARK: - single instance
 
-func acquireSingleInstanceLock() -> Bool {
-    let state = ProcessInfo.processInfo.environment["LLM_USAGE_DIR"].flatMap { $0.isEmpty ? nil : $0 }
+func stateDir() -> String {
+    ProcessInfo.processInfo.environment["LLM_USAGE_DIR"].flatMap { $0.isEmpty ? nil : $0 }
         ?? (ProcessInfo.processInfo.environment["XDG_STATE_HOME"].flatMap { $0.isEmpty ? nil : $0 } ?? NSHomeDirectory() + "/.local/state") + "/llm-usage"
+}
+
+func acquireSingleInstanceLock() -> Bool {
+    let state = stateDir()
     try? FileManager.default.createDirectory(atPath: state, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
     let fd = open(state + "/menubar.lock", O_RDWR | O_CREAT, 0o600)
     if fd < 0 { return true }  // cannot lock: run anyway
@@ -1165,6 +1904,22 @@ if let i = args.firstIndex(of: "--status-png"), i + 1 < args.count {
     exit(0)
 }
 
+func argValue(_ name: String) -> String? {
+    if let i = args.firstIndex(of: name), i + 1 < args.count { return args[i + 1] }
+    return nil
+}
+
+if let path = argValue("--window-png") {
+    _ = NSApplication.shared
+    guard case .success(let j) = loadSource() else { FileHandle.standardError.write("window-png: no usable data\n".data(using: .utf8)!); exit(1) }
+    let layout = MonitorLayout(rawValue: argValue("--layout") ?? "horizontal") ?? .horizontal
+    var size = layout.defaultSize
+    if let sz = argValue("--size")?.split(separator: "x"), sz.count == 2, let w = Double(sz[0]), let h = Double(sz[1]) { size = NSSize(width: w, height: h) }
+    writeWindowPNG(j, layout: layout, size: size, dark: args.contains("--dark"), mode: GraphMode(rawValue: argValue("--graph") ?? "both") ?? .both,
+                   stale: args.contains("--stale"), to: path)
+    exit(0)
+}
+
 if args.contains("--dump-menu") {
     _ = NSApplication.shared
     let source = loadSource()
@@ -1179,6 +1934,11 @@ if args.contains("--dump-menu") {
         ctx.shareMetric = j["share"]["metric_requested"].str ?? j["share"]["metric"].str ?? "requests"
         ctx.showImage = !args.contains("--no-image")
         ctx.showText = !args.contains("--no-text")
+        ctx.windowVisible = args.contains("--window-visible")
+        ctx.windowLayout = MonitorLayout(rawValue: argValue("--window-layout") ?? "") ?? .horizontal
+        ctx.windowGraph = GraphMode(rawValue: argValue("--window-graph") ?? "") ?? .both
+        ctx.windowOpacity = Double(argValue("--window-opacity") ?? "") ?? 1.0
+        ctx.windowClickThrough = args.contains("--window-click-through")
     case .failure(.message(let m)): ctx.error = m
     }
     let builder = Builder(target: nil)
