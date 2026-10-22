@@ -15,7 +15,7 @@ install-t3code-from-source() {
         esac
     done
 
-    [[ -d $repo/.git ]] || { echo "❌ t3code checkout not found at $repo (set T3CODE_REPO)" >&2; return 1; }
+    [[ -e $repo/.git ]] || { echo "❌ t3code checkout not found at $repo (set T3CODE_REPO)" >&2; return 1; }
 
     # rustup is keg-only under Homebrew; the desktop build needs cargo
     path=(/opt/homebrew/opt/rustup/bin $HOME/.cargo/bin $path)
