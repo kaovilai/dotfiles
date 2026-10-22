@@ -24,15 +24,14 @@ function hostPort(url: string): { host: string; port: string } | undefined {
  * No single env names the mode, so the whole base URL decides. Each launcher is
  * one daemon on its own fixed port: copilot http://localhost:<4141>, the Vertex
  * proxy http://127.0.0.1:<4142>, the OpenAI proxy http://127.0.0.1:<4145>, the
- * EnMaaS proxy http://127.0.0.1:<4146>, the GLM hybrid proxy
+ * EnMaaS proxy http://127.0.0.1:<4146>, the hosted-only proxy
  * http://127.0.0.1:<4148>, Ollama http://<OLLAMA_HOST>. A match on host and
  * port is certain. Any other loopback URL reads as local (:port): a legacy
  * per-session proxy, or something this table does not know, never guessed to be
  * one of the above.
  *
- * One GLM proxy serves both launchers; the sonnet tier (the auto-mode
- * classifier) tells them apart: glm-hybrid points it at the OpenAI review
- * model, glm-only keeps every tier on GLM.
+ * The hosted-only proxy serves claude-hosted-only (and its retired aliases
+ * claude-glm-only / claude-glm-hybrid); every tier stays on EnMaaS-hosted models.
  */
 export function classify(env: Env): string {
   if (env.useVertex === '1') return 'vertex-native-adc'
@@ -54,9 +53,7 @@ export function classify(env: Env): string {
     if (hp.host === '127.0.0.1' && hp.port === vertex) return 'vertex'
     if (hp.host === '127.0.0.1' && hp.port === openai) return 'openai'
     if (hp.host === '127.0.0.1' && hp.port === enmaas) return 'enmaas'
-    if (hp.host === '127.0.0.1' && hp.port === glm) {
-      return env.sonnetModel !== undefined && env.sonnetModel !== env.model ? 'glm-hybrid' : 'glm-only'
-    }
+    if (hp.host === '127.0.0.1' && hp.port === glm) return 'hosted-only'
     return `local (:${hp.port || '?'})`
   }
   return `custom (${hp.host})`

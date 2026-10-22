@@ -8,8 +8,7 @@ const COLORS: Record<string, string> = {
   enmaas: '#EE0000',
   vertex: '#1A73E8',
   'vertex-native-adc': '#0B8043',
-  'glm-only': '#3E5FF9',
-  'glm-hybrid': '#3E5FF9',
+  'hosted-only': '#3E5FF9',
   ollama: '#F0AB00',
   anthropic: '#D97757',
 }
@@ -29,7 +28,7 @@ export const register: Register = on => {
       vertexProxyPort: await $.env.get('CLAUDE_VERTEX_PROXY_PORT'),
       openaiPort: await $.env.get('CLAUDE_OPENAI_PROXY_PORT'),
       enmaasPort: await $.env.get('CLAUDE_ENMAAS_PROXY_PORT'),
-      glmPort: await $.env.get('GLM_HYBRID_CLAUDE_PROXY_PORT'),
+      glmPort: (await $.env.get('HOSTED_ONLY_CLAUDE_PROXY_PORT')) ?? (await $.env.get('GLM_HYBRID_CLAUDE_PROXY_PORT')),
       ollamaHost: await $.env.get('OLLAMA_HOST'),
     })
     const model = (await $.env.get('ANTHROPIC_MODEL')) ?? ''
