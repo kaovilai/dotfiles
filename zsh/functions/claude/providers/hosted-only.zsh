@@ -15,11 +15,13 @@
 # The proxy's hook cuts reasoning on requests without a thinking field (GLM 5.3
 # is thinking-only: thinking disabled leaves ~one sentence of reasoning, not
 # none); without it the classifier times out on GLM. It also sends GLM requests
-# that contain an image (GLM 400s on any) to DeepSeek. Every other tier and
-# subagents (forced) stay on GLM.
-# Knobs: HOSTED_ONLY_CLASSIFIER_MODEL (sonnet tier = auto-mode classifier) and
-# HOSTED_ONLY_SMALL_FAST_MODEL, both default DeepSeek: 2-4x faster than GLM and
-# thinking:disabled removes its reasoning entirely
+# that contain an image (GLM 400s on any) to DeepSeek. Main model and the
+# opus/haiku/fable tiers stay on GLM.
+# Knobs: HOSTED_ONLY_CLASSIFIER_MODEL (sonnet tier = auto-mode classifier),
+# HOSTED_ONLY_SMALL_FAST_MODEL and HOSTED_ONLY_SUBAGENT_MODEL (subagents,
+# forced; workflow subagents too), all default DeepSeek: 2-4x faster than GLM,
+# thinking:disabled removes its reasoning entirely, and it takes images, which
+# subagents (screenshots, UI checks) may need
 # (docs/notes/deepseek-v41-flash-vs-glm.md). Values: glm, deepseek, or an id.
 # CLAUDE_CODE_AUTO_MODE_SERVER=0 keeps auto-mode review client-side, where
 # the classifier model above applies.
@@ -42,19 +44,20 @@ _claude_hosted_launch() (
     # still sees the bare id. modelSettings keys use the bare id.
     local glm1m="${glm}[1m]" ds1m="${ds}[1m]"
     local -a picks=("fable=${glm1m}|GLM 5.3" "opus=${glm1m}|GLM 5.3" "haiku=${glm1m}|GLM 5.3" "=${ds1m}|DeepSeek V4.1 Flash")   # DeepSeek: picker entry only, no tier
-    local classifier small
+    local classifier small subagent
     classifier="$(_claude_hosted_ref "${HOSTED_ONLY_CLASSIFIER_MODEL:-$ds}" "$glm" "$ds")"
     small="$(_claude_hosted_ref "${HOSTED_ONLY_SMALL_FAST_MODEL:-$ds}" "$glm" "$ds")"
+    subagent="$(_claude_hosted_ref "${HOSTED_ONLY_SUBAGENT_MODEL:-$ds}" "$glm" "$ds")"
     local -a reply
     _claude_picker_args "${picks[@]}"
     local settings='{}'
     (( ${#reply} )) && settings="$reply[2]"
-    settings=$(jq -c --arg glm "$glm" --arg ds "$ds" --arg glm1m "$glm1m" --arg small "$small" '. + {
+    settings=$(jq -c --arg glm "$glm" --arg ds "$ds" --arg small "$small" --arg sub "$subagent" '. + {
         apiKeyHelper: "",
         env: {ANTHROPIC_CUSTOM_HEADERS: "", CLAUDE_CODE_USE_VERTEX: "0", CLAUDE_CODE_USE_BEDROCK: "0",
           CLAUDE_CODE_USE_FOUNDRY: "0", CLAUDE_CODE_AUTO_MODE_SERVER: "0",
-          ANTHROPIC_SMALL_FAST_MODEL: $small, CLAUDE_CODE_SUBAGENT_MODEL: $glm1m,
-          CLAUDE_CODE_SUBAGENT_MODEL_FORCE: "1", CLAUDE_CODE_WORKFLOW_SUBAGENT_MODEL: $glm1m},
+          ANTHROPIC_SMALL_FAST_MODEL: $small, CLAUDE_CODE_SUBAGENT_MODEL: $sub,
+          CLAUDE_CODE_SUBAGENT_MODEL_FORCE: "1", CLAUDE_CODE_WORKFLOW_SUBAGENT_MODEL: $sub},
         modelSettings: {($glm): {effortLevel: "medium"}, ($ds): {effortLevel: "medium"}}
       }' <<< "$settings") || return 1
     _claude_copilot_unset_env
