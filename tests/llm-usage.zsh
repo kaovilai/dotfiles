@@ -8,7 +8,9 @@ local tmp
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 export LLM_USAGE_DIR="$tmp/state"
-mkdir -p "$LLM_USAGE_DIR"
+mkdir -p "$LLM_USAGE_DIR" "$tmp/no-claude" "$tmp/no-codex"
+# hermetic: `--source auto` must not merge this machine's real Claude/Codex transcripts into the synthetic numbers
+export LLM_USAGE_CLAUDE_DIRS="$tmp/no-claude" LLM_USAGE_CODEX_DIRS="$tmp/no-codex"
 
 fail() { print -ru2 -- "FAIL: $*"; exit 1; }
 
@@ -229,7 +231,7 @@ def ev(sec_ago, port="4148", **kw):
 def err(sec_ago, code=429, **kw):
     return ev(sec_ago, **{"ok": False, "status": code, "upstream_status": code, "error": "boom", **kw})
 copilot_server = {}
-def run(name, events=(), up="4141,4147,4148", extra_env=None, inflight=None, transcripts=None, raw_lines=None, state=None):
+def run(name, events=(), up="4141,4147,4148", extra_env=None, inflight=None, transcripts=None, raw_lines=None, state=None, cli=()):
     state = state or tempfile.mkdtemp(dir=tmp)
     os.makedirs(state, exist_ok=True)
     lines = [json.dumps(e) for e in events] + list(raw_lines or [])
@@ -246,7 +248,7 @@ def run(name, events=(), up="4141,4147,4148", extra_env=None, inflight=None, tra
                     "message": {"id": f"m{i}", "model": model, "usage": {"input_tokens": 10, "output_tokens": out, "cache_read_input_tokens": 1000}}}) + "\n")
     env = {**os.environ, "LLM_USAGE_DIR": state, "LLM_USAGE_CLAUDE_DIRS": claude, "LLM_USAGE_CODEX_DIRS": tempfile.mkdtemp(dir=tmp),
            "LLM_USAGE_COPILOT_URL": "http://127.0.0.1:9/usage", **(extra_env or {})}
-    res = subprocess.run([sys.executable, usage, "menubar-data", "--up-ports", up], capture_output=True, text=True, env=env, timeout=60)
+    res = subprocess.run([sys.executable, usage, "menubar-data", "--up-ports", up, *cli], capture_output=True, text=True, env=env, timeout=60)
     assert res.returncode == 0, (name, res.stderr)
     d = json.loads(res.stdout)
     json.dump(d, open(f"{outdir}/{name}.json", "w"))
@@ -379,6 +381,49 @@ c = run("copilot-badshape", [ev(30)], extra_env={"LLM_USAGE_COPILOT_URL": url})[
 assert c["quota"] is None and c["quota_note"], c
 srv.shutdown()
 
+# traffic share (status-item logos): vendors from the served model, providers from the proxy port
+d = run("share-single", [ev(30), ev(60)])
+sh = d["share"]
+assert sh["window"] == "15m" and sh["metric"] == "requests" and sh["total"] == 2, sh
+assert [(m["key"], m["vendor"], m["share"], m["requests"]) for m in sh["models"]] == [("glm", "glm", 1.0, 2)], sh["models"]
+assert [(p["key"], p["label"], p["share"]) for p in sh["providers"]] == [("enmaas", "EnMaaS", 1.0)], sh["providers"]
+assert sh["models"][0]["models"] == ["glm-5.3"] and sh["models"][0]["tokens"] == 20, sh["models"]
+mix = [ev(30), ev(40), ev(50), ev(60, port="4142", requested=SON, served=SON), ev(70, port="4142", requested=SON, served=SON),
+       ev(80, port="4147", requested="gpt-6-luna", served="gpt-6-luna")]
+d = run("share-mix", mix)
+sh = d["share"]
+assert [m["key"] for m in sh["models"]] == ["glm", "claude", "openai"], sh["models"]
+assert abs(sum(m["share"] for m in sh["models"]) - 1) < 1e-3 and abs(sum(p["share"] for p in sh["providers"]) - 1) < 1e-3, sh
+assert [round(m["share"], 3) for m in sh["models"]] == [0.5, 0.333, 0.167], sh["models"]
+assert [(p["key"], round(p["share"], 3)) for p in sh["providers"]] == [("enmaas", 0.667), ("vertex", 0.333)], sh["providers"]
+# window / metric flags; events older than the window drop out, and an all-zero-token window falls back to requests
+d = run("share-1h", [ev(30), ev(1800, port="4142", requested=SON, served=SON)], cli=["--share-window", "1h"])
+assert d["share"]["window"] == "1h" and {m["key"] for m in d["share"]["models"]} == {"glm", "claude"}, d["share"]
+assert [m["key"] for m in run("share-15m", [ev(30), ev(1800, port="4142", requested=SON, served=SON)])["share"]["models"]] == ["glm"]
+tok = [ev(30, **{"in": 10, "out": 0}), ev(40, port="4142", requested=SON, served=SON, **{"in": 90, "out": 0})]
+d = run("share-tokens", tok, cli=["--share-metric", "tokens"])
+assert d["share"]["metric"] == "tokens" and [(m["key"], m["share"]) for m in d["share"]["models"]] == [("claude", 0.9), ("glm", 0.1)], d["share"]
+assert run("share-requests", tok)["share"]["models"][0]["share"] == 0.5
+d = run("share-tokens-none", [ev(30, **{"in": 0, "out": 0})], cli=["--share-metric", "tokens"])
+assert d["share"]["metric"] == "requests" and d["share"]["metric_requested"] == "tokens", d["share"]
+# copilot transcript calls (models absent from the proxy log) are attributed to github-copilot
+d = run("share-copilot", [ev(30)], transcripts=tr)
+sh = d["share"]
+assert [(m["key"], m["requests"]) for m in sh["models"]] == [("claude", 2), ("glm", 1)], sh["models"]
+assert [(p["key"], p["label"], p["requests"]) for p in sh["providers"]] == [("github-copilot", "GitHub Copilot", 2), ("enmaas", "EnMaaS", 1)], sh["providers"]
+# idle: nothing in the window -> empty clusters, not an error
+sh = run("share-idle", [])["share"]
+assert sh["models"] == [] and sh["providers"] == [] and sh["total"] == 0, sh
+# unknown model family -> other
+sh = run("share-unknown", [ev(30, requested="mistral-large", served="mistral-large")])["share"]
+assert [(m["key"], m["label"]) for m in sh["models"]] == [("other", "Other")], sh["models"]
+# LLM_USAGE_PROVIDER_MAP: port or proxy name -> logo key[:label]; unmapped named ports keep the built-in table
+d = run("share-provider-map", [ev(30), ev(40, port="4147"), ev(50, port="4142")],
+        extra_env={"LLM_USAGE_PROVIDER_MAP": "4148=anthropic,codex-hosted-only=mine:My Proxy"})
+assert {p["key"]: p["label"] for p in d["share"]["providers"]} == {"anthropic": "Anthropic", "mine": "My Proxy", "vertex": "Vertex AI"}, d["share"]["providers"]
+# only the named proxies count: a throwaway test proxy on an ad-hoc port is not part of the share
+assert run("share-adhoc", [ev(30, port="4999")])["share"]["total"] == 0
+
 # in-flight tracking in the proxy logger (stub litellm so it runs without the proxy venv)
 state = tempfile.mkdtemp(dir=tmp)
 os.environ["LLM_USAGE_DIR"] = state
@@ -453,6 +498,31 @@ if [[ -x /usr/bin/swiftc ]] || command -v swiftc >/dev/null; then
     [[ "$dump" == *"COPILOT-API (:4141) · TRANSCRIPT-DERIVED"* && "$dump" == *"premium: 120/300 left (40%)"* && "$dump" == *"resets 2026-11-01"* && "$dump" == *"in flight: n/a"* ]] || fail "copilot section: $dump"
     [[ "$(dump_of copilot-unlimited)" == *"premium: unlimited · 301.6k credits used"* ]] || fail "copilot unlimited row"
     [[ "$(dump_of copilot-noquota)" == *"quota: unavailable"* ]] || fail "copilot no-endpoint row"
+    # traffic share: section, toggles, status-item image (light/dark PNGs at @2x), logo resolution
+    dump=$(dump_of share-mix)
+    [[ "$dump" == *"TRAFFIC SHARE (15m · requests)"* && "$dump" == *"Models"* && "$dump" == *"Providers"* ]] || fail "share section: $dump"
+    [[ "$dump" == *"GLM "*"50%  3 req"* && "$dump" == *"Claude "*"33%  2 req"* && "$dump" == *"GPT "*"17%  1 req"* ]] || fail "share model rows: $dump"
+    [[ "$dump" == *"EnMaaS "*"67%  4 req"* && "$dump" == *"Vertex AI "*"33%  2 req"* ]] || fail "share provider rows: $dump"
+    [[ "$dump" == *"[x] Show logo image in menubar"* && "$dump" == *"[x] Show text next to the image"* \
+        && "$dump" == *"[ ] Show 1h traffic window"* && "$dump" == *"[ ] Show tokens as traffic metric"* ]] || fail "share toggles: $dump"
+    [[ "$(dump_of share-1h)" == *"TRAFFIC SHARE (1h · requests)"* && "$(dump_of share-1h)" == *"[x] Show 1h traffic window"* ]] || fail "1h toggle state"
+    [[ "$(dump_of share-tokens)" == *"TRAFFIC SHARE (15m · tokens)"* && "$(dump_of share-tokens)" == *"[x] Show tokens as traffic metric"* ]] || fail "tokens toggle state"
+    [[ "$(dump_of share-idle)" == *"idle: no traffic in the window"* ]] || fail "idle share row"
+    [[ "$(dump_of share-tokens-none)" == *"no token counts in this window: showing requests"* ]] || fail "tokens fallback note"
+    [[ "$(dump_of share-mix --no-image)" == *"[ ] Show logo image in menubar"* && "$(dump_of share-mix --no-text)" == *"[ ] Show text next to the image"* ]] || fail "image/text toggle flags"
+    local png w h
+    for png in share-mix share-single share-idle share-copilot throttled spike; do
+        "$mb" --status-png "$tmp/$png-light.png" --data-file "$mbjson/$png.json" >/dev/null || fail "status-png light $png"
+        "$mb" --status-png "$tmp/$png-dark.png" --dark --data-file "$mbjson/$png.json" >/dev/null || fail "status-png dark $png"
+        read w h <<<"$(python3 -I -c 'import struct,sys;d=open(sys.argv[1],"rb").read(24);assert d[:8]==b"\x89PNG\r\n\x1a\n";print(*struct.unpack(">II",d[16:24]))' "$tmp/$png-light.png")" || fail "status-png $png not a PNG"
+        (( w >= 100 && h == 48 )) || fail "status-png $png size ${w}x${h} (want @2x: height 48)"
+        cmp -s "$tmp/$png-light.png" "$tmp/$png-dark.png" && fail "status-png $png: light and dark renders are identical"
+    done
+    [[ "$("$mb" --status-png "$tmp/x.png" --data-file "$mbjson/share-mix.json" | tail -1)" == *"Models: GLM 50%, Claude 33%, GPT 17% · Providers: EnMaaS 67%, Vertex AI 33%"* ]] || fail "status-png description"
+    "$mb" --status-png "$tmp/notext.png" --no-text --data-file "$mbjson/share-single.json" >/dev/null
+    [[ "$(stat -f %z "$tmp/notext.png")" != "$(stat -f %z "$tmp/share-single-light.png")" ]] || fail "--no-text should change the render"
+    [[ "$("$mb" --status-png "$tmp/x.png" --data-file "$mbjson/throttled.json" | head -1)" == *'state=throttled text="429 '* ]] || fail "throttled status-png state/text"
+    "$mb" --status-png "$tmp/bad.png" --data-file "$tmp/bad.json" 2>/dev/null && fail "status-png on invalid JSON should exit non-zero"
     # bad / missing data: error row, non-zero exit, no crash
     print -r -- 'not json' > "$tmp/bad.json"
     dump=$("$mb" --dump-menu --data-file "$tmp/bad.json") && fail "invalid JSON should exit non-zero"
@@ -467,6 +537,52 @@ fd=os.open(sys.argv[1]+"/menubar.lock",os.O_RDWR|os.O_CREAT,0o600);fcntl.flock(f
     kill $holder 2>/dev/null
 else
     print -r -- "swiftc not found: skipping llm-usage-menubar compile/dump checks"
+fi
+
+# Logos: never in the repo; `menubar logos fetch` pins a commit + per-file sha256 (tests use local fixture PNGs, no network).
+local notices="$repo/THIRD_PARTY_NOTICES.md" logo_sha logo_repo
+logo_sha=$(sed -n 's/^LOGO_SHA = "\([0-9a-f]\{40\}\)"$/\1/p' "$usage")
+logo_repo=$(sed -n 's/^LOGO_REPO = "\(.*\)"$/\1/p' "$usage")
+[[ ${#logo_sha} == 40 && -n "$logo_repo" ]] || fail "LOGO_SHA / LOGO_REPO not found in llm-usage"
+[[ -f "$notices" ]] || fail "THIRD_PARTY_NOTICES.md missing"
+[[ "$(<$notices)" == *"https://github.com/$logo_repo"* && "$(<$notices)" == *"$logo_sha"* ]] || fail "THIRD_PARTY_NOTICES.md lacks the repo URL / pinned commit of llm-usage ($logo_repo @ $logo_sha)"
+[[ "$(<$notices)" == *"MIT License"* && "$(<$notices)" == *"Copyright (c) 2023 LobeHub"* && "$(<$notices)" == *"trademarks"* ]] || fail "THIRD_PARTY_NOTICES.md lacks the license text / trademark note"
+[[ "$(<$repo/README.md)" == *"THIRD_PARTY_NOTICES.md"* ]] || fail "README must credit the logo source and link THIRD_PARTY_NOTICES.md"
+[[ -z "$(find "$repo/scripts" \( -name "*.png" -o -name "*.svg" \) -print)" ]] || fail "logo image files must not be committed under scripts/"
+local logofix="$tmp/logo-fixture" lbase="$tmp/logo-menubar"
+mkdir -p "$logofix/packages/static-png/light" "$lbase"
+python3 -I - "$usage" "$logofix" <<'PYFIX' || fail "logo fixture"
+import re, struct, sys, zlib
+src = open(sys.argv[1]).read()
+def png(rgba, n=8):
+    raw = b"".join(b"\x00" + bytes(rgba) * n for _ in range(n))
+    chunk = lambda t, d: struct.pack(">I", len(d)) + t + d + struct.pack(">I", zlib.crc32(t + d) & 0xFFFFFFFF)
+    return b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", n, n, 8, 6, 0, 0, 0)) + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b"")
+files = re.findall(r'^    "[a-z-]+": \("([a-z-]+)", (?:True|False), "[0-9a-f]{64}"\),$', src, re.M)
+assert len(files) >= 8, files
+for f in files:
+    open(f"{sys.argv[2]}/packages/static-png/light/{f}.png", "wb").write(png((200, 100, 50, 255)))
+open(f"{sys.argv[2]}/LICENSE", "w").write("MIT License\n\nCopyright (c) 2023 LobeHub\n")
+PYFIX
+out=$(LLM_USAGE_MENUBAR_DIR="$lbase" $usage menubar logos fetch --from-dir "$logofix" 2>&1) && fail "fetch of unpinned files must fail the sha256 check: $out"
+[[ "$out" == *"sha256 mismatch"*"nothing written"* && ! -e "$lbase/logos" ]] || fail "sha mismatch handling: $out"
+out=$(LLM_USAGE_MENUBAR_DIR="$lbase" $usage menubar logos fetch --from-dir "$logofix" --no-verify) || fail "logos fetch (fixture): $out"
+[[ -f "$lbase/logos/claude.png" && -f "$lbase/logos/openai.mono.png" && -f "$lbase/logos/glm.mono.png" && -f "$lbase/logos/vertex.png" && ! -e "$lbase/logos/enmaas.png" ]] || fail "fetched files: $(ls $lbase/logos)"
+[[ "$(<$lbase/logos/LICENSE)" == *"Copyright (c) 2023 LobeHub"* ]] || fail "LICENSE not copied next to the logos"
+[[ "$(<$lbase/logos/SOURCES.md)" == *"https://github.com/$logo_repo"* && "$(<$lbase/logos/SOURCES.md)" == *"$logo_sha"* && "$(<$lbase/logos/SOURCES.md)" == *"MIT"* && "$(<$lbase/logos/SOURCES.md)" == *"trademarks"* ]] || fail "SOURCES.md incomplete"
+if [[ -x /usr/bin/swiftc ]] || command -v swiftc >/dev/null; then
+    local lcfg="$tmp/logo-cfg"; mkdir -p "$lcfg/logos" "$mbdir/logos"
+    cp "$logofix/packages/static-png/light/claude-color.png" "$lcfg/logos/claude.png"
+    cp "$logofix/packages/static-png/light/zai.png" "$lcfg/logos/deepseek.mono.png"
+    cp "$lbase/logos/"*.png "$mbdir/logos/"  # the fetched dir lives next to the built binary
+    out=$(LLM_USAGE_MENUBAR_DIR="$mbdir" LLM_USAGE_CONFIG_DIR="$lcfg" $usage menubar logos) || fail "menubar logos: $out"
+    [[ "$out" == *"claude "*"color "*"user dir: $lcfg/logos/claude.png"* ]] || fail "user dir must win over fetched: $out"
+    [[ "$out" == *"deepseek "*"mono "*"user dir (mono, tinted)"* ]] || fail "user mono logo: $out"
+    [[ "$out" == *"openai "*"mono "*"fetched (mono, tinted): $mbdir/logos/openai.mono.png"* ]] || fail "fetched mono logo: $out"
+    [[ "$out" == *"enmaas "*"monogram "*"generated monogram"* && "$out" == *"$lcfg/logos"* && "$out" == *"logos fetch"* ]] || fail "monogram / hints: $out"
+    [[ "${out##*$'\n'}" == *"https://github.com/$logo_repo @ ${logo_sha[1,12]}"*"MIT"*"THIRD_PARTY_NOTICES.md"* ]] || fail "last line must credit the source: ${out##*$'\n'}"
+    LLM_USAGE_MENUBAR_DIR="$mbdir" LLM_USAGE_CONFIG_DIR="$lcfg" "$mb" --status-png "$tmp/logo-render.png" --data-file "$mbjson/share-mix.json" >/dev/null || fail "status-png with logos"
+    rm -rf "$mbdir/logos"
 fi
 # install/uninstall only describe themselves under --dry-run and never touch launchd
 out=$($usage menubar install --dry-run)

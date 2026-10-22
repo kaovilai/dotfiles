@@ -1013,7 +1013,94 @@ def copilot_quota(now):
     return quota, note
 
 
-def menubar_data(now=None, up_ports=None):
+# Traffic-share mapping for the menubar logo image. One table per side; extend here (keys are logo keys,
+# see LOGO_FILES / main.swift logoSpecs).
+# Model side: served model -> (logo key, label), first regex match on the stripped name wins.
+MODEL_VENDORS = [
+    ("claude", "Claude", r"opus|sonnet|haiku|fable|claude"),
+    ("openai", "GPT", r"gpt|luna|codex|openai|^o[134](-|$)"),
+    ("glm", "GLM", r"glm|zai"),
+    ("deepseek", "DeepSeek", r"deepseek"),
+    ("gemini", "Gemini", r"gemini"),
+]
+# Provider side: proxy port -> logo key. "via: transcript" events are copilot-api traffic (see menubar_data).
+PROVIDER_PORTS = {"4141": "github-copilot", "4142": "vertex", "4145": "openai", "4146": "enmaas", "4147": "enmaas", "4148": "enmaas"}
+PROVIDER_LABELS = {"github-copilot": "GitHub Copilot", "vertex": "Vertex AI", "openai": "OpenAI", "enmaas": "EnMaaS",
+                   "anthropic": "Anthropic", "other": "Other"}
+SHARE_WINDOWS = {"15m": 900, "1h": 3600}
+SHARE_METRICS = ("requests", "tokens")
+
+
+def provider_overrides():
+    """LLM_USAGE_PROVIDER_MAP="4149=anthropic,my-proxy=enmaas:EnMaaS (lab)": port or proxy name -> logo key[:label]."""
+    out = {}
+    for pair in filter(None, (p.strip() for p in os.environ.get("LLM_USAGE_PROVIDER_MAP", "").split(","))):
+        if "=" in pair:
+            src, dst = (x.strip() for x in pair.split("=", 1))
+            key, _, label = dst.partition(":")
+            if src and key:
+                out[src] = (key.strip(), label.strip() or None)
+    return out
+
+
+def model_vendor(model):
+    m = strip_model(model)
+    for key, label, pattern in MODEL_VENDORS:
+        if re.search(pattern, m):
+            return key, label
+    return "other", "Other"
+
+
+def event_provider(ev, overrides):
+    port = "4141" if ev.get("via") == "transcript" else str(ev.get("port") or "")
+    for src in (port, proxy_name({**ev, "port": port})):
+        if src in overrides:
+            key, label = overrides[src]
+            return key, label or PROVIDER_LABELS.get(key, key)
+    key = PROVIDER_PORTS.get(port, "other")
+    return key, PROVIDER_LABELS[key]
+
+
+def tokens_of(ev):
+    return (ev.get("in") or 0) + (ev.get("out") or 0)
+
+
+def traffic_share(events, now, window="15m", metric="requests"):
+    """Share of traffic per model vendor and per provider over the window (events: named proxies + copilot transcripts)."""
+    window = window if window in SHARE_WINDOWS else "15m"
+    sel = [e for e in events if e["t"] >= now - SHARE_WINDOWS[window]]
+    use = metric if metric in SHARE_METRICS else "requests"
+    if use == "tokens" and not any(tokens_of(e) for e in sel):
+        use = "requests"  # nothing carries token counts: fall back rather than draw an empty image
+    overrides = provider_overrides()
+
+    def side(keyfn, extra=None):
+        acc = {}
+        for e in sel:
+            key, label = keyfn(e)
+            row = acc.setdefault(key, {"key": key, "label": label, "requests": 0, "tokens": 0, "_models": Counter()})
+            row["requests"] += 1
+            row["tokens"] += tokens_of(e)
+            row["_models"][strip_model(e.get("served"))] += 1
+        total = sum(r[use] for r in acc.values()) or 1
+        rows = sorted(acc.values(), key=lambda r: (-r[use], r["key"]))
+        for r in rows:
+            r["share"] = round(r[use] / total, 4)
+            top = [m for m, _ in r.pop("_models").most_common(3)]
+            if extra:
+                r.update(extra(r, top))
+        return rows
+
+    return {"window": window, "metric": use, "metric_requested": metric, "total": len(sel),
+            "models": side(model_key_of, lambda r, top: {"vendor": r["key"], "models": top}),
+            "providers": side(lambda e: event_provider(e, overrides))}
+
+
+def model_key_of(ev):
+    return model_vendor(ev.get("served"))
+
+
+def menubar_data(now=None, up_ports=None, share_window="15m", share_metric="requests"):
     """One compact JSON document for the menubar helper (and anything else that wants a status line)."""
     now = now or time.time()
     month = datetime.fromtimestamp(now, timezone.utc).replace(day=1, hour=0, minute=0, second=0, microsecond=0).timestamp()
@@ -1135,6 +1222,7 @@ def menubar_data(now=None, up_ports=None):
                      for (f, t, k, pr), v in sorted(reroutes.items(), key=lambda x: -x[1]["count"])],
         "series": {"bucket_s": 60, "start": iso_utc(minute0), **series},
         "reroutes_15m": sum(v["count_15m"] for v in reroutes.values()),
+        "share": traffic_share(hour, now, share_window, share_metric),
         "copilot": {"state": "up" if copilot_up else "down", "source": "transcript",
                     "attribution": "Claude Code/Codex transcript calls for models absent from the proxy log; approximates copilot-api traffic (may include direct-API sessions)",
                     "m15": cop["m15"], "h1": cop["h1"],
@@ -1151,7 +1239,7 @@ def menubar_data(now=None, up_ports=None):
 
 def cmd_menubar_data(args):
     up = None if args.up_ports is None else set(filter(None, args.up_ports.split(",")))
-    print(json.dumps(menubar_data(up_ports=up), separators=(",", ":")))
+    print(json.dumps(menubar_data(up_ports=up, share_window=args.share_window, share_metric=args.share_metric), separators=(",", ":")))
 
 
 MB_SRC = os.path.join(os.path.dirname(os.path.realpath(__file__)), "llm-usage-menubar", "main.swift")
@@ -1212,7 +1300,7 @@ def mb_build(force=False):
 def mb_env():
     env = {"LLM_USAGE_BIN": os.path.realpath(__file__),
            "PATH": "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:" + os.path.expanduser("~/.local/bin")}
-    for key in ("LLM_USAGE_DIR", "LLM_USAGE_PORT", "LLM_USAGE_PORT_NAMES"):
+    for key in ("LLM_USAGE_DIR", "LLM_USAGE_PORT", "LLM_USAGE_PORT_NAMES", "LLM_USAGE_PROVIDER_MAP", "LLM_USAGE_CONFIG_DIR", "LLM_USAGE_MENUBAR_DIR"):
         if os.environ.get(key):
             env[key] = os.environ[key]
     return env
@@ -1222,8 +1310,104 @@ def mb_log_path():
     return os.path.join(STATE, "menubar.log")
 
 
+# --------------------------------------------------------------------------- menubar logos
+# Logos are never committed here: `llm-usage menubar logos fetch` downloads the PNGs below from a pinned
+# commit of lobehub/lobe-icons (MIT; see THIRD_PARTY_NOTICES.md), verifies each sha256, and stores them in
+# <menubar dir>/logos. The logos are trademarks of their owners, used for personal status-bar display only.
+# Lookup order in the helper: ~/.config/llm-usage/logos > fetched dir > installed app icon > monogram.
+LOGO_REPO = "lobehub/lobe-icons"
+LOGO_SHA = "ab8cbcc6ce806b923c547628132957c8a8b61509"
+LOGO_LICENSE_SHA256 = "add9d7531d1b21646317a8958e38fc727506fa39d24bdecb44154d943c82753a"
+LOGO_NOTICES = os.path.join(os.path.dirname(os.path.dirname(os.path.realpath(__file__))), "THIRD_PARTY_NOTICES.md")
+# key -> (file under packages/static-png/light/, mono, sha256). mono = single-colour glyph the helper tints with the
+# menubar text colour (saved as <key>.mono.png); colour logos are saved as <key>.png. No upstream icon for enmaas / other.
+LOGO_FILES = {
+    "claude": ("claude-color", False, "97b53fb85b3bf401ffeb8ee7c5ebad734ce9f6edc3038f242021c53bcc18e23d"),
+    "anthropic": ("anthropic", True, "389105af72687ae02e5dfbbafe24ed99a84a77a6cf6ea339c13993615b64b37e"),
+    "openai": ("openai", True, "8a33312f6bb17c1edddf8f9d7fbac09ce1d1d697d6601f37227afa879e94c52e"),
+    "glm": ("zai", True, "e53c9c5bfac0971024d08ab812ec13682f22f12247fcc4f134b6a0f2c988fee7"),
+    "deepseek": ("deepseek-color", False, "f98596fd7802ca0c5290c498fec578fa823988646332ee36c43b7920dc4936eb"),
+    "gemini": ("gemini-color", False, "10c628f55d22a9725b9f9fccce7cf062b9fb68da5f7736e87010e0594d7ba6db"),
+    "github-copilot": ("githubcopilot", True, "984fc3fb2708c83fcc870eabfb2a9a4cd4a2a059ac18f78200119dc37f95ce8c"),
+    "vertex": ("vertexai-color", False, "d5cd06f2f2162b220a487dfb3f94ade0f7d4a8395598356e70fc623e110ccfd1"),
+}
+
+
+def logos_dir():
+    return os.path.join(os.path.dirname(mb_bin()), "logos")
+
+
+def user_logos_dir():
+    return os.path.join(os.environ.get("LLM_USAGE_CONFIG_DIR") or os.path.expanduser("~/.config/llm-usage"), "logos")
+
+
+def logo_fetch(from_dir=None, verify=True):
+    """Download (or copy from a local checkout of the repo) the pinned logo PNGs + LICENSE; sha256-verified."""
+    import hashlib
+    base = f"https://raw.githubusercontent.com/{LOGO_REPO}/{LOGO_SHA}/"
+
+    def get(rel):
+        if from_dir:
+            with open(os.path.join(from_dir, rel), "rb") as handle:
+                return handle.read()
+        req = urllib.request.Request(base + rel, headers={"User-Agent": "llm-usage"})
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            return resp.read()
+
+    wanted = [(f"packages/static-png/light/{f}.png", f"{key}.mono.png" if mono else f"{key}.png", sha)
+              for key, (f, mono, sha) in LOGO_FILES.items()] + [("LICENSE", "LICENSE", LOGO_LICENSE_SHA256)]
+    blobs = []
+    for rel, dest, sha in wanted:  # fetch + verify everything before touching the target dir
+        try:
+            data = get(rel)
+        except (OSError, ValueError) as err:
+            sys.exit(f"llm-usage: logo fetch failed for {rel}: {err}")
+        got = hashlib.sha256(data).hexdigest()
+        if verify and got != sha:
+            sys.exit(f"llm-usage: sha256 mismatch for {rel}: expected {sha}, got {got}; nothing written")
+        blobs.append((rel, dest, got, data))
+    out = logos_dir()
+    os.makedirs(out, exist_ok=True)
+    for stale in glob.glob(os.path.join(out, "*.png")):  # a key that moved between colour and mono must not leave both
+        os.remove(stale)
+    for rel, dest, got, data in blobs:
+        with open(os.path.join(out, dest + ".tmp"), "wb") as handle:
+            handle.write(data)
+        os.replace(os.path.join(out, dest + ".tmp"), os.path.join(out, dest))
+    lines = ["# Logo sources", "",
+             f"- Repository: https://github.com/{LOGO_REPO}", f"- Commit: {LOGO_SHA}", "- License: MIT (see LICENSE in this directory; copied from the repository)",
+             "- The logos are trademarks of their respective owners (Anthropic, OpenAI, Z.ai / Zhipu AI, DeepSeek, Google, GitHub / Microsoft),",
+             "  stored here for personal status-bar display only and not redistributed with the dotfiles.",
+             f"- Fetched by `llm-usage menubar logos fetch`; notices: {LOGO_NOTICES}", "", "| key | file | upstream | sha256 |", "|---|---|---|---|"]
+    lines += [f"| {dest[:-4] if dest.endswith('.png') else dest} | {dest} | {rel} | {got} |" for rel, dest, got, _ in blobs if dest != "LICENSE"]
+    with open(os.path.join(out, "SOURCES.md"), "w") as handle:
+        handle.write("\n".join(lines) + "\n")
+    print(f"menubar: fetched {len(blobs) - 1} logos + LICENSE + SOURCES.md into {out} (from {from_dir or base}, commit {LOGO_SHA[:12]})")
+
+
+def logo_list():
+    """Which source each logo key resolves to (the helper owns the lookup; this prints its answer)."""
+    out = mb_bin() if not mb_stale() else mb_build()
+    env = {**os.environ, "LLM_USAGE_MENUBAR_DIR": os.path.dirname(out)}
+    res = subprocess.run([out, "--list-logos"], capture_output=True, text=True, env=env)
+    if res.returncode:
+        sys.exit(f"llm-usage: {out} --list-logos failed: {res.stderr.strip()}")
+    sys.stdout.write(res.stdout)
+    print(f"custom logos: drop <key>.png|pdf|svg (colour) or <key>.mono.png (tinted to the menubar text colour) in {user_logos_dir()}")
+    print(f"downloaded:   `llm-usage menubar logos fetch` -> {logos_dir()}")
+    print(f"logos from https://github.com/{LOGO_REPO} @ {LOGO_SHA[:12]} (MIT), trademarks of their owners; notices: {LOGO_NOTICES}")
+
+
 def cmd_menubar(args):
     action = args.action
+    if action == "logos":
+        if args.logos_action == "fetch":
+            logo_fetch(args.from_dir, not args.no_verify)
+        elif args.logos_action:
+            sys.exit(f"llm-usage: unknown logos action {args.logos_action!r} (fetch)")
+        else:
+            logo_list()
+        return
     if action == "build":
         mb_build(args.force)
     elif action == "run":
@@ -1535,10 +1719,15 @@ def main():
 
     p = sub.add_parser("menubar-data", help="compact JSON for the menubar helper: proxies, 15m/1h counts, throttle, spike")
     p.add_argument("--up-ports", help=argparse.SUPPRESS)  # tests: comma list of ports to treat as up (no probing)
+    p.add_argument("--share-window", choices=list(SHARE_WINDOWS), default="15m", help="traffic-share window (default %(default)s)")
+    p.add_argument("--share-metric", choices=list(SHARE_METRICS), default="requests", help="traffic-share metric (default %(default)s)")
     p.set_defaults(fn=cmd_menubar_data)
 
-    p = sub.add_parser("menubar", help="macOS menubar monitor (native Swift helper): build|run|install|uninstall|status")
-    p.add_argument("action", choices=["build", "run", "install", "uninstall", "status"])
+    p = sub.add_parser("menubar", help="macOS menubar monitor (native Swift helper): build|run|install|uninstall|status|logos [fetch]")
+    p.add_argument("action", choices=["build", "run", "install", "uninstall", "status", "logos"])
+    p.add_argument("logos_action", nargs="?", help="logos: `fetch` downloads the pinned logo PNGs; omit to list what each key resolves to")
+    p.add_argument("--from-dir", help=argparse.SUPPRESS)  # logos fetch: local checkout of the logo repo instead of the network
+    p.add_argument("--no-verify", action="store_true", help=argparse.SUPPRESS)  # logos fetch: tests only (fixture PNGs)
     p.add_argument("--force", action="store_true", help="build: rebuild even when up to date")
     p.add_argument("--dry-run", action="store_true", help="install/uninstall: print what would happen, change nothing")
     p.set_defaults(fn=cmd_menubar)

@@ -8,6 +8,9 @@
 //   --dump-menu [--data-file FILE|-]   print title + menu structure and exit
 //   --chart-png PATH                   with --dump-menu: also write the chart images to PNG
 //   --no-charts                        with --dump-menu: render with charts off
+//   --status-png PATH [--dark]         render the status item image (+ text) to PNG from --data-file (no GUI)
+//                                      [--no-text]; --dump-menu also takes --no-image / --no-text
+//   --list-logos                       which source each logo key resolves to
 import AppKit
 import Foundation
 
@@ -217,6 +220,330 @@ func writePNG(_ images: [NSImage], to path: String) {
     if let png = rep.representation(using: .png, properties: [:]) { try? png.write(to: URL(fileURLWithPath: path)) }
 }
 
+// MARK: - logos (never bundled: user dir > fetched dir > installed app icon > generated monogram)
+
+struct LogoSpec {
+    let key: String
+    let label: String
+    let bundleIds: [String]   // installed apps whose icon stands in for the logo
+    let monogram: String
+    let brand: NSColor        // plain colour constant for the generated monogram, not a logo
+}
+
+func rgb(_ hex: UInt32) -> NSColor {
+    NSColor(srgbRed: CGFloat((hex >> 16) & 255) / 255, green: CGFloat((hex >> 8) & 255) / 255, blue: CGFloat(hex & 255) / 255, alpha: 1)
+}
+
+/// Data-driven: add a row (and a PROVIDER_PORTS / MODEL_VENDORS entry in llm-usage) to support another key.
+let logoSpecs: [LogoSpec] = [
+    LogoSpec(key: "claude", label: "Claude", bundleIds: ["com.anthropic.claudefordesktop"], monogram: "C", brand: rgb(0xD97757)),
+    LogoSpec(key: "anthropic", label: "Anthropic", bundleIds: ["com.anthropic.claudefordesktop"], monogram: "A", brand: rgb(0xB5543A)),
+    LogoSpec(key: "openai", label: "OpenAI / GPT", bundleIds: ["com.openai.codex"], monogram: "O", brand: rgb(0x10A37F)),
+    LogoSpec(key: "glm", label: "GLM / Z.ai", bundleIds: [], monogram: "Z", brand: rgb(0x3556E8)),
+    LogoSpec(key: "deepseek", label: "DeepSeek", bundleIds: [], monogram: "D", brand: rgb(0x4D6BFE)),
+    LogoSpec(key: "gemini", label: "Gemini", bundleIds: ["com.google.GeminiMacOS"], monogram: "✦", brand: rgb(0x5B7FEB)),
+    LogoSpec(key: "github-copilot", label: "GitHub Copilot", bundleIds: ["com.github.githubapp"], monogram: "Co", brand: rgb(0x6E40C9)),
+    LogoSpec(key: "vertex", label: "Vertex AI", bundleIds: [], monogram: "V", brand: rgb(0x4285F4)),
+    LogoSpec(key: "enmaas", label: "EnMaaS", bundleIds: [], monogram: "E", brand: rgb(0xCC2B2B)),
+    LogoSpec(key: "other", label: "Other", bundleIds: [], monogram: "•", brand: rgb(0x7A7F87)),
+]
+
+enum LogoKind: String { case color, mono, app, monogram }
+
+struct Logo {
+    let key: String
+    let kind: LogoKind
+    let image: CGImage?   // nil for monogram
+    let source: String    // where it came from, for `menubar logos`
+}
+
+func envDir(_ name: String) -> String? { ProcessInfo.processInfo.environment[name].flatMap { $0.isEmpty ? nil : $0 } }
+func userLogosDir() -> String { (envDir("LLM_USAGE_CONFIG_DIR") ?? NSHomeDirectory() + "/.config/llm-usage") + "/logos" }
+func fetchedLogosDir() -> String { (envDir("LLM_USAGE_MENUBAR_DIR") ?? NSHomeDirectory() + "/.local/share/llm-usage") + "/logos" }
+
+func cgImage(of image: NSImage, maxPixels: Int = 256) -> CGImage? {
+    var rect = NSRect(origin: .zero, size: NSSize(width: maxPixels, height: maxPixels))
+    if let cg = image.cgImage(forProposedRect: &rect, context: nil, hints: nil), cg.width > 0, cg.height > 0 { return cg }
+    return nil
+}
+
+func loadImageFile(_ path: String) -> CGImage? {
+    guard FileManager.default.fileExists(atPath: path), let img = NSImage(contentsOfFile: path), img.size.width > 0 else { return nil }
+    return cgImage(of: img)
+}
+
+var logoCache: [String: Logo] = [:]
+
+func resolveLogo(_ key: String) -> Logo {
+    if let hit = logoCache[key] { return hit }
+    let found = findLogo(key)
+    logoCache[key] = found
+    return found
+}
+
+func findLogo(_ key: String) -> Logo {
+    let user = userLogosDir(), fetched = fetchedLogosDir()
+    for ext in ["png", "pdf", "svg"] {
+        let path = "\(user)/\(key).\(ext)"
+        if let cg = loadImageFile(path) { return Logo(key: key, kind: .color, image: cg, source: "user dir: \(path)") }
+    }
+    for ext in ["png", "pdf", "svg"] {
+        let path = "\(user)/\(key).mono.\(ext)"
+        if let cg = loadImageFile(path) { return Logo(key: key, kind: .mono, image: cg, source: "user dir (mono, tinted): \(path)") }
+    }
+    let colorPath = "\(fetched)/\(key).png"
+    if let cg = loadImageFile(colorPath) { return Logo(key: key, kind: .color, image: cg, source: "fetched: \(colorPath)") }
+    let monoPath = "\(fetched)/\(key).mono.png"
+    if let cg = loadImageFile(monoPath) { return Logo(key: key, kind: .mono, image: cg, source: "fetched (mono, tinted): \(monoPath)") }
+    if let spec = logoSpecs.first(where: { $0.key == key }) {
+        for id in spec.bundleIds {
+            if let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: id) {
+                let icon = NSWorkspace.shared.icon(forFile: url.path)
+                if let cg = cgImage(of: icon) { return Logo(key: key, kind: .app, image: cg, source: "app icon: \(url.path) (\(id))") }
+            }
+        }
+    }
+    return Logo(key: key, kind: .monogram, image: nil, source: "generated monogram")
+}
+
+func listLogos() {
+    print("logo key         source")
+    var keys = logoSpecs.map { $0.key }
+    for extra in keysInDirs() where !keys.contains(extra) { keys.append(extra) }
+    for key in keys {
+        let l = resolveLogo(key)
+        print(key.padding(toLength: 16, withPad: " ", startingAt: 0) + " \(l.kind.rawValue.padding(toLength: 8, withPad: " ", startingAt: 0)) \(l.source)")
+    }
+}
+
+/// Keys the user dropped in a logos dir that the built-in table does not know (shown, but not used until a mapping emits that key).
+func keysInDirs() -> [String] {
+    var out: [String] = []
+    for dir in [userLogosDir(), fetchedLogosDir()] {
+        for f in (try? FileManager.default.contentsOfDirectory(atPath: dir)) ?? [] where ["png", "pdf", "svg"].contains((f as NSString).pathExtension) {
+            var base = (f as NSString).deletingPathExtension
+            if base.hasSuffix(".mono") { base = String(base.dropLast(5)) }
+            if !out.contains(base) { out.append(base) }
+        }
+    }
+    return out.sorted()
+}
+
+var tintCache: [String: CGImage] = [:]
+
+/// A single-colour glyph recoloured to `color` (alpha of the PNG is the mask).
+func tinted(_ cg: CGImage, color: CGColor, cacheKey: String) -> CGImage {
+    let comps = (color.converted(to: CGColorSpace(name: CGColorSpace.sRGB)!, intent: .defaultIntent, options: nil) ?? color).components ?? []
+    let id = cacheKey + comps.map { String(format: "%.3f", Double($0)) }.joined(separator: ",")
+    if let hit = tintCache[id] { return hit }
+    let n = 128
+    guard let ctx = CGContext(data: nil, width: n, height: n, bitsPerComponent: 8, bytesPerRow: 0,
+                              space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return cg }
+    let rect = CGRect(x: 0, y: 0, width: n, height: n)
+    ctx.interpolationQuality = .high
+    ctx.draw(cg, in: rect)
+    ctx.setBlendMode(.sourceIn)
+    ctx.setFillColor(color)
+    ctx.fill(rect)
+    let out = ctx.makeImage() ?? cg
+    tintCache[id] = out
+    return out
+}
+
+// MARK: - status item image
+
+struct ShareEntry {
+    let key: String
+    let label: String
+    let share: Double
+    let requests: Int
+    let tokens: Int
+    let models: [String]
+}
+
+func shareEntries(_ j: J) -> [ShareEntry] {
+    j.arr.compactMap { e in
+        guard let key = e["key"].str, let share = e["share"].dbl, share > 0 else { return nil }
+        return ShareEntry(key: key, label: e["label"].str ?? key, share: share, requests: e["requests"].int ?? 0,
+                          tokens: e["tokens"].int ?? 0, models: e["models"].arr.compactMap { $0.str })
+    }.sorted { $0.share > $1.share }
+}
+
+/// More traffic = more opaque; small shares stay visible. sqrt flattens the top so a 40% logo is not half-faded.
+func logoOpacity(_ share: Double) -> CGFloat { CGFloat(min(1.0, 0.25 + 0.75 * share.squareRoot())) }
+
+let imageHeight: CGFloat = 22
+let logoSize: CGFloat = 16
+let logoStep: CGFloat = 9  // 7 buried the minority logos (slivers); 9 keeps every glyph recognisable
+let maxLogosPerCluster = 4
+
+func clusterWidth(_ count: Int, overflow: Bool) -> CGFloat {
+    logoSize + CGFloat(max(min(count, maxLogosPerCluster) - 1, 0)) * logoStep + (overflow ? 12 : 0)
+}
+
+func shapePath(_ rect: CGRect, circle: Bool) -> CGPath {
+    CGPath(roundedRect: rect, cornerWidth: circle ? rect.width / 2 : 4, cornerHeight: circle ? rect.height / 2 : 4, transform: nil)
+}
+
+func drawMonogram(_ ctx: CGContext, spec: LogoSpec?, key: String, rect: CGRect, circle: Bool) {
+    let brand = spec?.brand ?? rgb(0x7A7F87)
+    let rect = rect.insetBy(dx: 1, dy: 1)  // same visual weight as the 14pt glyph logos
+    ctx.addPath(shapePath(rect, circle: circle))
+    ctx.setFillColor(brand.cgColor)
+    ctx.fillPath()
+    let text = spec?.monogram ?? String(key.prefix(1)).uppercased()
+    let font = NSFont.systemFont(ofSize: text.count > 1 ? 7.5 : 10, weight: .bold)
+    let attrs: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: NSColor.white]
+    let size = (text as NSString).size(withAttributes: attrs)
+    (text as NSString).draw(at: NSPoint(x: rect.midX - size.width / 2, y: rect.midY - size.height / 2), withAttributes: attrs)
+}
+
+func drawLogo(_ ctx: CGContext, entry: ShareEntry, rect: CGRect, circle: Bool, labelColor: CGColor) {
+    let logo = resolveLogo(entry.key)
+    let spec = logoSpecs.first { $0.key == entry.key }
+    ctx.saveGState()
+    ctx.setAlpha(logoOpacity(entry.share))
+    ctx.beginTransparencyLayer(auxiliaryInfo: nil)
+    ctx.interpolationQuality = .high
+    switch logo.kind {
+    case .color, .mono:
+        guard let cg = logo.image else { break }
+        let glyph = logo.kind == .mono ? tinted(cg, color: labelColor, cacheKey: entry.key) : cg
+        ctx.draw(glyph, in: rect.insetBy(dx: 0.5, dy: 0.5))
+    case .app:
+        if let cg = logo.image {
+            ctx.addPath(shapePath(rect, circle: circle))
+            ctx.clip()
+            ctx.draw(cg, in: rect)
+        }
+    case .monogram:
+        drawMonogram(ctx, spec: spec, key: entry.key, rect: rect, circle: circle)
+    }
+    ctx.endTransparencyLayer()
+    ctx.restoreGState()
+}
+
+/// `<models cluster> | <providers cluster>` as an avatar-stack image. Drawn with an explicit appearance so the
+/// single-colour logos and placeholders follow the menubar's light/dark mode (the caller re-renders on change).
+func statusImage(models: [ShareEntry], providers: [ShareEntry], badge: NSColor?, appearance: NSAppearance, scale: CGFloat = 2) -> NSImage {
+    let mOverflow = models.count > maxLogosPerCluster, pOverflow = providers.count > maxLogosPerCluster
+    let mw = clusterWidth(max(models.count, 1), overflow: mOverflow), pw = clusterWidth(max(providers.count, 1), overflow: pOverflow)
+    let gap: CGFloat = 10
+    let size = NSSize(width: ceil(1 + mw + gap + pw + (badge != nil ? 2 : 1)), height: imageHeight)
+    guard let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: Int(size.width * scale), pixelsHigh: Int(size.height * scale),
+                                     bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+                                     colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0) else { return NSImage(size: size) }
+    rep.size = size
+    appearance.performAsCurrentDrawingAppearance {
+        NSGraphicsContext.saveGraphicsState()
+        defer { NSGraphicsContext.restoreGraphicsState() }
+        guard let gc = NSGraphicsContext(bitmapImageRep: rep) else { return }
+        NSGraphicsContext.current = gc
+        let ctx = gc.cgContext
+        ctx.clear(CGRect(origin: .zero, size: size))
+        let label = NSColor.labelColor.cgColor
+        let y = (imageHeight - logoSize) / 2
+
+        func cluster(_ entries: [ShareEntry], x0: CGFloat, circle: Bool) {
+            guard !entries.isEmpty else {  // idle: one faint outline per cluster
+                ctx.addPath(shapePath(CGRect(x: x0 + 0.6, y: y + 0.6, width: logoSize - 1.2, height: logoSize - 1.2), circle: circle))
+                ctx.setStrokeColor(label.copy(alpha: 0.35) ?? label)
+                ctx.setLineWidth(1.2)
+                ctx.strokePath()
+                return
+            }
+            let shown = Array(entries.prefix(maxLogosPerCluster))
+            for i in shown.indices.reversed() {  // smallest share first, so the dominant logo ends up on top
+                let rect = CGRect(x: x0 + CGFloat(i) * logoStep, y: y, width: logoSize, height: logoSize)
+                if i < shown.count - 1 {  // carve a gap in what is underneath: avatar-stack outline that works on any bar colour
+                    ctx.saveGState()
+                    ctx.setBlendMode(.clear)
+                    ctx.addPath(shapePath(rect.insetBy(dx: -1.2, dy: -1.2), circle: circle))
+                    ctx.fillPath()
+                    ctx.restoreGState()
+                }
+                drawLogo(ctx, entry: shown[i], rect: rect, circle: circle, labelColor: label)
+            }
+            if entries.count > maxLogosPerCluster {
+                let chip = CGRect(x: x0 + clusterWidth(shown.count, overflow: false) + 1, y: y + (logoSize - 11) / 2, width: 11, height: 11)
+                ctx.setFillColor(label.copy(alpha: 0.18) ?? label)
+                ctx.fillEllipse(in: chip)
+                let text = "+\(entries.count - maxLogosPerCluster)"
+                let attrs: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: 6.5, weight: .bold), .foregroundColor: NSColor.labelColor.withAlphaComponent(0.75)]
+                let ts = (text as NSString).size(withAttributes: attrs)
+                (text as NSString).draw(at: NSPoint(x: chip.midX - ts.width / 2, y: chip.midY - ts.height / 2), withAttributes: attrs)
+            }
+        }
+        cluster(models, x0: 1, circle: true)
+        ctx.setFillColor(label.copy(alpha: 0.25) ?? label)
+        ctx.fill(CGRect(x: 1 + mw + gap / 2 - 0.5, y: (imageHeight - 12) / 2, width: 1, height: 12))
+        cluster(providers, x0: 1 + mw + gap, circle: false)
+
+        if let badge = badge {
+            let d: CGFloat = 7
+            let dot = CGRect(x: size.width - d - 0.5, y: size.height - d - 0.5, width: d, height: d)
+            ctx.saveGState()
+            ctx.setBlendMode(.clear)
+            ctx.fillEllipse(in: dot.insetBy(dx: -1.5, dy: -1.5))
+            ctx.restoreGState()
+            ctx.setFillColor(badge.cgColor)
+            ctx.fillEllipse(in: dot)
+        }
+    }
+    let image = NSImage(size: size)
+    image.addRepresentation(rep)
+    image.isTemplate = false
+    return image
+}
+
+func badgeColor(for state: String) -> NSColor? {
+    switch state {
+    case "throttled", "down": return .systemRed
+    case "spike": return .systemOrange
+    default: return nil
+    }
+}
+
+func shareDescription(_ share: J) -> String {
+    func side(_ name: String, _ arr: [ShareEntry]) -> String {
+        name + ": " + (arr.isEmpty ? "idle" : arr.map { "\($0.label) \(pct($0.share))" }.joined(separator: ", "))
+    }
+    return side("Models", shareEntries(share["models"])) + " · " + side("Providers", shareEntries(share["providers"]))
+}
+
+/// Status item image + text on a menubar-coloured background (debug: no GUI needed).
+func writeStatusPNG(_ d: J, summary: Summary, dark: Bool, showText: Bool, to path: String) {
+    let appearance = NSAppearance(named: dark ? .darkAqua : .aqua)!
+    let share = d["share"]
+    let img = statusImage(models: shareEntries(share["models"]), providers: shareEntries(share["providers"]),
+                          badge: badgeColor(for: summary.state), appearance: appearance)
+    let font = NSFont.menuBarFont(ofSize: 0)
+    let text = showText ? summary.text : ""
+    var textWidth: CGFloat = 0
+    if !text.isEmpty { textWidth = ceil((text as NSString).size(withAttributes: [.font: font]).width) + 4 }
+    let size = NSSize(width: 10 + img.size.width + textWidth + 10, height: 24)
+    guard let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: Int(size.width) * 2, pixelsHigh: Int(size.height) * 2,
+                                     bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+                                     colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0) else { return }
+    rep.size = size
+    appearance.performAsCurrentDrawingAppearance {
+        NSGraphicsContext.saveGraphicsState()
+        defer { NSGraphicsContext.restoreGraphicsState() }
+        NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
+        (dark ? NSColor(white: 0.14, alpha: 1) : NSColor(white: 0.92, alpha: 1)).setFill()
+        NSRect(origin: .zero, size: size).fill()
+        img.draw(in: NSRect(x: 10, y: (size.height - img.size.height) / 2, width: img.size.width, height: img.size.height))
+        if !text.isEmpty {
+            let attrs: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: NSColor.labelColor]
+            let ts = (text as NSString).size(withAttributes: attrs)
+            (text as NSString).draw(at: NSPoint(x: 10 + img.size.width + 4, y: (size.height - ts.height) / 2), withAttributes: attrs)
+        }
+    }
+    if let png = rep.representation(using: .png, properties: [:]) { try? png.write(to: URL(fileURLWithPath: path)) }
+    print("status-png: \(Int(size.width))x\(Int(size.height))pt (\(rep.pixelsWide)x\(rep.pixelsHigh)px) \(dark ? "dark" : "light") state=\(summary.state) text=\"\(text)\" -> \(path)")
+    print(shareDescription(share))
+}
+
 // MARK: - CLI discovery and polling
 
 func findUsageBinary() -> String? {
@@ -278,6 +605,10 @@ struct MenuContext {
     var charts: Bool
     var notifications: Bool
     var launchAgentInstalled: Bool
+    var showImage = true
+    var showText = true
+    var shareWindow = "15m"   // "15m" | "1h"
+    var shareMetric = "requests"  // "requests" | "tokens"
 }
 
 final class Builder {
@@ -308,7 +639,7 @@ final class Builder {
         let item = NSMenuItem(title: title, action: sel, keyEquivalent: "")
         item.target = target
         item.representedObject = represented
-        if let s = state { item.state = s ? .on : .off }
+        if let s = state { item.state = s ? .on : .off; item.tag = 1 }  // tag 1 = checkbox row (dump shows [x]/[ ])
         return item
     }
 
@@ -428,6 +759,28 @@ final class Builder {
         menu.addItem(.separator()); add(header("PROXIES (15m / 1h)"))
         for p in d["proxies"].arr { add(proxyItem(p)) }
 
+        // Traffic share (what the status item image draws)
+        let share = d["share"]
+        if share.exists {
+            menu.addItem(.separator())
+            add(header("TRAFFIC SHARE (\(share["window"].str ?? "15m") · \(share["metric"].str ?? "requests"))"))
+            if share["metric"].str != c.shareMetric && c.shareMetric == "tokens" {
+                add(info("no token counts in this window: showing requests", dim: true))
+            }
+            func block(_ title: String, _ entries: [ShareEntry]) {
+                add(info(title, dim: true))
+                if entries.isEmpty { add(info("  idle: no traffic in the window", dim: true)); return }
+                for e in entries {
+                    let name = e.label.padding(toLength: 16, withPad: " ", startingAt: 0)
+                    let tok = e.tokens > 0 ? "  \(human(e.tokens)) tok" : ""
+                    let sub = e.models.isEmpty ? "" : "  [\(e.models.joined(separator: ", "))]"
+                    add(info("  \(name) \(String(format: "%3.0f%%", e.share * 100))  \(e.requests) req\(tok)\(sub)", mono: true))
+                }
+            }
+            block("Models", shareEntries(share["models"]))
+            block("Providers", shareEntries(share["providers"]))
+        }
+
         // Charts
         if c.charts {
             menu.addItem(.separator())
@@ -521,6 +874,10 @@ final class Builder {
         }
         menu.addItem(.separator())
         menu.addItem(action("Show charts", #selector(AppController.toggleCharts), state: c.charts))
+        menu.addItem(action("Show logo image in menubar", #selector(AppController.toggleImage), state: c.showImage))
+        menu.addItem(action("Show text next to the image", #selector(AppController.toggleText), state: c.showText))
+        menu.addItem(action("Show 1h traffic window (off: 15m)", #selector(AppController.toggleWindow), state: c.shareWindow == "1h"))
+        menu.addItem(action("Show tokens as traffic metric (off: requests)", #selector(AppController.toggleMetric), state: c.shareMetric == "tokens"))
         menu.addItem(action("Notifications (throttled / proxy down)", #selector(AppController.toggleNotifications), state: c.notifications))
         menu.addItem(info("Launch at login: \(c.launchAgentInstalled ? "on (LaunchAgent installed)" : "off (llm-usage menubar install)")", dim: true))
         menu.addItem(.separator())
@@ -531,7 +888,7 @@ final class Builder {
 func dump(_ menu: NSMenu, indent: String = "") {
     for item in menu.items {
         if item.isSeparatorItem { print("\(indent)---"); continue }
-        let mark = item.state == .on ? "[x] " : (item.action != nil && item.submenu == nil && item.title.hasPrefix("Show") ? "[ ] " : "")
+        let mark = item.state == .on ? "[x] " : (item.tag == 1 ? "[ ] " : "")
         print("\(indent)\(mark)\(item.title)")
         if let sub = item.submenu { dump(sub, indent: indent + "    ") }
     }
@@ -555,12 +912,21 @@ final class AppController: NSObject, NSMenuDelegate {
 
     var charts: Bool { defaults.object(forKey: "charts") as? Bool ?? true }
     var notifications: Bool { defaults.object(forKey: "notifications") as? Bool ?? true }
+    var showImage: Bool { defaults.object(forKey: "showImage") as? Bool ?? true }
+    var showText: Bool { defaults.object(forKey: "showText") as? Bool ?? true }
+    var shareWindow: String { defaults.string(forKey: "shareWindow") == "1h" ? "1h" : "15m" }
+    var shareMetric: String { defaults.string(forKey: "shareMetric") == "tokens" ? "tokens" : "requests" }
+    var appearanceObservation: NSKeyValueObservation?
 
     func start() {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         statusItem.menu = NSMenu()
         statusItem.menu?.delegate = self
         render(title: Summary(glyph: "…", symbol: "ellipsis.circle", text: "", state: "loading"), stale: false)
+        // light/dark menubar: the single-colour logos are drawn for one appearance, so redraw when it flips
+        appearanceObservation = statusItem.button?.observe(\.effectiveAppearance) { [weak self] _, _ in
+            DispatchQueue.main.async { self?.tick() }
+        }
         rebuildMenu()
         poll()
         Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in self?.poll() }
@@ -571,7 +937,8 @@ final class AppController: NSObject, NSMenuDelegate {
     func context() -> MenuContext {
         MenuContext(data: data, now: Date(), refreshed: lastGood, stale: lastError != nil && data != nil, error: lastError,
                     charts: charts, notifications: notifications,
-                    launchAgentInstalled: FileManager.default.fileExists(atPath: NSHomeDirectory() + "/Library/LaunchAgents/com.kaovilai.llm-usage-menubar.plist"))
+                    launchAgentInstalled: FileManager.default.fileExists(atPath: NSHomeDirectory() + "/Library/LaunchAgents/com.kaovilai.llm-usage-menubar.plist"),
+                    showImage: showImage, showText: showText, shareWindow: shareWindow, shareMetric: shareMetric)
     }
 
     func tick() {
@@ -586,6 +953,20 @@ final class AppController: NSObject, NSMenuDelegate {
 
     func render(title s: Summary, stale: Bool) {
         guard let button = statusItem.button else { return }
+        if showImage, let d = data, d["share"].exists {
+            let share = d["share"]
+            let img = statusImage(models: shareEntries(share["models"]), providers: shareEntries(share["providers"]),
+                                  badge: badgeColor(for: s.state), appearance: button.effectiveAppearance)
+            let text = showText ? s.text : ""
+            img.accessibilityDescription = "llm-usage \(s.state). " + shareDescription(share)
+            button.image = img
+            button.imagePosition = text.isEmpty ? .imageOnly : .imageLeading
+            button.title = text.isEmpty ? "" : " " + text
+            button.setAccessibilityLabel("llm-usage \(s.state). " + shareDescription(share))
+            button.appearsDisabled = stale
+            button.toolTip = "llm-usage: \(s.state)\n" + shareDescription(share)
+            return
+        }
         if let img = NSImage(systemSymbolName: s.symbol, accessibilityDescription: s.state) {
             img.isTemplate = true
             button.image = img
@@ -623,8 +1004,9 @@ final class AppController: NSObject, NSMenuDelegate {
     func poll() {
         if polling { return }
         polling = true
+        let args = ["menubar-data", "--share-window", shareWindow, "--share-metric", shareMetric]
         DispatchQueue.global(qos: .utility).async { [weak self] in
-            let result = runUsage(["menubar-data"]).flatMap(parseJSON)
+            let result = runUsage(args).flatMap(parseJSON)
             DispatchQueue.main.async {
                 guard let self = self else { return }
                 self.polling = false
@@ -682,6 +1064,15 @@ final class AppController: NSObject, NSMenuDelegate {
     @objc func quit() { NSApp.terminate(nil) }
     @objc func toggleCharts() { defaults.set(!charts, forKey: "charts"); rebuildMenu() }
     @objc func toggleNotifications() { defaults.set(!notifications, forKey: "notifications"); rebuildMenu() }
+    @objc func toggleImage() { defaults.set(!showImage, forKey: "showImage"); refreshDisplay() }
+    @objc func toggleText() { defaults.set(!showText, forKey: "showText"); refreshDisplay() }
+    @objc func toggleWindow() { defaults.set(shareWindow == "1h" ? "15m" : "1h", forKey: "shareWindow"); poll(); refreshDisplay() }
+    @objc func toggleMetric() { defaults.set(shareMetric == "tokens" ? "requests" : "tokens", forKey: "shareMetric"); poll(); refreshDisplay() }
+
+    func refreshDisplay() {
+        if let d = data { let c = context(); render(title: summarize(d, now: c.now, stale: c.stale), stale: c.stale) }
+        rebuildMenu()
+    }
 
     @objc func copyText(_ sender: NSMenuItem) {
         guard let text = sender.representedObject as? String else { return }
@@ -751,16 +1142,32 @@ func acquireSingleInstanceLock() -> Bool {
 
 let args = Array(CommandLine.arguments.dropFirst())
 
-if args.contains("--dump-menu") {
-    _ = NSApplication.shared
-    var source: Result<J, PollError>
+func loadSource() -> Result<J, PollError> {
     if let i = args.firstIndex(of: "--data-file"), i + 1 < args.count {
         let path = args[i + 1]
         let data = path == "-" ? FileHandle.standardInput.readDataToEndOfFile() : (FileManager.default.contents(atPath: path) ?? Data())
-        source = parseJSON(data)
-    } else {
-        source = runUsage(["menubar-data"]).flatMap(parseJSON)
+        return parseJSON(data)
     }
+    return runUsage(["menubar-data"]).flatMap(parseJSON)
+}
+
+if args.contains("--list-logos") {
+    _ = NSApplication.shared
+    listLogos()
+    exit(0)
+}
+
+if let i = args.firstIndex(of: "--status-png"), i + 1 < args.count {
+    _ = NSApplication.shared
+    guard case .success(let j) = loadSource() else { FileHandle.standardError.write("status-png: no usable data\n".data(using: .utf8)!); exit(1) }
+    let now = parseISO(j["generated_at"].str) ?? Date()
+    writeStatusPNG(j, summary: summarize(j, now: now, stale: false), dark: args.contains("--dark"), showText: !args.contains("--no-text"), to: args[i + 1])
+    exit(0)
+}
+
+if args.contains("--dump-menu") {
+    _ = NSApplication.shared
+    let source = loadSource()
     var ctx = MenuContext(data: nil, now: Date(), refreshed: nil, stale: false, error: nil, charts: !args.contains("--no-charts"),
                           notifications: true, launchAgentInstalled: false)
     switch source {
@@ -768,6 +1175,10 @@ if args.contains("--dump-menu") {
         ctx.data = j
         ctx.now = parseISO(j["generated_at"].str) ?? Date()  // countdowns relative to the data, so fixtures are stable
         ctx.refreshed = ctx.now
+        ctx.shareWindow = j["share"]["window"].str ?? "15m"  // the data was computed for these: the toggles show them
+        ctx.shareMetric = j["share"]["metric_requested"].str ?? j["share"]["metric"].str ?? "requests"
+        ctx.showImage = !args.contains("--no-image")
+        ctx.showText = !args.contains("--no-text")
     case .failure(.message(let m)): ctx.error = m
     }
     let builder = Builder(target: nil)
