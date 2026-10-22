@@ -76,14 +76,18 @@ codex-enmaas() {
 }
 alias codex-enmass='codex-enmaas'   # pre-rename name
 
-# codex-glm-only: GLM for everything (auto-review included) through the local
-# GLM hybrid proxy; see scripts/codex-provider.zsh (backend glm-only) for the
-# wiring. Stop the shared proxy: codex-glm-only --stop-proxy
+# codex-hosted-only: EnMaaS-hosted free models (GLM 5.3, DeepSeek V4.1 Flash;
+# auto-review included) through the local hosted-only proxy; see
+# scripts/codex-provider.zsh (backend hosted-only) for the wiring. Pick the
+# model with -m. codex-glm-hybrid / codex-glm-only are retired names. Stop the shared proxy:
+# codex-hosted-only --stop-proxy
 typeset -g _codex_provider_script="${${(%):-%x}:A:h:h:h}/scripts/codex-provider.zsh"
-codex-glm-only() {
+codex-hosted-only() {
     CODEX_PROVIDER_NATIVE_BINARY="${CODEX_NATIVE_BINARY:-$(whence -p codex)}" \
-        /bin/zsh -f "$_codex_provider_script" glm-only "$@"
+        /bin/zsh -f "$_codex_provider_script" hosted-only "$@"
 }
+codex-glm-only() { codex-hosted-only "$@"; }   # retired name
+codex-glm-hybrid() { codex-hosted-only "$@"; }   # retired name (hybrid mode is gone)
 
 unalias codex 2>/dev/null || true
 function codex {

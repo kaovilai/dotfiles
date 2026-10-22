@@ -43,13 +43,14 @@ typeset -g _T3_DOTFILES_ROOT=${${(%):-%x}:A:h:h:h}
 
 # Each claude-t3-<backend> launcher is a symlink to scripts/claude-provider.zsh,
 # which takes its backend from the link name. Keep this list in sync with the
-# backends that script accepts.
-typeset -ga _T3_CLAUDE_BACKENDS=(copilot vertex openai enmaas glm-hybrid glm-only)
+# backends that script accepts. glm-hybrid / glm-only are retired names of
+# hosted-only, still linked because T3 settings.json may reference them.
+typeset -ga _T3_CLAUDE_BACKENDS=(copilot vertex openai enmaas hosted-only glm-hybrid glm-only)
 
 # Each codex-t3-<backend> launcher is a symlink to scripts/codex-provider.zsh,
 # same link-name dispatch. Keep this list in sync with the backends that
 # script accepts.
-typeset -ga _T3_CODEX_BACKENDS=(enmaas glm-hybrid glm-only)
+typeset -ga _T3_CODEX_BACKENDS=(enmaas hosted-only glm-hybrid glm-only)
 
 # Pre-rename launcher names (enmass -> enmaas). Linked, not verified: exported
 # T3 settings.json files still point at claude-t3-enmass / codex-t3-enmass.

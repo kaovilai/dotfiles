@@ -1,5 +1,7 @@
 #!/bin/zsh -f
-# Symlink as codex-t3-enmaas, codex-t3-glm-hybrid or codex-t3-glm-only. Never load .zshrc.
+# Symlink as codex-t3-enmaas or codex-t3-hosted-only (codex-t3-glm-hybrid and
+# codex-t3-glm-only = retired names, compat aliases of hosted-only). Never load
+# .zshrc.
 #
 # Executable launcher for apps (e.g. T3 Code) that need a binary path instead
 # of an interactive shell function. Fixed backend per symlink, independent of
@@ -13,24 +15,27 @@
 # enmaas: adds nothing but credentials. Codex talks to the gateway directly
 # (Responses API); no local proxy.
 #
-# glm-hybrid: GLM on EnMaaS as the main model, an OpenAI model (default
-# gpt-6-luna) as the auto-review model. Codex sends the auto-review request
-# to the same model_provider as the main model, so both go through the local
-# "codex" GLM hybrid LiteLLM proxy (scripts/glm-hybrid-proxy.zsh, port 4147),
-# which routes by model id. Codex gets only the local proxy token as
-# GLM_HYBRID_PROXY_TOKEN, never the upstream keys. Session exit leaves the
-# proxy running; a changed config or key refuses to start until stopped:
+# hosted-only: EnMaaS-hosted free models for everything, auto-review included
+# (the retired "glm-hybrid" mode gave GLM an OpenAI reviewer; DeepSeek now does
+# that job). Models: GLM 5.3 (text-only) and DeepSeek V4.1 Flash
+# (1M context, vision), both served by the same :4147 proxy (route per model
+# id). Codex's guardian reuses the main model's provider with only the model
+# swapped, so the reviewer (HOSTED_ONLY_REVIEW_MODEL, default DeepSeek) must be a
+# model the proxy routes too. Main model: HOSTED_ONLY_MODEL (default GLM). Proxy
+# + upstream knobs: scripts/hosted-only-proxy.zsh (old GLM_HYBRID_* names still read).
+# Codex gets only the local proxy token as HOSTED_ONLY_PROXY_TOKEN, never the
+# upstream key. Session exit leaves the proxy running; a changed config or key
+# refuses to start until it is stopped.
+# This launcher adds the provider wiring itself (-c overrides before the
+# caller's arguments) and generates a two-entry catalog
+# from the Codex binary's bundled catalog (`codex debug models --bundled`,
+# regenerated when the Codex version or catalog shape changes): every entry
+# auto_review_model_override = reviewer, tool_mode direct, no search tool.
+# apply_patch stays: the proxy hook strips the grammar EnMaaS's vLLM rejects.
+# Hosted web_search is disabled (both models are vLLM-served). Interactive use:
+# `codex-hosted-only` (zsh/functions/codex.zsh).
 #
-# glm-only: GLM for everything, auto-review included; no OpenAI key needed.
-# Same proxy; this launcher adds the provider wiring itself (-c overrides
-# before the caller's arguments) and generates a GLM catalog entry from the
-# Codex binary's bundled catalog (`codex debug models --bundled`, regenerated
-# when the Codex version changes): auto_review_model_override = GLM,
-# tool_mode direct, no hosted web search, text-only. apply_patch stays: the
-# proxy hook strips the grammar EnMaaS's vLLM rejects. Interactive use:
-# `codex-glm-only` (zsh/functions/codex.zsh).
-#
-#   codex-provider.zsh glm-hybrid --stop-proxy   (also glm-only; same proxy)
+#   codex-provider.zsh hosted-only --stop-proxy
 #   codex-t3-enmaas --version   bypasses credentials entirely
 emulate -L zsh
 unsetopt xtrace verbose
@@ -41,9 +46,10 @@ if [[ "$backend" == codex-provider.zsh ]]; then
     (( $# )) && shift
 fi
 [[ "$backend" == enmass ]] && backend=enmaas   # pre-rename launcher name
+[[ "$backend" == glm-only || "$backend" == glm-hybrid || "$backend" == hybrid ]] && backend=hosted-only   # retired launcher names
 case "$backend" in
-    enmaas|glm-hybrid|glm-only) ;;
-    *) print -ru2 -- 'Usage: codex-provider.zsh <enmaas|glm-hybrid|glm-only> [Codex arguments]'; exit 2 ;;
+    enmaas|hosted-only) ;;
+    *) print -ru2 -- 'Usage: codex-provider.zsh <enmaas|hosted-only> [Codex arguments]'; exit 2 ;;
 esac
 typeset native="${CODEX_PROVIDER_NATIVE_BINARY:-$HOME/.local/bin/codex}"
 [[ -x "$native" && "${native:A}" != "${0:A}" ]] || {
@@ -57,10 +63,10 @@ fi
 typeset -U path
 path=(/opt/homebrew/bin /usr/local/bin "$HOME/.local/bin" "$HOME/.bun/bin" $path)
 
-source "${0:A:h}/glm-hybrid-proxy.zsh" || exit 1
+source "${0:A:h}/hosted-only-proxy.zsh" || exit 1
 
-if [[ "$backend" == glm-* && "${1-}" == --stop-proxy ]]; then
-    _glm_hybrid_proxy_stop codex
+if [[ "$backend" != enmaas && "${1-}" == --stop-proxy ]]; then
+    _hosted_only_proxy_stop codex
     exit $?
 fi
 
@@ -78,44 +84,59 @@ if [[ "$backend" == enmaas ]]; then
     exec "$native" "$@"
 fi
 
-# glm-hybrid / glm-only
-typeset need_review=''
-[[ "$backend" == glm-hybrid ]] && need_review=review
-_glm_hybrid_proxy_ensure codex $need_review || {
-    [[ -f "$_ghp_runtime/fingerprint" ]] || exit 1
-    print -ru2 -- "codex-provider: to restart it: codex-provider.zsh $backend --stop-proxy"
+# hosted-only
+_hosted_only_proxy_ensure codex || {
+    _hosted_only_proxy_has_state || exit 1
+    print -ru2 -- "codex-provider: to restart it: codex-provider.zsh hosted-only --stop-proxy"
     exit 1
 }
 unset ENMAAS_API_KEY OPENAI_API_KEY
-export GLM_HYBRID_PROXY_TOKEN="$_ghp_token"
-[[ "$backend" == glm-hybrid ]] && exec "$native" "$@"
+export HOSTED_ONLY_PROXY_TOKEN="$_hop_token"
 
-# glm-only: catalog from the bundled one, keyed on the Codex version.
-typeset catalog="$_ghp_runtime/glm-only-models.json" version
+# hosted-only: catalog from the bundled one, keyed on Codex version + shape.
+# DeepSeek id: the shared lib's _hop_deepseek, else its knob/default.
+typeset ds="${_hop_deepseek:-${HOSTED_ONLY_DEEPSEEK_MODEL:-${GLM_HYBRID_DEEPSEEK_MODEL:-rits/deepseek-ai/DeepSeek-V4.1-Flash-1017}}}"
+typeset reviewer="${HOSTED_ONLY_REVIEW_MODEL:-$ds}"
+typeset main="${HOSTED_ONLY_MODEL:-$_hop_glm}"
+typeset -i glm_ctx="${HOSTED_ONLY_GLM_CONTEXT:-272000}" ds_ctx="${HOSTED_ONLY_DEEPSEEK_CONTEXT:-1048576}"
+if [[ "$reviewer" != "$_hop_glm" && "$reviewer" != "$ds" ]]; then
+    print -ru2 -- "codex-provider: HOSTED_ONLY_REVIEW_MODEL must be $_hop_glm or $ds (the proxy routes only those)."
+    exit 1
+fi
+typeset catalog="$_hop_runtime/hosted-only-models.json" version shape
 version=$("$native" --version 2>/dev/null) || version=unknown
-if [[ ! -s "$catalog" || "$(<"$catalog.version" 2>/dev/null)" != "$version" ]]; then
-    "$native" debug models --bundled 2>/dev/null | jq --arg glm "$_ghp_glm" '
+shape="$version|shape2|$_hop_glm|$ds|$reviewer|$glm_ctx|$ds_ctx"
+if [[ ! -s "$catalog" || "$(<"$catalog.version" 2>/dev/null)" != "$shape" ]]; then
+    "$native" debug models --bundled 2>/dev/null | jq --arg glm "$_hop_glm" --arg ds "$ds" \
+        --arg review "$reviewer" --argjson gctx "$glm_ctx" --argjson dctx "$ds_ctx" '
         [.models[] | select(.slug == "gpt-5.5")] + [.models[] | select(.visibility == "list")]
         | first // error("no bundled model to clone")
-        | {models: [.slug = $glm | .display_name = "GLM 5.3"
-            | .auto_review_model_override = $glm | .tool_mode = "direct"
-            | .supports_search_tool = false | .input_modalities = ["text"]]}' \
-        > "$catalog.tmp" && mv -f "$catalog.tmp" "$catalog" && print -r -- "$version" >| "$catalog.version" || {
+        | . as $base
+        | def common: .auto_review_model_override = $review | .tool_mode = "direct"
+            | .supports_search_tool = false | .upgrade = null;
+        {models: [
+            ($base | common | .slug = $glm | .display_name = "GLM 5.3" | .priority = 13
+                | .input_modalities = ["text"]
+                | .context_window = $gctx | .max_context_window = $gctx),
+            ($base | common | .slug = $ds | .display_name = "DeepSeek V4.1 Flash" | .priority = 14
+                | .input_modalities = ["text", "image"]
+                | .context_window = $dctx | .max_context_window = $dctx)]}' \
+        > "$catalog.tmp" && mv -f "$catalog.tmp" "$catalog" && print -r -- "$shape" >| "$catalog.version" || {
         rm -f "$catalog.tmp"
-        print -ru2 -- 'codex-provider: could not generate the GLM-only model catalog from `codex debug models --bundled`.'
+        print -ru2 -- 'codex-provider: could not generate the hosted-only model catalog from `codex debug models --bundled`.'
         exit 1
     }
 fi
 typeset -a wiring=(
     -c model_provider=glmonly
-    -c 'model_providers.glmonly.name="RH GLM Only"'
-    -c "model_providers.glmonly.base_url=\"$_ghp_base/v1\""
-    -c 'model_providers.glmonly.env_key="GLM_HYBRID_PROXY_TOKEN"'
+    -c 'model_providers.glmonly.name="RH Hosted Only"'
+    -c "model_providers.glmonly.base_url=\"$_hop_base/v1\""
+    -c 'model_providers.glmonly.env_key="HOSTED_ONLY_PROXY_TOKEN"'
     -c 'model_providers.glmonly.wire_api="responses"'
     -c model_providers.glmonly.requires_openai_auth=false
     -c "model_catalog_json=\"$catalog\""
     -c 'web_search="disabled"'
-    -c "model=\"$_ghp_glm\""
+    -c "model=\"$main\""
 )
 # Overrides placed before a session subcommand are not applied to it (seen with
 # `exec`, Codex 0.162.1), so put them right after it, where T3 puts its own

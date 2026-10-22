@@ -11,8 +11,8 @@
 #   claude-vertex-restart      LiteLLM -> Vertex           :4142
 #   claude-openai-restart      LiteLLM -> OpenAI           :4145
 #   claude-enmaas-restart      LiteLLM -> EnMaaS           :4146
-#   claude-glm-hybrid-restart  GLM hybrid, Claude flavor   :4148 (= claude-glm-only-restart)
-#   codex-glm-hybrid-restart   GLM hybrid, Codex flavor    :4147 (= codex-glm-only-restart)
+#   claude-hosted-only-restart hosted-only, Claude flavor  :4148 (= claude-{glm-hybrid,glm-only}-restart)
+#   codex-hosted-only-restart  hosted-only, Codex flavor   :4147 (= codex-{glm-hybrid,glm-only}-restart)
 #   llm-proxy-restart [name ...|all|--list]   several at once; no args or `all`
 #                              restarts only the ones currently listening
 
@@ -55,28 +55,30 @@ claude-enmaas-restart() {
     claude-enmaas --version >/dev/null
 }
 
-claude-glm-hybrid-restart() {
-    _glm_hybrid_proxy_stop claude || return 1
-    _llm_proxy_wait_down "${GLM_HYBRID_CLAUDE_PROXY_PORT:-4148}" || return 1
-    ( _glm_hybrid_proxy_ensure claude )
+claude-hosted-only-restart() {
+    _hosted_only_proxy_stop claude || return 1
+    _llm_proxy_wait_down "$(_hosted_only_knob CLAUDE_PROXY_PORT 4148)" || return 1
+    ( _hosted_only_proxy_ensure claude )
 }
-claude-glm-only-restart() { claude-glm-hybrid-restart; }
+claude-glm-hybrid-restart() { claude-hosted-only-restart; }
+claude-glm-only-restart() { claude-hosted-only-restart; }
 
-codex-glm-hybrid-restart() {
-    _glm_hybrid_proxy_stop codex || return 1
-    _llm_proxy_wait_down "${GLM_HYBRID_CODEX_PROXY_PORT:-4147}" || return 1
-    ( _glm_hybrid_proxy_ensure codex )
+codex-hosted-only-restart() {
+    _hosted_only_proxy_stop codex || return 1
+    _llm_proxy_wait_down "$(_hosted_only_knob CODEX_PROXY_PORT 4147)" || return 1
+    ( _hosted_only_proxy_ensure codex )
 }
-codex-glm-only-restart() { codex-glm-hybrid-restart; }
+codex-glm-hybrid-restart() { codex-hosted-only-restart; }
+codex-glm-only-restart() { codex-hosted-only-restart; }
 
 llm-proxy-restart() {
     local -A fn=(
         copilot claude-copilot-restart vertex claude-vertex-restart openai claude-openai-restart
-        enmaas claude-enmaas-restart glm-claude claude-glm-hybrid-restart glm-codex codex-glm-hybrid-restart)
+        enmaas claude-enmaas-restart glm-claude claude-hosted-only-restart glm-codex codex-hosted-only-restart)
     local -A port=(
         copilot "${COPILOT_API_PORT:-4141}" vertex "${CLAUDE_VERTEX_PROXY_PORT:-4142}"
         openai "${CLAUDE_OPENAI_PROXY_PORT:-4145}" enmaas "$(_claude_enmaas_port 2>/dev/null || print 4146)"
-        glm-claude "${GLM_HYBRID_CLAUDE_PROXY_PORT:-4148}" glm-codex "${GLM_HYBRID_CODEX_PROXY_PORT:-4147}")
+        glm-claude "$(_hosted_only_knob CLAUDE_PROXY_PORT 4148)" glm-codex "$(_hosted_only_knob CODEX_PROXY_PORT 4147)")
     local -a order=(copilot vertex openai enmaas glm-codex glm-claude) targets
     if [[ "${1-}" == --list ]]; then
         local n

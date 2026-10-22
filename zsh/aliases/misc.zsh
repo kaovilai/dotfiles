@@ -153,10 +153,10 @@ alias ce-openai='cd ~/experiments/ && claude-openai'
 # ce-enmaas = EnMaaS edition of ce (raw claude routed through the EnMaaS gateway via a local litellm proxy; see zsh/functions/claude/providers/)
 alias ce-enmaas='cd ~/experiments/ && claude-enmaas'
 alias ce-enmass='ce-enmaas'   # pre-rename name
-# ce-glm-hybrid = GLM 5.3 on EnMaaS, auto-mode classifier on an OpenAI model (local GLM hybrid proxy; see zsh/functions/claude/providers/glm-hybrid.zsh)
-alias ce-glm-hybrid='cd ~/experiments/ && claude-glm-hybrid'
-# ce-glm-only = GLM 5.3 on EnMaaS for everything, classifier included; no OpenAI key needed (see zsh/functions/claude/providers/glm-hybrid.zsh)
-alias ce-glm-only='cd ~/experiments/ && claude-glm-only'
+# ce-hosted-only = EnMaaS-hosted free models only (GLM 5.3 main, DeepSeek V4.1 Flash via --model; classifier + helpers on DeepSeek; local hosted-only proxy, no OpenAI key; see zsh/functions/claude/providers/hosted-only.zsh)
+alias ce-hosted-only='cd ~/experiments/ && claude-hosted-only'
+alias ce-glm-hybrid='ce-hosted-only'   # retired name (hybrid mode is gone)
+alias ce-glm-only='ce-hosted-only'   # retired name
 # Builds -e flags to pass the host's active Anthropic/copilot-api gateway
 # config into a container. ANTHROPIC_BASE_URL's host is rewritten from
 # localhost/127.0.0.1 to host.containers.internal since the container's
