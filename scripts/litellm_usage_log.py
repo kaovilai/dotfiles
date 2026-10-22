@@ -15,7 +15,10 @@ LiteLLM actually called), upstream host, token counts, latency, status.
 
 Failures also record `upstream_status` (what the provider answered, e.g. 429
 from EnMaaS), `status` (what the client sees), `rewritten`, `retry_after`
-(seconds) and `error_type`. Callback order matters: LiteLLM runs the logging
+(seconds) and `error_type`. Rewritten 429s add `reset_at` (epoch s),
+`reset_source` (which upstream header/body field, or which estimate rule, set
+it) and, only when upstream sends limit data the hooks do not parse, `drift`;
+see docs/notes/enmaas-reset-forward-compat.md. Callback order matters: LiteLLM runs the logging
 callbacks when the upstream call raises, *before* the proxy's
 async_post_call_failure_hook (hosted_only_hooks.rewrite_limit, which turns a
 429 into a 503 "(reset after ...)" for /v1/messages and edits the exception
@@ -192,6 +195,16 @@ def _hooks_module():
     return None
 
 
+def _is_limit(hooks, exc):
+    """Non-429 limit answers (Copilot-style 402 / 503 `upstream rate limited` /
+    error.code `rate_limited`) as the hooks classify them."""
+    check = getattr(hooks, "is_limit_error", None)
+    try:
+        return bool(check and check(exc))
+    except Exception:
+        return False
+
+
 def error_fields(kwargs, slo):
     """status / upstream_status / rewritten / retry_after / error_type / quota for a failed call."""
     exc = kwargs.get("exception")
@@ -206,7 +219,9 @@ def error_fields(kwargs, slo):
         out["retry_after"] = h * 3600 + m * 60 + s
         upstream, client = 429, 503
         out["rewritten"] = True
-    elif upstream == 429:
+        out["reset_source"] = "unknown:rewritten"
+        out["reset_at"] = int(time.time()) + out["retry_after"]
+    elif upstream == 429 or _is_limit(_hooks_module(), exc):
         hooks = _hooks_module()
         if hooks is not None and getattr(hooks, "LIMIT_REWRITE", False):
             url = str((kwargs.get("proxy_server_request") or {}).get("url") or "")
@@ -214,10 +229,23 @@ def error_fields(kwargs, slo):
             out["rewritten"] = True
             try:
                 now = time.time()
-                reset, monthly = hooks.limit_reset(exc, str(kwargs.get("model") or ""), now)
+                model = str(kwargs.get("model") or "")
+                analyze = getattr(hooks, "analyze_limit", None)
+                if analyze is not None:
+                    info = analyze(exc, model, now)
+                    reset, monthly = info["reset"], info["monthly"]
+                    out["reset_source"] = info["source"]
+                    if info["drift"]:
+                        out["drift"] = info["drift"]
+                        getattr(hooks, "warn_drift", lambda _d: None)(info["drift"])
+                else:
+                    reset, monthly = hooks.limit_reset(exc, model, now)
+                out["reset_at"] = int(reset)
                 out["retry_after"] = max(1, math.ceil(reset - now))
                 if monthly:
                     out["quota"] = True
+                    if "/v1/chat/completions" in url:  # hooks answer a monthly quota with 402 here
+                        client = 402
             except Exception:
                 pass
     if upstream == 429 and QUOTA_RE.search(message):

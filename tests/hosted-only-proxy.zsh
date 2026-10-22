@@ -111,7 +111,7 @@ launched=$(HOSTED_ONLY_CLIENT_MAX_RETRIES=7 _claude_hosted_launch) || fail "laun
 
 # Hook helpers (python), including the retired env-name fallback
 GLM_HYBRID_VISION_FALLBACK=0 GLM_HYBRID_MODEL=rits/x/old python3 -I - "$repo/scripts" <<'EOF' || fail "hook module"
-import json, sys, types
+import json, sys, time, types
 sys.path.insert(0, sys.argv[1])
 # stub the two third-party imports (litellm / fastapi are not installed here)
 fa = types.ModuleType("fastapi")
@@ -219,6 +219,198 @@ sent = run([{"type": "http.response.start", "status": 503, "headers": []}, {"typ
 hd = dict(sent[0]["headers"])
 assert int(hd[b"retry-after"]) > 60 and hd[b"x-should-retry"] == b"false", hd
 assert sent[1]["body"] == msg
+
+# --- upstream reset shapes, drift, event fields (docs/notes/enmaas-reset-forward-compat.md)
+import datetime, email.utils, logging
+NOW = 1_793_000_000                                   # 2026-10-26T..Z
+NEXT = h.month_bounds(NOW)[1]                         # 2026-11-01T00:00:00Z
+iso = lambda t: datetime.datetime.fromtimestamp(t, datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+def Ex(text="slow down", headers=None, body=None):
+    e = E(text); e.headers = headers; e.body = body
+    return e
+def an(exc, model="m"):
+    h.DRIFT_SEEN.clear(); h.LAST_LIMIT_RESET.clear(); h.LAST_LIMIT_KIND.clear()
+    return h.analyze_limit(exc, model, NOW)
+def check(info, reset, source, kind="rate-limit", drift=()):
+    assert abs(info["reset"] - reset) < 0.01, (info["reset"] - NOW, reset - NOW, info)
+    assert info["source"] == source and info["kind"] == kind, info
+    assert [d["kind"] for d in info["drift"]] == list(drift), info["drift"]
+    assert info["monthly"] == (kind == "quota")
+# headers
+check(an(Ex(headers={"Retry-After": "30"})), NOW + 30, "upstream-header:retry-after")
+check(an(Ex(headers={"retry-after": email.utils.format_datetime(datetime.datetime.fromtimestamp(NOW + 120, datetime.timezone.utc), usegmt=True)})), NOW + 120, "upstream-header:retry-after")
+check(an(Ex(headers={"retry-after": "30", "retry-after-ms": "1500"})), NOW + 1.5, "upstream-header:retry-after-ms")
+check(an(Ex(headers={"x-ratelimit-reset-requests": "1s", "x-ratelimit-reset-tokens": "6m0s",
+                     "x-ratelimit-remaining-requests": "5", "x-ratelimit-remaining-tokens": "0",
+                     "x-ratelimit-limit-requests": "100"})), NOW + 360, "upstream-header:x-ratelimit-reset-tokens")
+check(an(Ex(headers={"x-ratelimit-reset-requests": "1s", "x-ratelimit-reset-tokens": "6m0s"})), NOW + 1, "upstream-header:x-ratelimit-reset-requests")  # no remaining: earliest
+check(an(Ex(headers={"x-ratelimit-reset-tokens": "1h2m3.5s"})), NOW + 3723.5, "upstream-header:x-ratelimit-reset-tokens")
+check(an(Ex(headers={"x-ratelimit-reset-tokens": "250ms"})), NOW + 0.25, "upstream-header:x-ratelimit-reset-tokens")
+# praxis token_rate_limit: Retry-After + X-RateLimit-{Limit,Remaining,Reset}-Tokens (reset = bare seconds)
+check(an(Ex(headers={"Retry-After": "42", "X-RateLimit-Limit-Tokens": "1000000", "X-RateLimit-Remaining-Tokens": "0", "X-RateLimit-Reset-Tokens": "42"})), NOW + 42, "upstream-header:retry-after")
+check(an(Ex(headers={"X-RateLimit-Limit-Tokens": "1000", "X-RateLimit-Remaining-Tokens": "0", "X-RateLimit-Reset-Tokens": "42"})), NOW + 42, "upstream-header:x-ratelimit-reset-tokens")
+# LiteLLM: retry-after, x-ratelimit-*-input/output-tokens (seconds), reset_at, llm_provider- prefix
+check(an(Ex(headers={"x-ratelimit-limit-input-tokens": "100", "x-ratelimit-remaining-input-tokens": "0", "x-ratelimit-reset-input-tokens": "17", "x-ratelimit-reset-output-tokens": "40", "rate_limit_type": "tokens"})), NOW + 17, "upstream-header:x-ratelimit-reset-input-tokens")
+check(an(Ex(headers={"reset_at": str(NOW + 55)})), NOW + 55, "upstream-header:reset_at")
+check(an(Ex(headers={"llm_provider-retry-after": "9"})), NOW + 9, "upstream-header:retry-after")
+# IETF RateLimit
+check(an(Ex(headers={"RateLimit": "limit=100, remaining=0, reset=30", "RateLimit-Policy": "100;w=60"})), NOW + 30, "upstream-header:ratelimit")
+check(an(Ex(headers={"RateLimit": '"default";r=0;t=25', "RateLimit-Policy": '"default";q=100;w=60'})), NOW + 25, "upstream-header:ratelimit")
+check(an(Ex(headers={"RateLimit-Reset": "12", "RateLimit-Limit": "5", "RateLimit-Remaining": "0"})), NOW + 12, "upstream-header:ratelimit-reset")
+# Anthropic: RFC3339 or epoch
+check(an(Ex(headers={"anthropic-ratelimit-unified-reset": iso(NOW + 600), "anthropic-ratelimit-unified-status": "rejected", "anthropic-ratelimit-requests-reset": iso(NOW + 5)})), NOW + 600, "upstream-header:anthropic-ratelimit-unified-reset")
+check(an(Ex(headers={"anthropic-ratelimit-unified-reset": str(NOW + 700)})), NOW + 700, "upstream-header:anthropic-ratelimit-unified-reset")
+check(an(Ex(headers={"anthropic-ratelimit-tokens-reset": iso(NOW + 30), "anthropic-ratelimit-tokens-remaining": "0", "anthropic-ratelimit-requests-reset": iso(NOW + 5), "anthropic-ratelimit-requests-remaining": "9"})), NOW + 30, "upstream-header:anthropic-ratelimit-tokens-reset")
+# JSON body fields (#107 proposal), via exc.body and via text
+check(an(Ex(body={"error": {"type": "rate_limit_error", "reset_at": iso(NOW + 900)}})), NOW + 900, "upstream-body:reset_at")
+check(an(Ex("litellm.RateLimitError: OpenAIException - " + json.dumps({"error": {"type": "rate_limit_exceeded", "resets_at": NOW + 800}}))), NOW + 800, "upstream-body:resets_at")
+check(an(Ex(body={"error": {"type": "rate_limit_exceeded", "reset_after_seconds": 90}})), NOW + 90, "upstream-body:reset_after_seconds")
+check(an(Ex(body={"error": {"code": "rate_limit_exceeded", "reason": "per_minute", "retry_after": 45}})), NOW + 45, "upstream-body:retry_after")
+# header beats body; retry-after-ms beats everything
+check(an(Ex(headers={"retry-after": "30"}, body={"error": {"type": "rate_limit_error", "reset_after_seconds": 90}})), NOW + 30, "upstream-header:retry-after")
+# quota via body type/reason, exact reset at the UTC month boundary: no drift
+qbody = {"error": {"type": "insufficient_quota", "reason": "monthly_tokens", "message": "token budget exhausted", "reset_at": iso(NEXT)}}
+check(an(Ex(json.dumps(qbody), body=qbody)), NEXT, "upstream-body:reset_at", "quota")
+check(an(Ex("OpenAIException - " + json.dumps(qbody))), NEXT, "upstream-body:reset_at", "quota")
+# quota via a long Retry-After with the plain text body: kind from text, exact reset, no drift
+check(an(Ex("token budget exhausted", headers={"retry-after": str(NEXT - NOW)})), NEXT, "upstream-header:retry-after", "quota")
+# long wait without any kind signal counts as quota; inferred, so the month estimate is not compared
+check(an(Ex(headers={"retry-after": str(5 * 86400)})), NOW + 5 * 86400, "upstream-header:retry-after", "quota")
+# plain text unchanged: estimates, no drift
+check(an(E("token budget exhausted")), NEXT, "estimate:next-month-utc", "quota")
+check(an(E("slow down")), NOW + 60, "estimate:default")
+# unknown header -> unhandled_header (value sample, hint names the parser); reset still used
+info = an(Ex(headers={"retry-after": "30", "x-quota-window-end": "2026-11-01", "x-request-id": "abc", "x-litellm-key-spend": "1", "x-should-retry": "true"}))
+assert info["reset"] == NOW + 30 and len(info["drift"]) == 1, info
+d = info["drift"][0]
+assert d == {"kind": "unhandled_header", "detail": "x-quota-window-end=2026-11-01",
+             "hint": "update hosted_only_hooks.parse_reset_headers to parse x-quota-window-end"}, d
+# unknown JSON key -> unhandled_body_field
+info = an(Ex(body={"error": {"type": "rate_limit_error", "retry_hint_ms": 5, "reset_after_seconds": 90}}))
+assert [(d["kind"], d["detail"]) for d in info["drift"]] == [("unhandled_body_field", "retry_hint_ms=5")], info["drift"]
+assert "parse_reset_body" in info["drift"][0]["hint"] and info["reset"] == NOW + 90
+# upstream month boundary in a non-UTC zone (America/Chicago CDT = 05:00Z) -> estimate_mismatch
+chicago = {"error": {"type": "insufficient_quota", "message": "token budget exhausted", "reset_at": iso(NEXT + 5 * 3600)}}
+info = an(Ex(json.dumps(chicago), body=chicago))
+assert info["reset"] == NEXT + 5 * 3600 and info["kind"] == "quota", info
+assert [d["kind"] for d in info["drift"]] == ["estimate_mismatch"], info["drift"]
+assert iso(NEXT + 5 * 3600) in info["drift"][0]["hint"] and "update limit_reset" in info["drift"][0]["hint"]
+# within tolerance (a few seconds of skew) -> no drift
+check(an(Ex("token budget exhausted", headers={"retry-after": str(NEXT - NOW + 20)})), NEXT + 20, "upstream-header:retry-after", "quota")
+# quota/rate-limit disagreement -> kind_mismatch, upstream kind wins
+qb = {"error": {"type": "insufficient_quota", "reset_at": iso(NEXT)}}
+info = an(Ex("slow down", body=qb))
+assert info["kind"] == "quota" and [d["kind"] for d in info["drift"]] == ["kind_mismatch"], info
+rb = {"error": {"type": "rate_limit_exceeded", "reset_after_seconds": 30}}
+info = an(Ex("token budget exhausted", body=rb))
+assert info["kind"] == "rate-limit" and [d["kind"] for d in info["drift"]] == ["kind_mismatch"], info
+# JSON body we do not recognise -> shape_changed (once per distinct key set)
+info = an(Ex("x " + json.dumps({"object": "error", "message": "nope", "code": 429})))
+assert [d["kind"] for d in info["drift"]] == ["shape_changed"] and info["source"] == "estimate:default", info
+# router cooldown reuses the last real reset, no drift
+h.rewrite_limit(Ex("token budget exhausted"), {"model": "rc", "proxy_server_request": {"url": "/v1/responses"}}, now=NOW)
+class RouterRateLimitError(E): pass
+info = h.analyze_limit(RouterRateLimitError("No deployments available for selected model"), "rc", NOW + 5)
+assert info["source"] == "reuse:last-reset" and info["reset"] == NEXT and info["kind"] == "quota" and not info["drift"], info
+
+# WARNING once per (kind, key) per proxy lifetime
+records = []
+class Cap(logging.Handler):
+    def emit(self, record): records.append(record.getMessage())
+h.LOG.addHandler(Cap()); h.LOG.setLevel(logging.WARNING); h.LOG.propagate = False
+h.DRIFT_SEEN.clear()
+for value in ("1", "2", "3"):
+    h.limit_reset(Ex(headers={"x-new-quota-window": value}), "m", NOW)
+assert len(records) == 1 and "[unhandled_header] x-new-quota-window=1" in records[0] and "parse_reset_headers" in records[0], records
+h.limit_reset(Ex(headers={"x-other-limit-thing": "v"}), "m", NOW)
+assert len(records) == 2, records
+h.limit_reset(Ex(headers={"retry-after": "30"}), "m", NOW)       # no drift, no warning
+assert len(records) == 2, records
+
+# client rewrite uses the upstream reset, passes upstream headers through
+up = {"retry-after": "30", "retry-after-ms": "30000", "x-ratelimit-remaining-tokens": "0", "x-ratelimit-limit-tokens": "1000", "x-codex-primary-reset-at": "1"}
+out = h.rewrite_limit(Ex(headers=up), {"model": "m", "proxy_server_request": {"url": "/v1/responses"}}, now=NOW)
+assert out.headers["retry-after"] == "30" and out.headers["retry-after-ms"] == "30000", out.headers
+assert out.headers["x-ratelimit-remaining-tokens"] == "0" and out.headers["x-ratelimit-limit-tokens"] == "1000", out.headers
+assert out.headers["x-codex-primary-reset-at"] == str(NOW + 30), out.headers      # ours win
+out = h.rewrite_limit(Ex(headers={"retry-after": "30"}), {"model": "m", "proxy_server_request": {"url": "/v1/responses"}}, now=NOW)
+assert not any(k.startswith(("x-ratelimit", "retry-after-ms")) for k in out.headers), out.headers
+out = h.rewrite_limit(Ex(body={"error": {"type": "rate_limit_error", "reset_after_seconds": 7200}}), {"model": "m", "proxy_server_request": {"url": "/v1/messages"}}, now=NOW)
+assert out.status_code == 503 and "(reset after 2h)" in out.detail, out.detail
+qex = Ex("token budget exhausted", body={"error": {"type": "insufficient_quota", "message": "token budget exhausted", "reset_at": iso(NEXT + 3600)}})
+out = h.rewrite_limit(qex, chat, now=NOW)
+assert out.status_code == 402 and out.detail == f"Monthly token budget exhausted. Quota resets {iso(NEXT + 3600)}.", out.detail
+assert not out.headers, out.headers                                   # 402: nothing retry-like
+out = h.rewrite_limit(Ex(headers={"retry-after": "60", "retry-after-ms": "60000", "x-ratelimit-remaining-tokens": "0"}), chat, now=NOW)
+assert out.status_code == 429 and out.headers["retry-after-ms"] == "60000" and out.headers["x-ratelimit-remaining-tokens"] == "0", out.headers
+
+# usage logger: reset_at / reset_source / drift in the event
+import litellm_usage_log as ul
+sys.modules["litellm"].callbacks = [h.HostedOnlyHooks()]
+h.DRIFT_SEEN.clear()
+exc = Ex(headers={"retry-after": "30", "x-quota-window-end": "z"})
+ev = ul.error_fields({"exception": exc, "model": "m", "proxy_server_request": {"url": "/v1/messages"}}, {"error_information": {"error_code": "429"}})
+assert ev["status"] == 503 and ev["upstream_status"] == 429 and ev["rewritten"] and 29 <= ev["retry_after"] <= 31, ev
+assert ev["reset_source"] == "upstream-header:retry-after" and abs(ev["reset_at"] - time.time() - 30) < 5, ev
+assert [d["kind"] for d in ev["drift"]] == ["unhandled_header"], ev
+ev = ul.error_fields({"exception": E("token budget exhausted"), "model": "m", "proxy_server_request": {"url": "/v1/responses"}}, {"error_information": {"error_code": "429"}})
+assert ev["reset_source"] == "estimate:next-month-utc" and ev["quota"] and "drift" not in ev and ev["reset_at"] > time.time(), ev
+ev = ul.error_fields({"exception": Exception("[m] [429]: {} (reset after 1h 2m 3s)"), "model": "m"}, {})
+assert ev["reset_source"] == "unknown:rewritten" and ev["retry_after"] == 3723, ev
+
+# --- GitHub Copilot shapes (docs/notes/copilot-api-429-handling.md)
+def St(status, text="", headers=None, body=None):
+    e = type("St", (Exception,), {"status_code": status})(text)
+    e.headers = headers; e.body = body
+    return e
+# x-usage-ratelimit-{session,weekly}: rem=<n>&rst=<ISO>; the exhausted one decides, else the earliest
+check(an(St(429, headers={"x-usage-ratelimit-session": f"rem=0&rst={iso(NOW + 1800)}"})), NOW + 1800, "upstream-header:x-usage-ratelimit-session")
+check(an(St(429, headers={"x-usage-ratelimit-session": f"rem=40&rst={iso(NOW + 18000)}", "x-usage-ratelimit-weekly": f"rem=0&rst={iso(NOW + 3 * 86400)}"})), NOW + 3 * 86400, "upstream-header:x-usage-ratelimit-weekly", "quota")
+check(an(St(429, headers={"x-usage-ratelimit-session": f"rem=40&rst={iso(NOW + 18000)}", "x-usage-ratelimit-weekly": f"rem=90&rst={iso(NOW + 3 * 86400)}"})), NOW + 18000, "upstream-header:x-usage-ratelimit-session")
+check(an(St(429, headers={"x-usage-ratelimit-session": "rem=50", "retry-after": "20"})), NOW + 20, "upstream-header:retry-after")   # no rst: informational
+# unknown variants -> drift
+info = an(St(429, headers={"x-usage-ratelimit-session": "garbage", "x-usage-ratelimit-monthly": "rem=0&rst=x", "retry-after": "20"}))
+assert sorted(d["detail"].split("=")[0] for d in info["drift"]) == ["x-usage-ratelimit-monthly", "x-usage-ratelimit-session"], info["drift"]
+assert all(d["kind"] == "unhandled_header" for d in info["drift"]) and info["reset"] == NOW + 20
+# optional x-ratelimit-* beside them: informational, no drift
+check(an(St(429, headers={"x-ratelimit-limit": "100", "x-ratelimit-remaining": "0", "retry-after": "20"})), NOW + 20, "upstream-header:retry-after")
+# body error.code rate_limited, retry_after in error or top-level, any status
+check(an(St(429, body={"error": {"code": "rate_limited", "message": "x", "retry_after": 12}})), NOW + 12, "upstream-body:retry_after")
+check(an(St(429, body={"error": {"code": "rate_limited", "message": "x"}, "retry_after": 33})), NOW + 33, "upstream-body:retry_after")
+check(an(St(500, "x " + json.dumps({"error": {"code": "rate_limited", "retry_after": 8}}))), NOW + 8, "upstream-body:retry_after")
+check(an(St(429, body={"error": {"code": "rate_limited", "message": "x"}})), NOW + 60, "estimate:default")
+info = an(St(429, body={"error": {"code": "rate_limited"}, "copilot_quota_reset": "tomorrow"}))
+assert [(d["kind"], d["detail"]) for d in info["drift"]] == [("unhandled_body_field", "copilot_quota_reset=tomorrow")], info["drift"]
+# 402 = quota used up (plain text, or with a reset); 503 `upstream rate limited` = rate limit
+check(an(St(402, "payment required")), NEXT, "estimate:next-month-utc", "quota")
+check(an(St(402, body={"error": {"message": "quota", "retry_after": NEXT - NOW}})), NEXT, "upstream-body:retry_after", "quota")
+check(an(St(503, "Upstream rate limited, try later")), NOW + 60, "estimate:default")
+check(an(St(503, "upstream rate limited", body={"error": {"code": "rate_limited", "retry_after": 20}})), NOW + 20, "upstream-body:retry_after")
+# what counts as a limit answer
+for status, text, body, want in (
+    (429, "", None, True), (402, "", None, True), (503, "Upstream rate limited", None, True),
+    (503, "metering system unavailable", None, False), (500, "boom", None, False), (400, "bad", None, False),
+    (500, "", {"error": {"code": "rate_limited"}}, True), (200, "", {"error": {"code": "other"}}, False),
+):
+    assert h.is_limit_error(St(status, text, body=body)) is want, (status, text, body)
+# client rewrite of those answers
+msgs = {"model": "m", "proxy_server_request": {"url": "/v1/messages"}}
+resp = {"model": "m", "proxy_server_request": {"url": "/v1/responses"}}
+out = h.rewrite_limit(St(503, "upstream rate limited", body={"retry_after": 20}), msgs, now=NOW)
+assert out.status_code == 503 and "(reset after 20s)" in out.detail and "Rate limit reached." in out.detail, out.detail
+out = h.rewrite_limit(St(402, "payment required"), chat, now=NOW)
+assert out.status_code == 402 and out.type == "insufficient_quota" and iso(NEXT) in out.detail, (out.status_code, out.detail)
+out = h.rewrite_limit(St(402, "payment required"), resp, now=NOW)
+assert out.status_code == 429 and out.type == "usage_limit_reached" and out.headers["x-codex-primary-reset-at"] == str(int(NEXT)), out.headers
+assert h.rewrite_limit(St(503, "metering system unavailable"), msgs, now=NOW) is None
+assert h.rewrite_limit(St(500, "boom"), msgs, now=NOW) is None
+# usage logger: non-429 limit answers keep their real upstream status, client sees the rewrite
+ev = ul.error_fields({"exception": St(503, "upstream rate limited", body={"retry_after": 20}), "model": "m", "proxy_server_request": {"url": "/v1/messages"}}, {"error_information": {"error_code": "503"}})
+assert (ev["upstream_status"], ev["status"], ev["rewritten"]) == (503, 503, True) and ev["reset_source"] == "upstream-body:retry_after", ev
+ev = ul.error_fields({"exception": St(402, "payment required"), "model": "m", "proxy_server_request": {"url": "/v1/chat/completions"}}, {"error_information": {"error_code": "402"}})
+assert (ev["upstream_status"], ev["status"], ev.get("quota")) == (402, 402, True) and ev["reset_source"] == "estimate:next-month-utc", ev
+ev = ul.error_fields({"exception": St(500, "boom"), "model": "m"}, {"error_information": {"error_code": "500"}})
+assert "reset_source" not in ev and "rewritten" not in ev, ev
 EOF
 
 print -r -- "ok hosted-only-proxy"

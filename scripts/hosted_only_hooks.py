@@ -39,8 +39,20 @@ retired GLM_HYBRID_* name as a fallback.
 5. Rate-limit rewrite (all models, both flavors): EnMaaS 429s carry no reset
    time, so T3 Code cannot auto-resume a limited thread. A 429 is rewritten
    into the shape each client's T3 adapter turns into a reset time, plus a
-   `retry-after` header. Reset time, in order:
-   - upstream `retry-after` (seconds or HTTP-date), when the 429 carries one;
+   `retry-after` header. Reset time, in order (parse_reset_headers /
+   parse_reset_body; the winning one is logged as `reset_source`):
+   - what upstream sends, most specific first: `retry-after-ms`, `retry-after`
+     (seconds or HTTP-date), JSON body `error.{reset_at,resets_at,
+     reset_after_seconds,retry_after}`, OpenAI `x-ratelimit-reset-*` (praxis
+     token_rate_limit's `X-RateLimit-Reset-Tokens`, LiteLLM's), Anthropic
+     `anthropic-ratelimit-*-reset`, Copilot `x-usage-ratelimit-{session,weekly}`
+     (`rem=<n>&rst=<ISO>`), IETF `RateLimit`/`RateLimit-Reset`, `reset_at`.
+     An upstream error type/reason (`insufficient_quota`, `monthly_*`, ...) sets
+     quota vs rate limit; an upstream reset over 24 h out counts as quota. It
+     also drives the client rewrite below, and rate-limit headers clients
+     already read (`retry-after-ms`, `x-ratelimit-*`, `RateLimit-*`) are passed
+     through on the 429 routes (not on the Claude 503, whose headers the
+     handler fixes, nor the chat 402, which must not look retryable);
    - praxis-proxy `reject_budget_exhausted()` (filters/src/metering/mod.rs):
      429, plain-text body exactly `token budget exhausted`, no headers. That
      is the monthly token quota (pricetag-metering internal/storage/quota.go
@@ -48,8 +60,15 @@ retired GLM_HYBRID_* name as a fallback.
      the next UTC month;
    - any other 429 (per-minute RPM/TPM; GLM is reportedly 100 RPM / 1M TPM)
      -> now + HOSTED_ONLY_RATE_LIMIT_DEFAULT_RETRY_SECONDS (default 60).
-   Other statuses are never touched (503 `metering system unavailable` is not
-   a limit). HOSTED_ONLY_LIMIT_REWRITE=0 turns this off.
+   Other statuses are never touched, except Copilot-style limit answers (402;
+   503 `upstream rate limited`; any status with error.code `rate_limited`; see
+   is_limit_error): 503 `metering system unavailable` is not a limit. HOSTED_ONLY_LIMIT_REWRITE=0 turns this off.
+   Drift: when upstream starts sending limit data this code does not parse (an
+   unknown rate/retry/reset/quota/limit header or JSON key, an unrecognised
+   JSON body, a monthly reset that is not the next UTC month start, a
+   quota/rate-limit classification that disagrees with ours) the event records
+   `drift` and the proxy log gets one WARNING per signal per lifetime. Contract:
+   docs/notes/enmaas-reset-forward-compat.md.
    - Claude (/v1/messages): 503 whose message reads `[<model>] [429]:
      {"type":"error","error":{"type":"rate_limit_error",...}} (reset after
      1h 2m 3s)`, the text T3's ClaudeAdapterV2 parses for a gateway limit.
@@ -82,11 +101,13 @@ retired GLM_HYBRID_* name as a fallback.
 
 import email.utils
 import json
+import logging
 import math
 import os
 import re
 import time
 from datetime import datetime, timezone
+from urllib.parse import parse_qs
 
 from fastapi import HTTPException
 from litellm.integrations.custom_logger import CustomLogger
@@ -118,6 +139,7 @@ BUDGET_EXHAUSTED_TEXT = "token budget exhausted"
 # after a 429 and answers the next requests itself (RouterRateLimitError), with
 # no upstream body, so those reuse the reset the real 429 produced.
 LAST_LIMIT_RESET = {}
+LAST_LIMIT_KIND = {}
 
 
 def has_image(node):
@@ -161,32 +183,6 @@ def exc_text(exc):
     return str(getattr(exc, "message", None) or exc)
 
 
-def upstream_retry_after(exc, now):
-    """Epoch seconds from an upstream `retry-after` (seconds or HTTP-date)."""
-    for source in (exc, getattr(exc, "response", None)):
-        headers = getattr(source, "headers", None) or getattr(
-            source, "litellm_response_headers", None
-        )
-        if not headers:
-            continue
-        try:
-            raw = headers.get("retry-after")
-        except AttributeError:
-            continue
-        if not raw:
-            continue
-        try:
-            seconds = float(raw)
-        except ValueError:
-            try:
-                return email.utils.parsedate_to_datetime(str(raw)).timestamp()
-            except (TypeError, ValueError):
-                continue
-        if seconds > 0:
-            return now + seconds
-    return None
-
-
 def month_bounds(now):
     """(start, next start) of the UTC calendar month containing `now`, epoch s."""
     at = datetime.fromtimestamp(now, timezone.utc)
@@ -195,19 +191,400 @@ def month_bounds(now):
     return start.timestamp(), nxt.timestamp()
 
 
+LOG = logging.getLogger("hosted_only_hooks")
+LIMIT_KEY_RE = re.compile(r"rate|retry|reset|quota|limit", re.I)
+# Headers that match LIMIT_KEY_RE but are not an upstream limit signal.
+HEADER_IGNORED_RE = re.compile(
+    r"^(x-litellm-|x-should-retry$|access-control-|x-stainless-|x-envoy-upstream-)"
+)
+# Limit headers we read for information only (no reset in them).
+HEADER_INFO_RE = re.compile(
+    r"^(x-ratelimit-(limit|remaining)(-[a-z-]+)?|ratelimit-(limit|remaining|policy)"
+    r"|anthropic-ratelimit-[a-z0-9-]+-(limit|remaining)"
+    r"|anthropic-ratelimit-unified-(status|representative-claim|fallback|fallback-percentage)"
+    r"|rate_limit_type)$"
+)
+ANTHROPIC_DIMS = ("requests", "tokens", "input-tokens", "output-tokens")
+BODY_RESET_KEYS = (
+    "reset_at", "resets_at", "reset_after_seconds",
+    "retry_after", "retry_after_seconds", "retry_after_ms",
+)
+BODY_INFO_KEYS = {"rate_limit_type"}
+QUOTA_NAMES = {
+    "insufficient_quota", "quota_exceeded", "quota_exhausted", "budget_exceeded",
+    "billing_hard_limit_reached", "usage_limit_reached",
+}
+RATE_NAMES = {
+    "rate_limit_exceeded", "rate_limit_error", "rate_limited", "too_many_requests",
+    "requests", "tokens",
+}
+RATE_REASON_RE = re.compile(r"per_(second|minute|hour)|^(rpm|tpm)$|rate_limit", re.I)
+LONG_WAIT_QUOTA_SECONDS = 86400  # an upstream reset this far out is a quota, not a rate limit
+ESTIMATE_TOLERANCE_CAP = 300     # estimate vs upstream reset: max(60 s, min(5%, 5 min))
+DURATION_RE = re.compile(r"(\d+(?:\.\d+)?)(ms|h|m|s)")
+# Upstream limit signals already seen and warned about (kind, key); see warn_drift.
+DRIFT_SEEN = set()
+
+
+def parse_duration(raw):
+    """Seconds from `6m0s` / `1h2m3.5s` / `250ms` (Go style, OpenAI x-ratelimit-reset-*)
+    or a bare number (seconds, as praxis and LiteLLM send). None when unparseable."""
+    raw = str(raw).strip()
+    try:
+        number = float(raw)
+        return number if math.isfinite(number) else None
+    except ValueError:
+        pass
+    parts = DURATION_RE.findall(raw)
+    if not parts or "".join(n + u for n, u in parts) != raw:
+        return None
+    scale = {"h": 3600, "m": 60, "s": 1, "ms": 0.001}
+    return sum(float(n) * scale[u] for n, u in parts)
+
+
+def parse_when(raw, now):
+    """Epoch seconds from an epoch (s or ms), RFC3339 or HTTP-date. A small bare number
+    is a delta in seconds. None when unparseable."""
+    if isinstance(raw, bool):
+        return None
+    if isinstance(raw, (int, float)) or re.fullmatch(r"\d+(\.\d+)?", str(raw).strip()):
+        value = float(raw)
+        if value > 1e12:
+            return value / 1000
+        return value if value > 1e9 else now + value
+    text = str(raw).strip()
+    try:
+        return datetime.fromisoformat(text.replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        pass
+    try:
+        return email.utils.parsedate_to_datetime(text).timestamp()
+    except (TypeError, ValueError):
+        return None
+
+
+def norm_headers(exc):
+    """{lowercase name: str value} of the upstream response headers on `exc`.
+    LiteLLM prefixes forwarded provider headers with `llm_provider-`."""
+    merged = {}
+    for source in (getattr(exc, "response", None), exc):
+        for attr in ("headers", "litellm_response_headers"):
+            headers = getattr(source, attr, None)
+            try:
+                items = list(headers.items()) if headers else []
+            except AttributeError:
+                continue
+            for name, value in items:
+                name = str(name).lower()
+                name = name.removeprefix("llm_provider-")
+                merged.setdefault(name, str(value))
+    return merged
+
+
+def error_body(exc, text):
+    """Parsed JSON error body (dict) of `exc`, else None. Plain text bodies give None."""
+    body = getattr(exc, "body", None)
+    if isinstance(body, dict):
+        return body
+    start, end = text.find("{"), text.rfind("}")
+    if start < 0 or end <= start:
+        return None
+    try:
+        data = json.loads(text[start : end + 1])
+    except ValueError:
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def pick_reset(pairs):
+    """pairs: [(dimension, reset epoch, remaining or None, header)]. The limit that is
+    exhausted (remaining 0) decides, the slowest one if several; when remaining is not
+    reported the earliest reset wins (a retry that is still limited costs one 429)."""
+    exhausted = [p for p in pairs if p[2] is not None and p[2] <= 0]
+    if exhausted:
+        return max(exhausted, key=lambda p: p[1])
+    return min(pairs, key=lambda p: p[1]) if pairs else None
+
+
+def parse_reset_headers(headers, now):
+    """Reset candidates from upstream headers: ([(rank, epoch, source)], handled names).
+    Lower rank wins: retry-after-ms, retry-after, OpenAI x-ratelimit-reset-*, Anthropic
+    anthropic-ratelimit-*-reset, IETF RateLimit/RateLimit-Reset, LiteLLM reset_at.
+    praxis token_rate_limit sends Retry-After + X-RateLimit-{Limit,Remaining,Reset}-Tokens
+    (reset = bare seconds); LiteLLM sends retry-after and x-ratelimit-reset-{input,output}-tokens
+    (seconds) and a reset_at header. Update this function when EnMaaS sends anything else."""
+    cands, handled = [], set()
+
+    def add(rank, epoch, name):
+        handled.add(name)
+        if epoch is not None:
+            cands.append((rank, epoch, f"upstream-header:{name}"))
+
+    def remaining(name):
+        raw = headers.get(name)
+        number = parse_duration(raw) if raw is not None else None
+        if raw is not None:
+            handled.add(name)
+        return number
+
+    if "retry-after-ms" in headers:
+        ms = parse_duration(headers["retry-after-ms"])
+        add(0, now + ms / 1000 if ms and ms > 0 else None, "retry-after-ms")
+    if "retry-after" in headers:
+        raw = headers["retry-after"]
+        seconds = parse_duration(raw)
+        if seconds is None:
+            add(1, parse_when(raw, now), "retry-after")
+        else:
+            add(1, now + seconds if seconds > 0 else None, "retry-after")
+    openai = []
+    for name in headers:
+        match = re.fullmatch(r"x-ratelimit-reset-(.+)", name)
+        if match:
+            seconds = parse_duration(headers[name])
+            handled.add(name)
+            if seconds is not None:
+                openai.append(
+                    (match[1], now + seconds, remaining(f"x-ratelimit-remaining-{match[1]}"), name)
+                )
+    chosen = pick_reset(openai)
+    if chosen:
+        add(3, chosen[1], chosen[3])
+    pairs = []
+    for dim in ANTHROPIC_DIMS:
+        name = f"anthropic-ratelimit-{dim}-reset"
+        if name in headers:
+            handled.add(name)
+            when = parse_when(headers[name], now)
+            if when is not None:
+                pairs.append((dim, when, remaining(f"anthropic-ratelimit-{dim}-remaining"), name))
+    if "anthropic-ratelimit-unified-reset" in headers:
+        add(4, parse_when(headers["anthropic-ratelimit-unified-reset"], now),
+            "anthropic-ratelimit-unified-reset")
+    chosen = pick_reset(pairs)
+    if chosen:
+        add(5, chosen[1], chosen[3])
+    for name in ("anthropic-ratelimit-unified-5h-reset", "anthropic-ratelimit-unified-7d-reset"):
+        if name in headers:
+            add(6, parse_when(headers[name], now), name)
+    usage = []
+    for scope in ("session", "weekly"):  # GitHub Copilot: `rem=<pct>&rst=<ISO>`
+        name = f"x-usage-ratelimit-{scope}"
+        if name not in headers:
+            continue
+        fields = parse_qs(headers[name])
+        left = parse_duration(fields["rem"][0]) if "rem" in fields else None
+        when = parse_when(fields["rst"][0], now) if "rst" in fields else None
+        if when is not None:
+            handled.add(name)
+            usage.append((scope, when, left, name))
+        elif left is not None:
+            handled.add(name)
+    chosen = pick_reset(usage)
+    if chosen:
+        add(6, chosen[1], chosen[3])
+    if "ratelimit" in headers:  # draft-07 `reset=30` or draft-08 `"default";r=0;t=30`
+        handled.add("ratelimit")
+        found = []
+        for item in re.split(r',\s*(?=")', headers["ratelimit"]):
+            reset = re.search(r"(?:^|[;,\s])(?:reset|t)=(\d+(?:\.\d+)?)", item)
+            left = re.search(r"(?:^|[;,\s])(?:remaining|r)=(\d+)", item)
+            if reset:
+                found.append((float(reset[1]), int(left[1]) if left else None))
+        zero = [f for f in found if f[1] == 0]
+        use = max(zero) if zero else (min(found) if found else None)
+        if use:
+            add(7, now + use[0], "ratelimit")
+    if "ratelimit-reset" in headers:
+        seconds = parse_duration(headers["ratelimit-reset"])
+        add(7, now + seconds if seconds is not None else None, "ratelimit-reset")
+    for name in ("reset_at", "x-ratelimit-reset"):
+        if name in headers:
+            add(8, parse_when(headers[name], now), name)
+    return cands, handled
+
+
+def body_kind(err):
+    """'quota' / 'rate-limit' / None from error.reason, then type, then code."""
+    reason = str(err.get("reason") or "").lower()
+    if reason.startswith("monthly_") or reason in QUOTA_NAMES:
+        return "quota"
+    if reason and RATE_REASON_RE.search(reason):
+        return "rate-limit"
+    for field in ("type", "code"):
+        value = str(err.get(field) or "").lower()
+        if value in QUOTA_NAMES:
+            return "quota"
+        if value in RATE_NAMES:
+            return "rate-limit"
+    return None
+
+
+def parse_reset_body(body, now):
+    """(candidates, kind, handled keys) from a JSON error body shaped like our #107
+    proposal: error.{reset_at,resets_at,reset_after_seconds,retry_after,type,code,reason}.
+    Update this function when EnMaaS puts the reset anywhere else."""
+    if not body:
+        return [], None, set()
+    err = body.get("error") if isinstance(body.get("error"), dict) else body
+    cands, handled = [], set()
+    for key in BODY_RESET_KEYS:
+        if key in err:  # error.retry_after, else top-level (Copilot: both occur)
+            raw = err[key]
+        elif key in body:
+            raw = body[key]
+        else:
+            continue
+        handled.add(key)
+        if key in ("reset_at", "resets_at"):
+            epoch = parse_when(raw, now)
+        else:
+            seconds = parse_duration(raw)
+            if seconds is not None and key == "retry_after_ms":
+                seconds /= 1000
+            epoch = now + seconds if seconds is not None and seconds > 0 else None
+        if epoch is not None:
+            cands.append((2, epoch, f"upstream-body:{key}"))
+    return cands, body_kind(err), handled | BODY_INFO_KEYS
+
+
+def month_estimate(now):
+    return month_bounds(now)[1]
+
+
+def drift_item(kind, detail, hint):
+    return {"kind": kind, "detail": detail, "hint": hint}
+
+
+def drift_key(item):
+    """Dedupe key: unhandled_* and estimate_mismatch ignore the varying value."""
+    detail = item["detail"]
+    if item["kind"] in ("unhandled_header", "unhandled_body_field", "estimate_mismatch"):
+        detail = re.split(r"[=:]", detail, maxsplit=1)[0]
+    return (item["kind"], detail)
+
+
+def warn_drift(drift):
+    """One WARNING per (kind, key) per proxy lifetime, so it shows in the proxy log."""
+    for item in drift:
+        key = drift_key(item)
+        if key in DRIFT_SEEN:
+            continue
+        DRIFT_SEEN.add(key)
+        LOG.warning(
+            "hosted_only_hooks DRIFT [%s] %s -- %s", item["kind"], item["detail"], item["hint"]
+        )
+
+
+UPSTREAM_RATE_LIMITED_TEXT = "upstream rate limited"
+
+
+def is_limit_error(exc):
+    """True for an upstream limit answer: 429; 402 (quota used up); 503 whose text
+    says `upstream rate limited` (a limit, not a server fault; `metering system
+    unavailable` is not); or any status whose JSON body has error.code
+    `rate_limited` (GitHub Copilot shapes, docs/notes/copilot-api-429-handling.md)."""
+    status = status_of(exc)
+    if status in (429, 402):
+        return True
+    text = exc_text(exc)
+    if status == 503 and UPSTREAM_RATE_LIMITED_TEXT in text.lower():
+        return True
+    body = error_body(exc, text)
+    err = body.get("error") if body and isinstance(body.get("error"), dict) else body
+    return bool(err) and str(err.get("code") or "").lower() == "rate_limited"
+
+
+def analyze_limit(exc, model, now):
+    """Everything known about a 429: {reset: epoch s, monthly: bool, kind:
+    'quota'|'rate-limit', source, drift: [...], passthrough: {header: value}}.
+    `source` is upstream-header:<name> | upstream-body:<field> | estimate:next-month-utc |
+    estimate:default | reuse:last-reset. See docs/notes/enmaas-reset-forward-compat.md."""
+    text = exc_text(exc)
+    router = type(exc).__name__ == "RouterRateLimitError" or "No deployments available" in text
+    headers = {} if router else norm_headers(exc)
+    body = None if router else error_body(exc, text)
+    cands, handled = parse_reset_headers(headers, now)
+    bcands, upstream_kind, bhandled = parse_reset_body(body, now)
+    cands = sorted(cands + bcands, key=lambda c: c[0])
+    quota_text = BUDGET_EXHAUSTED_TEXT in text.lower() or status_of(exc) == 402
+    ours_kind = "quota" if quota_text else "rate-limit"
+    kind = upstream_kind or ours_kind
+    inferred = False
+    drift = []
+    for name, value in headers.items():
+        if (
+            LIMIT_KEY_RE.search(name)
+            and name not in handled
+            and not HEADER_IGNORED_RE.match(name)
+            and not HEADER_INFO_RE.match(name)
+        ):
+            drift.append(drift_item(
+                "unhandled_header", f"{name}={value[:60]}",
+                f"update hosted_only_hooks.parse_reset_headers to parse {name}",
+            ))
+    if body:
+        err = body.get("error") if isinstance(body.get("error"), dict) else body
+        for key in {*body, *err}:
+            if LIMIT_KEY_RE.search(str(key)) and key not in bhandled:
+                sample = str(err.get(key, body.get(key)))[:60]
+                drift.append(drift_item(
+                    "unhandled_body_field", f"{key}={sample}",
+                    f"update hosted_only_hooks.parse_reset_body to parse {key}",
+                ))
+        if not bcands and upstream_kind is None and ours_kind != "quota":
+            keys = ",".join(sorted(map(str, {*body, *err})))[:80]
+            drift.append(drift_item(
+                "shape_changed", f"json error body keys: {keys}",
+                "update hosted_only_hooks.parse_reset_body / limit_reset: 429 body is no "
+                "longer plain text and not recognised",
+            ))
+    if upstream_kind and upstream_kind != ours_kind:
+        drift.append(drift_item(
+            "kind_mismatch", f"upstream says {upstream_kind}, text rule says {ours_kind}",
+            "update hosted_only_hooks.limit_reset: classify with the upstream error "
+            "type/reason, not only the `token budget exhausted` text",
+        ))
+    if cands:
+        _, reset, source = cands[0]
+        if not upstream_kind and kind != "quota" and reset - now > LONG_WAIT_QUOTA_SECONDS:
+            kind, inferred = "quota", True
+        if kind == "quota" and not inferred:
+            estimate = month_estimate(now)
+            wait = max(reset - now, 0)
+            tolerance = max(60, min(0.05 * wait, ESTIMATE_TOLERANCE_CAP))
+            if abs(reset - estimate) > tolerance:
+                shown = datetime.fromtimestamp(reset, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+                drift.append(drift_item(
+                    "estimate_mismatch",
+                    f"next-month-utc: estimate {datetime.fromtimestamp(estimate, timezone.utc):%Y-%m-%dT%H:%M:%SZ}, upstream {shown}",
+                    f"estimate rule next-month-utc is wrong: upstream says {shown}; update limit_reset",
+                ))
+    elif router and LAST_LIMIT_RESET.get(model, 0) > now:
+        reset, source = LAST_LIMIT_RESET[model], "reuse:last-reset"
+        kind = LAST_LIMIT_KIND.get(model, kind)
+    elif kind == "quota":
+        reset, source = month_estimate(now), "estimate:next-month-utc"
+    else:
+        reset, source = now + LIMIT_DEFAULT_RETRY_SECONDS, "estimate:default"
+    passthrough = {}
+    if source.startswith("upstream-"):
+        for name, value in headers.items():
+            if name == "retry-after-ms":
+                passthrough[name] = str(max(1, math.ceil((reset - now) * 1000)))
+            elif re.match(r"^(x-ratelimit-(limit|remaining|reset)-|ratelimit(-limit|-remaining|-policy|-reset)?$)", name):
+                passthrough[name] = value
+    return {
+        "reset": reset, "monthly": kind == "quota", "kind": kind, "source": source,
+        "drift": drift, "passthrough": passthrough,
+    }
+
+
 def limit_reset(exc, model, now):
     """(reset epoch seconds, monthly?) for a 429; see item 5 of the docstring."""
-    after = upstream_retry_after(exc, now)
-    if after is not None:
-        return after, False
-    text = exc_text(exc)
-    if BUDGET_EXHAUSTED_TEXT in text.lower():
-        return month_bounds(now)[1], True
-    if type(exc).__name__ == "RouterRateLimitError" or "No deployments available" in text:
-        last = LAST_LIMIT_RESET.get(model)
-        if last is not None and last > now:
-            return last, False
-    return now + LIMIT_DEFAULT_RETRY_SECONDS, False
+    info = analyze_limit(exc, model, now)
+    warn_drift(info["drift"])
+    return info["reset"], info["monthly"]
 
 
 def format_wait(seconds):
@@ -220,12 +597,15 @@ def format_wait(seconds):
 
 def rewrite_limit(exc, request_data, now=None):
     """HTTPException replacing a 429, or None to leave the error as it is."""
-    if status_of(exc) != 429:
+    if not is_limit_error(exc):
         return None
     now = time.time() if now is None else now
     model = str(request_data.get("model") or "")
-    reset, monthly = limit_reset(exc, model, now)
+    info = analyze_limit(exc, model, now)
+    warn_drift(info["drift"])
+    reset, monthly = info["reset"], info["monthly"]
     LAST_LIMIT_RESET[model] = reset
+    LAST_LIMIT_KIND[model] = info["kind"]
     seconds = max(1, math.ceil(reset - now))
     reason = "Monthly token budget exhausted." if monthly else "Rate limit reached."
     url = str((request_data.get("proxy_server_request") or {}).get("url") or "")
@@ -268,7 +648,10 @@ def rewrite_limit(exc, request_data, now=None):
     out = HTTPException(
         status_code=429,
         detail=f"{reason} Try again in {format_wait(seconds)}.",
+        # upstream rate-limit headers clients already read (retry-after-ms,
+        # x-ratelimit-*, RateLimit-*) go through; ours win on any clash
         headers={
+            **info["passthrough"],
             "retry-after": str(seconds),
             "x-codex-primary-used-percent": "100",
             "x-codex-primary-window-minutes": str(window),
