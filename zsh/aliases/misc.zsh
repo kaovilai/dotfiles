@@ -122,7 +122,7 @@ alias termc='osascript -e "tell app \"Terminal\" to do script \"cd $PWD && claud
 alias audio-desk='SwitchAudioSource -t all -s "FiiO USB DAC K1" && SwitchAudioSource -t input -s "HD Pro Webcam C920"'
 alias audio-poly='SwitchAudioSource -t all -s "Poly V4320 Series"'
 alias restart-dock='killall Dock'
-alias kill-screensharing='sudo launchctl kill KILL system/com.apple.screensharing'
+alias kill-screensharing='sudo killall -KILL screensharingd ScreensharingAgent ScreenSharingSubscriber'
 c() {
     if [[ "$OSTYPE" != darwin* ]]; then
         echo "Error: c is only supported on macOS" >&2
