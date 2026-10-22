@@ -13,6 +13,17 @@ Prompts, completions, keys and header values are never stored; only metadata:
 requested model (the name the client asked for), served model (the deployment
 LiteLLM actually called), upstream host, token counts, latency, status.
 
+Failures also record `upstream_status` (what the provider answered, e.g. 429
+from EnMaaS), `status` (what the client sees), `rewritten`, `retry_after`
+(seconds) and `error_type`. Callback order matters: LiteLLM runs the logging
+callbacks when the upstream call raises, *before* the proxy's
+async_post_call_failure_hook (hosted_only_hooks.rewrite_limit, which turns a
+429 into a 503 "(reset after ...)" for /v1/messages and edits the exception
+in place). So the usual view here is the original 429, and the rewrite is
+predicted with the hooks' own limit_reset(); if the logger ever runs late and
+sees the already-rewritten 503, the "[429]: ... (reset after Xh Ym Zs)" text
+is parsed back into upstream 429 + retry_after.
+
 Token fields use Anthropic semantics so every source lines up: `in` is the
 fresh (uncached) prompt, `cache_read`/`cache_write` are separate, and the full
 context size is in + cache_read + cache_write.
@@ -21,9 +32,12 @@ Logging must never break a request: every failure is swallowed.
 """
 
 import json
+import math
 import os
+import re
 import sys
 import threading
+import time
 from datetime import datetime, timezone
 from urllib.parse import urlparse
 
@@ -145,6 +159,68 @@ def _iso(value):
     return None
 
 
+RESET_AFTER_RE = re.compile(r"\[429\]: .*\(reset after (?:(\d+)h ?)?(?:(\d+)m ?)?(?:(\d+)s)?\)", re.S)
+QUOTA_RE = re.compile(r"token budget exhausted|monthly token budget", re.I)
+
+
+def _status(exc):
+    for name in ("status_code", "code"):
+        try:
+            return int(getattr(exc, name))
+        except (AttributeError, TypeError, ValueError):
+            pass
+    return None
+
+
+def _hooks_module():
+    """The glm/hosted-only hooks module when it is loaded in this proxy."""
+    try:
+        import litellm
+        for callback in litellm.callbacks:
+            if type(callback).__name__ in ("GlmHybridHooks", "HostedOnlyHooks"):
+                return sys.modules.get(type(callback).__module__)
+    except Exception:
+        pass
+    return None
+
+
+def error_fields(kwargs, slo):
+    """status / upstream_status / rewritten / retry_after / error_type / quota for a failed call."""
+    exc = kwargs.get("exception")
+    info = slo.get("error_information") or {}
+    message = str(info.get("error_message") or _get(exc, "message") or exc or "")
+    out = {"error_type": (info.get("error_class") or (type(exc).__name__ if exc is not None else None)) or None}
+    upstream = _int(info.get("error_code")) or _status(exc) or None
+    client = upstream
+    match = RESET_AFTER_RE.search(message)
+    if match:  # already rewritten (logger ran after the hook)
+        h, m, s = (int(g or 0) for g in match.groups())
+        out["retry_after"] = h * 3600 + m * 60 + s
+        upstream, client = 429, 503
+        out["rewritten"] = True
+    elif upstream == 429:
+        hooks = _hooks_module()
+        if hooks is not None and getattr(hooks, "LIMIT_REWRITE", False):
+            url = str((kwargs.get("proxy_server_request") or {}).get("url") or "")
+            client = 503 if "/v1/messages" in url else 429
+            out["rewritten"] = True
+            try:
+                now = time.time()
+                reset, monthly = hooks.limit_reset(exc, str(kwargs.get("model") or ""), now)
+                out["retry_after"] = max(1, math.ceil(reset - now))
+                if monthly:
+                    out["quota"] = True
+            except Exception:
+                pass
+    if upstream == 429 and QUOTA_RE.search(message):
+        out["quota"] = True
+    if upstream:
+        out["upstream_status"] = upstream
+    if client:
+        out["status"] = client
+    return out
+
+
 def build_event(kwargs, response_obj, start_time, end_time, ok):
     slo = kwargs.get("standard_logging_object") or {}
     litellm_params = kwargs.get("litellm_params") or {}
@@ -214,6 +290,10 @@ def build_event(kwargs, response_obj, start_time, end_time, ok):
         "role": "classifier" if CLASSIFIER_MARKER in head else None,
         "fallback": bool(previous),
     }
+    if ok:
+        event["status"] = 200
+    else:
+        event.update(error_fields(kwargs, slo))
     return {k: v for k, v in event.items() if v is not None}
 
 

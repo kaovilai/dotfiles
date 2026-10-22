@@ -153,8 +153,19 @@ tbody tr:hover td { background: var(--wash); }
       <div class="chart" id="ch-lat"></div><div class="scroll" id="tb-lat" hidden></div>
     </section>
 
+    <section class="card" id="c-errtime">
+      <div class="card-h"><h2>Errors over time <span class="sub">429 rate-limit/quota · 5xx server · other; flagged spikes below</span></h2></div>
+      <div class="chart" id="ch-errtime"></div>
+      <div class="scroll" id="tb-spikes"></div>
+    </section>
+
+    <section class="card half" id="c-errmodel">
+      <div class="card-h"><h2>Error rate per model <span class="sub">failed / requests</span></h2></div>
+      <div class="bars" id="ch-errmodel"></div>
+    </section>
+
     <section class="card half" id="c-err">
-      <div class="card-h"><h2>Errors</h2></div>
+      <div class="card-h"><h2>Errors <span class="sub">grouped by status + message</span></h2></div>
       <div class="scroll" id="tb-err"></div>
     </section>
 
@@ -219,7 +230,9 @@ const human = (n) => {
 };
 const ms = (n) => (n == null ? "-" : n >= 1000 ? (n / 1000).toFixed(1) + "s" : Math.round(n) + "ms");
 const pctf = (x) => (x == null ? "-" : Math.round(x * 100) + "%");
-const colorOf = (m) => (m === "Other" || D.colors[m] == null || D.colors[m] === 0 ? "var(--other)" : `var(--s${D.colors[m]})`);
+const ERRC = { "429 rate-limit/quota": "var(--crit)", "5xx server": "var(--warn)", "other 4xx/unknown": "var(--other)" };
+const ERR_KEYS = [["429", "429 rate-limit/quota"], ["5xx", "5xx server"], ["oth", "other 4xx/unknown"]];
+const colorOf = (m) => (ERRC[m] ? ERRC[m] : m === "Other" || D.colors[m] == null || D.colors[m] === 0 ? "var(--other)" : `var(--s${D.colors[m]})`);
 
 function nice(max, integer) {
   if (!(max > 0)) return { max: 1, ticks: [0, 1] };
@@ -403,9 +416,9 @@ const sw = (m) => html("span", {}, html("span", { class: "sw", style: { backgrou
 
 function renderTables() {
   table(document.getElementById("tb-models"),
-    ["Model", "Reqs", "Err", "In", "Out", "Cache", "Hit", "Ctx max", ">200k", "p50", "p95", "tok/s", "Cost"],
-    D.model_table.map((r) => [sw(D.colors[r.model] != null ? r.model : "Other"), r.n, r.err || "-", human(r.in), human(r.out), human(r.cread), pctf(r.hit), human(r.ctxmax), r.long || "-", ms(r.p50), ms(r.p95), r.tps ? Math.round(r.tps) : "-", r.cost ? "$" + r.cost.toFixed(2) : "-"]),
-    ["l", "r", "r", "r", "r", "r", "r", "r", "r", "r", "r", "r", "r"]);
+    ["Model", "Reqs", "Err", "429", "5xx", "Err%", "In", "Out", "Cache", "Hit", "Ctx max", ">200k", "p50", "p95", "tok/s", "Cost"],
+    D.model_table.map((r) => [sw(D.colors[r.model] != null ? r.model : "Other"), r.n, r.err || "-", r.e429 || "-", r.e5xx || "-", r.err ? pctf(r.err_rate) : "-", human(r.in), human(r.out), human(r.cread), pctf(r.hit), human(r.ctxmax), r.long || "-", ms(r.p50), ms(r.p95), r.tps ? Math.round(r.tps) : "-", r.cost ? "$" + r.cost.toFixed(2) : "-"]),
+    ["l", "r", "r", "r", "r", "r", "r", "r", "r", "r", "r", "r", "r", "r", "r", "r"]);
 
   const routes = D.routes.filter((r) => r.requested !== "-");
   const rt = document.getElementById("tb-routes");
@@ -420,7 +433,13 @@ function renderTables() {
     D.clients.map((r) => [r.proxy, r.client, r.role, r.n, r.err || "-", human(r.in), human(r.out), human(r.cread), ms(r.p50), ms(r.p95)]),
     ["l", "l", "l", "r", "r", "r", "r", "r", "r", "r"]);
 
-  table(document.getElementById("tb-err"), ["Count", "Error"], D.errors.map((e) => [e.count, e.error]), ["r", "l"]);
+  table(document.getElementById("tb-err"), ["Count", "Status", "Kind", "Error"],
+    D.errors.map((e) => [e.count, html("span", { class: "tag bad" }, e.status), e.kind, e.error]), ["r", "l", "l", "l"]);
+
+  const sp = document.getElementById("tb-spikes");
+  if (D.spikes.length) table(sp, ["Spike from", "To", "Errors", "429", "5xx", "Other", "Peak / bucket"],
+    D.spikes.map((s) => [fullTime(s.start), fullTime(s.end - D.bucket), s.n, s.e429 || "-", s.e5xx || "-", s.eoth || "-", s.peak]), ["l", "l", "r", "r", "r", "r", "r"]);
+  else sp.replaceChildren(html("div", { class: "empty" }, D.kpi && D.kpi.err ? "No spike windows (flag: > max(3, 3× median) errors per bucket, or a 429 burst)." : "No errors in this range."));
 
   table(document.getElementById("tb-recent"), ["Time", "Proxy", "Client", "Route", "Status", "Context", "Out", "Latency", "Notes"],
     D.recent.map((r) => {
@@ -469,7 +488,30 @@ function renderKpis() {
   if (k.cost) tile("Cost", "$" + k.cost.toFixed(2), "per LiteLLM pricing");
 }
 
+function errorCharts() {
+  const host = document.getElementById("ch-errtime"), rates = document.getElementById("ch-errmodel");
+  const total = D.kpi ? D.kpi.err : 0;
+  if (!total) {
+    host.replaceChildren(html("div", { class: "empty" }, D.kpi ? "No failed requests in this range." : "No events in this range."));
+    rates.replaceChildren(html("div", { class: "empty" }, "No failed requests in this range."));
+    return;
+  }
+  const n = D.buckets.length;
+  columns(host, { n, models: ERR_KEYS.map((k) => k[1]), val: (m, i) => D.err_series[ERR_KEYS.find((k) => k[1] === m)[0]][i],
+    fmt: (v) => String(Math.round(v)), yfmt: (v) => String(Math.round(v)), integer: true, height: 200,
+    xlabel: (i) => xFormat(D.buckets[i]), xtitle: (i) => fullTime(D.buckets[i]) });
+  rates.replaceChildren();
+  const rows = D.model_table.filter((r) => r.err).sort((a, b) => b.err_rate - a.err_rate);
+  for (const r of rows) {
+    const bar = html("div", { class: "bar", style: { width: `${Math.max(1, r.err_rate * 100)}%`, background: "var(--crit)", maxWidth: "calc(100% - 96px)" } });
+    const val = html("span", { class: "val" }, `${Math.round(r.err_rate * 100)}% (${r.err}/${r.n})`);
+    rates.append(html("div", { class: "row" }, html("div", { class: "name", title: r.model }, html("span", { class: "sw", style: { background: colorOf(D.colors[r.model] != null ? r.model : "Other") } }), r.model),
+      html("div", { class: "track", tabindex: 0, title: `${r.e429} × 429, ${r.e5xx} × 5xx, ${r.eoth} other` }, bar, val)));
+  }
+}
+
 function renderCharts() {
+  errorCharts();
   const n = D.buckets.length, metric = st.metric, models = D.models;
   document.getElementById("t-time").textContent = `${METRICS[metric]} over time`;
   const fmt = metric === "req" || metric === "err" ? (v) => String(Math.round(v)) : human;

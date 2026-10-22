@@ -21,6 +21,7 @@ Stdlib only; no state besides the logs.
 import argparse
 import glob
 import json
+import math
 import os
 import re
 import statistics
@@ -28,7 +29,7 @@ import subprocess
 import sys
 import time
 import urllib.request
-from collections import defaultdict
+from collections import Counter, defaultdict
 from datetime import datetime, timedelta, timezone
 
 STATE = os.environ.get("LLM_USAGE_DIR") or os.path.join(
@@ -42,8 +43,10 @@ PROXIES = {
     "4142": ("vertex", os.path.expanduser("~/.config/claude-vertex-proxy.yaml")),
     "4145": ("openai", os.path.expanduser("~/.config/claude-openai-proxy.yaml")),
     "4146": ("enmaas", f"/tmp/claude-enmaas-proxy-{UID}-4146/config.json"),
-    "4147": ("codex-glm-hybrid", os.path.expanduser("~/.local/state/glm-hybrid-codex-4147/config.yaml")),
-    "4148": ("claude-glm-hybrid", os.path.expanduser("~/.local/state/glm-hybrid-claude-4148/config.yaml")),
+    "4147": ("codex-hosted-only", ["~/.local/state/hosted-only-codex-4147/config.yaml",
+                                   "~/.local/state/glm-hybrid-codex-4147/config.yaml"]),  # legacy path until cutover
+    "4148": ("claude-hosted-only", ["~/.local/state/hosted-only-claude-4148/config.yaml",
+                                    "~/.local/state/glm-hybrid-claude-4148/config.yaml"]),
 }
 for pair in filter(None, os.environ.get("LLM_USAGE_PORT_NAMES", "").split(",")):
     if "=" in pair:
@@ -60,12 +63,15 @@ def color(text, code):
 # --------------------------------------------------------------------------- model naming
 
 def strip_model(model):
-    """Display name: lowercase, provider/org prefixes and [1m] dropped."""
+    """Display name: lowercase, provider/org prefixes, build-date suffix and [1m] dropped."""
     if not model:
         return "?"
     m = str(model).lower().replace("[1m]", "")
     if "glm" in m:
         return "glm-5.3" if re.search(r"5[-.]3", m) else m.split("/")[-1]
+    if "deepseek" in m:
+        # rits/deepseek-ai/DeepSeek-V4.1-Flash-1017 -> deepseek-v4.1-flash
+        return re.sub(r"-\d{4,}$", "", m.split("/")[-1])
     for prefix in ("anthropic/", "vertex_ai/", "openai/", "bedrock/", "github_copilot/", "copilot/"):
         if m.startswith(prefix):
             m = m[len(prefix):]
@@ -79,6 +85,8 @@ def family(model):
             return fam
     if "glm" in m:
         return "glm"
+    if "deepseek" in m:
+        return "deepseek"
     if "luna" in m:
         return "luna"
     if m.startswith(("gpt", "o1", "o3", "o4")):
@@ -313,6 +321,118 @@ def proxy_name(ev):
     return PROXIES.get(str(port), (f":{port}" if port else "?", None))[0]
 
 
+# --------------------------------------------------------------------------- errors
+
+SPARK = "▁▂▃▄▅▆▇█"
+ERR_CLASSES = ("429", "5xx", "oth")
+QUOTA_RE = re.compile(r"token budget exhausted|monthly token budget", re.I)
+# Events logged before status fields existed: infer the class from the error text.
+TEXT_STATUS = [
+    (re.compile(r"RateLimitError|\b429\b|rate.?limit|slow down|token budget exhausted", re.I), 429),
+    (re.compile(r"ServiceUnavailable|\b503\b|Service Unavailable", re.I), 503),
+    (re.compile(r"BadGateway|\b502\b", re.I), 502),
+    (re.compile(r"InternalServerError|\b500\b|timeout|APIConnectionError", re.I), 500),
+    (re.compile(r"Malformed API Key|AuthenticationError|\b401\b", re.I), 401),
+]
+
+
+def err_status(ev):
+    """(upstream status, client-visible status, inferred?) of a failed event; (None, None, False) if unknown."""
+    up, cl = ev.get("upstream_status"), ev.get("status")
+    if up or cl:
+        return up or cl, cl or up, False
+    text = ev.get("error") or ""
+    for rx, code in TEXT_STATUS:
+        if rx.search(text):
+            return code, code, True
+    return None, None, False
+
+
+def err_class(ev):
+    """'429' | '5xx' | 'oth' for a failed event, None for a successful one."""
+    if ev.get("ok", True):
+        return None
+    up = err_status(ev)[0]
+    if up == 429:
+        return "429"
+    if up and up >= 500:
+        return "5xx"
+    return "oth"
+
+
+def err_kind(ev):
+    up = err_status(ev)[0]
+    if up == 429:
+        if ev.get("quota") or QUOTA_RE.search(ev.get("error") or ""):
+            return "quota (budget exhausted)"
+        return "rate-limit"
+    if up and up >= 500:
+        return "server"
+    if up:
+        return "client"
+    return "unknown"
+
+
+def err_status_label(ev):
+    up, cl, inferred = err_status(ev)
+    if not up:
+        return "?"
+    text = str(up) if up == cl else f"{cl}<-{up}"
+    return text + ("*" if inferred else "")
+
+
+def spark(values):
+    top = max(values, default=0)
+    if top <= 0:
+        return SPARK[0] * len(values)
+    return "".join(SPARK[0] if v <= 0 else SPARK[min(len(SPARK) - 1, max(1, round(v / top * (len(SPARK) - 1))))] for v in values)
+
+
+def error_buckets(events, size):
+    """{bucket start: [429, 5xx, oth]} over every bucket from first to last event (zeros included)."""
+    if not events:
+        return {}
+    first = int(min(e["t"] for e in events) // size) * size
+    last = int(max(e["t"] for e in events) // size) * size
+    out = {t: [0, 0, 0] for t in range(first, last + size, size)}
+    for ev in events:
+        cls = err_class(ev)
+        if cls:
+            out[int(ev["t"] // size) * size][ERR_CLASSES.index(cls)] += 1
+    return out
+
+
+def spike_windows(buckets, size):
+    """Contiguous runs of flagged buckets: > max(3, 3x median of non-zero buckets) errors, or a 429 burst."""
+    nonzero = [sum(v) for v in buckets.values() if sum(v)]
+    limit = max(3, 3 * statistics.median(nonzero)) if nonzero else 3
+    burst = 5 if size < 3600 else 10
+    windows, cur = [], None
+    for t in sorted(buckets):
+        n = sum(buckets[t])
+        if n > limit or buckets[t][0] >= burst:
+            if cur and t - cur["end"] <= size:
+                cur["end"] = t + size
+                cur["buckets"].append(t)
+            else:
+                cur = {"start": t, "end": t + size, "buckets": [t]}
+                windows.append(cur)
+    for w in windows:
+        w["counts"] = [sum(buckets[t][i] for t in w["buckets"]) for i in range(3)]
+        w["n"] = sum(w["counts"])
+        w["peak"] = max(sum(buckets[t]) for t in w["buckets"])
+    return windows, limit
+
+
+def bucket_size(events, choice="auto"):
+    if choice == "minute":
+        return 60
+    if choice == "hour":
+        return 3600
+    span = (max(e["t"] for e in events) - min(e["t"] for e in events)) if events else 0
+    return 60 if span <= 3 * 3600 else 3600
+
+
 KEYS = {
     "model": lambda e: strip_model(e.get("served")),
     "requested": lambda e: strip_model(e.get("requested")) if e.get("requested") else "-",
@@ -369,6 +489,9 @@ def aggregate(events, keyfns):
         cost = sum(e["cost"] for e in evs if isinstance(e.get("cost"), (int, float)))
         rows.append({
             "key": key, "n": len(evs), "err": sum(1 for e in evs if not e.get("ok", True)),
+            "e429": sum(1 for e in evs if err_class(e) == "429"), "e5xx": sum(1 for e in evs if err_class(e) == "5xx"),
+            "eoth": sum(1 for e in evs if err_class(e) == "oth"),
+            "err_rate": sum(1 for e in evs if not e.get("ok", True)) / len(evs),
             "in": cin, "out": sum(e.get("out", 0) for e in evs), "cread": cread,
             "hit": cread / (cin + cread) if cin + cread else None,
             "ctxmax": max(ctx_of(e) for e in evs), "long": sum(1 for e in evs if ctx_of(e) > LONG_CTX),
@@ -401,42 +524,66 @@ def strip_ansi(text):
     return re.sub(r"\033\[[0-9;]*m", "", text)
 
 
+def err_cells(r, show):
+    if not show:
+        return []
+    return [r["e429"] or "-", r["e5xx"] or "-", r["eoth"] or "-", f"{r['err_rate'] * 100:.0f}%" if r["err"] else "-"]
+
+
 def stats_table(events, by):
     keyfns = [KEYS[k] for k in by]
     rows = aggregate(events, keyfns)
     has_latency = any(r["p50"] is not None for r in rows)
-    headers = [k.upper() for k in by] + ["REQS", "ERR", "IN", "OUT", "CACHE", "HIT%", "CTX-MAX", ">200K"]
-    aligns = ["l"] * len(by) + ["r"] * 8
+    has_err = any(r["err"] for r in rows)
+    headers = [k.upper() for k in by] + ["REQS", "ERR"] + (["429", "5XX", "OTH", "ERR%"] if has_err else []) \
+        + ["IN", "OUT", "CACHE", "HIT%", "CTX-MAX", ">200K"]
+    aligns = ["l"] * len(by) + ["r"] * (2 + (4 if has_err else 0) + 6)
     if has_latency:
         headers += ["P50", "P95", "TTFT", "TOK/S"]
         aligns += ["r"] * 4
     if any(r["cost"] for r in rows):
         headers += ["COST"]
         aligns += ["r"]
+
+    def line_for(key, r, err_text):
+        line = key + [r["n"], err_text] + err_cells(r, has_err) + [
+            human(r["in"]), human(r["out"]), human(r["cread"]), f"{r['hit'] * 100:.0f}" if r["hit"] is not None else "-",
+            human(r["ctxmax"]), r["long"] or "-"]
+        if has_latency:
+            line += [ms(r["p50"]), ms(r["p95"]), ms(r["ttft"]), f"{r['tps']:.0f}" if r["tps"] else "-"]
+        if any(x["cost"] for x in rows):
+            line += [f"${r['cost']:.2f}" if r["cost"] else "-"]
+        return line
+
     body = []
     for r in rows:
         key = list(r["key"])
         if r["reroutes"]:
             key[0] = color(key[0], "35")
-        line = key + [r["n"], color(r["err"], "31") if r["err"] else "0", human(r["in"]), human(r["out"]),
-                      human(r["cread"]), f"{r['hit'] * 100:.0f}" if r["hit"] is not None else "-",
-                      human(r["ctxmax"]), r["long"] or "-"]
-        if has_latency:
-            line += [ms(r["p50"]), ms(r["p95"]), ms(r["ttft"]), f"{r['tps']:.0f}" if r["tps"] else "-"]
-        if any(x["cost"] for x in rows):
-            line += [f"${r['cost']:.2f}" if r["cost"] else "-"]
-        body.append(line)
+        body.append(line_for(key, r, color(r["err"], "31") if r["err"] else "0"))
     total = aggregate(events, [lambda e: "TOTAL"])
     if len(rows) > 1 and total:
-        t = total[0]
-        line = ["TOTAL"] + [""] * (len(by) - 1) + [t["n"], t["err"], human(t["in"]), human(t["out"]), human(t["cread"]),
-                f"{t['hit'] * 100:.0f}" if t["hit"] is not None else "-", human(t["ctxmax"]), t["long"] or "-"]
-        if has_latency:
-            line += [ms(t["p50"]), ms(t["p95"]), ms(t["ttft"]), f"{t['tps']:.0f}" if t["tps"] else "-"]
-        if any(x["cost"] for x in rows):
-            line += [f"${t['cost']:.2f}" if t["cost"] else "-"]
-        body.append(line)
+        body.append(line_for(["TOTAL"] + [""] * (len(by) - 1), total[0], total[0]["err"]))
     return render(headers, body, aligns)
+
+
+def error_spark_line(events, label="errors"):
+    """One sparkline row of failures per bucket, or None when the data has none (transcripts never do)."""
+    bad = [e for e in events if not e.get("ok", True)]
+    if not bad:
+        return None
+    size = bucket_size(events)
+    buckets = error_buckets(events, size)
+    windows, _ = spike_windows(buckets, size)
+    counts = [sum(v) for _, v in sorted(buckets.items())]
+    if len(counts) > 60:  # keep one terminal line
+        step = math.ceil(len(counts) / 60)
+        counts = [sum(counts[i:i + step]) for i in range(0, len(counts), step)]
+    c = Counter(err_class(e) for e in bad)
+    unit = "min" if size == 60 else "hour"
+    text = (f"{label}/{unit}  {spark(counts)}  {len(bad)} failed ({c['429']} 429, {c['5xx']} 5xx, {c['oth']} other)"
+            f"  {len(windows)} spike window(s)" + ("  -> llm-usage errors --spikes" if windows else ""))
+    return color(text, "31" if windows else "33")
 
 
 # --------------------------------------------------------------------------- commands
@@ -456,6 +603,9 @@ def cmd_summary(args):
         print("no events")
         return
     print(stats_table(events, by))
+    spark_row = error_spark_line(events)
+    if spark_row:
+        print(spark_row)
     if used.startswith(("transcripts", "merged")):
         print(color("note: transcript rows show the answering model only; requested->served reroutes and latency need the proxy log.", "2"))
 
@@ -472,12 +622,22 @@ def cmd_routes(args):
     for r in rows:
         proxy, req, srv, up = r["key"]
         flag = color("REROUTED", "35") if family(req) != family(srv) else "direct"
-        body.append([proxy, req, "->", srv, up, flag, r["n"], r["err"] or "-", human(r["in"]), human(r["out"]), ms(r["p50"])])
-    print(render(["PROXY", "REQUESTED", "", "SERVED", "UPSTREAM", "KIND", "REQS", "ERR", "IN", "OUT", "P50"], body,
-                 ["l", "l", "l", "l", "l", "l", "r", "r", "r", "r", "r"]))
+        body.append([proxy, req, "->", srv, up, flag, r["n"], r["err"] or "-", r["e429"] or "-", r["e5xx"] or "-", r["eoth"] or "-",
+                     f"{r['err_rate'] * 100:.0f}%" if r["err"] else "-", human(r["in"]), human(r["out"]), ms(r["p50"])])
+    print(render(["PROXY", "REQUESTED", "", "SERVED", "UPSTREAM", "KIND", "REQS", "ERR", "429", "5XX", "OTH", "ERR%", "IN", "OUT", "P50"], body,
+                 ["l", "l", "l", "l", "l", "l", "r", "r", "r", "r", "r", "r", "r", "r", "r"]))
+    spark_row = error_spark_line(events)
+    if spark_row:
+        print(spark_row)
     fallbacks = sum(1 for e in events if e.get("fallback"))
     if fallbacks:
         print(color(f"{fallbacks} request(s) were served by a router fallback after a failed first attempt", "33"))
+
+
+def fmt_wait(seconds):
+    h, rest = divmod(int(seconds), 3600)
+    m, sec = divmod(rest, 60)
+    return " ".join(f"{n}{u}" for n, u in ((h, "h"), (m, "m"), (sec, "s")) if n) or "0s"
 
 
 def event_line(ev):
@@ -487,7 +647,7 @@ def event_line(ev):
         arrow = strip_model(ev["served"])
     elif is_reroute(ev):
         arrow = color(arrow, "35")
-    status = "ok " if ev.get("ok", True) else color("ERR", "31")
+    status = "ok " if ev.get("ok", True) else color(f"ERR {err_status_label(ev)}", "31")
     extra = []
     if ev.get("role"):
         extra.append(ev["role"])
@@ -495,6 +655,8 @@ def event_line(ev):
         extra.append("fallback")
     if ctx_of(ev) > LONG_CTX:
         extra.append("1M-ctx")
+    if ev.get("retry_after"):
+        extra.append(f"reset {fmt_wait(ev['retry_after'])}")
     if ev.get("error"):
         extra.append(ev["error"][:80].replace("\n", " "))
     return (f"{when} {proxy_name(ev):<18} {ev.get('client', '?'):<11} {arrow:<28} {status} "
@@ -529,17 +691,61 @@ def cmd_tail(args):
         pass
 
 
+def fmt_clock(t, size):
+    return datetime.fromtimestamp(t).strftime("%m-%d %H:%M" if size < 3600 else "%m-%d %H:00")
+
+
+def print_spikes(events, bucket_choice):
+    bad = [e for e in events if not e.get("ok", True)]
+    if not bad:
+        print("no failed requests, no spikes")
+        return
+    size = bucket_size(events, bucket_choice)
+    buckets = error_buckets(events, size)
+    windows, limit = spike_windows(buckets, size)
+    counts = [sum(v) for _, v in sorted(buckets.items())]
+    unit = "minute" if size == 60 else "hour"
+    print(color(f"per-{unit} errors {fmt_clock(min(buckets), size)} -> {fmt_clock(max(buckets), size)}  "
+                f"(flag: > {limit:g}/{unit} or >= {5 if size < 3600 else 10} x 429)", "2"))
+    print(spark(counts[-120:]))
+    if not windows:
+        print("no spike windows")
+        return
+    rows = []
+    for w in windows:
+        per = [sum(buckets[t]) for t in range(w["start"], w["end"], size) if t in buckets]
+        rows.append([fmt_clock(w["start"], size), fmt_clock(w["end"] - size, size), w["n"], w["counts"][0] or "-", w["counts"][1] or "-",
+                     w["counts"][2] or "-", w["peak"], spark(per)])
+    print(render(["FROM", "TO", "ERRORS", "429", "5XX", "OTH", f"PEAK/{unit[:3].upper()}", "SHAPE"], rows, ["l", "l", "r", "r", "r", "r", "r", "l"]))
+
+
 def cmd_errors(args):
-    events, used = load(parse_since(args.since), "proxy")
+    events, used = load(parse_since(args.since), args.source)
     bad = sorted((e for e in events if not e.get("ok", True)), key=lambda e: e["t"])
-    print(color(f"llm-usage errors  since {args.since}  proxy events: {len(events)}  failed: {len(bad)}", "2"))
+    print(color(f"llm-usage errors  since {args.since}  source: {used}  events: {len(events)}  failed: {len(bad)}", "2"))
+    if args.spikes:
+        print_spikes(events, args.bucket)
+        return
+    if not bad:
+        if used != "proxy":
+            print(color("note: transcripts record no status codes; failures only appear in the proxy log (--source proxy).", "2"))
+        return
     for ev in bad[-args.n:]:
         print(event_line(ev))
-    if bad:
-        by_error = defaultdict(int)
-        for ev in bad:
-            by_error[re.sub(r"\d{4,}", "N", (ev.get("error") or "?")[:90])] += 1
-        print("\n" + render(["COUNT", "ERROR"], [[n, e] for e, n in sorted(by_error.items(), key=lambda x: -x[1])[:10]], ["r", "l"]))
+    groups = defaultdict(list)
+    for ev in bad:
+        up, cl, _ = err_status(ev)
+        groups[(err_status_label(ev), err_kind(ev), re.sub(r"\d{4,}", "N", (ev.get("error") or ev.get("error_type") or "?")[:90]))].append(ev["t"])
+    rows = [[len(ts), st, kind, datetime.fromtimestamp(min(ts)).strftime("%m-%d %H:%M"), datetime.fromtimestamp(max(ts)).strftime("%m-%d %H:%M"), msg]
+            for (st, kind, msg), ts in sorted(groups.items(), key=lambda x: -len(x[1]))[:15]]
+    print("\n" + render(["COUNT", "STATUS", "KIND", "FIRST", "LAST", "MESSAGE"], rows, ["r", "l", "l", "l", "l", "l"]))
+    if any(r[1].endswith("*") for r in rows):
+        print(color("* status inferred from the error text (event predates status logging)", "2"))
+    kinds = Counter(err_kind(e) for e in bad)
+    print(color("  ".join(f"{k}: {n}" for k, n in kinds.most_common()), "2"))
+    spark_row = error_spark_line(events)
+    if spark_row:
+        print(spark_row)
 
 
 def probe(port):
@@ -560,7 +766,10 @@ def listener_pid(port):
 
 
 def config_models(path):
-    if not path or not os.path.exists(path):
+    """path: one config file or a preference-ordered list (first existing wins)."""
+    paths = [path] if isinstance(path, str) else list(path or [])
+    path = next((q for q in map(os.path.expanduser, paths) if os.path.exists(q)), None)
+    if not path:
         return None, None
     text = open(path, errors="replace").read()
     names = re.findall(r'"?model_name"?\s*:\s*"?([^"\s,}]+)', text)
@@ -571,10 +780,13 @@ def config_models(path):
 def status_rows():
     events = load_proxy(time.time() - 7 * 86400)
     last_seen, counts = {}, defaultdict(int)
+    errs = defaultdict(Counter)
     for ev in events:
         port = str(ev.get("port"))
         last_seen[port] = max(last_seen.get(port, 0), ev["t"])
         counts[port] += 1
+        if err_class(ev):
+            errs[port][err_class(ev)] += 1
     rows = []
     for port, (name, config) in sorted(PROXIES.items()):
         up = probe(port)
@@ -590,7 +802,7 @@ def status_rows():
         else:
             code = "idle" if logging_on else "unknown"
         rows.append({"port": port, "name": name, "up": up, "pid": listener_pid(port) if up else None,
-                     "models": models or [], "code": code, "requests_7d": counts.get(port, 0),
+                     "models": models or [], "code": code, "requests_7d": counts.get(port, 0), "errors_7d": dict(errs.get(port, {})),
                      "last_seen": last_seen.get(port)})
     return rows, events
 
@@ -610,6 +822,10 @@ def cmd_status(args):
     for r in status:
         if r["code"] == "logging":
             state = color("logging", "32") + f" ({r['requests_7d']} reqs/7d, last {ms((time.time() - r['last_seen']) * 1000)} ago)"
+            if r["errors_7d"]:
+                e = r["errors_7d"]
+                state += color(f" errors/7d: {sum(e.values())} ({e.get('429', 0)} 429, {e.get('5xx', 0)} 5xx, {e.get('oth', 0)} other; "
+                               f"{sum(e.values()) / r['requests_7d'] * 100:.0f}%)", "31")
         else:
             state = STATE_TEXT[r["code"]]
             if r["code"] == "not-logging":
@@ -641,7 +857,8 @@ def cmd_top(args):
                 out.append("\nrecent:")
                 out += [event_line(e) for e in sorted(events, key=lambda e: e["t"])[-args.n:]]
                 if bad:
-                    out.append(color(f"\n{len(bad)} errors in window; latest: {(bad[-1].get('error') or '')[:100]}", "31"))
+                    out.append(color(f"\n{len(bad)} errors in window ({err_status_label(bad[-1])}); latest: {(bad[-1].get('error') or '')[:100]}", "31"))
+                    out.append(error_spark_line(events))
             sys.stdout.write("\033[H\033[J" + "\n".join(out) + "\n")
             sys.stdout.flush()
             time.sleep(args.interval)
@@ -732,7 +949,15 @@ def dashboard_data(since_text, source, hide):
     bad = defaultdict(int)
     for ev in events:
         if not ev.get("ok", True):
-            bad[re.sub(r"\d{4,}", "N", (ev.get("error") or "?")[:120])] += 1
+            bad[(err_status_label(ev), err_kind(ev), re.sub(r"\d{4,}", "N", (ev.get("error") or "?")[:120]))] += 1
+    # Failures per bucket by class, on the same x axis as the traffic chart.
+    err_series = {c: [0] * count for c in ERR_CLASSES}
+    for ev in events:
+        cls = err_class(ev)
+        if cls:
+            err_series[cls][min(max(int((ev["t"] - start) // size), 0), count - 1)] += 1
+    err_map = {t: [err_series[c][i] for c in ERR_CLASSES] for i, t in enumerate(buckets)}
+    windows, limit = spike_windows(err_map, size)
 
     return {
         "now": now, "since": since, "bucket": size, "source": used, "events": len(events),
@@ -747,9 +972,11 @@ def dashboard_data(since_text, source, hide):
                     "rerouted": r["key"][1] != "-" and family(r["key"][1]) != family(r["key"][2])}
                    for r in aggregate(events, [KEYS["proxy"], KEYS["requested"], lambda e: strip_model(e.get("served")), KEYS["upstream"]])],
         "clients": [row_json(r, ["proxy", "client", "role"]) for r in aggregate(events, [KEYS["proxy"], KEYS["client"], KEYS["role"]])],
-        "errors": [{"count": n, "error": e} for e, n in sorted(bad.items(), key=lambda x: -x[1])[:10]],
+        "errors": [{"count": n, "status": st, "kind": kind, "error": e} for (st, kind, e), n in sorted(bad.items(), key=lambda x: -x[1])[:10]],
+        "err_series": err_series, "err_limit": limit,
+        "spikes": [{"start": w["start"], "end": w["end"], "n": w["n"], "e429": w["counts"][0], "e5xx": w["counts"][1], "eoth": w["counts"][2], "peak": w["peak"]} for w in windows],
         "recent": [{"t": e["t"], "proxy": proxy_name(e), "client": e.get("client"), "requested": strip_model(e["requested"]) if e.get("requested") else None,
-                    "served": strip_model(e.get("served")), "rerouted": is_reroute(e), "ok": e.get("ok", True), "ctx": ctx_of(e),
+                    "served": strip_model(e.get("served")), "rerouted": is_reroute(e), "ok": e.get("ok", True), "status": err_status_label(e) if not e.get("ok", True) else None, "ctx": ctx_of(e),
                     "out": e.get("out", 0), "ms": e.get("ms"), "role": e.get("role"), "fallback": bool(e.get("fallback")),
                     "error": (e.get("error") or "")[:160] or None} for e in recent],
         "status": status,
@@ -853,9 +1080,11 @@ def main():
     p.add_argument("--since", default="24h")
     p.set_defaults(fn=cmd_tail)
 
-    p = sub.add_parser("errors", help="failed requests grouped by message")
-    p.add_argument("--since", default="24h")
+    p = sub.add_parser("errors", help="failed requests grouped by status + message; --spikes for error bursts")
+    common(p, source="proxy")
     p.add_argument("-n", type=int, default=20)
+    p.add_argument("--spikes", action="store_true", help="show spike windows (error bursts) with a sparkline instead of the list")
+    p.add_argument("--bucket", choices=["auto", "minute", "hour"], default="auto", help="spike bucket size (auto: minute for <=3h of data, else hour)")
     p.set_defaults(fn=cmd_errors)
 
     p = sub.add_parser("top", help="live dashboard")
