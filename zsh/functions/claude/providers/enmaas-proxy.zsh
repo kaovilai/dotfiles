@@ -88,6 +88,38 @@ def signature(key, token):
     return hmac.new(token.encode(), key.encode(), hashlib.sha256).hexdigest()
 
 
+# Hook modules (CLAUDE_ENMAAS_HOOK_FILES, newline separated absolute paths, in
+# callback order) are copied next to the config and loaded as dotted modules:
+# LiteLLM splits a callback on '.', so a file path or `file.py:name` cannot work.
+HOOK_ENV_PREFIXES = ('HOSTED_ONLY_', 'GLM_HYBRID_', 'ENMAAS_RESPONSES_')
+CHILD_ENV_PREFIXES = HOOK_ENV_PREFIXES + ('LLM_USAGE_',)
+
+
+def hook_files():
+    return [Path(p) for p in os.environ.get('CLAUDE_ENMAAS_HOOK_FILES', '').split('\n') if p]
+
+
+def hook_digest(files):
+    # Hook code and the knobs the hooks read; a change needs a proxy restart.
+    if not files:
+        return ''
+    digest = hashlib.sha256()
+    for path in files:
+        digest.update(path.name.encode() + b'\0' + path.read_bytes() + b'\0')
+    for name in sorted(os.environ):
+        if name.startswith(HOOK_ENV_PREFIXES):
+            digest.update(('%s=%s\0' % (name, os.environ[name])).encode())
+    return digest.hexdigest()
+
+
+def install_hooks(root, files):
+    for path in files:
+        fd = os.open(root / path.name, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
+        with os.fdopen(fd, 'wb') as stream:
+            stream.write(path.read_bytes())
+    return [path.stem + '.proxy_handler_instance' for path in files]
+
+
 def stop(root, info):
     if not owned(info):
         raise RuntimeError('no verified EnMaaS proxy; no process was stopped')
@@ -106,6 +138,8 @@ def stop(root, info):
 def ensure(root, port, config, versions, timeout, required):
     info = read_private(root / 'proxy.json')
     key = os.environ['ENMAAS_API_KEY']
+    files = hook_files()
+    hooks = hook_digest(files)
     if owned(info):
         if not ready(info, root):
             raise RuntimeError('recorded proxy is not ready; run claude-enmaas-kill before relaunching')
@@ -113,6 +147,8 @@ def ensure(root, port, config, versions, timeout, required):
         if (info['versions'] != versions or info['key_signature'] != signature(key, info['token'])
                 or old['model_list'][0]['litellm_params']['api_base'] != config['model_list'][0]['litellm_params']['api_base']):
             raise RuntimeError('shared gateway/key or dependency settings changed; run claude-enmaas-kill and relaunch')
+        if info.get('hooks', '') != hooks:
+            raise RuntimeError('proxy hook code or knobs changed; run claude-enmaas-kill and relaunch')
         previous = {r['model_name']: r['litellm_params'] for r in old['model_list']}
         proposed = {r['model_name']: r['litellm_params'] for r in config['model_list']}
         for model in required:
@@ -134,30 +170,38 @@ def ensure(root, port, config, versions, timeout, required):
             raise RuntimeError('proxy port is occupied; refusing to adopt or stop its listener')
     token = 'sk-enmaas-' + secrets.token_hex(32)
     config['general_settings']['master_key'] = token
-    config.setdefault("litellm_settings", {})["callbacks"] = ["/private/tmp/unwrap_tools_middleware.py:proxy_handler_instance"]
+    if files:
+        config.setdefault('litellm_settings', {})['callbacks'] = install_hooks(root, files)
     write_private(root / 'config.json', config)
     args = ['uv', 'tool', 'run', '--with', 'fastapi==' + versions[1],
             '--from', 'litellm[proxy]==' + versions[0], 'litellm',
             '--config', str(root / 'config.json'), '--host', '127.0.0.1', '--port', str(port),
             '--telemetry', 'False']
     env = {k: v for k, v in os.environ.items() if k in
-           ('PATH', 'HOME', 'TMPDIR', 'UV_CACHE_DIR', 'UV_OFFLINE', 'XDG_CACHE_HOME', 'LANG', 'LC_ALL')}
-    env.update(ENMAAS_API_KEY=key, LITELLM_LOG='ERROR')
-    child = subprocess.Popen(args, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                             stderr=subprocess.DEVNULL, start_new_session=True)
+           ('PATH', 'HOME', 'TMPDIR', 'UV_CACHE_DIR', 'UV_OFFLINE', 'XDG_CACHE_HOME', 'XDG_STATE_HOME', 'LANG', 'LC_ALL')
+           or k.startswith(CHILD_ENV_PREFIXES)}
+    env.update(ENMAAS_API_KEY=key, LITELLM_LOG=os.environ.get('CLAUDE_ENMAAS_LITELLM_LOG') or 'ERROR')
+    # A boot failure (bad config, hook import error) must leave a trace.
+    log = root / 'proxy.log'
+    logfd = os.open(log, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
+    try:
+        child = subprocess.Popen(args, env=env, stdin=subprocess.DEVNULL, stdout=logfd,
+                                 stderr=logfd, start_new_session=True)
+    finally:
+        os.close(logfd)
     info = {'pid': child.pid, 'birth': birth(child.pid), 'port': port, 'token': token,
-            'versions': versions, 'key_signature': signature(key, token)}
+            'versions': versions, 'key_signature': signature(key, token), 'hooks': hooks}
     write_private(root / 'proxy.json', info)
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         if ready(info, root):
             return dict(info, models=[row['model_name'] for row in config['model_list']])
         if child.poll() is not None:
-            raise RuntimeError('standard LiteLLM proxy failed to start; check cached dependencies and configuration')
+            raise RuntimeError('standard LiteLLM proxy failed to start; see %s' % log)
         time.sleep(.2)
     if owned(info):
         stop(root, info)
-    raise RuntimeError('standard LiteLLM proxy startup timed out')
+    raise RuntimeError('standard LiteLLM proxy startup timed out; see %s' % log)
 
 
 if __name__ == '__main__':

@@ -66,10 +66,11 @@ def color(text, code):
 # --------------------------------------------------------------------------- model naming
 
 def strip_model(model):
-    """Display name: lowercase, provider/org prefixes, build-date suffix and [1m] dropped."""
+    """Display name: lowercase, provider/org prefixes, build-date suffix, [1m] and #responses dropped."""
     if not model:
         return "?"
-    m = str(model).lower().replace("[1m]", "")
+    # "#responses" = enmaas_proxy_hooks' /v1/responses sibling route of the same model
+    m = str(model).lower().replace("[1m]", "").removesuffix("#responses")
     if "glm" in m:
         return "glm-5.3" if re.search(r"5[-.]3", m) else m.split("/")[-1]
     if "deepseek" in m:

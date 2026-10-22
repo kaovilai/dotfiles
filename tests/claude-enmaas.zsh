@@ -12,7 +12,7 @@ trap '[[ -n "$run_pid" ]] && kill -TERM "$run_pid" 2>/dev/null; rm -rf -- "$tmp"
 source <(python3 - "$repo/zsh/functions/claude/common.zsh" <<'PY'
 import re, sys
 s = open(sys.argv[1]).read()
-for name in ('_claude_copilot_latest_model', '_claude_picker_args', '_claude_copilot_unset_env'):
+for name in ('_claude_copilot_latest_model', '_claude_picker_args', '_claude_copilot_unset_env', '_claude_invoke'):
     print(re.search(r'^' + name + r'\(\) \{\n.*?^\}', s, re.M | re.S).group())
 print(re.search(r'^typeset -ga _claude_copilot_env_names=\(\n.*?^\)', s, re.M | re.S).group())
 PY
@@ -20,34 +20,31 @@ PY
 source "$repo/zsh/functions/claude/providers/enmaas.zsh"
 # Preserve the real emitted helper for isolated Python tests, then replace the
 # launcher seam before any claude-enmaas call can reach an actual daemon.
-_claude_enmaas_program > "$tmp/actual-daemon.py"
+_claude_enmaas_proxy_program > "$tmp/actual-daemon.py"
 
 python3 - "$tmp" <<'PY'
 from pathlib import Path
 import sys
 p = Path(sys.argv[1]); (p/'bin').mkdir()
 files = {
-'mock-daemon.py': r'''import json, os, sys, time
+'mock-daemon.py': r'''import json, os, secrets, sys
 from pathlib import Path
 p = Path(os.environ['ENMAAS_TEST_CAPTURE'])
 op = sys.argv[1]
 if op == 'ensure':
+ config = json.load(sys.stdin)
+ token = 'sk-enmaas-' + secrets.token_hex(8)
  (p/'ensure.json').write_text(json.dumps({'argv':sys.argv[2:]}))
+ (p/'registration.json').write_text(json.dumps({'token':token, 'model_list':config['model_list'], 'config':config,
+     'upstream_key':os.environ['ENMAAS_API_KEY'],
+     'hook_files':os.environ.get('CLAUDE_ENMAAS_HOOK_FILES'), 'routes':os.environ.get('ENMAAS_RESPONSES_ROUTES')}))
  (p/'session-path').write_text(str(Path(__file__).parent))
  (p/'program-mode').write_text(oct(Path(__file__).stat().st_mode & 0o777))
  (p/'directory-mode').write_text(oct(Path(__file__).parent.stat().st_mode & 0o777))
  if os.environ.get('ENMAAS_TEST_ENSURE_FAIL') == '1': sys.exit(51)
- print(p/'runtime')
-elif op == 'lease':
- registration = json.load(sys.stdin)
- (p/'lease.pid').write_text(str(os.getpid()))
- (p/'owner.pid').write_text(str(os.getppid())+'\n')
- if os.environ.get('ENMAAS_TEST_LEASE_FAIL') == '1': sys.exit(52)
- (p/'registration.tmp').write_text(json.dumps(registration))
- (p/'registration.tmp').replace(p/'registration.json')
- while True: time.sleep(.1)
+ print(json.dumps({'token':token, 'runtime':str(p/'runtime'), 'models':[r['model_name'] for r in config['model_list']]}))
 else:
- raise AssertionError('test mock prohibits serve/shutdown and unknown operations')
+ raise AssertionError('test mock prohibits every operation but ensure')
 ''',
 'bin/uv': r'''#!/bin/zsh
 print -ru2 -- 'FAIL - unit suite must not launch uv'
@@ -59,16 +56,6 @@ from pathlib import Path
 p = Path(os.environ['ENMAAS_TEST_ROOT']); c = Path(os.environ['ENMAAS_TEST_CAPTURE'])
 args = sys.argv[1:]; endpoint = args[-1]
 headers = sys.stdin.read() if '--config' in args else ''
-if not endpoint.startswith('http://127.0.0.1:58123'):
- # Registration readiness is token- and marker-scoped, with no HTTP listener.
- if not (c/'registration.json').exists(): sys.exit(22)
- r = json.loads((c/'registration.json').read_text())
- expected = 'Authorization: Bearer '+r['token']
- if headers:
-  if expected not in headers: sys.exit(22)
- elif args[args.index('-H')+1] != expected: sys.exit(22)
- marker = 'wrong-tenant-marker' if os.environ.get('ENMAAS_TEST_WRONG_MARKER') == '1' else r['marker']
- print(json.dumps({'data':[{'id':marker}]})); sys.exit(0)
 native = 'x-api-key: upstream-test-secret' in headers and 'anthropic-version: 2023-06-01' in headers
 bearer = 'Authorization: Bearer upstream-test-secret' in headers
 path = endpoint.removeprefix('http://127.0.0.1:58123')
@@ -108,7 +95,7 @@ for name, text in files.items():
     f = p/name; f.write_text(text)
     if name.startswith('bin/'): f.chmod(0o700)
 PY
-_claude_enmaas_program() { print -r -- "$(<"$tmp/mock-daemon.py")"; }
+_claude_enmaas_proxy_program() { print -r -- "$(<"$tmp/mock-daemon.py")"; }
 export ENMAAS_API_BASE_URL='http://127.0.0.1:58123/v1/messages' ENMAAS_API_KEY='upstream-test-secret'
 export PATH="$tmp/bin:$PATH" ENMAAS_TEST_ROOT="$tmp" ENMAAS_TEST_CAPTURE="$tmp/capture" CLAUDE_ENMAAS_PROXY_START_TIMEOUT=3
 mkdir "$ENMAAS_TEST_CAPTURE"
@@ -172,15 +159,26 @@ assert m['o3-mini']['model']=='openai/responses/o3-mini'
 assert not any(i in m for i in ('gpt-realtime','gpt-image-1','text-embedding-3-small','gpt-5-mini-2025-08-07'))
 assert m['native-claude']['model']=='anthropic/native-claude'
 assert m['*']['model']=='openai/*'
-assert m['rits/zai-org/glm-5-3']['model']=='anthropic/rits/zai-org/glm-5-3'
+glm='rits/zai-org/glm-5-3'; ds='rits/deepseek-ai/DeepSeek-V4.1-Flash-1017'
+assert m[glm]['model']=='anthropic/'+glm and m[glm]['api_base']==root
+assert m[ds]['model']=='anthropic/'+ds and m[ds]['api_base']==root, 'DeepSeek must use the Messages dialect at the gateway root'
+# Responses passthrough siblings for Codex: same upstream id, /v1, no anthropic bridge
+for hosted in (glm, ds):
+    assert m[hosted+'#responses']['model']=='openai/'+hosted and m[hosted+'#responses']['api_base']==root+'/v1'
+assert reg['routes']==glm+','+ds
+hooks=reg['hook_files'].split('\n')
+assert [Path(h).name for h in hooks]==['hosted_only_hooks.py','unwrap_tools_middleware.py','enmaas_proxy_hooks.py','litellm_usage_log.py'], hooks
+assert all(Path(h).is_file() for h in hooks)
+assert 'router_settings' not in reg['config'], 'no paid-model vision fallback unless asked for'
 assert all(row['api_key']=='os.environ/ENMAAS_API_KEY' for row in m.values())
 assert reg['upstream_key']=='upstream-test-secret'
 assert (c/'program-mode').read_text()=='0o600'; assert (c/'directory-mode').read_text()=='0o700'
 assert launch['argv'][2:]==['--model=gemini-3-pro','--print','argument with spaces']
 settings=json.loads(launch['argv'][1]); assert settings['apiKeyHelper']==''
-assert settings['modelSettings']=={'rits/zai-org/glm-5-3':{'effortLevel':'medium'}}
+assert settings['modelSettings']=={glm:{'effortLevel':'medium'}, ds:{'effortLevel':'medium'}}
 opts=settings['modelPicker']['options']; ids=[r['model'] for r in opts]; assert ids.count('ambiguous')==1
 assert any('GLM 5.3' in row['label'] for row in opts)
+assert any(row['model']==ds and 'DeepSeek' in row['label'] for row in opts)
 assert any(row['label'].startswith('Claude Sonnet 4.6') for row in opts if row['model']=='claude-sonnet-4-6')
 assert any(row['label'].startswith('GPT-6.1 Sol') for row in opts if row['model']=='gpt-6.1-sol')
 assert '_claude-enmaas-ready-' not in json.dumps(opts)
@@ -200,20 +198,17 @@ assert e['ANTHROPIC_CUSTOM_HEADERS']==''
 assert 'ANTHROPIC_FOUNDRY_API_KEY' not in e and 'CLAUDE_CODE_API_KEY_HELPER' not in e
 assert 'ENMAAS_API_KEY' not in e, 'upstream key inherited by Claude child'
 assert not Path((c/'session-path').read_text()).exists(), 'private directory survives return'
-try: os.kill(int((c/'lease.pid').read_text()),0)
-except ProcessLookupError: pass
-else: raise AssertionError('owned mock lease survives return')
 requests=[json.loads(l) for l in (p/'discovery.jsonl').read_text().splitlines()]
 assert any(r['native'] for r in requests) and any(r['bearer'] for r in requests)
 assert any(r['path']=='/v1/responses/../models' and r['bearer'] and not r['native'] for r in requests)
 assert all('upstream-test-secret' not in json.dumps(r['argv']) and '-L' not in r['argv'] and '--location' not in r['argv'] for r in requests)
 assert 'gpt-6.1-sol' in ids and 'gpt-6-luna' in ids
 assert 'upstream-test-secret' not in (p/'stdout').read_text()+(p/'stderr').read_text()+json.dumps(settings)
-assert json.loads((c/'ensure.json').read_text())['argv']==['4146','1.97.0','0.136.3','3']
-print('ok - routing, discovery union, settings, auth, argv, modes and lease-only cleanup')
+argv=json.loads((c/'ensure.json').read_text())['argv']
+assert argv==['4146','1.97.0','0.136.3','3','gemini-3-pro','claude-opus-4-6','claude-sonnet-4-6','claude-haiku-4-5','claude-sonnet-4-6',glm,ds,glm+'#responses',ds+'#responses'], argv
+print('ok - routing, discovery union, hosted routes, hooks, settings, auth, argv, modes and private-file cleanup')
 PY
-local first_token=$(jq -r '.token' "$ENMAAS_TEST_CAPTURE/registration.json")
-local config=$(_claude_enmaas_config 'https://gateway.example' 'test-token' '{"data":[]}' 'test-marker' 'custom')
+local config=$(_claude_enmaas_config 'https://gateway.example' 'test-token' '{"data":[]}' 'custom')
 _claude_enmaas_assert 'config enables explicit Chat conversion' test "$(jq -r '.litellm_settings.use_chat_completions_url_for_anthropic_messages' <<< "$config")" = true
 _claude_enmaas_assert 'config contains no literal upstream credential' test "$(jq -r '.model_list | all(.litellm_params.api_key == "os.environ/ENMAAS_API_KEY")' <<< "$config")" = true
 
@@ -229,7 +224,7 @@ export CLAUDE_ENMAAS_OPUS_MODEL='custom-opus' CLAUDE_ENMAAS_SONNET_MODEL='custom
 export CLAUDE_ENMAAS_HAIKU_MODEL='custom-haiku' CLAUDE_ENMAAS_FABLE_MODEL='custom-fable'
 export CLAUDE_ENMAAS_MODEL_DIALECTS='unknown-exact=responses custom-opus=chat default-exact=anthropic ambiguous=chat'
 claude-enmaas --model unknown-exact --print 'exact id' >"$tmp/stdout" 2>"$tmp/stderr"
-python3 - "$ENMAAS_TEST_CAPTURE" "$first_token" <<'PY'
+python3 - "$ENMAAS_TEST_CAPTURE" <<'PY'
 import json, sys
 from pathlib import Path
 p=Path(sys.argv[1]); reg=json.loads((p/'registration.json').read_text()); m={row['model_name']:row['litellm_params'] for row in reg['model_list']}
@@ -239,9 +234,8 @@ assert m['ambiguous']['model']=='openai/ambiguous'
 assert m['default-exact']['model']=='anthropic/default-exact'
 assert e['ANTHROPIC_DEFAULT_OPUS_MODEL']=='custom-opus' and e['ANTHROPIC_DEFAULT_FABLE_MODEL']=='custom-fable'
 assert e['ANTHROPIC_MODEL']=='unknown-exact'
-assert reg['token']!=sys.argv[2]
 assert e['ANTHROPIC_BASE_URL']=='http://127.0.0.1:4146'
-print('ok - exact dialect overrides, tier overrides, separated --model and per-launch auth')
+print('ok - exact dialect overrides, tier overrides and separated --model')
 PY
 claude-enmaas --model opus >"$tmp/stdout" 2>"$tmp/stderr"
 _claude_enmaas_assert 'CLI family aliases preserve selected tier' test "$(jq -r '.env.ANTHROPIC_MODEL' "$ENMAAS_TEST_CAPTURE/claude.json")" = custom-opus
@@ -280,8 +274,8 @@ _claude_enmaas_assert 'port override forwarded to controller' test "$(jq -r '.ar
 _claude_enmaas_assert 'port override used in child transport' test "$(jq -r '.env.ANTHROPIC_BASE_URL' "$ENMAAS_TEST_CAPTURE/claude.json")" = 'http://127.0.0.1:5143'
 unset CLAUDE_ENMAAS_PROXY_PORT
 
-# Controller/lease/readiness failures never call Claude. All seams are mocks.
-for failure in ENSURE_FAIL LEASE_FAIL WRONG_MARKER; do
+# Controller failures never call Claude. All seams are mocks.
+for failure in ENSURE_FAIL; do
     rm -f "$ENMAAS_TEST_CAPTURE/claude.json" "$ENMAAS_TEST_CAPTURE/registration.json"
     export "ENMAAS_TEST_${failure}=1" CLAUDE_ENMAAS_PROXY_START_TIMEOUT=1
     rc=0; claude-enmaas >"$tmp/stdout" 2>"$tmp/stderr" || rc=$?
@@ -334,7 +328,7 @@ rc=0
 ( export ENMAAS_API_KEY=$'invalid\nkey'; claude-enmaas ) >"$tmp/stdout" 2>"$tmp/stderr" || rc=$?
 _claude_enmaas_assert 'control characters in key rejected' test "$rc" = 1
 
-# TERM only reaches invocation-owned mock lease/client children, never a daemon.
+# TERM only reaches the invocation's own Claude child and private files, never the proxy.
 mkdir "$tmp/signal-capture"
 export ENMAAS_TEST_CAPTURE="$tmp/signal-capture" ENMAAS_TEST_CLAUDE_WAIT=1
 claude-enmaas >"$tmp/stdout" 2>"$tmp/stderr" &
@@ -344,122 +338,118 @@ if [[ ! -s "$ENMAAS_TEST_CAPTURE/claude.json" ]]; then
     print -ru2 -- "FAIL - signal fixture did not launch Claude: $(<"$tmp/stderr")"
     exit 1
 fi
-local owner_pid=''
-IFS= read -r owner_pid < "$ENMAAS_TEST_CAPTURE/owner.pid"
-kill -TERM "$owner_pid"
+# $run_pid is only the backgrounding wrapper; TERM must reach the claude-enmaas
+# subshell, two levels above Claude (claude-enmaas -> _claude_invoke subshell -> claude).
+local claude_pid invoke_pid owner_pid
+claude_pid=$(<"$ENMAAS_TEST_CAPTURE/claude.pid")
+invoke_pid=$(ps -o ppid= -p "$claude_pid"); owner_pid=$(ps -o ppid= -p "${invoke_pid// }")
+kill -TERM "${owner_pid// }"
 rc=0; wait "$run_pid" || rc=$?
 run_pid=''
 _claude_enmaas_assert 'TERM interrupts running Claude with status 143' test "$rc" = 143
 python3 - "$ENMAAS_TEST_CAPTURE" <<'PY'
-import os, sys
+import os, sys, time
 from pathlib import Path
 p=Path(sys.argv[1])
-for name in ('claude.pid','lease.pid'):
- try: os.kill(int((p/name).read_text()),0)
- except ProcessLookupError: pass
- else: raise AssertionError(name+' survives TERM')
+pid=int((p/'claude.pid').read_text())
+for _ in range(50):
+    try: os.kill(pid,0)
+    except ProcessLookupError: break
+    time.sleep(.1)
+else: raise AssertionError('claude.pid survives TERM')
 assert not Path((p/'session-path').read_text()).exists()
-print('ok - TERM removes only mock Claude, lease and private files')
+print('ok - TERM removes only mock Claude and private files')
 PY
 unset ENMAAS_TEST_CLAUDE_WAIT
 
-# Exercise actual emitted controller functions with patched sockets/processes.
-# Never invoke serve/shutdown, and never touch a real runtime or listener.
+# Opt-in LiteLLM fallback for a failed GLM request (paid model, so never default).
+mkdir "$tmp/fallback-capture"
+export ENMAAS_TEST_CAPTURE="$tmp/fallback-capture"
+CLAUDE_ENMAAS_VISION_FALLBACK_MODEL=claude-sonnet-4-6 claude-enmaas >"$tmp/stdout" 2>"$tmp/stderr"
+_claude_enmaas_assert 'explicit vision fallback model is routed' test "$(jq -c '.config.router_settings.fallbacks' "$ENMAAS_TEST_CAPTURE/registration.json")" = '[{"rits/zai-org/glm-5-3":["claude-sonnet-4-6"]}]'
+
+# Hook env: every hook module exists and loads as a dotted LiteLLM callback name
+# (LiteLLM splits on '.', so a file path or `file.py:name` breaks proxy boot).
+( _claude_enmaas_hook_env; python3 - "$CLAUDE_ENMAAS_HOOK_FILES" <<'PY'
+import re, sys
+from pathlib import Path
+for f in map(Path, sys.argv[1].split('\n')):
+    assert f.is_file() and re.fullmatch(r'[A-Za-z_]\w*', f.stem), f
+    assert 'proxy_handler_instance' in f.read_text(), f
+print('ok - hook modules exist and expose proxy_handler_instance')
+PY
+)
+
+# Exercise the actual emitted controller functions with patched sockets/processes.
+# Never touches a real runtime or listener.
 python3 - "$tmp/actual-daemon.py" "$tmp" <<'PY'
-import hashlib, io, json, os, runpy, sys
+import json, os, runpy, sys
 from pathlib import Path
 from unittest.mock import patch
-p=Path(sys.argv[2]); g=runpy.run_path(sys.argv[1]); info={'protocol':1,'instance':'unit-instance','pid':999999,'port':4146,'versions':['1.97.0','0.136.3'], 'source_hash':hashlib.sha256(Path(sys.argv[1]).read_bytes()).hexdigest()}
-exchanges=[]
-def exchange(root, body):
- exchanges.append(body)
- return {'instance':info['instance'],'pid':info['pid'],'port':info['port']}
-g['verified'].__globals__['exchange']=exchange
-with patch.object(g['os'], 'kill', return_value=None):
- assert g['verified'](p, info)
- assert exchanges==[{'op':'ping','instance':'unit-instance'}]
- assert not g['verified'](p, {'protocol':2})
- g['verified'].__globals__['exchange']=lambda *args: {'instance':'wrong','pid':info['pid'],'port':info['port']}
- assert not g['verified'](p, info)
- g['verified'].__globals__['exchange']=lambda *args: {'instance':info['instance'],'pid':1,'port':info['port']}
- assert not g['verified'](p, info)
- g['verified'].__globals__['exchange']=lambda *args: {'instance':info['instance'],'pid':info['pid'],'port':5143}
- assert not g['verified'](p, info)
-g['verified'].__globals__['exchange']=exchange
-with patch.object(g['os'], 'kill', side_effect=ProcessLookupError):
- assert not g['verified'](p, info)
+p=Path(sys.argv[2]); g=runpy.run_path(sys.argv[1]); ns=g['ensure'].__globals__
 
-root=p/'controller-runtime'; root.mkdir(mode=0o700)
-(root/'daemon.json').write_text(json.dumps(info)); (root/'daemon.json').chmod(0o600)
-assert g['metadata'](root)==info
-(root/'daemon.json').chmod(0o644)
-try: g['metadata'](root)
-except RuntimeError: pass
-else: raise AssertionError('public metadata accepted')
-(root/'daemon.json').chmod(0o600)
+# Hook digest follows hook code and the knobs the hooks read, nothing else.
+hdir=p/'hooks'; hdir.mkdir()
+for name in ('first_hook.py','second_hook.py'): (hdir/name).write_text('proxy_handler_instance = 1\n')
+files=[hdir/'first_hook.py', hdir/'second_hook.py']
+with patch.dict(os.environ, {'CLAUDE_ENMAAS_HOOK_FILES': '\n'.join(map(str, files))}):
+    assert g['hook_files']()==files
+    d0=g['hook_digest'](files)
+    (hdir/'second_hook.py').write_text('proxy_handler_instance = 2\n')
+    d1=g['hook_digest'](files); assert d1!=d0, 'hook code change not detected'
+    with patch.dict(os.environ, {'HOSTED_ONLY_VISION_FALLBACK':'0'}):
+        assert g['hook_digest'](files)!=d1, 'hook knob change not detected'
+    with patch.dict(os.environ, {'UNRELATED_KNOB':'x'}):
+        assert g['hook_digest'](files)==d1
+assert g['hook_digest']([])==''
+root=p/'runtime-hooks'; root.mkdir(mode=0o700)
+assert g['install_hooks'](root, files)==['first_hook.proxy_handler_instance','second_hook.proxy_handler_instance']
+assert (root/'first_hook.py').stat().st_mode & 0o777==0o600
 
-namespace=g['ensure'].__globals__
-namespace['private_runtime']=lambda port: root
-namespace['verified']=lambda root, identity: bool(identity)
-class FakeSocket:
- def __init__(self, *args): self.sent=[]
- def __enter__(self): return self
- def __exit__(self, *args): pass
- def bind(self, address): raise OSError('occupied mocked port')
- def setsockopt(self, *args): pass
- def settimeout(self, timeout): pass
- def connect(self, address): assert address==str(root/'control.sock')
- def sendall(self, data): self.sent.append(json.loads(data))
- def makefile(self, mode): return io.BytesIO(b'{"ok":true}\n')
-
-# Reuse requires authenticated identity and exact dependency versions.
-with patch.object(namespace['socket'], 'socket', side_effect=AssertionError('reuse must not probe listener')), patch.object(namespace['subprocess'], 'Popen', side_effect=AssertionError('reuse must not spawn')):
- with patch.object(sys, 'stdout', io.StringIO()) as output:
-  g['ensure'](4146,'1.97.0','0.136.3',1)
-  assert output.getvalue().strip()==str(root)
- try: g['ensure'](4146,'different','0.136.3',1)
- except RuntimeError as e: assert 'versions differ' in str(e)
- else: raise AssertionError('dependency mismatch accepted')
-
-namespace['verified']=lambda *args: False
-with patch.object(namespace['socket'], 'socket', FakeSocket), patch.object(namespace['subprocess'], 'Popen', side_effect=AssertionError('occupied port must not spawn')), patch.object(namespace['os'], 'killpg', side_effect=AssertionError('occupied port must not signal')):
- try: g['ensure'](4146,'1.97.0','0.136.3',1)
- except RuntimeError as e: assert 'refusing to adopt or replace' in str(e)
- else: raise AssertionError('unverified occupied port accepted')
-assert g['metadata'](root)==info, 'failed challenge altered identity'
-
-# A new controller launch filters credentials before spawning pinned uv.
-(root/'daemon.json').unlink()
-class AvailableSocket(FakeSocket):
- def bind(self, address): assert address==('127.0.0.1',4146)
-class FakeChild:
- pid=999999
- def poll(self): return None
+# ensure(): not owned -> spawn pinned uv with dotted callbacks, a proxy log and a filtered env.
+config={'model_list':[{'model_name':'*','litellm_params':{'model':'openai/*','api_base':'http://x/v1'}}],
+        'general_settings':{'master_key':''},'litellm_settings':{'drop_params':True}}
 spawned=[]
+class FakeChild:
+    pid=999999
+    def poll(self): return None
 def spawn(argv, **kwargs):
- spawned.append((argv, kwargs))
- identity=dict(info, instance=argv[-3])
- (root/'daemon.json').write_text(json.dumps(identity)); (root/'daemon.json').chmod(0o600)
- return FakeChild()
-namespace['verified']=lambda root, identity: bool(identity)
-with patch.object(namespace['socket'], 'socket', AvailableSocket), patch.object(namespace['subprocess'], 'Popen', spawn), patch.dict(os.environ, {'ENMAAS_API_KEY':'unit-upstream-secret','ANTHROPIC_API_KEY':'other-provider-secret'}), patch.object(sys, 'stdout', io.StringIO()):
- g['ensure'](4146,'1.97.0','0.136.3',1)
-argv, options=spawned[0]
-assert 'litellm[proxy]==1.97.0' in argv and 'fastapi==0.136.3' in argv
-assert 'unit-upstream-secret' not in json.dumps(argv)+json.dumps(options)
-assert 'ENMAAS_API_KEY' not in options['env'] and 'ANTHROPIC_API_KEY' not in options['env']
-assert options['start_new_session'] is True
-assert (root/'daemon.py').stat().st_mode & 0o777==0o600
+    spawned.append((argv, kwargs)); return FakeChild()
+class OpenSocket:
+    def __init__(self,*a): pass
+    def __enter__(self): return self
+    def __exit__(self,*a): pass
+    def setsockopt(self,*a): pass
+    def bind(self,*a): pass
+env={'ENMAAS_API_KEY':'unit-upstream-secret','ANTHROPIC_API_KEY':'other-secret','HOSTED_ONLY_VISION_FALLBACK':'0',
+     'LLM_USAGE_DIR':str(p/'usage'),'CLAUDE_ENMAAS_HOOK_FILES':'\n'.join(map(str, files)),'ENMAAS_RESPONSES_ROUTES':'a,b'}
+froot=p/'runtime-spawn'; froot.mkdir(mode=0o700)
+fresh=lambda: json.loads(json.dumps(config))
+with patch.dict(os.environ, env), patch.object(ns['subprocess'],'Popen',spawn), patch.object(ns['socket'],'socket',OpenSocket), \
+     patch.dict(ns, {'listeners':lambda port:set(),'birth':lambda pid:'t0','ready':lambda info,root:True}):
+    g['ensure'](froot, 4166, fresh(), ['1.97.0','0.136.3'], 3, [])
+argv,options=spawned[0]
+cfg=json.loads((froot/'config.json').read_text())
+assert cfg['litellm_settings']['callbacks']==['first_hook.proxy_handler_instance','second_hook.proxy_handler_instance'], cfg
+assert all('/' not in c and ':' not in c and c.count('.')==1 for c in cfg['litellm_settings']['callbacks'])
+assert (froot/'first_hook.py').exists() and (froot/'second_hook.py').exists(), 'hooks must sit next to config.json'
+assert 'litellm[proxy]==1.97.0' in argv and 'fastapi==0.136.3' in argv and str(froot/'config.json') in argv
+e=options['env']
+assert e['HOSTED_ONLY_VISION_FALLBACK']=='0' and e['LLM_USAGE_DIR']==str(p/'usage') and e['ENMAAS_RESPONSES_ROUTES']=='a,b'
+assert 'ANTHROPIC_API_KEY' not in e and e['ENMAAS_API_KEY']=='unit-upstream-secret'
+assert isinstance(options['stdout'], int) and options['stderr']==options['stdout'], 'boot failures must be logged'
+assert (froot/'proxy.log').stat().st_mode & 0o777==0o600
+info=json.loads((froot/'proxy.json').read_text())
+assert info['hooks'] and info['hooks']!=''
 
-# Registration is stdin payload over a private control socket, not CLI args.
-registration={'token':'test-token-'+'a'*32,'marker':'ready-unit','model_list':[], 'upstream_key':'unit-upstream-secret'}
-sockets=[]
-def lease_socket(*args):
- s=FakeSocket(); sockets.append(s); return s
-with patch.object(namespace['socket'], 'socket', lease_socket), patch.object(namespace['os'], 'getppid', side_effect=[42,1]), patch.object(sys, 'stdin', io.StringIO(json.dumps(registration))):
- g['lease'](root)
-assert len(sockets)==1
-assert sockets[0].sent[0]==dict(registration, op='register', instance=g['metadata'](root)['instance'])
-print('ok - real helper identity/version checks, occupied-port refusal, sanitized spawn and stdin lease (all mocked)')
+# ensure(): owned + ready -> reuse; hook knob change -> refuse restart.
+patched={'owned':lambda i:True,'ready':lambda i,r:True}
+with patch.dict(os.environ, env), patch.dict(ns, patched), patch.object(ns['subprocess'],'Popen',side_effect=AssertionError('reuse must not spawn')):
+    assert g['ensure'](froot, 4166, fresh(), ['1.97.0','0.136.3'], 3, [])['token']==info['token']
+with patch.dict(os.environ, dict(env, HOSTED_ONLY_VISION_FALLBACK='1')), patch.dict(ns, patched):
+    try: g['ensure'](froot, 4166, fresh(), ['1.97.0','0.136.3'], 3, [])
+    except RuntimeError as error: assert 'hook code or knobs changed' in str(error), error
+    else: raise AssertionError('changed hook knob accepted by a running proxy')
+print('ok - hook digest, dotted callbacks next to config, proxy log, env passthrough, reuse and hook-change refusal (all mocked)')
 PY
 print 'All claude-enmaas unit/launcher tests passed.'

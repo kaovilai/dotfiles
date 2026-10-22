@@ -20,11 +20,51 @@
 # exit leaves it running. Private runtime dir
 # /tmp/claude-enmaas-proxy-<uid>-<port> (0700/0600); config references
 # os.environ/ENMAAS_API_KEY and Claude children only get the local token.
-# Gateway/key/dependency/route changes fail with a restart instruction
+# Gateway/key/dependency/route/hook changes fail with a restart instruction
 # instead of disrupting active sessions. claude-enmaas-kill stops only the
 # recorded, birth-time-verified proxy process group (disconnects every
 # session using it).
+#
+# The same proxy also serves Codex (codex-t3-enmaas, scripts/codex-provider.zsh:
+# /v1/responses and /v1/chat/completions) so GLM and DeepSeek work there too.
+# It loads these hooks from scripts/ (copied next to the runtime config, loaded
+# as dotted modules; a boot failure is logged to <runtime>/proxy.log):
+#   hosted_only_hooks      rits/ models only: grammar-tool strip, thinking-off,
+#                          empty developer item filter, GLM->DeepSeek image
+#                          reroute. All models: 429 reset rewrite.
+#   unwrap_tools_middleware  rits/ models: Codex additional_tools -> tools
+#   enmaas_proxy_hooks     rits/ ids on /v1/responses use their Responses
+#                          passthrough route; hosted web_search tools dropped
+#   litellm_usage_log      one JSONL line per request for llm-usage
+#   CLAUDE_ENMAAS_VISION_FALLBACK_MODEL=<id> additionally lets LiteLLM retry a
+#   failed GLM request on that model (off by default; the hook already moves
+#   image requests to DeepSeek).
 source "${${(%):-%N}:A:h}/enmaas-proxy.zsh"
+typeset -g _CLAUDE_ENMAAS_SCRIPTS="${${(%):-%N}:A:h:h:h:h:h}/scripts"
+
+# Hosted vLLM models routed with the Anthropic dialect on /v1/messages. Same
+# knobs and defaults as the hooks read.
+_claude_enmaas_glm_id() { print -r -- "${HOSTED_ONLY_GLM_MODEL:-${GLM_HYBRID_MODEL:-rits/zai-org/glm-5-3}}"; }
+_claude_enmaas_deepseek_id() {
+    print -r -- "${HOSTED_ONLY_DEEPSEEK_MODEL:-${GLM_HYBRID_DEEPSEEK_MODEL:-rits/deepseek-ai/DeepSeek-V4.1-Flash-1017}}"
+}
+
+# Exports what the proxy controller needs to load the hooks. Call in a subshell
+# before _claude_enmaas_proxy_program ensure; both launchers must set the same
+# values or the running proxy refuses the second one (hook digest).
+_claude_enmaas_hook_env() {
+    local name file files=''
+    for name in hosted_only_hooks unwrap_tools_middleware enmaas_proxy_hooks litellm_usage_log; do
+        file="$_CLAUDE_ENMAAS_SCRIPTS/$name.py"
+        [[ -r "$file" ]] || {
+            print -ru2 -- "claude-enmaas: missing proxy hook $file."
+            return 1
+        }
+        files+="$file"$'\n'
+    done
+    export CLAUDE_ENMAAS_HOOK_FILES="${files%$'\n'}"
+    export ENMAAS_RESPONSES_ROUTES="$(_claude_enmaas_glm_id),$(_claude_enmaas_deepseek_id)"
+}
 
 _claude_enmaas_root() {
     python3 - "$1" <<'PY'
@@ -92,6 +132,22 @@ _claude_enmaas_discover() {
         --proto '=http,https' --config - "${root}${endpoint}" 2>/dev/null
 }
 
+# Prints the merged model catalog JSON; an unavailable catalog degrades to empty.
+_claude_enmaas_catalog() {
+    local root="$1" a='{"data":[]}' b='{"data":[]}' r='{"data":[]}' payload
+    payload=$(_claude_enmaas_discover anthropic "$root" "$ENMAAS_API_KEY")
+    if jq -e '(.data | type == "array")' <<< "$payload" &>/dev/null; then a="$payload"; fi
+    payload=$(_claude_enmaas_discover chat "$root" "$ENMAAS_API_KEY")
+    if jq -e '(.data | type == "array")' <<< "$payload" &>/dev/null; then b="$payload"; fi
+    payload=$(_claude_enmaas_discover responses "$root" "$ENMAAS_API_KEY")
+    if jq -e '(.data | type == "array")' <<< "$payload" &>/dev/null; then
+        r="$payload"
+    else
+        print -ru2 -- 'claude-enmaas: OpenAI catalog discovery unavailable; GPT models may be omitted. Exact supported IDs can still be pinned with CLAUDE_ENMAAS_MODEL_DIALECTS.'
+    fi
+    _claude_enmaas_models "$a" "$b" "$r"
+}
+
 _claude_enmaas_models() {
     local anthropic_json="$1" bearer_json="$2" responses_json="${3-}"
     [[ -n "$responses_json" ]] || responses_json='{"data":[]}'
@@ -123,6 +179,7 @@ _claude_enmaas_config() {
     local root="$1" token="$2" models="$3"; shift 3
     jq -nc --arg root "$root" --arg token "$token" \
         --arg fb_from "${_claude_enmaas_fallback_from-}" --arg fb_to "${_claude_enmaas_fallback_to-}" \
+        --arg routes "${ENMAAS_RESPONSES_ROUTES-}" \
         --argjson models "$models" --args '
         def claude: test("(^|/)claude([/_.-]|$)"; "i");
         def provider($d; $id):
@@ -132,14 +189,25 @@ _claude_enmaas_config() {
         def entry($id; $d): {model_name: $id, litellm_params: {
           model: provider($d; $id), api_key: "os.environ/ENMAAS_API_KEY",
           api_base: ($root + (if $d == "anthropic" then "" else "/v1" end))}};
+        # "<id>#responses" siblings (Responses passthrough at /v1, upstream id
+        # without any bridge prefix) serve Codex on /v1/responses; the proxy hook
+        # enmaas_proxy_hooks picks them. Needed for the hosted vLLM models
+        # (GLM, DeepSeek: Messages dialect at the root for Claude Code) and for
+        # every responses-dialect id (whose "openai/responses/<id>" route would
+        # send the bridge prefix upstream on a native Responses call).
+        ($routes | split(",") | map(select(length > 0))) as $hosted
+        | def passthrough($id): {model_name: ($id + "#responses"), litellm_params: {
+            model: ("openai/" + $id), api_key: "os.environ/ENMAAS_API_KEY", api_base: ($root + "/v1")}};
         ($models.data | map({key: .id, value: .}) | from_entries) as $known
-        | ($ARGS.positional | unique | map(. as $id
-            | ($known[$id] // {}) as $m
+        | def dialect($id): ($known[$id] // {}) as $m
             | ($m._enmaas_dialect // $m._enmaas_metadata_dialect //
-                (if $m._enmaas_anthropic or ($id | claude) or $id == "rits/zai-org/glm-5-3"
-                 then "anthropic" else "chat" end)) as $d
-            | entry($id; $d))) as $entries
-        | {model_list: ([entry("*"; "chat")] + $entries),
+                (if $m._enmaas_anthropic or ($id | claude) or ($hosted | index($id))
+                 then "anthropic" else "chat" end));
+        ($ARGS.positional | unique) as $ids
+        | ($ids | map(. as $id | entry($id; dialect($id)))) as $entries
+        | ($hosted + ($ids | map(select(. as $id | dialect($id) == "responses"))) | unique
+            | map(passthrough(.))) as $siblings
+        | {model_list: ([entry("*"; "chat")] + $entries + $siblings),
            general_settings: {master_key: $token},
            # Otherwise LiteLLM sends all openai/* Messages requests to Responses,
            # bypassing the per-model responses/ bridge and leaking its prefix.
@@ -152,6 +220,12 @@ _claude_enmaas_config() {
 # Session cleanup only stops its Claude child; the shared proxy persists.
 _claude_enmaas_cleanup() {
     if [[ "${_claude_enmaas_claude_pid-}" == <-> ]]; then
+        # The backgrounded _claude_invoke is a subshell around the real claude;
+        # TERM to the subshell alone would orphan it.
+        local child
+        for child in ${(f)"$(pgrep -P "$_claude_enmaas_claude_pid" 2>/dev/null)"}; do
+            kill -TERM "$child" 2>/dev/null
+        done
         kill -TERM "$_claude_enmaas_claude_pid" 2>/dev/null
         wait "$_claude_enmaas_claude_pid" 2>/dev/null
     fi
@@ -230,18 +304,8 @@ claude-enmaas() (
         }
     fi
 
-    local a='{"data":[]}' b='{"data":[]}' r='{"data":[]}' payload models
-    payload=$(_claude_enmaas_discover anthropic "$root" "$ENMAAS_API_KEY")
-    if jq -e '(.data | type == "array")' <<< "$payload" &>/dev/null; then a="$payload"; fi
-    payload=$(_claude_enmaas_discover chat "$root" "$ENMAAS_API_KEY")
-    if jq -e '(.data | type == "array")' <<< "$payload" &>/dev/null; then b="$payload"; fi
-    payload=$(_claude_enmaas_discover responses "$root" "$ENMAAS_API_KEY")
-    if jq -e '(.data | type == "array")' <<< "$payload" &>/dev/null; then
-        r="$payload"
-    else
-        print -ru2 -- 'claude-enmaas: OpenAI catalog discovery unavailable; GPT models may be omitted. Exact supported IDs can still be pinned with CLAUDE_ENMAAS_MODEL_DIALECTS.'
-    fi
-    models=$(_claude_enmaas_models "$a" "$b" "$r") || return 1
+    local models
+    models=$(_claude_enmaas_catalog "$root") || return 1
     local selected="${CLAUDE_ENMAAS_MODEL-}" cli_model="" arg previous="" mapping id dialect
     local cli_seen=0
     for arg in "$@"; do
@@ -281,16 +345,18 @@ claude-enmaas() (
         '') ;; *) selected="$cli_model" ;;
     esac
 
-    # The PDF recipe's optional GLM id has an explicit Anthropic mapping.
-    # Documented text-only context: 262144; output: 65536. These are model
-    # metadata, not verified gateway transport limits or global Claude settings.
-    local glm='rits/zai-org/glm-5-3'
-    # GLM is text-only: image/PDF requests it rejects are retried on a Claude
-    # Sonnet. Resolved from discovery, not $sonnet, which a GLM session remaps
-    # to GLM itself and the shared proxy freezes whichever launch started it.
-    local vision_fallback="${CLAUDE_ENMAAS_VISION_FALLBACK_MODEL:-$(_claude_copilot_latest_model sonnet "$models")}"
+    # The hosted vLLM models have an explicit Anthropic mapping: GLM 5.3
+    # (text-only; documented context 262144, output 65536) and DeepSeek V4.1
+    # Flash (1M context, vision). These are model metadata, not verified
+    # gateway transport limits or global Claude settings.
+    local glm ds
+    glm=$(_claude_enmaas_glm_id) ds=$(_claude_enmaas_deepseek_id)
+    # GLM is text-only; the proxy hook moves requests carrying an image to
+    # DeepSeek. LiteLLM retrying a failed GLM request on another model is opt-in
+    # (it would be a paid model that may be over its cap).
+    local vision_fallback="${CLAUDE_ENMAAS_VISION_FALLBACK_MODEL-}"
     local -a ids pairs reply
-    ids=("${(@f)$(jq -r '.data[].id' <<< "$models")}" "$selected" "$opus" "$sonnet" "$haiku" "$fable" "$glm" "$vision_fallback")
+    ids=("${(@f)$(jq -r '.data[].id' <<< "$models")}" "$selected" "$opus" "$sonnet" "$haiku" "$fable" "$glm" "$ds" "$vision_fallback")
     ids=("${(@)ids:#}")
     for mapping in ${=CLAUDE_ENMAAS_MODEL_DIALECTS}; do
         id="${mapping%=*}" dialect="${mapping##*=}"
@@ -316,12 +382,14 @@ claude-enmaas() (
         id="${(P)role}"
         label=$(jq -r --arg id "$id" '[.data[] | select(.id == $id) | .display_name // .id] | first // empty' <<< "$models")
         [[ "$id" == "$glm" ]] && label='GLM 5.3 (text-only recipe)'
+        [[ "$id" == "$ds" ]] && label='DeepSeek V4.1 Flash (1M, vision)'
         label="${label//|/ }"
         pairs+=("${role}=${id}|${label}")
     done
     for id in "${ids[@]}"; do
         label=$(jq -r --arg id "$id" '[.data[] | select(.id == $id) | .display_name // .id] | first // empty' <<< "$models")
         [[ "$id" == "$glm" ]] && label='GLM 5.3 (text-only recipe)'
+        [[ "$id" == "$ds" ]] && label='DeepSeek V4.1 Flash (1M, vision)'
         # The shared picker uses a pipe separator; never allow a label to inject it.
         label="${label//|/ }"
         pairs+=("=${id}|${label}")
@@ -329,10 +397,10 @@ claude-enmaas() (
     _claude_picker_args "${pairs[@]}"
     local settings='{}'
     (( ${#reply} )) && settings="$reply[2]"
-    settings=$(jq -c --arg glm "$glm" '. + {
+    settings=$(jq -c --arg glm "$glm" --arg ds "$ds" '. + {
         apiKeyHelper: "",
         env: {ANTHROPIC_CUSTOM_HEADERS: "", CLAUDE_CODE_USE_VERTEX: "0", CLAUDE_CODE_USE_BEDROCK: "0", CLAUDE_CODE_USE_FOUNDRY: "0"},
-        modelSettings: {($glm): {effortLevel: "medium"}}
+        modelSettings: {($glm): {effortLevel: "medium"}, ($ds): {effortLevel: "medium"}}
       }' <<< "$settings") || return 1
 
     local token base="http://127.0.0.1:${port}" config service
@@ -343,13 +411,14 @@ claude-enmaas() (
         print -ru2 -- 'claude-enmaas: CLAUDE_ENMAAS_PROXY_START_TIMEOUT must be 1 through 600 seconds.'
         return 1
     }
+    _claude_enmaas_hook_env || return 1
     config=$(_claude_enmaas_fallback_from="$glm" _claude_enmaas_fallback_to="$vision_fallback" \
         _claude_enmaas_config "$root" '' "$models" "${ids[@]}") || return 1
     _claude_enmaas_proxy_program > "${_claude_enmaas_tmp}/proxy.py" || return 1
     export ENMAAS_API_KEY
     service=$(print -rn -- "$config" | python3 "${_claude_enmaas_tmp}/proxy.py" ensure \
-        "$port" "$litellm_version" "$fastapi_version" "$timeout" "$selected" "$opus" "$sonnet" "$haiku" "$fable" "$glm" \
-        ${${=CLAUDE_ENMAAS_MODEL_DIALECTS}%=*}) || return 1
+        "$port" "$litellm_version" "$fastapi_version" "$timeout" "$selected" "$opus" "$sonnet" "$haiku" "$fable" "$glm" "$ds" \
+        "${glm}#responses" "${ds}#responses" ${${=CLAUDE_ENMAAS_MODEL_DIALECTS}%=*}) || return 1
     token=$(jq -er '.token' <<< "$service") || return 1
     # A running proxy's frozen routes win over newly discovered dialects.
     settings=$(jq -c --argjson supported "$(jq -c '.models' <<< "$service")" '
@@ -381,6 +450,47 @@ claude-enmaas() (
     wait "$_claude_enmaas_claude_pid" || result=$?
     _claude_enmaas_claude_pid=''
     return "$result"
+)
+
+# Starts (or reuses) the shared proxy for Codex (scripts/codex-provider.zsh
+# enmaas). Prints {"token","port","glm","deepseek"}. Same route freeze rules as
+# claude-enmaas: a running proxy keeps its routes and hook code; a change fails
+# with a restart instruction (claude-enmaas-kill). Needs ENMAAS_API_KEY; the
+# gateway defaults to https://api.enmaas.devshift.net without ENMAAS_API_BASE_URL.
+_claude_enmaas_codex_proxy() (
+    emulate -L zsh
+    unsetopt monitor
+    umask 077
+    local dep
+    for dep in python3 jq curl uv lsof; do
+        command -v "$dep" &>/dev/null || {
+            print -ru2 -- "codex-enmaas: missing dependency: ${dep}."
+            return 1
+        }
+    done
+    [[ -n "${ENMAAS_API_KEY-}" && "$ENMAAS_API_KEY" != *[[:cntrl:]]* ]] || {
+        print -ru2 -- 'codex-enmaas: ENMAAS_API_KEY is not set or contains a control character.'
+        return 1
+    }
+    local root port glm ds models config service tmp
+    root=$(_claude_enmaas_root "${ENMAAS_API_BASE_URL:-https://api.enmaas.devshift.net}") || return 1
+    port=$(_claude_enmaas_port) || return 1
+    glm=$(_claude_enmaas_glm_id) ds=$(_claude_enmaas_deepseek_id)
+    models=$(_claude_enmaas_catalog "$root") || return 1
+    local -a ids
+    ids=("${(@f)$(jq -r '.data[].id' <<< "$models")}" "$glm" "$ds")
+    ids=("${(@u)ids:#}")
+    export ENMAAS_API_KEY
+    _claude_enmaas_hook_env || return 1
+    config=$(_claude_enmaas_config "$root" '' "$models" "${ids[@]}") || return 1
+    tmp=$(command mktemp -d "${TMPDIR:-/tmp}/codex-enmaas.XXXXXXXX") || return 1
+    trap 'command rm -rf -- "$tmp"' EXIT
+    _claude_enmaas_proxy_program > "$tmp/proxy.py" || return 1
+    service=$(print -rn -- "$config" | python3 "$tmp/proxy.py" ensure "$port" \
+        "${CLAUDE_OPENAI_PROXY_LITELLM_VERSION:-1.97.0}" "${CLAUDE_OPENAI_PROXY_FASTAPI_VERSION:-0.136.3}" \
+        "${CLAUDE_ENMAAS_PROXY_START_TIMEOUT:-60}" "$glm" "$ds" "${glm}#responses" "${ds}#responses") || return 1
+    jq -nc --argjson s "$service" --arg port "$port" --arg glm "$glm" --arg ds "$ds" \
+        '{token: $s.token, port: ($port | tonumber), glm: $glm, deepseek: $ds}'
 )
 
 # Live shells may still carry the pre-rename claude-enmaas-kill alias, which

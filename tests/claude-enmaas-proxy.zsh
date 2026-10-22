@@ -113,7 +113,8 @@ def request(model, **extra):
     req = urllib.request.Request(base + '/v1/messages', data=json.dumps(body).encode(),
           headers={'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json', 'anthropic-version': '2023-06-01'})
     return urllib.request.urlopen(req, timeout=25)
-for model in ['claude-sonnet-5-5', 'offline-chat', 'offline-responses', 'gpt-6-luna', 'rits/zai-org/glm-5-3']:
+for model in ['claude-sonnet-5-5', 'offline-chat', 'offline-responses', 'gpt-6-luna', 'rits/zai-org/glm-5-3',
+              'rits/deepseek-ai/DeepSeek-V4.1-Flash-1017']:
     with request(model) as r: data = json.load(r)
     assert data['content'][0]['text'] == 'hello', (model, data)
 for model in ['claude-sonnet-5-5', 'offline-chat']:
@@ -203,7 +204,8 @@ exit $result
                 assert r['version'], r
         expected = {'claude-sonnet-5-5': '/v1/messages', 'offline-chat': '/v1/chat/completions',
                     'offline-responses': '/v1/responses', 'gpt-6-luna': '/v1/responses',
-                    'rits/zai-org/glm-5-3': '/v1/messages'}
+                    'rits/zai-org/glm-5-3': '/v1/messages',
+                    'rits/deepseek-ai/DeepSeek-V4.1-Flash-1017': '/v1/messages'}
         for model, endpoint in expected.items():
             assert any(r['model'] == model and r['path'] == endpoint for r in records), (model, endpoint)
         print('PASS: exact model IDs, per-model dialect authentication, shared standard proxy and parent environment isolation')

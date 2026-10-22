@@ -12,8 +12,25 @@
 # travels in T3's per-instance launchArgs as `-c` config overrides, the same
 # mechanism T3's own managed Codex runtime uses.
 #
-# enmaas: adds nothing but credentials. Codex talks to the gateway directly
-# (Responses API); no local proxy.
+# enmaas: all EnMaaS models through the shared local LiteLLM proxy that
+# claude-enmaas uses (default 127.0.0.1:4146, CLAUDE_ENMAAS_PROXY_PORT; started on
+# demand by _claude_enmaas_codex_proxy, zsh/functions/claude/providers/enmaas.zsh,
+# which also documents its hooks). GPT/Gemini ids pass through as on the direct
+# route; GLM and DeepSeek get the vLLM workarounds (grammar strip for apply_patch,
+# empty developer item filter, thinking default, hosted web_search dropped, GLM
+# image -> DeepSeek, 429 reset rewrite incl. x-codex-* headers). The launcher
+# generates a Codex model catalog = the bundled one + GLM (text) + DeepSeek
+# (text+image) entries (tool_mode direct, no search tool), regenerated when the
+# Codex version or shape changes, and wires provider `enmaas` to the proxy with
+# `-c` overrides right after the session subcommand. T3's launchArgs (the old
+# direct-to-gateway provider keys) are filtered where they collide, everything
+# else (review_model, approvals_reviewer, model_context_window, ...) stays.
+# Codex gets only the proxy's local token as ENMAAS_API_KEY, never the gateway
+# key. CODEX_ENMAAS_DIRECT=1 skips the proxy (old behavior: the caller's
+# launchArgs talk to the gateway directly). A running proxy whose routes, hooks
+# or key differ is never restarted under live sessions: stop it with
+# claude-enmaas-kill. CODEX_ENMAAS_REVIEW_MODEL (default the DeepSeek id) is the
+# auto_review model of the GLM/DeepSeek catalog entries.
 #
 # hosted-only: EnMaaS-hosted free models for everything, auto-review included
 # (the retired "glm-hybrid" mode gave GLM an OpenAI reviewer; DeepSeek now does
@@ -79,9 +96,81 @@ fi
     exit 1
 }
 
-if [[ "$backend" == enmaas ]]; then
+if [[ "$backend" == enmaas && "${CODEX_ENMAAS_DIRECT-}" == 1 ]]; then
     export ENMAAS_API_KEY
     exec "$native" "$@"
+fi
+
+if [[ "$backend" == enmaas ]]; then
+    source "${0:A:h:h}/zsh/functions/claude/providers/enmaas.zsh" || exit 1
+    typeset service token port glm_id ds_id
+    service=$(_claude_enmaas_codex_proxy) || {
+        print -ru2 -- 'codex-provider: EnMaaS proxy unavailable (claude-enmaas-kill stops a stale one; CODEX_ENMAAS_DIRECT=1 bypasses it).'
+        exit 1
+    }
+    token=$(jq -er '.token' <<< "$service") && port=$(jq -er '.port' <<< "$service") \
+        && glm_id=$(jq -er '.glm' <<< "$service") && ds_id=$(jq -er '.deepseek' <<< "$service") || exit 1
+    typeset review="${CODEX_ENMAAS_REVIEW_MODEL:-$ds_id}"
+    typeset catalog_dir="${XDG_STATE_HOME:-$HOME/.local/state}/codex-enmaas"
+    typeset catalog="$catalog_dir/models.json" version shape
+    mkdir -p "$catalog_dir" && chmod 700 "$catalog_dir" || exit 1
+    version=$("$native" --version 2>/dev/null) || version=unknown
+    shape="$version|shape1|$glm_id|$ds_id|$review"
+    if [[ ! -s "$catalog" || "$(<"$catalog.version" 2>/dev/null)" != "$shape" ]]; then
+        "$native" debug models --bundled 2>/dev/null | jq --arg glm "$glm_id" --arg ds "$ds_id" --arg review "$review" '
+            ([.models[] | select(.slug == "gpt-5.5")] + [.models[] | select(.visibility == "list")]
+                | first // error("no bundled model to clone")) as $base
+            | def hosted: .auto_review_model_override = $review | .tool_mode = "direct"
+                | .supports_search_tool = false | .upgrade = null;
+            {models: ([.models[] | select(.slug != $glm and .slug != $ds)] + [
+                ($base | hosted | .slug = $glm | .display_name = "GLM 5.3" | .priority = 13
+                    | .input_modalities = ["text"] | .context_window = 272000 | .max_context_window = 272000),
+                ($base | hosted | .slug = $ds | .display_name = "DeepSeek V4.1 Flash" | .priority = 14
+                    | .input_modalities = ["text", "image"] | .context_window = 1048576 | .max_context_window = 1048576)])}' \
+            > "$catalog.tmp" && mv -f "$catalog.tmp" "$catalog" && print -r -- "$shape" >| "$catalog.version" || {
+            rm -f "$catalog.tmp"
+            print -ru2 -- 'codex-provider: could not generate the EnMaaS model catalog from `codex debug models --bundled`.'
+            exit 1
+        }
+    fi
+    # Codex's key for the provider is the proxy's local token, not the gateway key.
+    export ENMAAS_API_KEY="$token"
+    typeset -a wiring=(
+        -c model_provider=enmaas
+        -c 'model_providers.enmaas.name="EnMaaS"'
+        -c "model_providers.enmaas.base_url=\"http://127.0.0.1:$port/v1\""
+        -c 'model_providers.enmaas.env_key="ENMAAS_API_KEY"'
+        -c 'model_providers.enmaas.wire_api="responses"'
+        -c model_providers.enmaas.requires_openai_auth=false
+        -c "model_catalog_json=\"$catalog\""
+    )
+    # Drop the caller's -c/--config overrides of the keys wired above (T3's
+    # launchArgs point the provider straight at the gateway), then put ours in.
+    typeset -a rest=() kept=()
+    typeset sub="${1-}" arg key i
+    case "$sub" in
+        exec|e|review|app-server|resume|fork) shift ;;
+        *) sub= ;;
+    esac
+    rest=("$@")
+    typeset -i skip
+    for (( i = 1; i <= $#rest; i++ )); do
+        arg="${rest[i]}" skip=0
+        case "$arg" in
+            -c|--config) (( i < $#rest )) && { key="${rest[i+1]%%=*}"; skip=2; } ;;
+            --config=*) key="${${arg#--config=}%%=*}"; skip=1 ;;
+            -c=*) key="${${arg#-c=}%%=*}"; skip=1 ;;
+        esac
+        if (( skip )) && [[ "$key" == (model_provider|model_catalog_json|model_providers.enmaas.*) ]]; then
+            (( i += skip - 1 ))
+            continue
+        fi
+        kept+=("$arg")
+    done
+    if [[ -n "$sub" ]]; then
+        exec "$native" "$sub" "${wiring[@]}" "${kept[@]}"
+    fi
+    exec "$native" "${wiring[@]}" "${kept[@]}"
 fi
 
 # hosted-only
