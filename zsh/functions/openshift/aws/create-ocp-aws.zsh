@@ -964,7 +964,19 @@ metadata:
 spec: {}'
     fi
 
-    if ! echo "$hco_manifest" | oc apply -f -; then
+    # CSV Succeeded can precede the hco-webhook conversion endpoint serving
+    # ("conversion webhook ... failed: Post .../convert"), so retry briefly.
+    local applied=false
+    elapsed=0
+    while (( elapsed < 300 )); do
+        if echo "$hco_manifest" | oc apply -f -; then
+            applied=true
+            break
+        fi
+        sleep 15
+        (( elapsed += 15 ))
+    done
+    if [[ "$applied" != "true" ]]; then
         echo "WARN: --community-hco: failed to create HyperConverged CR" >&2
         return 1
     fi
