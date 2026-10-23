@@ -871,7 +871,10 @@ EOF
     echo "INFO: --community-hco: waiting up to 5m for community-kubevirt-hyperconverged PackageManifest (preferred channel $channel)..."
     local elapsed=0 found=false channels="" default_channel=""
     while (( elapsed < 300 )); do
-        channels=$(oc get packagemanifest community-kubevirt-hyperconverged -n default -o jsonpath='{.status.channels[*].name}' 2>/dev/null)
+        # Scope to our CatalogSource: community-operators ships a same-named
+        # package with unrelated (old) channels.
+        channels=$(oc get packagemanifest -n openshift-marketplace -l catalog=kubevirt-community-catalog \
+            -o jsonpath='{.items[?(@.metadata.name=="community-kubevirt-hyperconverged")].status.channels[*].name}' 2>/dev/null)
         if [[ -n "$channels" ]]; then
             found=true
             break
@@ -884,7 +887,8 @@ EOF
         return 1
     fi
     if ! print -l ${=channels} | grep -qx "$channel"; then
-        default_channel=$(oc get packagemanifest community-kubevirt-hyperconverged -n default -o jsonpath='{.status.defaultChannel}' 2>/dev/null)
+        default_channel=$(oc get packagemanifest -n openshift-marketplace -l catalog=kubevirt-community-catalog \
+            -o jsonpath='{.items[?(@.metadata.name=="community-kubevirt-hyperconverged")].status.defaultChannel}' 2>/dev/null)
         echo "INFO: --community-hco: channel $channel not in index (have: $channels); using defaultChannel ${default_channel}"
         [[ -z "$default_channel" ]] && return 1
         channel="$default_channel"
