@@ -686,13 +686,29 @@ get-openshift-install() {
         return 2  # Binary not executable (wrong CPU arch, missing deps, etc.)
     }
 
-    # Try EC version first, then stable, then generic
-    for binary in "openshift-install-${ec_version}" "openshift-install-${stable_version}" "openshift-install"; do
+    # Try a pinned OCP_RELEASE_VERSION first, then EC, then stable, then generic
+    for binary in ${OCP_RELEASE_VERSION:+"openshift-install-${OCP_RELEASE_VERSION}"} "openshift-install-${ec_version}" "openshift-install-${stable_version}" "openshift-install"; do
         if command -v "$binary" &> /dev/null && check_binary_arch "$binary"; then
             echo "$binary"
             return 0
         fi
     done
+
+    # Non-interactive (cluster-manager, agents): the prompt below can't be
+    # answered. Callers re-resolve the exact binary for the release image
+    # later (get-openshift-install-for-release-image), so any runnable cached
+    # versioned binary is good enough here.
+    if [[ ! -t 0 ]]; then
+        local cached
+        for cached in ${(f)"$(print -l /opt/homebrew/bin/openshift-install-*(N) /usr/local/bin/openshift-install-*(N) \
+                | awk -F'openshift-install-' '{print $NF "\t" $0}' | sort -V -r | cut -f2)"}; do
+            if check_binary_arch "$cached"; then
+                echo "WARN: No openshift-install for ${OCP_RELEASE_VERSION:-$ec_version}; using cached $cached until the exact binary is extracted" >&2
+                echo "$cached"
+                return 0
+            fi
+        done
+    fi
 
     # No suitable binary found, offer to install
     if true; then

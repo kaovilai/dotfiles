@@ -22,12 +22,30 @@ get_latest_arm64_release_image() {
     fi
 }
 
-# Get the latest EC version from AMD64 release for compatibility
+# Get the latest Accepted EC version from the AMD64 dev-preview streams.
+# EC builds live in one stream per major (4-dev-preview, 5-dev-preview, ...),
+# so "latest EC" scans every major's stream instead of only 4-dev-preview.
+# Optional $1 = minor (e.g. "5.0") restricts the result to that minor's ECs.
 get_latest_ec_version() {
-    local version
-    version=$(curl -sm 10 https://amd64.ocp.releases.ci.openshift.org/api/v1/releasestream/4-dev-preview/latest | jq -r '.name' 2>/dev/null)
+    local minor=$1
+    local major version streams
+    if [[ -n "$minor" ]]; then
+        if [[ ! "$minor" =~ ^[0-9]+\.[0-9]+$ ]]; then
+            echo "ERROR: EC minor must look like X.Y (e.g. 5.0), got: $minor" >&2
+            return 1
+        fi
+        streams="${minor%%.*}-dev-preview"
+    else
+        streams=$(curl -sm 10 https://amd64.ocp.releases.ci.openshift.org/api/v1/releasestreams/accepted \
+            | jq -r 'keys[] | select(test("^[0-9]+-dev-preview$"))' 2>/dev/null)
+        [[ -z "$streams" ]] && streams="4-dev-preview"
+    fi
+    version=$(for s in ${(f)streams}; do
+            curl -sm 10 "https://amd64.ocp.releases.ci.openshift.org/api/v1/releasestream/${s}/tags" \
+                | jq -r '.tags[] | select(.phase == "Accepted") | .name' 2>/dev/null
+        done | grep -E "^${minor:+${minor//./\\.}\\.}[0-9.]+-ec\.[0-9]+$" | sort -V | tail -1)
     if [[ -z "$version" ]]; then
-        echo "ERROR: Failed to fetch latest EC version from OpenShift CI API" >&2
+        echo "ERROR: Failed to find an Accepted EC version${minor:+ for $minor} via OpenShift CI API" >&2
         return 1
     else
         echo "$version"
@@ -48,7 +66,7 @@ get_latest_multi_release_image() {
 
 # Functions to get latest EC version and release images dynamically at runtime
 get-ocp-latest-ec-version() {
-    get_latest_ec_version
+    get_latest_ec_version "$@"
 }
 
 function get-ocp-release-image-amd64() {

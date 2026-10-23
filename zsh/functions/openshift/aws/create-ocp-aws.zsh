@@ -48,7 +48,8 @@ create-ocp-aws() {
         echo ""
         echo "Flags (can be combined):"
         echo "  --force-new Force creation alongside existing clusters (skip prompt)"
-        echo "  --ec        Automatically select Early Candidate release stream"
+        echo "  --ec        Automatically select the newest Accepted Early Candidate (any major)"
+        echo "  --ec=X.Y    Same, restricted to minor X.Y (e.g. --ec=5.1)"
         echo "  --verify-all-signatures"
         echo "              With --ec, check every image in the release payload for a"
         echo "              published signature instead of just rhel-coreos (slower, ~10-20s)"
@@ -250,6 +251,7 @@ create-ocp-aws() {
     # Parse command line flags
     local force_new=false
     local auto_ec=false
+    local ec_minor=""
     local add_kvm_pool=false
     local kvm_spot=false
     local kvm_all_workers=false
@@ -268,6 +270,10 @@ create-ocp-aws() {
                 ;;
             --ec)
                 auto_ec=true
+                ;;
+            --ec=*)
+                auto_ec=true
+                ec_minor="${arg#--ec=}"
                 ;;
             --verify-all-signatures)
                 verify_all_signatures=true
@@ -346,8 +352,15 @@ create-ocp-aws() {
         echo "INFO: Using pre-set OCP_RELEASE_VERSION=$OCP_RELEASE_VERSION (stream=$stream)"
         unset AUTO_SELECT_EC
     elif [[ -n "$AUTO_SELECT_EC" ]]; then
-        stream="4-dev-preview"
-        echo "Automatically selecting Early Candidate release stream"
+        # Resolve the concrete EC version up front (newest Accepted EC across
+        # every major's dev-preview stream, or newest of --ec=X.Y's minor) and
+        # pin it via OCP_RELEASE_VERSION, so a 5.x EC is reachable and the
+        # release image, signature check and installer binary all agree.
+        local ec_version
+        ec_version=$(get-ocp-latest-ec-version $ec_minor) || return 1
+        export OCP_RELEASE_VERSION="$ec_version"
+        stream="dev-preview"
+        echo "Automatically selecting Early Candidate release ${ec_version}${ec_minor:+ (--ec=${ec_minor})}"
         unset AUTO_SELECT_EC
     else
         local stream_output=$(prompt-release-stream)
@@ -851,10 +864,15 @@ EOF
     local -a tag_parts=(${(s:.:)index_tag})
     local channel="stable-v${tag_parts[1]}.${tag_parts[2]}"
 
-    echo "INFO: --community-hco: waiting up to 5m for community-kubevirt-hyperconverged PackageManifest with channel $channel..."
-    local elapsed=0 found=false
+    # Unstable/nightly indexes (e.g. 1.20.0-unstable, nightly) only publish a
+    # candidate-vX.Y channel, and non-semver tags yield no usable derived
+    # channel at all, so fall back to the package's defaultChannel when the
+    # derived one isn't in the catalog.
+    echo "INFO: --community-hco: waiting up to 5m for community-kubevirt-hyperconverged PackageManifest (preferred channel $channel)..."
+    local elapsed=0 found=false channels="" default_channel=""
     while (( elapsed < 300 )); do
-        if oc get packagemanifest community-kubevirt-hyperconverged -n default -o jsonpath='{.status.channels[*].name}' 2>/dev/null | grep -qw "$channel"; then
+        channels=$(oc get packagemanifest community-kubevirt-hyperconverged -n default -o jsonpath='{.status.channels[*].name}' 2>/dev/null)
+        if [[ -n "$channels" ]]; then
             found=true
             break
         fi
@@ -862,8 +880,14 @@ EOF
         (( elapsed += 5 ))
     done
     if [[ "$found" != "true" ]]; then
-        echo "WARN: --community-hco: PackageManifest channel $channel did not appear within 5m" >&2
+        echo "WARN: --community-hco: PackageManifest did not appear within 5m" >&2
         return 1
+    fi
+    if ! print -l ${=channels} | grep -qx "$channel"; then
+        default_channel=$(oc get packagemanifest community-kubevirt-hyperconverged -n default -o jsonpath='{.status.defaultChannel}' 2>/dev/null)
+        echo "INFO: --community-hco: channel $channel not in index (have: $channels); using defaultChannel ${default_channel}"
+        [[ -z "$default_channel" ]] && return 1
+        channel="$default_channel"
     fi
 
     if ! oc apply -f - <<EOF
