@@ -41,9 +41,19 @@ delete-ocp-azure-sts(){
         # install dir: delete-ocp-azure-sts-dir passes OCP_CREATE_DIR as an env
         # prefix, but the assignment above already clobbered it, which made
         # suffixed clusters (...-sts-1) destroy the unsuffixed directory.
-        if [[ "$CLUSTER_NAME" =~ ^tkaovila-([0-9]{6,8})-sts(-[0-9]+)?$ ]] \
-           && [[ -d "$OCP_MANIFESTS_DIR/${match[1]}-azure-sts${match[2]}" ]]; then
+        #
+        # Never fall back to $TODAY's dir for an explicit name: when the named
+        # dir is gone, today's dir belongs to a DIFFERENT cluster (same-day
+        # names differ only by -N), and destroying it kills that cluster.
+        if [[ "$CLUSTER_NAME" =~ ^tkaovila-([0-9]{6,8})-sts(-[0-9]+)?$ ]]; then
             OCP_CREATE_DIR=$OCP_MANIFESTS_DIR/${match[1]}-azure-sts${match[2]}
+            if [[ ! -d "$OCP_CREATE_DIR" ]]; then
+                echo "ERROR: $OCP_CREATE_DIR (install dir for $CLUSTER_NAME) does not exist; refusing to guess another dir" >&2
+                return 1
+            fi
+        elif [[ "$CLUSTER_NAME" != "cleanup-legacy" ]]; then
+            echo "ERROR: cannot map cluster name '$CLUSTER_NAME' to an install dir (expected tkaovila-<date>-sts[-N])" >&2
+            return 1
         fi
     fi
     
