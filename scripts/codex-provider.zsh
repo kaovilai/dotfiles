@@ -216,6 +216,9 @@ if [[ ! -s "$catalog" || "$(<"$catalog.version" 2>/dev/null)" != "$shape" ]]; th
         exit 1
     }
 fi
+# Hook ~/.claude/hooks/shrink-view-image.sh shrinks images to this many px
+# (EnMaaS 413s on large request bodies).
+export T3_IMAGE_MAX_PX=1000
 typeset -a wiring=(
     -c model_provider=glmonly
     -c 'model_providers.glmonly.name="RH Hosted Only"'
