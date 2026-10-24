@@ -881,6 +881,19 @@ is-cluster-live() {
     KUBECONFIG="$kubeconfig" timeout 10 oc get clusterversion version >/dev/null 2>&1
 }
 
+# True while another create-ocp-* process is working in this cluster dir (the pid
+# it wrote to .ocp-busy is still alive). Being destroyed or still bootstrapping
+# means the API is not up yet, so is-cluster-live alone misses it -- real
+# incident 2026-10-23: a same-day create's pre-create cleanup ran
+# `openshift-install destroy` against a cluster cluster-manager was destroying.
+#
+# Usage: ocp-dir-busy "$OCP_CREATE_DIR"
+ocp-dir-busy() {
+    local pid
+    pid=$(cat "$1/.ocp-busy" 2>/dev/null) || return 1
+    [[ -n "$pid" && "$pid" != "$$" ]] && kill -0 "$pid" 2>/dev/null
+}
+
 # Function to generate unique cluster name and directory
 # Usage: result=$(generate-unique-cluster-name "tkaovila-20250114-sts" "/path/to/dir")
 #        cluster_name=$(echo "$result" | grep "cluster_name:" | cut -d: -f2)
@@ -900,6 +913,9 @@ is-cluster-live() {
 # Environment:
 #   PROCEED_WITH_EXISTING_CLUSTERS - If "true", appends -1, -2, etc. to avoid
 #     conflicting with any existing (even non-live) directory.
+#   OCP_TARGET_CLUSTER_DIR + OCP_TARGET_CLUSTER_NAME - Use exactly this dir/name
+#     (cluster-manager sets them: it picks a pair no other cluster record holds,
+#     and reuses it for every retry of the same request).
 # Example:
 #   local unique=$(generate-unique-cluster-name "$CLUSTER_NAME" "$OCP_CREATE_DIR")
 #   [[ -z "$unique" ]] && return 1
@@ -920,9 +936,23 @@ generate-unique-cluster-name() {
     local candidate_dir="$base_dir"
     local candidate_name="$base_name"
 
+    if [[ -n "$OCP_TARGET_CLUSTER_DIR$OCP_TARGET_CLUSTER_NAME" ]]; then
+        if [[ -z "$OCP_TARGET_CLUSTER_DIR" || -z "$OCP_TARGET_CLUSTER_NAME" || "${OCP_TARGET_CLUSTER_DIR:h}" != "${OCP_MANIFESTS_DIR%/}" ]]; then
+            echo "ERROR: OCP_TARGET_CLUSTER_DIR and OCP_TARGET_CLUSTER_NAME must both be set, dir directly under $OCP_MANIFESTS_DIR" >&2
+            return 1
+        fi
+        if is-cluster-live "$OCP_TARGET_CLUSTER_DIR" || ocp-dir-busy "$OCP_TARGET_CLUSTER_DIR"; then
+            echo "ERROR: target $OCP_TARGET_CLUSTER_DIR is a live cluster or another process is working in it" >&2
+            return 1
+        fi
+        echo "cluster_name:${OCP_TARGET_CLUSTER_NAME}"
+        echo "cluster_dir:${OCP_TARGET_CLUSTER_DIR}"
+        return 0
+    fi
+
     while [[ -d "$candidate_dir" ]]; do
-        if is-cluster-live "$candidate_dir"; then
-            echo "Found LIVE cluster at $candidate_dir (API server reachable) -- never auto-reusing/destroying a live cluster's directory, picking a new name/dir" >&2
+        if is-cluster-live "$candidate_dir" || ocp-dir-busy "$candidate_dir"; then
+            echo "Found LIVE or busy cluster at $candidate_dir (API server reachable, or another create/destroy is running in it) -- never auto-reusing/destroying it, picking a new name/dir" >&2
         elif [[ "$PROCEED_WITH_EXISTING_CLUSTERS" != "true" ]]; then
             # Existing but not live, and caller hasn't opted into
             # auto-suffixing: keep prior default behavior of returning this
@@ -1082,7 +1112,10 @@ cleanup-orphaned-gcp-resources() {
 
     [[ -z "$cluster_name" || -z "$project" ]] && return 0
 
-    local filter="name~${cluster_name}"
+    # Anchored on <name>-<5-char infra suffix>: a bare substring match also
+    # matched tkaovila-D-wif-1-* (a different, possibly live, cluster) when
+    # cleaning up after tkaovila-D-wif.
+    local filter="name~^${cluster_name}-[a-z0-9]{5}(-|\$)"
     local found=false
 
     # Check if any orphaned compute resources exist

@@ -120,8 +120,8 @@ create-ocp-azure-sts(){
             # second same-day invocation destroyed a different, still-live
             # cluster that happened to land on this same directory). Never
             # destroy a live cluster -- fail loudly instead of guessing.
-            if is-cluster-live "$OCP_CREATE_DIR"; then
-                echo "ERROR: $OCP_CREATE_DIR is a LIVE, reachable cluster (API server responded). Refusing to destroy it automatically." >&2
+            if is-cluster-live "$OCP_CREATE_DIR" || ocp-dir-busy "$OCP_CREATE_DIR"; then
+                echo "ERROR: $OCP_CREATE_DIR is a LIVE, reachable cluster, or another create/destroy is running in it. Refusing to destroy it automatically." >&2
                 echo "If this directory really should be replaced, verify the cluster is actually meant to be torn down first." >&2
                 return 1
             fi
@@ -539,7 +539,9 @@ create-ocp-azure-sts(){
       type: $nested_virt_vm_size"
     fi
 
-    mkdir -p $OCP_CREATE_DIR && \
+    # Mark the dir in use for the life of this create so a concurrent
+    # invocation's generate-unique-cluster-name / pre-create cleanup skips it.
+    mkdir -p $OCP_CREATE_DIR && echo $$ > "$OCP_CREATE_DIR/.ocp-busy" && \
     echo "additionalTrustBundlePolicy: Proxyonly
 apiVersion: v1
 baseDomain: $AZURE_BASEDOMAIN

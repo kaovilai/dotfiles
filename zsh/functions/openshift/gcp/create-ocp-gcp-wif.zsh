@@ -246,8 +246,8 @@ create-ocp-gcp-wif(){
             # second same-day invocation destroyed a different, still-live
             # cluster that happened to land on this same directory). Never
             # destroy a live cluster -- fail loudly instead of guessing.
-            if is-cluster-live "$OCP_CREATE_DIR"; then
-                echo "ERROR: $OCP_CREATE_DIR is a LIVE, reachable cluster (API server responded). Refusing to destroy it automatically." >&2
+            if is-cluster-live "$OCP_CREATE_DIR" || ocp-dir-busy "$OCP_CREATE_DIR"; then
+                echo "ERROR: $OCP_CREATE_DIR is a LIVE, reachable cluster, or another create/destroy is running in it. Refusing to destroy it automatically." >&2
                 echo "If this directory really should be replaced, verify the cluster is actually meant to be torn down first." >&2
                 return 1
             fi
@@ -418,7 +418,9 @@ create-ocp-gcp-wif(){
     # Handle registry login and pull secret update
     handle-registry-login "$BASE_RELEASE_IMAGE_REGISTRY"
     update-pull-secret-with-podman "$BASE_RELEASE_IMAGE_REGISTRY"
-    mkdir -p $OCP_CREATE_DIR || return 1
+    # Mark the dir in use for the life of this create so a concurrent
+    # invocation's generate-unique-cluster-name / pre-create cleanup skips it.
+    mkdir -p $OCP_CREATE_DIR && echo $$ > "$OCP_CREATE_DIR/.ocp-busy" || return 1
     
     {
         create-install-config-header
