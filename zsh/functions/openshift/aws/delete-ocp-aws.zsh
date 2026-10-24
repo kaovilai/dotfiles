@@ -18,9 +18,8 @@ delete-ocp-aws() {
     # EC2 instances + a VPC with no local trace left to destroy against,
     # because the default guessed openshift-install-4.23.0-ec.0 (not
     # installed) instead of the 5.0.0 nightly binary the cluster actually
-    # used. Fix: resolve the exact binary this cluster's own create run used
-    # from its .openshift_install.log, and abort loudly instead of guessing
-    # if that can't be determined and the fallback doesn't exist either.
+    # used. Fix: resolve the binary from this cluster's own install log and
+    # keep the dir when destroy fails -- see util/destroy-installer.zsh.
     local OPENSHIFT_INSTALL_ENV_OVERRIDE="${OPENSHIFT_INSTALL:-}"
     local ARCH_SUFFIX=$2
     
@@ -162,9 +161,9 @@ delete-ocp-aws() {
             local LEGACY_CLUSTER_NAME="tkaovila--$ARCH_SUFFIX"
 
             echo "Destroying AWS cluster in legacy directory: $EMPTY_TODAY_DIR"
-            $OPENSHIFT_INSTALL destroy cluster --dir $EMPTY_TODAY_DIR || echo "no existing cluster in legacy directory"
-            echo "Destroying AWS bootstrap in legacy directory: $EMPTY_TODAY_DIR"
-            $OPENSHIFT_INSTALL destroy bootstrap --dir $EMPTY_TODAY_DIR || echo "no existing bootstrap in legacy directory"
+            local LEGACY_INSTALL
+            LEGACY_INSTALL=$(resolve-destroy-installer "$EMPTY_TODAY_DIR" "$OPENSHIFT_INSTALL_ENV_OVERRIDE") || return 1
+            destroy-ocp-install-dir "$LEGACY_INSTALL" "$EMPTY_TODAY_DIR" || return 1
 
             ((rm -r $EMPTY_TODAY_DIR && echo "removed legacy create dir") || (true && echo "no legacy install dir")) || true
         else
@@ -174,30 +173,16 @@ delete-ocp-aws() {
         return 0
     fi
     
-    # Resolve the exact openshift-install binary this cluster's own create
-    # run used, from the first "Running: <path>" line in its own install log
-    # -- guarantees a version match without needing to parse/guess a version
-    # string, and works regardless of where that binary lives on disk.
-    local OPENSHIFT_INSTALL="$OPENSHIFT_INSTALL_ENV_OVERRIDE"
-    if [[ -z "$OPENSHIFT_INSTALL" && -f "$OCP_CREATE_DIR/.openshift_install.log" ]]; then
-        OPENSHIFT_INSTALL=$(grep -oE 'Running: [^ ]*openshift-install[^ ]*' "$OCP_CREATE_DIR/.openshift_install.log" 2>/dev/null | head -1 | awk '{print $2}')
-    fi
-    if [[ -z "$OPENSHIFT_INSTALL" ]]; then
-        local EC_VERSION; EC_VERSION=$(get-ocp-latest-ec-version)
-        OPENSHIFT_INSTALL="openshift-install-${EC_VERSION}"
-        echo "WARNING: could not resolve this cluster's actual openshift-install binary from its log -- guessing latest EC ($OPENSHIFT_INSTALL). This may not match and silently no-op destroy." >&2
-    fi
-    if ! command -v "$OPENSHIFT_INSTALL" >/dev/null 2>&1; then
-        echo "ERROR: resolved openshift-install binary '$OPENSHIFT_INSTALL' not found/executable." >&2
+    # Exact binary this cluster's create used (see util/destroy-installer.zsh
+    # for the lookup order); refuses rather than guessing across minors.
+    local OPENSHIFT_INSTALL
+    OPENSHIFT_INSTALL=$(resolve-destroy-installer "$OCP_CREATE_DIR" "$OPENSHIFT_INSTALL_ENV_OVERRIDE") || {
         echo "Refusing to remove $OCP_CREATE_DIR without a working destroy -- that would orphan real cloud resources with no local trace left to destroy against (see 2026-09-21 incident note above)." >&2
-        echo "Set OPENSHIFT_INSTALL=/path/to/matching/binary and retry." >&2
         return 1
-    fi
+    }
 
     echo "Destroying AWS cluster in directory: $OCP_CREATE_DIR"
-    $OPENSHIFT_INSTALL destroy cluster --dir $OCP_CREATE_DIR || echo "no existing cluster"
-    echo "Destroying AWS bootstrap in directory: $OCP_CREATE_DIR"
-    $OPENSHIFT_INSTALL destroy bootstrap --dir $OCP_CREATE_DIR || echo "no existing bootstrap"
+    destroy-ocp-install-dir "$OPENSHIFT_INSTALL" "$OCP_CREATE_DIR" || return 1
     ((rm -r $OCP_CREATE_DIR && echo "removed existing create dir") || (true && echo "no existing install dir")) || return 1
 }
 

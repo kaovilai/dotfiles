@@ -40,6 +40,7 @@ _safe_source ~/git/dotfiles/zsh/functions/openshift/crc/crc-functions.zsh
 
 # Load utility functions
 _safe_source ~/git/dotfiles/zsh/functions/openshift/util/common-functions.zsh
+_safe_source ~/git/dotfiles/zsh/functions/openshift/util/destroy-installer.zsh
 _safe_source ~/git/dotfiles/zsh/functions/openshift/util/ca-functions.zsh
 _safe_source ~/git/dotfiles/zsh/functions/openshift/util/install-tools.zsh
 _safe_source ~/git/dotfiles/zsh/functions/openshift/util/misc-functions.zsh

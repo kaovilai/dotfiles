@@ -4,9 +4,10 @@ delete-ocp-azure-sts(){
         unset SSH_AUTH_SOCK
     fi
     
-    # Use specified openshift-install or default to latest EC version
-    local EC_VERSION; EC_VERSION=$(get-ocp-latest-ec-version)
-    local OPENSHIFT_INSTALL=${OPENSHIFT_INSTALL:-openshift-install-${EC_VERSION}}
+    # Destroy binary is resolved per dir from its install log right before use
+    # (util/destroy-installer.zsh); a latest-EC default here destroyed with a
+    # binary that wasn't installed, swallowed the error, then removed the dir.
+    local OPENSHIFT_INSTALL_ENV_OVERRIDE="${OPENSHIFT_INSTALL:-}" OPENSHIFT_INSTALL
 
     # Check if help is requested
     if [[ $1 == "help" ]]; then
@@ -53,9 +54,8 @@ delete-ocp-azure-sts(){
         local LEGACY_CLUSTER_NAME="tkaovila--sts"
         
         echo "Destroying Azure cluster in legacy directory: $EMPTY_TODAY_DIR"
-        $OPENSHIFT_INSTALL destroy cluster --dir $EMPTY_TODAY_DIR || echo "no existing cluster in legacy directory"
-        echo "Destroying Azure bootstrap in legacy directory: $EMPTY_TODAY_DIR"
-        $OPENSHIFT_INSTALL destroy bootstrap --dir $EMPTY_TODAY_DIR || echo "no existing bootstrap in legacy directory"
+        OPENSHIFT_INSTALL=$(resolve-destroy-installer "$EMPTY_TODAY_DIR" "$OPENSHIFT_INSTALL_ENV_OVERRIDE") || return 1
+        destroy-ocp-install-dir "$OPENSHIFT_INSTALL" "$EMPTY_TODAY_DIR" || return 1
         
         # Generate storage account name same way as create function
         local LEGACY_STORAGE_ACCOUNT_NAME; LEGACY_STORAGE_ACCOUNT_NAME=$(echo "$LEGACY_CLUSTER_NAME" | tr -d '-' | tr '[:upper:]' '[:lower:]' | cut -c1-24)
@@ -75,10 +75,14 @@ delete-ocp-azure-sts(){
     if [[ "$1" == "cleanup-legacy" ]]; then
         return 0
     fi
-echo "Destroying Azure cluster in directory: $OCP_CREATE_DIR"
-$OPENSHIFT_INSTALL destroy cluster --dir $OCP_CREATE_DIR || echo "no existing cluster"
-echo "Destroying Azure bootstrap in directory: $OCP_CREATE_DIR"
-$OPENSHIFT_INSTALL destroy bootstrap --dir $OCP_CREATE_DIR || echo "no existing bootstrap"
+    OPENSHIFT_INSTALL=$(resolve-destroy-installer "$OCP_CREATE_DIR" "$OPENSHIFT_INSTALL_ENV_OVERRIDE") || {
+        echo "Refusing to remove $OCP_CREATE_DIR without a working destroy -- that would orphan real cloud resources." >&2
+        return 1
+    }
+    echo "Destroying Azure cluster in directory: $OCP_CREATE_DIR"
+    # ccoctl cleanup + rm only after the cluster is gone: they delete the
+    # identity/dir a retry would need.
+    destroy-ocp-install-dir "$OPENSHIFT_INSTALL" "$OCP_CREATE_DIR" || return 1
     # Generate storage account name same way as create function
     local STORAGE_ACCOUNT_NAME; STORAGE_ACCOUNT_NAME=$(echo "$CLUSTER_NAME" | tr -d '-' | tr '[:upper:]' '[:lower:]' | cut -c1-24)
     (ccoctl azure delete \
