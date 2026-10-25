@@ -829,6 +829,58 @@ add-kvm-machineset() {
     return 1
 }
 
+# Print a minimal HyperConverged CR for <namespace>. Uses hco.kubevirt.io/v1
+# when the CRD serves it (v1beta1 is deprecated in HCO 1.20 and dropped in 1.21,
+# see https://github.com/kubevirt/hyperconverged-cluster-operator/issues/4673),
+# and falls back to v1beta1 for older CNV releases that only serve v1beta1.
+# The workload toleration moved from spec.workloads.nodePlacement (v1beta1) to
+# spec.nodePlacements.workload (v1).
+#
+# Usage: KUBECONFIG=/path/to/kubeconfig _hco-manifest <namespace> [tolerate-kvm-taint]
+_hco-manifest() {
+    local namespace=$1
+    local tolerate_kvm_taint=${2:-false}
+    local served_v1
+    served_v1=$(oc get crd hyperconvergeds.hco.kubevirt.io \
+        -o jsonpath='{.spec.versions[?(@.name=="v1")].served}' 2>/dev/null)
+
+    local toleration='      tolerations:
+      - key: dedicated
+        operator: Equal
+        value: kubevirt
+        effect: NoSchedule'
+
+    if [[ "$served_v1" == "true" ]]; then
+        echo "apiVersion: hco.kubevirt.io/v1
+kind: HyperConverged
+metadata:
+  name: kubevirt-hyperconverged
+  namespace: ${namespace}"
+        if [[ "$tolerate_kvm_taint" == "true" ]]; then
+            echo "spec:
+  nodePlacements:
+    workload:
+${toleration}"
+        else
+            echo "spec: {}"
+        fi
+    else
+        echo "apiVersion: hco.kubevirt.io/v1beta1
+kind: HyperConverged
+metadata:
+  name: kubevirt-hyperconverged
+  namespace: ${namespace}"
+        if [[ "$tolerate_kvm_taint" == "true" ]]; then
+            echo "spec:
+  workloads:
+    nodePlacement:
+${toleration}"
+        else
+            echo "spec: {}"
+        fi
+    fi
+}
+
 # Install Community HCO (quay.io/kubevirt/hyperconverged-cluster-index) from a
 # custom CatalogSource, instead of productized CNV from the default
 # redhat-operators catalog. This is the fallback path OADP's own virt e2e CI
@@ -943,28 +995,7 @@ EOF
 
     echo "INFO: --community-hco: creating HyperConverged CR"
     local hco_manifest
-    if [[ "$tolerate_kvm_taint" == "true" ]]; then
-        hco_manifest='apiVersion: hco.kubevirt.io/v1beta1
-kind: HyperConverged
-metadata:
-  name: kubevirt-hyperconverged
-  namespace: kubevirt-hyperconverged
-spec:
-  workloads:
-    nodePlacement:
-      tolerations:
-      - key: dedicated
-        operator: Equal
-        value: kubevirt
-        effect: NoSchedule'
-    else
-        hco_manifest='apiVersion: hco.kubevirt.io/v1beta1
-kind: HyperConverged
-metadata:
-  name: kubevirt-hyperconverged
-  namespace: kubevirt-hyperconverged
-spec: {}'
-    fi
+    hco_manifest=$(_hco-manifest kubevirt-hyperconverged "$tolerate_kvm_taint")
 
     # CSV Succeeded can precede the hco-webhook conversion endpoint serving
     # ("conversion webhook ... failed: Post .../convert"), so retry briefly.
@@ -1063,28 +1094,7 @@ EOF
 
     echo "INFO: --install-cnv: creating HyperConverged CR"
     local hco_manifest
-    if [[ "$tolerate_kvm_taint" == "true" ]]; then
-        hco_manifest='apiVersion: hco.kubevirt.io/v1beta1
-kind: HyperConverged
-metadata:
-  name: kubevirt-hyperconverged
-  namespace: openshift-cnv
-spec:
-  workloads:
-    nodePlacement:
-      tolerations:
-      - key: dedicated
-        operator: Equal
-        value: kubevirt
-        effect: NoSchedule'
-    else
-        hco_manifest='apiVersion: hco.kubevirt.io/v1beta1
-kind: HyperConverged
-metadata:
-  name: kubevirt-hyperconverged
-  namespace: openshift-cnv
-spec: {}'
-    fi
+    hco_manifest=$(_hco-manifest openshift-cnv "$tolerate_kvm_taint")
 
     if ! echo "$hco_manifest" | oc apply -f -; then
         echo "WARN: --install-cnv: failed to create HyperConverged CR" >&2
