@@ -170,6 +170,148 @@ def is_empty_instruction(item):
     return content is None
 
 
+# Hosted vLLM models (rits/) have no server-side web search: upstream accepts
+# the tool, ignores it, and answers from stale weights. Dropping it silently
+# leaves the model believing it searched. Drop the tool and say so in-band, so
+# the model routes the lookup somewhere that can actually search (the same
+# policy nudge-web-search-via-luna.sh applies at the harness level).
+# HOSTED_ONLY_SEARCH_NUDGE=0 turns the note off.
+SEARCH_TOOL_PREFIX = "web_search"
+SEARCH_NOTE_MARKER = "[web-search-unavailable]"
+SEARCH_NUDGE = knob("SEARCH_NUDGE", "1") != "0"
+
+
+def strip_web_search_tools(data):
+    """Remove hosted web_search tools; True when the request changed."""
+    tools = data.get("tools")
+    if not isinstance(tools, list):
+        return False
+    kept = [
+        tool
+        for tool in tools
+        if not (
+            isinstance(tool, dict)
+            and str(tool.get("type") or "").startswith(SEARCH_TOOL_PREFIX)
+        )
+    ]
+    if len(kept) == len(tools):
+        return False
+    if kept:
+        data["tools"] = kept
+    else:
+        data.pop("tools", None)
+        data.pop("tool_choice", None)
+    return True
+
+
+def search_note_text():
+    """In-band note replacing the dropped tool: no search, route it instead."""
+    route = os.environ.get("T3_WEB_SEARCH_DELEGATE", "").strip()
+    provider, _, model = route.partition(":")
+    if provider and model:
+        where = f"T3 delegate_task with providerInstanceId={provider} model={model}"
+    elif provider:
+        where = f"T3 delegate_task with providerInstanceId={provider}"
+    else:
+        where = "a search-capable model or provider (for example T3 delegate_task)"
+    return (
+        f"{SEARCH_NOTE_MARKER} This model has no web search: the hosted upstream "
+        "ignores the web_search tool, so it was removed for this request. Never "
+        "claim to have searched, and never guess or invent a URL. When the task "
+        "needs current information (news, releases, versions, prices, events) or "
+        f"the user asks you to look something up, route the lookup to {where}: "
+        "ask it to search, open every URL it returns, report findings with their "
+        "URLs, drop dead/403/404 links, one URL per story. If no search-capable "
+        "provider is available, say web search is unavailable instead of "
+        "answering from memory. For a known URL, fetch it directly."
+    )
+
+
+def search_note_present(data):
+    """True when this request already carries the note (retries, fallbacks)."""
+    probe = {k: data.get(k) for k in ("system", "instructions", "messages", "input")}
+    try:
+        return SEARCH_NOTE_MARKER in json.dumps(probe)
+    except (TypeError, ValueError):
+        return False
+
+
+def add_to_system(data, text):
+    """Anthropic /v1/messages: top-level system string or text blocks."""
+    system = data.get("system")
+    if isinstance(system, str):
+        data["system"] = [{"type": "text", "text": system}, {"type": "text", "text": text}]
+        return True
+    if isinstance(system, list):
+        system.append({"type": "text", "text": text})
+        return True
+    if system is None:
+        data["system"] = text
+        return True
+    return False
+
+
+def add_to_instructions(data, text):
+    """Responses: the instructions field, set or appended."""
+    instructions = data.get("instructions")
+    if isinstance(instructions, str) and instructions.strip():
+        data["instructions"] = instructions + "\n\n" + text
+        return True
+    if instructions is None:
+        data["instructions"] = text
+        return True
+    return False
+
+
+def add_to_chat_messages(data, text):
+    """Chat completions: extend the system message, else prepend one."""
+    messages = data.get("messages")
+    if not isinstance(messages, list):
+        return False
+    for message in messages:
+        if isinstance(message, dict) and message.get("role") == "system":
+            content = message.get("content")
+            if isinstance(content, str):
+                message["content"] = content + "\n\n" + text
+            elif isinstance(content, list):
+                content.append({"type": "text", "text": text})
+            else:
+                message["content"] = text
+            return True
+    messages.insert(0, {"role": "system", "content": text})
+    return True
+
+
+def add_to_responses_input(data, text):
+    """Responses without an instructions field: prepend a developer item."""
+    item = {"role": "developer", "content": [{"type": "input_text", "text": text}]}
+    items = data.get("input")
+    if isinstance(items, list):
+        items.insert(0, item)
+        return True
+    if isinstance(items, str):
+        data["input"] = [
+            item,
+            {"role": "user", "content": [{"type": "input_text", "text": items}]},
+        ]
+        return True
+    return False
+
+
+def inject_search_note(data, text, call_type=""):
+    """Attach the note in the dialect this request already speaks."""
+    kind = str(call_type or "")
+    if "system" in data or "message" in kind:
+        return add_to_system(data, text)
+    if "instructions" in data or "input" in data or kind in ("responses", "aresponses"):
+        # A developer item inside input survives every Responses upstream;
+        # `instructions` support varies, so it is only the fallback.
+        return add_to_responses_input(data, text) or add_to_instructions(data, text)
+    if "messages" in data:
+        return add_to_chat_messages(data, text)
+    return False
+
+
 def status_of(exc):
     for name in ("status_code", "code"):
         try:
@@ -791,6 +933,24 @@ class HostedOnlyHooks(CustomLogger):
                 fmt = tool.get("format")
                 if isinstance(fmt, dict) and fmt.get("type") == "grammar":
                     tool.pop("format", None)
+        if SEARCH_NUDGE and strip_web_search_tools(data) and not search_note_present(data):
+            inject_search_note(data, search_note_text(), call_type)
+        # Why thinking is disabled here (docstring item 2 has the full story):
+        # Anthropic Messages semantics are "no thinking unless requested", but
+        # GLM reasons by default. The request that trips on this is Claude
+        # Code's auto-mode classifier: ~40k-token prompt, no thinking field,
+        # 2112-token stage-1 cap. GLM's default reasoning (1.5-2k tokens,
+        # 20-27 s) blows that cap and auto mode reports the classifier as
+        # "temporarily unavailable (timed out)". GLM 5.3 is a thinking-only
+        # model, so {"type": "disabled"} does not turn reasoning off — it cuts
+        # it to about one sentence (9-14 output tokens on a 26k-token prompt,
+        # vs 130-270 without), which is what keeps the classifier inside its
+        # limit; the server ignores chat_template_kwargs.enable_thinking=false.
+        # The guard leaves everything else as sent: `thinking is None` means
+        # main turns, which request thinking explicitly, are untouched, and
+        # messages-without-input is the Anthropic Messages dialect only —
+        # Codex's Responses requests carry no thinking field. DeepSeek (which
+        # the vision reroute above may have swapped in) honors disabled fully.
         if "messages" in data and "input" not in data and data.get("thinking") is None:
             data["thinking"] = {"type": "disabled"}
         if isinstance(data.get("input"), list):
