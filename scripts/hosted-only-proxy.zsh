@@ -186,11 +186,16 @@ _hosted_only_proxy_ensure() {
                 python3 "$_HOSTED_ONLY_SCRIPTS/claude-provider.py" --background "$_hop_runtime/proxy.log" \
                 uv tool run --with "fastapi==$fastapi_version" --from "litellm[proxy]==$litellm_version" litellm \
                 --config "$_hop_runtime/config.yaml" --host 127.0.0.1 --port "$_hop_port" --telemetry False || return 1
+            # Boot wait: one dot per second so the (potentially minutes-long)
+            # uv/litellm startup is visible progress, not a blank terminal.
             local i
+            print -nu2 -- "hosted-only: starting $_hop_flavor proxy on :$_hop_port "
             for i in {1..90}; do
                 curl -sf --max-time 2 "$health" -o /dev/null && break
+                print -nu2 -- .
                 sleep 1
             done
+            print -u2
             if curl -sf --max-time 2 "$health" -o /dev/null; then
                 print -r -- "$fp" >| "$_hop_runtime/fingerprint"
             else

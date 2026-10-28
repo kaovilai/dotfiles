@@ -192,13 +192,23 @@ def ensure(root, port, config, versions, timeout, required):
     info = {'pid': child.pid, 'birth': birth(child.pid), 'port': port, 'token': token,
             'versions': versions, 'key_signature': signature(key, token), 'hooks': hooks}
     write_private(root / 'proxy.json', info)
+    # Boot wait: a dot per second on stderr so the (up to `timeout` long)
+    # litellm startup shows progress instead of a blank terminal.
     deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        if ready(info, root):
-            return dict(info, models=[row['model_name'] for row in config['model_list']])
-        if child.poll() is not None:
-            raise RuntimeError('standard LiteLLM proxy failed to start; see %s' % log)
-        time.sleep(.2)
+    ticks = 0
+    try:
+        while time.monotonic() < deadline:
+            if ready(info, root):
+                return dict(info, models=[row['model_name'] for row in config['model_list']])
+            if child.poll() is not None:
+                raise RuntimeError('standard LiteLLM proxy failed to start; see %s' % log)
+            time.sleep(.2)
+            ticks += 1
+            if not ticks % 5:
+                print('.', end='', flush=True, file=sys.stderr)
+    finally:
+        if ticks:
+            print(file=sys.stderr)
     if owned(info):
         stop(root, info)
     raise RuntimeError('standard LiteLLM proxy startup timed out; see %s' % log)
