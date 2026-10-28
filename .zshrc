@@ -99,7 +99,7 @@ _lazy_load_podman_utils() {
         _safe_source ~/git/dotfiles/zsh/functions/podman-utils.zsh && PODMAN_UTILS_LOADED=1
     fi
 }
-for func in check-qemu-stuck kill-stuck-qemu podman-build-multiarch; do
+for func in check-qemu-stuck kill-stuck-qemu podman-build-multiarch container-registry-inherit; do
     functions[$func]="_lazy_load_podman_utils || return 1; ${func} \"\$@\""
 done
 unset func

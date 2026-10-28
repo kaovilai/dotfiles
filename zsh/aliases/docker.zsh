@@ -27,6 +27,7 @@ alias dockerplatforms-amdarm='echo linux/amd64,linux/arm64'
 alias dockerplatforms-amdarmibm='echo linux/amd64,linux/arm64,linux/s390x,linux/ppc64le'
 
 # Podman related aliases
+alias crl-inherit='container-registry-inherit'
 alias pbubi_manifest='podman build --platform "$(dockerplatforms-amdarm)" -f Dockerfile.ubi . --manifest "$(ghcr_tag)" && podman manifest push "$(ghcr_tag)" && ghcr_tag'
 
 # Socktainer socket symlink functions

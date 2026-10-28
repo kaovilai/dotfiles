@@ -225,3 +225,55 @@ podman-build-multiarch() {
 
     return $exit_code
 }
+
+# Usage: container-registry-inherit [-a|--all]
+# Copy registry logins from podman/docker auth files into Apple `container`.
+# fzf multi-select (tab); rows already logged in with the same user are grayed.
+# --all preselects every row. Password equality can't be checked (container keeps
+# it in Keychain), so "same" = host+username.
+container-registry-inherit() {
+    local files=("${REGISTRY_AUTH_FILE:-$HOME/.config/containers/auth.json}" "$HOME/.docker/config.json")
+    local f key auth user host src rows="" existing c
+    local -a fzf_extra=()
+    local -A seen
+    [[ $1 == -a || $1 == --all ]] && fzf_extra=(--bind 'start:select-all')
+
+    for c in container fzf jq base64; do
+        command -v $c &>/dev/null || { echo "❌ $c not found" >&2; return 1; }
+    done
+
+    # host<TAB>user of current container logins
+    existing=$(container registry list 2>/dev/null | awk 'NR>1 {print $1 "\t" $2}')
+
+    for f in $files; do
+        [[ -r $f ]] || continue
+        src=${f/#$HOME/\~}
+        while IFS=$'\t' read -r key auth; do
+            [[ -n $auth ]] || { echo "⚠️  $src: $key has no inline auth (credsStore/token), skipped" >&2; continue }
+            user=${$(print -rn -- "$auth" | base64 -d 2>/dev/null)%%:*}
+            [[ -n $user ]] || continue
+            host=${key#http://}; host=${host#https://}; host=${host%%/*}
+            [[ $host == index.docker.io ]] && host=docker.io
+            [[ -n ${seen[$host$'\t'$user]} ]] && continue
+            seen[$host$'\t'$user]=1
+            if print -r -- "$existing" | grep -qxF -- "$host"$'\t'"$user"; then
+                rows+=$'\e[90m'"same  $host  $user  ($src)"$'\e[0m\t'"$f"$'\t'"$key"$'\t'"$host"$'\t'"$user"$'\n'
+            else
+                rows+="diff  $host  $user  ($src)"$'\t'"$f"$'\t'"$key"$'\t'"$host"$'\t'"$user"$'\n'
+            fi
+        done < <(jq -r '.auths // {} | to_entries[] | [.key, (.value.auth // "")] | @tsv' "$f")
+    done
+
+    [[ -n $rows ]] || { echo "No inheritable logins found" >&2; return 1; }
+
+    local sel pass
+    sel=$(print -rn -- "$rows" | fzf --ansi --multi --delimiter=$'\t' --with-nth=1 $fzf_extra \
+        --header 'TAB select · ENTER login · gray = already in container (same user)') || return 1
+
+    while IFS=$'\t' read -r _ f key host user; do
+        [[ -n $f ]] || continue
+        pass=$(jq -r --arg k "$key" '.auths[$k].auth' "$f" | base64 -d | cut -d: -f2-)
+        print -rn -- "$pass" | container registry login --username "$user" --password-stdin "$host" \
+            && echo "✅ $host ($user)" || echo "❌ $host ($user)" >&2
+    done <<< "$sel"
+}
