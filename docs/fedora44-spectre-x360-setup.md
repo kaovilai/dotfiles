@@ -203,6 +203,23 @@ not from re-running the same brute-force probe.
 
 
 
+## Battery gauge cuts off at 17%
+
+The battery gauge is miscalibrated: recalibration cycles (running down to the
+sudden power-off) don't fix it, and the hardware cuts power at a reported
+**17%**, so the usable range is 17-100%. `cycle_count` is always 0 and
+`charge_full == charge_full_design`, so the firmware reports static values.
+
+Software can't re-map the gauge, but UPower can shut down cleanly before the
+cutoff. [`scripts/spectre-x360/setup-battery-thresholds.sh`](../scripts/spectre-x360/setup-battery-thresholds.sh)
+installs a drop-in (`90-spectre-x360-battery.conf`) that warns at 30%, goes
+critical at 25% and powers off at 21%. `CriticalPowerAction=Auto` falls back to
+power-off because hibernate is unavailable (no disk swap, no `resume=`).
+
+Limit: UPower can't act while suspended, so a long suspend can still drain to
+the cutoff with no warning. Fixing that needs hibernate (disk swap of at least
+RAM size plus `resume=`/`resume_offset=`) and `suspend-then-hibernate`.
+
 ## Audio (B&O speakers) — under investigation
 
 Codec is Realtek ALC295 (`snd_hda_codec_alc269` driver). Boot log:
