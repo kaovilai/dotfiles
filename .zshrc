@@ -4,7 +4,7 @@
 # profiling start
 # zmodload zsh/zprof
 
-# Brew completions FPATH must be set before compinit (in znap.zsh)
+# Brew completions FPATH must be set before compinit (run by zsh-autocomplete, loaded in znap.zsh)
 # Avoid slow brew --prefix subprocess; check well-known paths directly
 if [[ "$OSTYPE" == darwin* ]]; then
   if [[ -d /opt/homebrew/share/zsh/site-functions ]]; then      # Apple Silicon
@@ -197,7 +197,7 @@ fi
 } &!
 
 # bun completions
-[ -s "/home/tigerkaovilai/.bun/_bun" ] && source "/home/tigerkaovilai/.bun/_bun"
+[ -s "$HOME/.bun/_bun" ] && source "$HOME/.bun/_bun"
 
 # bun
 export BUN_INSTALL="$HOME/.bun"

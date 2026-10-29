@@ -74,6 +74,9 @@ _claude_hosted_launch() (
         ANTHROPIC_DEFAULT_SONNET_MODEL="$classifier" ANTHROPIC_DEFAULT_HAIKU_MODEL="$glm1m" \
         ANTHROPIC_DEFAULT_FABLE_MODEL="$glm1m" CLAUDE_CODE_USE_VERTEX=0 \
         CLAUDE_CODE_USE_BEDROCK=0 CLAUDE_CODE_USE_FOUNDRY=0 ANTHROPIC_CUSTOM_HEADERS=''
+    # Hosted rits/* models have no server-side web search (vLLM ignores it).
+    # Hook ~/.claude/hooks/nudge-web-search-via-luna.sh reads this route.
+    export T3_WEB_SEARCH_DELEGATE="codex_rh_codex_api:gpt-5.6-luna"
     # Hook ~/.claude/hooks/shrink-view-image.sh shrinks images to this many px
     # (EnMaaS 413s on large request bodies).
     export T3_IMAGE_MAX_PX=1000

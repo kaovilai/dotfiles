@@ -184,6 +184,110 @@ Every backend needs `python3` and `jq` from the Brewfile. Beyond that:
 - `vertex`: `CLOUD_ML_REGION` and `ANTHROPIC_VERTEX_PROJECT_ID` in `~/secrets.zsh`, `gcloud auth application-default login`, and `uv`
 - `copilot`: the copilot-api gateway checkout (`git clone -b dev https://github.com/kaovilai/copilot-api ~/git/copilot-api`) and `bun`. Its GitHub login in `~/.local/share/copilot-api` isn't migrated, so sign in again with `bun run --cwd ~/git/copilot-api ./src/main.ts auth`.
 
+##### Copilot-only Linux host (Fedora, WSL2)
+
+A Linux machine, or WSL2 on Windows 11, can serve as another T3 Code environment on Copilot alone, with no EnMaaS, Vertex or `~/secrets.zsh`. Tested on Fedora 44 and on Ubuntu 24.04 with a simulated WSL PATH (both arm64 containers). The wrappers fall back to `sha256sum` and `ss` where macOS has `shasum` and `lsof`.
+
+On WSL2, install a distro first from PowerShell (`wsl --install -d Ubuntu-24.04`) and run everything below inside it. Keep both checkouts in the Linux filesystem (`~/git`), not under `/mnt/c`: the Windows drive is slow and Windows git checks files out with CRLF line endings. `link-claude-t3-launchers` warns about either, and about a tool on PATH that resolves to a Windows program under `/mnt/c`.
+
+```bash
+sudo dnf install zsh git jq curl python3                 # Fedora
+sudo apt install zsh git jq curl python3 unzip iproute2  # Ubuntu / WSL2 (unzip: bun's installer)
+git clone https://github.com/kaovilai/dotfiles ~/git/dotfiles
+curl -fsSL https://claude.ai/install.sh | bash
+# Before the symlink: bun's installer appends its PATH lines to ~/.zshrc
+# unconditionally, and this repo's .zshrc already carries them.
+curl -fsSL https://bun.sh/install | bash
+ln -sf ~/git/dotfiles/.zshrc ~/.zshrc
+chsh -s "$(command -v zsh)" && exec zsh
+git clone -b dev https://github.com/kaovilai/copilot-api ~/git/copilot-api
+bun run --cwd ~/git/copilot-api ./src/main.ts auth   # GitHub device login
+
+link-claude-t3-launchers copilot     # only claude-t3-copilot
+verify-claude-t3-launchers copilot
+claude-t3-copilot --prepare          # starts the gateway on :4141, prints the tiers
+```
+
+In T3 Code, add a Claude provider instance whose `binaryPath` is `/home/<user>/.local/bin/claude-t3-copilot`. With the desktop app on Windows that's its WSL backend, so the path is the Linux one; a headless box runs the T3 server itself, below.
+
+##### Headless host (Fedora or WSL2)
+
+For a machine nobody sits at, run the T3 server as a background service and reach it from the phone, instead of running the desktop app. `t3 service install` writes a systemd user unit (`t3code.service`, restarts on failure) and enables lingering, so it starts at boot with nobody logged in. Tested with `t3` 0.1.3: `t3 serve` started with only the unit's environment (no shell rc files, systemd's default PATH) ran a Copilot thread through `claude-t3-copilot`. `t3 service install` itself is untested here (the test containers can't run systemd).
+
+```bash
+sudo dnf install nodejs npm libatomic          # Fedora
+# Ubuntu / WSL2: apt's nodejs is too old (24.04 ships 18; t3 needs >= 20.11), so use NodeSource's
+curl -fsSL https://deb.nodesource.com/setup_22.x | sudo bash - && sudo apt install nodejs libatomic1
+# t3's downloaded runtime links libatomic; without it: "libatomic.so.1: cannot open shared object file"
+npm i -g --prefix ~/.local t3@latest
+mkdir -p ~/.t3/userdata   # then add the provider instance below, or from a paired client
+t3 service install
+t3 pair                   # QR code for the phone; --tailscale to pair over the tailnet
+verify-t3-headless        # systemd, lingering, t3code.service, claude-t3-copilot
+```
+
+Provider instance in `~/.t3/userdata/settings.json` (merge into an existing file):
+
+```json
+{"providerInstances": {"claude_copilot": {"driver": "claudeAgent", "displayName": "Claude · Copilot", "enabled": true,
+  "environment": [], "config": {"binaryPath": "/home/<user>/.local/bin/claude-t3-copilot", "customModels": []}}}}
+```
+
+The copilot-api gateway the launcher starts lives in the service's cgroup, so `t3 service restart` and `t3 update` stop it too; the next session starts it again.
+
+**WSL2, Windows side (untested).** WSL only runs while something holds the distro open, and only for a signed-in user unless a task starts it.
+
+1. Enable systemd in the distro, then restart WSL from PowerShell with `wsl --shutdown`:
+   ```ini
+   # /etc/wsl.conf
+   [boot]
+   systemd=true
+   ```
+2. Start the distro at boot and keep it running, from an elevated PowerShell. "Run whether user is logged on or not" needs the account password (a Microsoft account's password, not the PIN):
+   ```powershell
+   $a = New-ScheduledTaskAction -Execute 'wsl.exe' -Argument '-d Ubuntu-24.04 --exec /bin/sleep infinity'
+   $t = New-ScheduledTaskTrigger -AtStartup
+   $s = New-ScheduledTaskSettingsSet -ExecutionTimeLimit ([TimeSpan]::Zero) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
+   Register-ScheduledTask -TaskName 'WSL keepalive' -Action $a -Trigger $t -Settings $s -User $env:USERNAME -Password (Read-Host 'Windows password')
+   ```
+   Systemd in the distro then starts `t3code.service` through lingering.
+3. Stop the machine sleeping on AC power: `powercfg /change standby-timeout-ac 0` and `powercfg /change hibernate-timeout-ac 0`.
+4. For maintenance without a screen, enable Windows' OpenSSH server (then `wsl` from the SSH session) or run Tailscale with SSH inside the distro.
+
+After a reboot, check from inside the distro with `verify-t3-headless`.
+
+**Lid-closed Fedora laptop.** Plugged in with the lid shut and nobody logged in, a stock Fedora Workstation suspends on lid close, suspends again after a while idle at the login screen, and after a reboot can sit at the disk passphrase or come up without Wi-Fi. On a machine with a battery, `verify-t3-headless` checks each of these. The settings below are untested here (the test containers have no logind, GDM or TPM).
+
+```bash
+# Lid closed on AC: do nothing (on battery it still suspends). Applies after a reboot.
+sudo mkdir -p /etc/systemd/logind.conf.d
+printf '[Login]\nHandleLidSwitchExternalPower=ignore\nHandleLidSwitchDocked=ignore\n' |
+    sudo tee /etc/systemd/logind.conf.d/90-t3-lid.conf
+
+# No idle suspend on AC at the login screen (what runs with nobody logged in),
+# and in your own session for when you do log in
+sudo mkdir -p /etc/dconf/db/gdm.d
+printf "[org/gnome/settings-daemon/plugins/power]\nsleep-inactive-ac-type='nothing'\n" |
+    sudo tee /etc/dconf/db/gdm.d/95-t3-no-suspend
+sudo dconf update
+gsettings set org.gnome.settings-daemon.plugins.power sleep-inactive-ac-type 'nothing'
+# Or never suspend at all, also on battery (undo: systemctl unmask):
+#   sudo systemctl mask sleep.target suspend.target hibernate.target hybrid-sleep.target
+
+# Wi-Fi up before anyone logs in: shared with all users, password stored system-wide
+sudo nmcli connection modify '<SSID>' connection.permissions '' \
+    802-11-wireless-security.psk-flags 0 802-11-wireless-security.psk '<password>'
+
+# Encrypted disk only (lsblk -f shows crypto_LUKS): unlock with the TPM at boot.
+# Add tpm2-device=auto to that volume's options in /etc/crypttab, then rebuild the initramfs.
+sudo systemd-cryptenroll --tpm2-device=auto /dev/<luks-partition>
+sudo dracut -f
+
+sudo systemctl enable --now sshd   # a way in with the lid shut
+```
+
+If the firmware supports it, also limit charging to protect a battery that never leaves AC (GNOME Settings → Power), and set the BIOS to power on when AC returns so an outage doesn't leave it off.
+
 #### Application-Specific Configs
 
 1. **VS Code**

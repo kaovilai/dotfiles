@@ -12,8 +12,10 @@
 //                                      [--no-text]; --dump-menu also takes --no-image / --no-text
 //   --list-logos                       which source each logo key resolves to
 //   --window-png PATH [--dark] [--layout horizontal|vertical|history] [--size WxH] [--graph bars|lines|both] [--stale]
+//                                      [--hover vendor:<key>|provider:<key>] [--window-metric requests|tokens]
+//                                      [--graph-hover MINUTE]  pin the graph hover readout to minute MINUTE (0 = oldest)
 //                                      render the floating monitor window content to PNG (@2x) from --data-file
-//   --dump-menu also takes --window-visible --window-layout L --window-graph G --window-opacity N --window-click-through
+//   --dump-menu also takes --window-visible --window-layout L --window-graph G --window-metric M --chart-metric M --window-opacity N --window-click-through
 import AppKit
 import Foundation
 
@@ -122,7 +124,6 @@ func summarize(_ d: J, now: Date, stale: Bool) -> Summary {
 
 // MARK: - charts (drawn with system colors only, so light/dark just work)
 
-let modelPalette: [NSColor] = [.systemBlue, .systemTeal, .systemPurple, .systemIndigo, .systemGreen, .systemPink]
 let chartWidth: CGFloat = 380
 
 func chartImage(height: CGFloat, _ draw: @escaping (NSRect) -> Void) -> NSImage {
@@ -139,46 +140,88 @@ func drawText(_ text: String, at p: NSPoint, color: NSColor = .secondaryLabelCol
 }
 
 /// Requests per minute for the last hour; 429 / 5xx / other failures stacked on top of the successes.
-func requestsChart(_ d: J) -> (NSImage, String) {
+func requestsChart(_ d: J, metric: ChartMetric = .requests) -> (NSImage, String) {
     let s = d["series"]
     let req = s["requests"].arr.map { $0.int ?? 0 }
     let e429 = s["e429"].arr.map { $0.int ?? 0 }
     let e5 = s["e5xx"].arr.map { $0.int ?? 0 }
     let eo = s["eother"].arr.map { $0.int ?? 0 }
     let n = req.count
-    let peak = max(req.max() ?? 0, 1)
     let total = req.reduce(0, +)
-    let alt = "requests/min, last 60m: \(total) total, peak \(req.max() ?? 0)/min, 429 \(e429.reduce(0, +)), 5xx \(e5.reduce(0, +)), other \(eo.reduce(0, +))"
+    // Same per-vendor split and colours as the floating window, so both charts read alike.
+    let bv = metric == .tokens ? s["tps_by_vendor"] : s["by_vendor"]
+    let vendors: [(String, [Double])] = bv.exists
+        ? bv.keys.map { k in (k, bv[k].arr.map { metric == .tokens ? ($0.dbl ?? 0) : Double($0.int ?? 0) }) }
+            .sorted { ($0.1.reduce(0, +), $1.0) > ($1.1.reduce(0, +), $0.0) }
+        : []
+    let durVals = metric.isDuration
+        ? (metric == .ttft ? s["ttft"].arr.map { $0.dbl ?? 0 } : s["latency"].arr.map { $0.dbl ?? 0 })
+        : []
+    let peak: Double = metric.isDuration
+        ? max(durVals.max() ?? 0, 1)
+        : max(metric == .tokens ? (s["tps"].arr.map { $0.dbl ?? 0 }.max() ?? 0) : Double(req.max() ?? 0), metric == .tokens ? 0.1 : 1)
+    let peakText = metric.isDuration ? compactMs(peak) : (metric == .tokens ? compactRate(peak) : String(Int(peak)))
+    let title = metric.isDuration ? (metric == .ttft ? "ttft p50" : "latency p50") : (metric == .tokens ? "tok/s" : "requests/min")
+    let alt = metric.isDuration
+        ? "\(title), last 60m: peak \(peakText), \(total) requests"
+        : (metric == .tokens
+            ? "tokens/s, last 60m: peak \(peakText)/s, \(total) requests, 429 \(e429.reduce(0, +)), 5xx \(e5.reduce(0, +)), other \(eo.reduce(0, +))"
+            : "requests/min, last 60m: \(total) total, peak \(Int(peak))/min, 429 \(e429.reduce(0, +)), 5xx \(e5.reduce(0, +)), other \(eo.reduce(0, +))")
     let image = chartImage(height: 62) { rect in
-        drawText("requests/min · last 60m · peak \(peak)", at: NSPoint(x: 0, y: rect.height - 12))
+        drawText("\(title) · last 60m · peak \(peakText)", at: NSPoint(x: 0, y: rect.height - 12))
         guard n > 0 else { drawText("no data", at: NSPoint(x: 0, y: 20)); return }
         let area = NSRect(x: 0, y: 2, width: rect.width, height: rect.height - 16)
         NSColor.separatorColor.setFill()
         NSRect(x: 0, y: 1, width: rect.width, height: 1).fill()
         let slot = area.width / CGFloat(n)
+        let scale = (area.height - 1) / CGFloat(peak)
+        if metric.isDuration {
+            let path = NSBezierPath()
+            path.lineWidth = 1.5
+            path.lineJoinStyle = .round
+            var started = false
+            for (i, v) in durVals.enumerated() where i < n {
+                guard v > 0 else { started = false; continue }
+                let pt = NSPoint(x: area.minX + (CGFloat(i) + 0.5) * slot, y: area.minY + 0.5 + CGFloat(v) * scale)
+                if started { path.line(to: pt) } else { path.move(to: pt); started = true }
+            }
+            NSColor.systemBlue.setStroke()
+            path.stroke()
+            return
+        }
         for i in 0..<n {
             let x = area.minX + CGFloat(i) * slot
-            let scale = (area.height - 1) / CGFloat(peak)
-            let failed = (i < e429.count ? e429[i] : 0) + (i < e5.count ? e5[i] : 0) + (i < eo.count ? eo[i] : 0)
+            let w = max(slot - 1, 1)
+            let a = i < e429.count ? e429[i] : 0
+            let r5 = (i < e5.count ? e5[i] : 0) + (i < eo.count ? eo[i] : 0)
             var y = area.minY
-            let segments: [(Int, NSColor)] = [
-                (max(req[i] - failed, 0), .systemBlue),
-                (i < e429.count ? e429[i] : 0, .systemOrange),
-                (i < e5.count ? e5[i] : 0, .systemRed),
-                (i < eo.count ? eo[i] : 0, .systemYellow),
-            ]
-            for (count, color) in segments where count > 0 {
-                let h = max(CGFloat(count) * scale, 1)
-                color.setFill()
-                NSRect(x: x, y: y, width: max(slot - 1, 1), height: h).fill()
-                y += h
+            if vendors.isEmpty {
+                let success = metric == .tokens ? 0 : max(req[i] - a - r5, 0)
+                if success > 0 {
+                    let h = max(CGFloat(success) * scale, 1)
+                    NSColor.systemBlue.setFill()
+                    NSRect(x: x, y: y, width: w, height: h).fill()
+                    y += h
+                }
+            } else {
+                for (key, values) in vendors where i < values.count && values[i] > 0 {
+                    let h = max(CGFloat(values[i]) * scale, 1)
+                    vendorColor(key).setFill()
+                    NSRect(x: x, y: y, width: w, height: h).fill()
+                    y += h
+                }
+            }
+            // errors are a thin cap on the bar, the same language as the floating window
+            if a + r5 > 0 {
+                (r5 > 0 ? NSColor.systemRed : NSColor.systemOrange).setFill()
+                NSRect(x: x, y: min(y + 0.5, area.maxY - 2), width: w, height: 2).fill()
             }
         }
     }
     return (image, alt)
 }
 
-struct Slice { let label: String; let count: Int; let note: String }
+struct Slice { let label: String; let count: Int; let note: String; let color: NSColor }
 
 /// One stacked bar plus a legend row per slice.
 func stackedChart(title: String, slices: [Slice]) -> (NSImage, String) {
@@ -191,15 +234,15 @@ func stackedChart(title: String, slices: [Slice]) -> (NSImage, String) {
         guard !slices.isEmpty else { drawText("no requests", at: NSPoint(x: 0, y: rect.height - 26)); return }
         var x: CGFloat = 0
         let barY = rect.height - 28
-        for (i, sl) in slices.enumerated() {
+        for sl in slices {
             let w = rect.width * CGFloat(sl.count) / CGFloat(total)
-            modelPalette[i % modelPalette.count].setFill()
+            sl.color.setFill()
             NSRect(x: x, y: barY, width: max(w - 1, 1), height: 10).fill()
             x += w
         }
         for (i, sl) in slices.prefix(rows).enumerated() {
             let y = barY - 14 - CGFloat(i) * 13
-            modelPalette[i % modelPalette.count].setFill()
+            sl.color.setFill()
             NSRect(x: 0, y: y + 2, width: 8, height: 8).fill()
             let share = String(format: "%.0f%%", 100 * Double(sl.count) / Double(total))
             drawText("\(sl.label)  \(sl.count) (\(share))\(sl.note.isEmpty ? "" : "  " + sl.note)",
@@ -577,6 +620,22 @@ enum GraphMode: String, CaseIterable {
     }
 }
 
+/// What the graph plots per minute: request count or completion tokens per second.
+enum ChartMetric: String, CaseIterable {
+    case requests, tokens, latency, ttft, all
+    var title: String {
+        switch self {
+        case .requests: return "Requests/min"
+        case .tokens: return "Tokens/s"
+        case .latency: return "Latency p50"
+        case .ttft: return "TTFT p50"
+        case .all: return "All three"
+        }
+    }
+    var isDuration: Bool { self == .latency || self == .ttft }
+    var isStacked: Bool { self == .all }
+}
+
 func dynamicColor(light: NSColor, dark: NSColor) -> NSColor {
     NSColor(name: nil) { $0.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? dark : light }
 }
@@ -612,7 +671,7 @@ struct SpanItem {
     let source: String, basis: String, resetSource: String?
 }
 
-struct ProviderSeries { let key: String; let label: String; let values: [Int] }
+struct ProviderSeries { let key: String; let label: String; let values: [Int]; let tps: [Double]; let latency: [Double]; let ttft: [Double] }
 struct DriftItem { let kind: String; let detail: String; let hint: String; let count: Int; let proxy: String }
 
 func spanItems(_ d: J) -> [SpanItem] {
@@ -628,7 +687,10 @@ func spanItems(_ d: J) -> [SpanItem] {
 func providerSeries(_ d: J) -> [ProviderSeries] {
     d["series_by_provider"]["providers"].arr.compactMap { p in
         guard let key = p["key"].str else { return nil }
-        return ProviderSeries(key: key, label: p["label"].str ?? key, values: p["requests"].arr.map { $0.int ?? 0 })
+        return ProviderSeries(key: key, label: p["label"].str ?? key, values: p["requests"].arr.map { $0.int ?? 0 },
+                              tps: p["tps"].arr.map { $0.dbl ?? 0 },
+                              latency: p["latency"].arr.map { $0.dbl ?? 0 },
+                              ttft: p["ttft"].arr.map { $0.dbl ?? 0 })
     }
 }
 
@@ -656,21 +718,99 @@ func shortLabel(_ key: String, _ label: String) -> String { key == "github-copil
 
 func textWidth(_ s: String, _ font: NSFont) -> CGFloat { ceil((s as NSString).size(withAttributes: [.font: font]).width) }
 
+func compactRate(_ v: Double) -> String { v >= 10 ? String(Int(v.rounded())) : String(format: "%.1f", v) }
+
+func compactMs(_ ms: Double) -> String { ms >= 1000 ? String(format: "%.1fs", ms / 1000) : String(format: "%.0fms", ms) }
+
 final class MonitorView: NSView {
     var data: J? { didSet { needsDisplay = true } }
     var now = Date()
     var stale = false
     var layout: MonitorLayout = .horizontal { didSet { needsDisplay = true } }
     var graphMode: GraphMode = .both { didSet { needsDisplay = true } }
+    var metric: ChartMetric = .requests { didSet { needsDisplay = true } }
     var drawsBackground = false  // the panel has its own material; the headless PNG render needs a fill
     var onCopyHint: ((String) -> Void)?
+    var onToggleMetric: (() -> Void)?
     private var hintHit: (NSRect, String)?
+    private var metricHit: NSRect?
+    private var hoverMetric = false
+    enum HoverTarget: Equatable { case vendor(String), provider(String) }
+    private var hover: HoverTarget?
+    private var hoverRects: [(NSRect, HoverTarget)] = []
+    private var hoverTracking: NSTrackingArea?
+    // Graph hover: the minute under the mouse gets a crosshair on every graph and a readout of that minute.
+    private var graphHits: [(rect: NSRect, metric: ChartMetric)] = []
+    private var graphCursor: (graph: Int, minute: Int, x: CGFloat)?
+    private var graphMinutes = 60
+    /// Headless PNG renders pin the graph cursor to a minute index (0 = oldest).
+    var debugGraphMinute: Int?
 
     override var isOpaque: Bool { false }
 
     override func mouseDown(with event: NSEvent) {
         let p = convert(event.locationInWindow, from: nil)
-        if let (r, hint) = hintHit, r.contains(p) { onCopyHint?(hint) } else { super.mouseDown(with: event) }
+        if let r = metricHit, r.contains(p) { onToggleMetric?() }
+        else if let (r, hint) = hintHit, r.contains(p) { onCopyHint?(hint) }
+        else { super.mouseDown(with: event) }
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let hoverTracking { removeTrackingArea(hoverTracking) }
+        let area = NSTrackingArea(rect: bounds, options: [.mouseMoved, .mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self, userInfo: nil)
+        addTrackingArea(area)
+        hoverTracking = area
+    }
+
+    override func mouseMoved(with event: NSEvent) { updateHover(convert(event.locationInWindow, from: nil)) }
+    override func mouseEntered(with event: NSEvent) { updateHover(convert(event.locationInWindow, from: nil)) }
+    override func mouseExited(with event: NSEvent) { updateHover(nil) }
+
+    private func updateHover(_ point: NSPoint?) {
+        updateGraphCursor(point)
+        let next = point.flatMap { p in hoverRects.first { $0.0.contains(p) }?.1 }
+        let overCaption = point.map { metricHit?.contains($0) ?? false } ?? false
+        if overCaption != hoverMetric {
+            hoverMetric = overCaption
+            hoverMetric ? NSCursor.pointingHand.set() : NSCursor.arrow.set()
+            needsDisplay = true
+        }
+        if next != hover {
+            hover = next
+            needsDisplay = true
+        }
+    }
+
+    private func updateGraphCursor(_ point: NSPoint?) {
+        var next: (graph: Int, minute: Int, x: CGFloat)?
+        if let p = point, let gi = graphHits.firstIndex(where: { $0.rect.contains(p) }) {
+            let r = graphHits[gi].rect
+            let minute = min(max(Int((p.x - r.minX) / (r.width / CGFloat(graphMinutes))), 0), graphMinutes - 1)
+            next = (gi, minute, p.x)
+        }
+        // Redraw only when the minute (or graph) changes, not on every pixel of movement.
+        if next?.graph != graphCursor?.graph || next?.minute != graphCursor?.minute {
+            graphCursor = next
+            needsDisplay = true
+        } else if let next {
+            graphCursor = next
+        }
+    }
+
+    /// 1 for the hovered series, dimmed for everything else, unchanged when nothing is hovered.
+    private func hoverAlpha(_ target: HoverTarget) -> CGFloat {
+        guard let hover else { return 1 }
+        return hover == target ? 1 : 0.12
+    }
+
+    /// Headless PNG renders pin a hover target: "vendor:<key>" or "provider:<key>".
+    func setDebugHover(_ spec: String?) {
+        switch spec {
+        case let s? where s.hasPrefix("vendor:"): hover = .vendor(String(s.dropFirst(7)))
+        case let s? where s.hasPrefix("provider:"): hover = .provider(String(s.dropFirst(9)))
+        default: hover = nil
+        }
     }
 
     override func draw(_ dirty: NSRect) {
@@ -678,6 +818,9 @@ final class MonitorView: NSView {
         let b = bounds
         if drawsBackground { NSColor.windowBackgroundColor.setFill(); b.fill() }
         hintHit = nil
+        metricHit = nil
+        hoverRects = []
+        graphHits = []
         guard let d = data else {
             drawStr("waiting for data…", in: NSRect(x: 0, y: b.midY - 7, width: b.width, height: 14), color: .secondaryLabelColor, align: .center)
             return
@@ -705,7 +848,7 @@ final class MonitorView: NSView {
 
         switch layout {
         case .history:
-            drawGraph(ctx, rect: area, model: model, spans: spans)
+            drawGraph(ctx, rect: area, model: model, spans: spans, metric: metric.isStacked ? .tokens : metric)
             drawOverlay(summary: summary, live: live, d: d, in: area)
         case .horizontal, .vertical:
             let header = NSRect(x: area.minX, y: area.maxY - 14, width: area.width, height: 14)
@@ -723,6 +866,126 @@ final class MonitorView: NSView {
             }
             drawGraphColumn(ctx, rect: graphCol, model: model, spans: spans, d: d)
             drawStats(ctx, rect: stats, d: d, spans: spans)
+        }
+        graphMinutes = model.n
+        drawGraphReadout(model: model, spans: spans, bounds: b)
+    }
+
+    // MARK: graph hover readout
+
+    func vendorName(_ key: String) -> String {
+        ["claude": "Claude", "openai": "GPT", "glm": "GLM", "deepseek": "DeepSeek", "gemini": "Gemini", "other": "Other"][key] ?? key
+    }
+
+    /// Crosshair on every graph at the hovered minute, plus a readout box for that minute next to the mouse.
+    func drawGraphReadout(model: GraphModel, spans: [SpanItem], bounds b: NSRect) {
+        let cursor: (graph: Int, minute: Int, x: CGFloat)
+        if let c = graphCursor, c.graph < graphHits.count {
+            cursor = c
+        } else if let m = debugGraphMinute, !graphHits.isEmpty {
+            let r = graphHits[0].rect
+            let i = min(max(m, 0), model.n - 1)
+            cursor = (0, i, r.minX + (CGFloat(i) + 0.5) * r.width / CGFloat(model.n))
+        } else {
+            return
+        }
+        let i = cursor.minute
+        func at<T>(_ a: [T], _ zero: T) -> T { i < a.count ? a[i] : zero }
+
+        for hit in graphHits {
+            let r = hit.rect
+            let slot = r.width / CGFloat(model.n)
+            NSColor.labelColor.withAlphaComponent(0.07).setFill()
+            NSRect(x: r.minX + CGFloat(i) * slot, y: r.minY, width: max(slot, 1), height: r.height).fill()
+            NSColor.labelColor.withAlphaComponent(0.55).setFill()
+            NSRect(x: r.minX + (CGFloat(i) + 0.5) * slot - 0.25, y: r.minY, width: 0.5, height: r.height).fill()
+        }
+
+        // Rows: (text, swatch colour or nil, emphasised)
+        var rows: [(String, NSColor?, Bool)] = []
+        let start = model.start ?? now.addingTimeInterval(-3600)
+        let t0 = start.addingTimeInterval(Double(i) * 3600 / Double(model.n))
+        let fmt = DateFormatter()
+        fmt.dateFormat = "HH:mm"
+        let ago = Int(now.timeIntervalSince(t0) / 60)
+        rows.append(("\(fmt.string(from: t0)) · \(ago <= 0 ? "now" : "\(ago)m ago")", nil, true))
+
+        let m = graphHits[cursor.graph].metric
+        switch m {
+        case .latency, .ttft:
+            let overall = at(m == .ttft ? model.ttft : model.latency, 0)
+            rows.append(((m == .ttft ? "ttft p50 " : "latency p50 ") + (overall > 0 ? compactMs(overall) : "–"), nil, true))
+            for p in model.providers {
+                let v = at(m == .ttft ? p.ttft : p.latency, 0)
+                if v > 0 { rows.append(("\(shortLabel(p.key, p.label))  \(compactMs(v))", providerColor(p.key), false)) }
+            }
+            for (key, values) in model.durationSeries(m) {
+                let v = at(values, 0)
+                if v > 0 { rows.append(("\(vendorName(key))  \(compactMs(v))", vendorColor(key), false)) }
+            }
+        case .tokens:
+            rows.append(("\(compactRate(at(model.tps, 0))) tok/s", nil, true))
+            for v in model.vendorTps where at(v.values, 0) > 0 {
+                rows.append(("\(vendorName(v.key))  \(compactRate(at(v.values, 0)))", vendorColor(v.key), false))
+            }
+            for p in model.providers where at(p.tps, 0) > 0 {
+                rows.append(("\(shortLabel(p.key, p.label))  \(compactRate(at(p.tps, 0)))", providerColor(p.key), false))
+            }
+        case .requests, .all:
+            let total = at(model.totalsPerMinute(), 0)
+            rows.append(("\(total) req", nil, true))
+            for v in model.vendors where at(v.values, 0) > 0 {
+                rows.append(("\(vendorName(v.key))  \(at(v.values, 0))", vendorColor(v.key), false))
+            }
+            for p in model.providers where at(p.values, 0) > 0 {
+                rows.append(("\(shortLabel(p.key, p.label))  \(at(p.values, 0))", providerColor(p.key), false))
+            }
+            let lat = at(model.latency, 0), ttft = at(model.ttft, 0)
+            if lat > 0 || ttft > 0 {
+                rows.append(([lat > 0 ? "p50 \(compactMs(lat))" : nil, ttft > 0 ? "ttft \(compactMs(ttft))" : nil]
+                    .compactMap { $0 }.joined(separator: " · "), nil, false))
+            }
+        }
+
+        let e429 = at(model.e429, 0), e5 = at(model.e5, 0), eo = at(model.eo, 0)
+        if e429 > 0 { rows.append(("429 ×\(e429)", amber429, false)) }
+        if e5 > 0 { rows.append(("5xx ×\(e5)", .systemRed, false)) }
+        if eo > 0 { rows.append(("other errors ×\(eo)", .systemRed, false)) }
+
+        let t1 = t0.addingTimeInterval(3600 / Double(model.n))
+        for sp in spans where sp.start < t1 && sp.end > t0 {
+            let kind = sp.kind == "quota" ? "quota" : "rate limit"
+            let end = sp.end > now.addingTimeInterval(3600 * 24) ? "open" : (sp.endEstimated ? "~" : "") + fmt.string(from: sp.end)
+            rows.append(("\(shortLabel(sp.provider, sp.label)) \(kind) → \(end)", providerColor(sp.provider), false))
+        }
+
+        // Box beside the mouse, flipped left / clamped so it stays inside the window.
+        let lineH: CGFloat = 11, pad: CGFloat = 5, sw: CGFloat = 8
+        let textW = rows.map { textWidth($0.0, $0.2 ? valueFont : tinyFont) + ($0.1 == nil ? 0 : sw + 3) }.max() ?? 0
+        let w = textW + pad * 2, h = CGFloat(rows.count) * lineH + pad * 2 - 2
+        let graph = graphHits[cursor.graph].rect
+        var x = cursor.x + 10
+        if x + w > graph.maxX { x = cursor.x - 10 - w }  // keep it over the graph, not the stats beside it
+        x = max(b.minX + 2, x)
+        let y = min(max(graph.maxY - h, b.minY + 2), b.maxY - h - 2)
+        let box = NSRect(x: x, y: y, width: w, height: h)
+        let path = NSBezierPath(roundedRect: box, xRadius: 4, yRadius: 4)
+        NSColor.windowBackgroundColor.setFill()
+        path.fill()
+        NSColor.separatorColor.setStroke()
+        path.lineWidth = 0.5
+        path.stroke()
+        var ly = box.maxY - pad - lineH + 1
+        for (text, color, strong) in rows {
+            var tx = box.minX + pad
+            if let color {
+                color.setFill()
+                NSBezierPath(roundedRect: NSRect(x: tx, y: ly + 2.5, width: sw, height: 5), xRadius: 1.5, yRadius: 1.5).fill()
+                tx += sw + 3
+            }
+            drawStr(text, in: NSRect(x: tx, y: ly, width: box.maxX - pad - tx, height: lineH),
+                    font: strong ? valueFont : tinyFont, color: strong ? .labelColor : .secondaryLabelColor)
+            ly -= lineH
         }
     }
 
@@ -742,7 +1005,21 @@ final class MonitorView: NSView {
             return "429 · " + (names.isEmpty ? (d["throttled"]["proxy"].str ?? "throttled") : names.joined(separator: ", ")) + (left.map { " · \($0)" } ?? "")
         case "down": return "Proxy down"
         case "spike": return "Error spike"
-        case "normal": return "OK · \(d["totals"]["m15"]["requests"].int ?? 0) req/15m"
+        case "normal":
+            // Follow the graph metric so the header and caption do not disagree.
+            switch metric {
+            case .tokens:
+                if let out = d["tokens"]["m15"]["out"].int, out > 0 {
+                    return "OK · \(compactRate(Double(out) / 900)) tok/s avg"
+                }
+            case .latency:
+                if let p = d["latency"]["p50"].dbl { return "OK · p50 \(compactMs(p))" }
+            case .ttft:
+                if let t = d["latency"]["ttft_p50"].dbl { return "OK · ttft \(compactMs(t))" }
+            case .requests, .all:
+                break
+            }
+            return "OK · \(d["totals"]["m15"]["requests"].int ?? 0) req/15m"
         default: return s.state
         }
     }
@@ -777,12 +1054,38 @@ final class MonitorView: NSView {
 
     struct GraphModel {
         var vendors: [(key: String, values: [Int])] = []
+        var vendorTps: [(key: String, values: [Double])] = []
+        var tps: [Double] = []
+        var latency: [Double] = []
+        var ttft: [Double] = []
+        var latencyByVendor: [(key: String, values: [Double])] = []
+        var ttftByVendor: [(key: String, values: [Double])] = []
         var providers: [ProviderSeries] = []
         var e429: [Int] = [], e5: [Int] = [], eo: [Int] = []
         var n = 60
         var peak = 3
+        var peakTps: Double = 1
+        var peakLatency: Double = 1
+        var peakTtft: Double = 1
         var start: Date?
         var hasTraffic = false
+
+        func vendorValues(_ metric: ChartMetric) -> [(key: String, values: [Double])] {
+            metric == .tokens ? vendorTps : vendors.map { ($0.key, $0.values.map(Double.init)) }
+        }
+
+        func peakValue(_ metric: ChartMetric) -> Double {
+            switch metric {
+            case .tokens: return peakTps
+            case .latency: return peakLatency
+            case .ttft: return peakTtft
+            case .requests, .all: return Double(peak)
+            }
+        }
+
+        func durationSeries(_ metric: ChartMetric) -> [(key: String, values: [Double])] {
+            metric == .ttft ? ttftByVendor : latencyByVendor
+        }
 
         init(_ d: J) {
             let s = d["series"]
@@ -794,6 +1097,26 @@ final class MonitorView: NSView {
             } else if !req.isEmpty {
                 vendors = [("other", req)]  // older helper JSON: one grey stack from the proxy-log series
             }
+            let tv = s["tps_by_vendor"]
+            if tv.exists {
+                vendorTps = tv.keys.map { k in (k, tv[k].arr.map { $0.dbl ?? 0 }) }
+                    .sorted { ($0.1.reduce(0, +), $1.0) > ($1.1.reduce(0, +), $0.0) }
+            } else if !vendors.isEmpty {
+                vendorTps = vendors.map { v in (v.key, v.values.map { Double($0) }) }
+            }
+            tps = s["tps"].arr.map { $0.dbl ?? 0 }
+            latency = s["latency"].arr.map { $0.dbl ?? 0 }
+            ttft = s["ttft"].arr.map { $0.dbl ?? 0 }
+            let lv = s["latency_by_vendor"]
+            if lv.exists {
+                latencyByVendor = lv.keys.map { k in (k, lv[k].arr.map { $0.dbl ?? 0 }) }
+                    .sorted { ($0.1.max() ?? 0) > ($1.1.max() ?? 0) }
+            }
+            let tvv = s["ttft_by_vendor"]
+            if tvv.exists {
+                ttftByVendor = tvv.keys.map { k in (k, tvv[k].arr.map { $0.dbl ?? 0 }) }
+                    .sorted { ($0.1.max() ?? 0) > ($1.1.max() ?? 0) }
+            }
             if let longest = vendors.map({ $0.values.count }).max() { n = max(n, longest) }
             providers = providerSeries(d)
             e429 = s["e429"].arr.map { $0.int ?? 0 }
@@ -803,6 +1126,12 @@ final class MonitorView: NSView {
             let totals = totalsPerMinute()
             hasTraffic = (totals.max() ?? 0) > 0 || providers.contains { ($0.values.max() ?? 0) > 0 }
             peak = max(totals.max() ?? 0, providers.compactMap { $0.values.max() }.max() ?? 0, 3)
+            peakTps = max(tps.max() ?? 0, vendorTps.compactMap { $0.values.max() }.max() ?? 0,
+                          providers.compactMap { $0.tps.max() }.max() ?? 0, 0.1)
+            peakLatency = max(latency.max() ?? 0, latencyByVendor.compactMap { $0.values.max() }.max() ?? 0,
+                              providers.compactMap { $0.latency.max() }.max() ?? 0, 1)
+            peakTtft = max(ttft.max() ?? 0, ttftByVendor.compactMap { $0.values.max() }.max() ?? 0,
+                           providers.compactMap { $0.ttft.max() }.max() ?? 0, 1)
         }
 
         func totalsPerMinute() -> [Int] {
@@ -816,16 +1145,79 @@ final class MonitorView: NSView {
 
     /// Graph with its caption above and the throttle legend below.
     func drawGraphColumn(_ ctx: CGContext, rect: NSRect, model: GraphModel, spans: [SpanItem], d: J) {
+        if metric.isStacked {
+            let metrics: [ChartMetric] = [.tokens, .ttft, .latency]
+            let band = rect.height / CGFloat(metrics.count)
+            for (i, m) in metrics.enumerated() {
+                let r = NSRect(x: rect.minX, y: rect.minY + CGFloat(metrics.count - 1 - i) * band, width: rect.width, height: band)
+                drawMiniGraph(ctx, rect: r, model: model, metric: m)
+            }
+            return
+        }
         let capH: CGFloat = 11, legH: CGFloat = spans.isEmpty ? 0 : 12
-        let caption = "req/min · 60m · peak \(model.peak)"
-        drawStr(caption, in: NSRect(x: rect.minX, y: rect.maxY - capH, width: rect.width, height: capH), font: tinyFont, color: .secondaryLabelColor)
+        let peak = model.peakValue(metric)
+        let label: String
+        switch metric {
+        case .requests: label = "req/min · 60m · peak \(Int(peak))"
+        case .tokens: label = "tok/s · 60m · peak \(compactRate(peak))"
+        case .latency: label = "latency p50 · 60m · peak \(compactMs(peak))"
+        case .ttft: label = "ttft p50 · 60m · peak \(compactMs(peak))"
+        case .all: label = "all metrics"
+        }
+        let caption = label + "  ⇄"
+        let capRect = NSRect(x: rect.minX, y: rect.maxY - capH, width: rect.width, height: capH)
+        metricHit = capRect  // click the caption to switch Requests/min <-> Tokens/s
+        drawStr(caption, in: capRect, font: tinyFont, color: hoverMetric ? .labelColor : .secondaryLabelColor)
+        if hoverMetric {
+            NSColor.secondaryLabelColor.setFill()
+            NSRect(x: rect.minX, y: capRect.minY + 0.5, width: min(textWidth(caption, tinyFont), rect.width), height: 0.5).fill()
+        }
         let g = NSRect(x: rect.minX, y: rect.minY + legH, width: rect.width, height: rect.height - capH - legH - 1)
-        drawGraph(ctx, rect: g, model: model, spans: spans)
+        drawGraph(ctx, rect: g, model: model, spans: spans, metric: metric)
         if !spans.isEmpty { drawSpanLegend(ctx, in: NSRect(x: rect.minX, y: rect.minY, width: rect.width, height: legH - 2)) }
     }
 
-    func drawGraph(_ ctx: CGContext, rect: NSRect, model: GraphModel, spans: [SpanItem]) {
+    func drawMiniGraph(_ ctx: CGContext, rect: NSRect, model: GraphModel, metric m: ChartMetric) {
+        let capH: CGFloat = 10
+        let peak = model.peakValue(m)
+        metricHit = rect  // clicking a stacked panel cycles the window metric
+        let label: String
+        switch m {
+        case .tokens: label = "tok/s · peak \(compactRate(peak))"
+        case .latency: label = "latency · peak \(compactMs(peak))"
+        case .ttft: label = "ttft · peak \(compactMs(peak))"
+        default: label = m.title
+        }
+        drawStr(label, in: NSRect(x: rect.minX, y: rect.maxY - capH, width: rect.width, height: capH), font: tinyFont, color: .secondaryLabelColor)
+        // Throttle ribbons are omitted here so three stacked panels stay readable.
+        drawGraph(ctx, rect: NSRect(x: rect.minX, y: rect.minY + 1, width: rect.width, height: rect.height - capH - 2),
+                  model: model, spans: [], metric: m)
+    }
+
+    /// One median line for a duration metric; zero means "no sample", so the path breaks there.
+    func drawDurationLine(_ ctx: CGContext, rect: NSRect, values: [Double], n: Int, slot: CGFloat, scale: CGFloat,
+                          color: NSColor, alpha: CGFloat, width: CGFloat, halo: Bool) {
+        let path = NSBezierPath()
+        var started = false
+        for (i, v) in values.enumerated() where i < n {
+            guard v > 0 else { started = false; continue }
+            let pt = NSPoint(x: rect.minX + (CGFloat(i) + 0.5) * slot, y: rect.minY + 0.5 + CGFloat(v) * scale)
+            if started { path.line(to: pt) } else { path.move(to: pt); started = true }
+        }
+        path.lineJoinStyle = .round
+        if halo {
+            path.lineWidth = width + 1.7
+            NSColor.windowBackgroundColor.withAlphaComponent(0.55 * alpha).setStroke()
+            path.stroke()
+        }
+        path.lineWidth = width
+        color.withAlphaComponent(alpha).setStroke()
+        path.stroke()
+    }
+
+    func drawGraph(_ ctx: CGContext, rect: NSRect, model: GraphModel, spans: [SpanItem], metric m: ChartMetric) {
         guard rect.width > 8, rect.height > 8 else { return }
+        graphHits.append((rect, m))
         let clip = NSBezierPath(roundedRect: rect, xRadius: 3, yRadius: 3)
         NSColor.labelColor.withAlphaComponent(0.06).setFill()
         clip.fill()
@@ -841,8 +1233,12 @@ final class MonitorView: NSView {
         let laneStep: CGFloat = 3.5
         let lanesH = spans.isEmpty ? 0 : CGFloat(lanes.count) * laneStep + 1
         let plotTop = rect.maxY - lanesH
-        let scale = max(plotTop - rect.minY - 1, 1) / CGFloat(model.peak)
+        let scale = max(plotTop - rect.minY - 1, 1) / CGFloat(model.peakValue(m))
+        let minuteTotals: [Double] = (0..<n).map { i in
+            m == .tokens ? (i < model.tps.count ? model.tps[i] : 0) : Double(model.totalsPerMinute()[i])
+        }
         let start = model.start ?? now.addingTimeInterval(-3600)
+        let chrome: CGFloat = hover == nil ? 1 : 0.22
 
         // throttle washes sit under the bars so the data stays readable; lanes and edges go on top afterwards
         for sp in spans {
@@ -850,11 +1246,11 @@ final class MonitorView: NSView {
             let x1 = xFor(sp.start, rect, start), x2 = max(xFor(sp.end, rect, start), x1 + 2)
             let band = NSRect(x: x1, y: rect.minY, width: x2 - x1, height: rect.height)
             if sp.kind == "quota" {
-                c.withAlphaComponent(0.10).setFill()
+                c.withAlphaComponent(0.10 * chrome).setFill()
                 band.fill()
                 ctx.saveGState()
                 ctx.clip(to: band)
-                c.withAlphaComponent(0.55).setStroke()
+                c.withAlphaComponent(0.55 * chrome).setStroke()
                 let hatch = NSBezierPath()
                 hatch.lineWidth = 0.8
                 var x = band.minX - rect.height
@@ -865,19 +1261,19 @@ final class MonitorView: NSView {
                 hatch.stroke()
                 ctx.restoreGState()
             } else {
-                c.withAlphaComponent(0.22).setFill()
+                c.withAlphaComponent(0.22 * chrome).setFill()
                 band.fill()
             }
         }
 
-        if graphMode != .lines {
+        if graphMode != .lines && !m.isDuration {
             for i in 0..<n {
                 var y = rect.minY
                 let x = rect.minX + CGFloat(i) * slot
                 let w = slot > 2.4 ? slot - 0.6 : slot + 0.3
-                for v in model.vendors where i < v.values.count && v.values[i] > 0 {
+                for v in model.vendorValues(m) where i < v.values.count && v.values[i] > 0 {
                     let h = max(CGFloat(v.values[i]) * scale, 0.8)
-                    vendorColor(v.key).setFill()
+                    vendorColor(v.key).withAlphaComponent(hoverAlpha(.vendor(v.key))).setFill()
                     NSRect(x: x, y: y, width: w, height: h).fill()
                     y += h
                 }
@@ -885,35 +1281,57 @@ final class MonitorView: NSView {
         }
 
         // failures: a wash across the minute plus a cap on top (429 amber, anything else red)
-        for i in 0..<n {
+        for i in 0..<n where !m.isDuration {
             let a = i < model.e429.count ? model.e429[i] : 0
             let r5 = (i < model.e5.count ? model.e5[i] : 0) + (i < model.eo.count ? model.eo[i] : 0)
             guard a + r5 > 0 else { continue }
             let c = r5 > 0 ? NSColor.systemRed : amber429
             let x = rect.minX + CGFloat(i) * slot
             let w = max(slot, 2.5)
-            c.withAlphaComponent(0.22).setFill()
+            c.withAlphaComponent(0.22 * chrome).setFill()
             NSRect(x: x - (w - slot) / 2, y: rect.minY, width: w, height: plotTop - rect.minY).fill()
-            let top = (model.totalsPerMinute()[i] > 0 ? CGFloat(model.totalsPerMinute()[i]) * scale : 0) + rect.minY
-            c.setFill()
+            let top = (minuteTotals[i] > 0 ? CGFloat(minuteTotals[i]) * scale : 0) + rect.minY
+            c.withAlphaComponent(chrome).setFill()
             NSRect(x: x - (w - slot) / 2, y: min(top + 0.5, plotTop - 3), width: w, height: 3).fill()
         }
 
-        if graphMode != .bars {
+        if graphMode != .bars && !m.isDuration {
             let bg = NSColor.windowBackgroundColor.withAlphaComponent(0.55)
-            for p in model.providers where (p.values.max() ?? 0) > 0 {
+            for p in model.providers {
+                let values = m == .tokens ? p.tps : p.values.map(Double.init)
+                guard (values.max() ?? 0) > 0 else { continue }
                 let path = NSBezierPath()
-                for (i, v) in p.values.enumerated() {
+                for (i, v) in values.enumerated() {
                     let pt = NSPoint(x: rect.minX + (CGFloat(i) + 0.5) * slot, y: rect.minY + 0.5 + CGFloat(v) * scale)
                     i == 0 ? path.move(to: pt) : path.line(to: pt)
                 }
                 path.lineJoinStyle = .round
+                let alpha = hoverAlpha(.provider(p.key))
                 path.lineWidth = 3.2
-                bg.setStroke()
+                bg.withAlphaComponent(0.55 * alpha).setStroke()
                 path.stroke()  // halo so a line stays visible across any bar colour
-                path.lineWidth = 1.5
-                providerColor(p.key).setStroke()
+                path.lineWidth = hover == .provider(p.key) ? 2 : 1.5
+                providerColor(p.key).withAlphaComponent(alpha).setStroke()
                 path.stroke()
+            }
+        }
+
+        // Latency / TTFT are distributions: median lines, split by provider (Lines mode) and/or model vendor (Bars mode).
+        if m.isDuration {
+            if graphMode != .bars {
+                for p in model.providers {
+                    let values = m == .ttft ? p.ttft : p.latency
+                    guard (values.max() ?? 0) > 0 else { continue }
+                    drawDurationLine(ctx, rect: rect, values: values, n: n, slot: slot, scale: scale,
+                                     color: providerColor(p.key), alpha: hoverAlpha(.provider(p.key)),
+                                     width: hover == .provider(p.key) ? 2 : 1.6, halo: true)
+                }
+            }
+            if graphMode != .lines {
+                for (key, values) in model.durationSeries(m) where (values.max() ?? 0) > 0 {
+                    drawDurationLine(ctx, rect: rect, values: values, n: n, slot: slot, scale: scale,
+                                     color: vendorColor(key), alpha: hoverAlpha(.vendor(key)), width: 1, halo: false)
+                }
             }
         }
 
@@ -927,14 +1345,14 @@ final class MonitorView: NSView {
             bar.lineWidth = 2.5
             bar.move(to: NSPoint(x: x1, y: ly + 1.25)); bar.line(to: NSPoint(x: x2, y: ly + 1.25))
             if sp.kind == "quota" { bar.setLineDash([3, 2], count: 2, phase: 0) }
-            c.withAlphaComponent(0.95).setStroke()
+            c.withAlphaComponent(0.95 * chrome).setStroke()
             bar.stroke()
             if sp.end <= start.addingTimeInterval(3598) {  // an end beyond the graph is open-ended: no edge
                 let edge = NSBezierPath()
                 edge.lineWidth = 1.2
                 edge.move(to: NSPoint(x: x2, y: rect.minY)); edge.line(to: NSPoint(x: x2, y: rect.maxY))
                 if sp.endEstimated { edge.setLineDash([2.5, 2], count: 2, phase: 0) }
-                c.withAlphaComponent(0.95).setStroke()
+                c.withAlphaComponent(0.95 * chrome).setStroke()
                 edge.stroke()
             }
         }
@@ -1032,13 +1450,13 @@ final class MonitorView: NSView {
         if modelRows == 0, let r = next() { drawStr("idle · no traffic", in: r, color: .tertiaryLabelColor) }
         for e in models.prefix(modelRows) {
             guard let r = next() else { break }
-            drawShareRow(ctx, r, e, marker: graphMode == .lines ? nil : .tick(vendorColor(e.key)), circle: true)
+            drawShareRow(ctx, r, e, marker: graphMode == .lines ? nil : .tick(vendorColor(e.key)), circle: true, hover: .vendor(e.key))
         }
         if !providers.isEmpty, rowsLeft >= 2 {
             if let r = next() { drawStr("Providers · \(d["share"]["window"].str ?? "15m")", in: r, font: tinyFont, color: .secondaryLabelColor) }
             for e in providers.prefix(min(rowsLeft, layout == .vertical ? 3 : 2)) {
                 guard let r = next() else { break }
-                drawShareRow(ctx, r, e, marker: graphMode == .bars ? nil : .line(providerColor(e.key)), circle: false)
+                drawShareRow(ctx, r, e, marker: graphMode == .bars ? nil : .line(providerColor(e.key)), circle: false, hover: .provider(e.key))
             }
         }
         if let note = d["throttle_notes"]["github-copilot"].str, spans.allSatisfy({ $0.provider != "github-copilot" }), rowsLeft >= 1,
@@ -1050,7 +1468,16 @@ final class MonitorView: NSView {
 
     enum Marker { case tick(NSColor), line(NSColor) }
 
-    func drawShareRow(_ ctx: CGContext, _ r: NSRect, _ e: ShareEntry, marker: Marker?, circle: Bool) {
+    func drawShareRow(_ ctx: CGContext, _ r: NSRect, _ e: ShareEntry, marker: Marker?, circle: Bool, hover target: HoverTarget) {
+        hoverRects.append((r, target))
+        ctx.saveGState()
+        defer { ctx.restoreGState() }
+        if hover == target {
+            NSColor.labelColor.withAlphaComponent(0.07).setFill()
+            NSBezierPath(roundedRect: r.insetBy(dx: -3, dy: 0.5), xRadius: 3, yRadius: 3).fill()
+        } else if hover != nil {
+            ctx.setAlpha(0.22)
+        }
         var x = r.minX
         switch marker {
         case .tick(let c)?: c.setFill(); NSBezierPath(roundedRect: NSRect(x: x, y: r.minY + 2, width: 3, height: 9), xRadius: 1.5, yRadius: 1.5).fill(); x += 6
@@ -1071,13 +1498,17 @@ final class MonitorView: NSView {
 }
 
 /// Window content to PNG, @2x, light or dark (debug: no GUI needed).
-func writeWindowPNG(_ d: J, layout: MonitorLayout, size: NSSize, dark: Bool, mode: GraphMode, stale: Bool, to path: String) {
+func writeWindowPNG(_ d: J, layout: MonitorLayout, size: NSSize, dark: Bool, mode: GraphMode, metric: ChartMetric = .requests,
+                    stale: Bool, hover: String? = nil, graphMinute: Int? = nil, to path: String) {
     let appearance = NSAppearance(named: dark ? .darkAqua : .aqua)!
     let view = MonitorView(frame: NSRect(origin: .zero, size: size))
     view.layout = layout
     view.graphMode = mode
+    view.metric = metric
     view.drawsBackground = true
     view.stale = stale
+    view.setDebugHover(hover)
+    view.debugGraphMinute = graphMinute
     view.now = parseISO(d["generated_at"].str) ?? Date()
     view.data = d
     guard let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: Int(size.width) * 2, pixelsHigh: Int(size.height) * 2,
@@ -1092,7 +1523,7 @@ func writeWindowPNG(_ d: J, layout: MonitorLayout, size: NSSize, dark: Bool, mod
         view.draw(view.bounds)
     }
     if let png = rep.representation(using: .png, properties: [:]) { try? png.write(to: URL(fileURLWithPath: path)) }
-    print("window-png: \(Int(size.width))x\(Int(size.height))pt (\(rep.pixelsWide)x\(rep.pixelsHigh)px) \(dark ? "dark" : "light") layout=\(layout.rawValue) graph=\(mode.rawValue) -> \(path)")
+    print("window-png: \(Int(size.width))x\(Int(size.height))pt (\(rep.pixelsWide)x\(rep.pixelsHigh)px) \(dark ? "dark" : "light") layout=\(layout.rawValue) graph=\(mode.rawValue) metric=\(metric.rawValue) -> \(path)")
 }
 
 // MARK: - CLI discovery and polling
@@ -1154,6 +1585,7 @@ struct MenuContext {
     var stale: Bool
     var error: String?
     var charts: Bool
+    var chartMetric: ChartMetric = .requests
     var notifications: Bool
     var launchAgentInstalled: Bool
     var showImage = true
@@ -1163,6 +1595,7 @@ struct MenuContext {
     var windowVisible = false
     var windowLayout = MonitorLayout.horizontal
     var windowGraph = GraphMode.both
+    var windowMetric = ChartMetric.requests
     var windowOpacity = 1.0
     var windowClickThrough = false
 }
@@ -1365,16 +1798,19 @@ final class Builder {
         // Charts
         if c.charts {
             menu.addItem(.separator())
-            menu.addItem(chartItem(requestsChart(d)))
+            menu.addItem(chartItem(requestsChart(d, metric: c.chartMetric)))
             let models = d["by_model"].arr.map { m -> Slice in
                 let rr = m["reroutes"].int ?? 0
                 let src = m["sources"].arr.compactMap { $0.str }.contains("transcript") ? "transcript" : ""
                 let note = [rr > 0 ? "↪\(rr)" : "", src].filter { !$0.isEmpty }.joined(separator: " ")
-                return Slice(label: m["model"].str ?? "?", count: m["requests"].int ?? 0, note: note)
+                return Slice(label: m["model"].str ?? "?", count: m["requests"].int ?? 0, note: note,
+                             color: vendorColor(m["vendor"].str ?? "other"))
             }
             menu.addItem(chartItem(stackedChart(title: "by model · last 1h", slices: models)))
             let proxies = d["by_proxy"].arr.map { p -> Slice in
-                Slice(label: p["proxy"].str ?? "?", count: p["requests"].int ?? 0, note: p["source"].str == "transcript" ? "transcript" : "")
+                Slice(label: p["proxy"].str ?? "?", count: p["requests"].int ?? 0,
+                      note: p["source"].str == "transcript" ? "transcript" : "",
+                      color: providerColor(p["provider"].str ?? "other"))
             }
             menu.addItem(chartItem(stackedChart(title: "by proxy · last 1h", slices: proxies)))
         }
@@ -1455,6 +1891,11 @@ final class Builder {
         }
         menu.addItem(.separator())
         menu.addItem(action("Show charts", #selector(AppController.toggleCharts), state: c.charts))
+        let metricItem = NSMenuItem(title: "Chart Metric", action: nil, keyEquivalent: "")
+        let metricMenu = NSMenu(); metricMenu.autoenablesItems = false
+        for m in ChartMetric.allCases where !m.isStacked { metricMenu.addItem(action(m.title, #selector(AppController.setChartMetric(_:)), represented: m.rawValue, state: c.chartMetric == m)) }
+        metricItem.submenu = metricMenu
+        menu.addItem(metricItem)
         menu.addItem(action("Show logo image in menubar", #selector(AppController.toggleImage), state: c.showImage))
         menu.addItem(action("Show text next to the image", #selector(AppController.toggleText), state: c.showText))
         menu.addItem(action("Show 1h traffic window (off: 15m)", #selector(AppController.toggleWindow), state: c.shareWindow == "1h"))
@@ -1471,6 +1912,11 @@ final class Builder {
         for g in GraphMode.allCases { graphMenu.addItem(action(g.title, #selector(AppController.setWindowGraph(_:)), represented: g.rawValue, state: c.windowGraph == g)) }
         graphItem.submenu = graphMenu
         menu.addItem(graphItem)
+        let windowMetricItem = NSMenuItem(title: "Window Metric", action: nil, keyEquivalent: "")
+        let windowMetricMenu = NSMenu(); windowMetricMenu.autoenablesItems = false
+        for m in ChartMetric.allCases { windowMetricMenu.addItem(action(m.title, #selector(AppController.setWindowMetric(_:)), represented: m.rawValue, state: c.windowMetric == m)) }
+        windowMetricItem.submenu = windowMetricMenu
+        menu.addItem(windowMetricItem)
         let opacityItem = NSMenuItem(title: "Window Opacity", action: nil, keyEquivalent: "")
         let opacityMenu = NSMenu(); opacityMenu.autoenablesItems = false
         for o in [100, 80, 60, 40] { opacityMenu.addItem(action("\(o)%", #selector(AppController.setWindowOpacity(_:)), represented: Double(o) / 100, state: abs(c.windowOpacity - Double(o) / 100) < 0.01)) }
@@ -1523,6 +1969,8 @@ final class AppController: NSObject, NSMenuDelegate, NSWindowDelegate {
     var windowVisible: Bool { defaults.bool(forKey: "windowVisible") }
     var windowLayout: MonitorLayout { MonitorLayout(rawValue: defaults.string(forKey: "windowLayout") ?? "") ?? .horizontal }
     var windowGraph: GraphMode { GraphMode(rawValue: defaults.string(forKey: "windowGraph") ?? "") ?? .both }
+    var windowMetric: ChartMetric { ChartMetric(rawValue: defaults.string(forKey: "windowMetric") ?? "") ?? .requests }
+    var chartMetric: ChartMetric { ChartMetric(rawValue: defaults.string(forKey: "chartMetric") ?? "") ?? .requests }
     var windowOpacity: Double { defaults.object(forKey: "windowOpacity") as? Double ?? 1.0 }
     var windowClickThrough: Bool { defaults.bool(forKey: "windowClickThrough") }
 
@@ -1547,10 +1995,10 @@ final class AppController: NSObject, NSMenuDelegate, NSWindowDelegate {
 
     func context() -> MenuContext {
         MenuContext(data: data, now: Date(), refreshed: lastGood, stale: lastError != nil && data != nil, error: lastError,
-                    charts: charts, notifications: notifications,
+                    charts: charts, chartMetric: chartMetric, notifications: notifications,
                     launchAgentInstalled: FileManager.default.fileExists(atPath: NSHomeDirectory() + "/Library/LaunchAgents/com.kaovilai.llm-usage-menubar.plist"),
                     showImage: showImage, showText: showText, shareWindow: shareWindow, shareMetric: shareMetric,
-                    windowVisible: windowVisible, windowLayout: windowLayout, windowGraph: windowGraph, windowOpacity: windowOpacity,
+                    windowVisible: windowVisible, windowLayout: windowLayout, windowGraph: windowGraph, windowMetric: windowMetric, windowOpacity: windowOpacity,
                     windowClickThrough: windowClickThrough)
     }
 
@@ -1680,6 +2128,7 @@ final class AppController: NSObject, NSMenuDelegate, NSWindowDelegate {
         monitorView.now = Date()
         monitorView.stale = lastError != nil && data != nil
         monitorView.graphMode = windowGraph
+        monitorView.metric = windowMetric
         monitorView.data = data
     }
 
@@ -1700,6 +2149,7 @@ final class AppController: NSObject, NSMenuDelegate, NSWindowDelegate {
         p.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         p.hidesOnDeactivate = false
         p.becomesKeyOnlyIfNeeded = true
+        p.acceptsMouseMovedEvents = true
         p.isMovableByWindowBackground = true
         p.isReleasedWhenClosed = false
         p.delegate = self
@@ -1711,6 +2161,7 @@ final class AppController: NSObject, NSMenuDelegate, NSWindowDelegate {
         monitorView.autoresizingMask = [.width, .height]
         monitorView.layout = layout
         monitorView.onCopyHint = { [weak self] hint in self?.copy(hint) }
+        monitorView.onToggleMetric = { [weak self] in self?.toggleWindowMetric() }
         fx.addSubview(monitorView)
         p.contentView = fx
         p.contentMinSize = layout.minSize
@@ -1782,6 +2233,24 @@ final class AppController: NSObject, NSMenuDelegate, NSWindowDelegate {
         guard let raw = sender.representedObject as? String, GraphMode(rawValue: raw) != nil else { return }
         defaults.set(raw, forKey: "windowGraph")
         updateWindow()
+        rebuildMenu()
+    }
+    @objc func setWindowMetric(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? String, ChartMetric(rawValue: raw) != nil else { return }
+        defaults.set(raw, forKey: "windowMetric")
+        updateWindow()
+        rebuildMenu()
+    }
+    func toggleWindowMetric() {
+        let all = ChartMetric.allCases
+        let next = all[((all.firstIndex(of: windowMetric) ?? 0) + 1) % all.count]
+        defaults.set(next.rawValue, forKey: "windowMetric")
+        updateWindow()
+        rebuildMenu()
+    }
+    @objc func setChartMetric(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? String, ChartMetric(rawValue: raw) != nil else { return }
+        defaults.set(raw, forKey: "chartMetric")
         rebuildMenu()
     }
     @objc func setWindowOpacity(_ sender: NSMenuItem) {
@@ -1916,7 +2385,9 @@ if let path = argValue("--window-png") {
     var size = layout.defaultSize
     if let sz = argValue("--size")?.split(separator: "x"), sz.count == 2, let w = Double(sz[0]), let h = Double(sz[1]) { size = NSSize(width: w, height: h) }
     writeWindowPNG(j, layout: layout, size: size, dark: args.contains("--dark"), mode: GraphMode(rawValue: argValue("--graph") ?? "both") ?? .both,
-                   stale: args.contains("--stale"), to: path)
+                   metric: ChartMetric(rawValue: argValue("--window-metric") ?? "") ?? .requests,
+                   stale: args.contains("--stale"), hover: argValue("--hover"),
+                   graphMinute: argValue("--graph-hover").flatMap { Int($0) }, to: path)
     exit(0)
 }
 
@@ -1924,6 +2395,7 @@ if args.contains("--dump-menu") {
     _ = NSApplication.shared
     let source = loadSource()
     var ctx = MenuContext(data: nil, now: Date(), refreshed: nil, stale: false, error: nil, charts: !args.contains("--no-charts"),
+                          chartMetric: ChartMetric(rawValue: argValue("--chart-metric") ?? "") ?? .requests,
                           notifications: true, launchAgentInstalled: false)
     switch source {
     case .success(let j):
@@ -1937,6 +2409,7 @@ if args.contains("--dump-menu") {
         ctx.windowVisible = args.contains("--window-visible")
         ctx.windowLayout = MonitorLayout(rawValue: argValue("--window-layout") ?? "") ?? .horizontal
         ctx.windowGraph = GraphMode(rawValue: argValue("--window-graph") ?? "") ?? .both
+        ctx.windowMetric = ChartMetric(rawValue: argValue("--window-metric") ?? "") ?? .requests
         ctx.windowOpacity = Double(argValue("--window-opacity") ?? "") ?? 1.0
         ctx.windowClickThrough = args.contains("--window-click-through")
     case .failure(.message(let m)): ctx.error = m

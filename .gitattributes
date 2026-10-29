@@ -1,1 +1,4 @@
 .github/workflows/*.lock.yml linguist-generated=true merge=ours
+# LF everywhere, so a checkout made by Windows git (core.autocrlf) still runs
+# under WSL: a CRLF shebang or zsh script fails there.
+* text=auto eol=lf

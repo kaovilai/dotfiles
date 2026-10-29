@@ -77,6 +77,24 @@ rm "$tmp/bin/claude-t3-copilot"
 if verify-claude-t3-launchers >/dev/null 2>&1; then fail "verify passed with a missing launcher"; fi
 link-claude-t3-launchers >/dev/null 2>&1 || fail "relink failed"
 
+# Backend args link and verify only that subset (a copilot-only machine);
+# copilot alone does not need secrets.zsh
+local sub="$tmp/subset"
+out=$(T3_CLAUDE_LAUNCHER_DIR="$sub" CLAUDE_PROVIDER_CREDENTIALS_FILE="$tmp/no-secrets" \
+    link-claude-t3-launchers copilot 2>&1) || fail "subset link failed: $out"
+[[ "$out" != *secrets* ]] || fail "copilot-only link warned about secrets: $out"
+[[ "${(j: :)${(@f)$(ls "$sub")}}" == claude-t3-copilot ]] || fail "subset link created extra launchers: $(ls "$sub")"
+T3_CLAUDE_LAUNCHER_DIR="$sub" verify-claude-t3-launchers copilot >/dev/null 2>&1 || fail "subset verify failed"
+if T3_CLAUDE_LAUNCHER_DIR="$sub" link-claude-t3-launchers bogus >/dev/null 2>&1; then fail "unknown backend accepted"; fi
+[[ ! -e "$sub/claude-t3-bogus" ]] || fail "unknown backend was linked"
+
+# WSL: a checkout on the Windows drive and a tool resolved from the appended
+# Windows PATH are both reported
+out=$(COPILOT_API_DIR=/mnt/c/Users/x/copilot-api _t3_claude_launcher_prereqs copilot 2>&1)
+[[ "$out" == *"/mnt/c/Users/x/copilot-api is on the Windows drive"* ]] || fail "Windows-drive checkout not reported: $out"
+out=$(commands[jq]=/mnt/c/Users/x/npm/jq; _t3_claude_launcher_prereqs copilot 2>&1)
+[[ "$out" == *"jq resolves to Windows' /mnt/c/Users/x/npm/jq"* ]] || fail "Windows jq not reported: $out"
+
 # Absolute binaryPaths in T3 settings must exist; bare names and disabled
 # instances are skipped
 mkdir -p "$tmp/t3/userdata"

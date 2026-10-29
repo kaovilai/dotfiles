@@ -135,6 +135,9 @@ if [[ "$backend" == enmaas ]]; then
     fi
     # Codex's key for the provider is the proxy's local token, not the gateway key.
     export ENMAAS_API_KEY="$token"
+    # Hosted rits/* models have no server-side web search (vLLM ignores it).
+    # Hook ~/.claude/hooks/nudge-web-search-via-luna.sh reads this route.
+    export T3_WEB_SEARCH_DELEGATE="codex_rh_codex_api:gpt-5.6-luna"
     typeset -a wiring=(
         -c model_provider=enmaas
         -c 'model_providers.enmaas.name="EnMaaS"'
@@ -216,6 +219,9 @@ if [[ ! -s "$catalog" || "$(<"$catalog.version" 2>/dev/null)" != "$shape" ]]; th
         exit 1
     }
 fi
+# Hosted rits/* models have no server-side web search (vLLM ignores it).
+# Hook ~/.claude/hooks/nudge-web-search-via-luna.sh reads this route.
+export T3_WEB_SEARCH_DELEGATE="codex_rh_codex_api:gpt-5.6-luna"
 # Hook ~/.claude/hooks/shrink-view-image.sh shrinks images to this many px
 # (EnMaaS 413s on large request bodies).
 export T3_IMAGE_MAX_PX=1000

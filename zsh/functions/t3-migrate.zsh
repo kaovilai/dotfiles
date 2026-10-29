@@ -350,33 +350,77 @@ _t3_check_provider_binaries() {
     return $failed
 }
 
+# _t3_check_backend_args <kind> <known...> -- <requested...>: error on any
+# requested backend not in the known list.
+_t3_check_backend_args() {
+    local kind="$1"; shift
+    local -a known=(${@[1,${@[(i)--]}-1]}) requested=(${@[${@[(i)--]}+1,-1]})
+    local b bad=0
+    for b in $requested; do
+        (( ${known[(Ie)$b]} )) || { error "Unknown $kind-t3 backend '$b' (choose: $known)"; bad=1; }
+    done
+    return $bad
+}
+
 # What the launchers need at run time that neither git nor the T3 archive
-# carries. Warnings only: each backend needs a different subset.
+# carries. Warnings only: each backend needs a different subset. Args: the
+# backends being linked.
 _t3_claude_launcher_prereqs() {
     local native="${CLAUDE_PROVIDER_NATIVE_BINARY:-$HOME/.local/bin/claude}"
     [[ -x "$native" ]] \
         || warning "Claude Code not found at $native (install: curl -fsSL https://claude.ai/install.sh | bash)"
 
-    local cmd
-    for cmd in python3 jq uv; do
-        command_exists $cmd || warning "$cmd not found (brew bundle --file=$_T3_DOTFILES_ROOT/Brewfile)"
+    # python3 + jq: every backend. uv: the LiteLLM proxies (vertex, openai,
+    # enmaas, hosted-only). bun + a copilot-api checkout: copilot.
+    local -a cmds=(python3 jq)
+    (( ${@[(I)copilot]} )) && cmds+=(bun)
+    (( ${#${@:#copilot}} )) && cmds+=(uv)
+    local cmd hint="brew bundle --file=$_T3_DOTFILES_ROOT/Brewfile"
+    [[ "$OSTYPE" == darwin* ]] || hint="install it with your package manager; bun: curl -fsSL https://bun.sh/install | bash"
+    for cmd in $cmds; do
+        # Under WSL the appended Windows PATH can supply a /mnt/c/... program
+        # of the same name, which can't serve these Linux launchers.
+        if [[ "${commands[$cmd]-}" == /mnt/[a-z]/* ]]; then
+            [[ $cmd == bun && -x $HOME/.bun/bin/bun ]] \
+                || warning "$cmd resolves to Windows' ${commands[$cmd]}; install the Linux one inside WSL ($hint)"
+        else
+            command_exists $cmd || [[ $cmd == bun && -x $HOME/.bun/bin/bun ]] || warning "$cmd not found ($hint)"
+        fi
+    done
+    local repo_dir="${COPILOT_API_DIR:-$HOME/git/copilot-api}" d
+    if (( ${@[(I)copilot]} )) && [[ ! -d "$repo_dir/.git" ]]; then
+        warning "copilot-api checkout missing (git clone -b dev https://github.com/kaovilai/copilot-api $repo_dir)"
+    fi
+    # WSL: checkouts on the Windows drive are slow, lose exec bits, and get
+    # CRLF line endings from Windows git.
+    local -a dirs=("$_T3_DOTFILES_ROOT")
+    (( ${@[(I)copilot]} )) && dirs+=("$repo_dir")
+    for d in $dirs; do
+        [[ "${d:A}" == /mnt/[a-z]/* ]] && warning "$d is on the Windows drive; clone it inside the Linux filesystem (e.g. ~/git) instead"
     done
 
+    # copilot authenticates with copilot-api's own GitHub token, not secrets.zsh.
     local credentials="${CLAUDE_PROVIDER_CREDENTIALS_FILE:-$HOME/secrets.zsh}"
-    [[ -r "$credentials" ]] \
-        || warning "$credentials not found; the launchers read provider keys from it (see docs/LAPTOP_MIGRATION.md)"
+    (( ${#${@:#copilot}} )) && [[ ! -r "$credentials" ]] \
+        && warning "$credentials not found; the launchers read provider keys from it (see docs/LAPTOP_MIGRATION.md)"
+    return 0
 }
 
 # Point each claude-t3-<backend> launcher at this checkout's
 # scripts/claude-provider.zsh. Existing symlinks are repointed; anything else
-# at a launcher path is left alone and reported.
+# at a launcher path is left alone and reported. Backend args limit it to a
+# subset, e.g. `link-claude-t3-launchers copilot` on a machine without EnMaaS
+# or Vertex access; none = every backend plus the legacy names.
 link-claude-t3-launchers() {
     local target="$_T3_DOTFILES_ROOT/scripts/claude-provider.zsh"
     [[ -x "$target" ]] || { error "Launcher script missing or not executable: $target"; return 1; }
+    local -a backends=("$@")
+    (( $# )) || backends=($_T3_CLAUDE_BACKENDS $_T3_LEGACY_BACKENDS)
+    _t3_check_backend_args claude $_T3_CLAUDE_BACKENDS $_T3_LEGACY_BACKENDS -- $backends || return 1
     mkdir -p "$T3_CLAUDE_LAUNCHER_DIR" || { error "Failed to create $T3_CLAUDE_LAUNCHER_DIR"; return 1; }
 
     local backend link failed=0
-    for backend in $_T3_CLAUDE_BACKENDS $_T3_LEGACY_BACKENDS; do
+    for backend in $backends; do
         link="$T3_CLAUDE_LAUNCHER_DIR/claude-t3-$backend"
         if [[ -L "$link" && "${link:A}" == "${target:A}" ]]; then
             success "claude-t3-$backend already linked"
@@ -391,16 +435,20 @@ link-claude-t3-launchers() {
         fi
     done
 
-    _t3_claude_launcher_prereqs
+    _t3_claude_launcher_prereqs $backends
     return $failed
 }
 
 # Check each launcher resolves to this checkout and starts Claude Code.
 # `--version` skips credentials and proxies, so this is safe to run any time.
+# Backend args limit the check like link-claude-t3-launchers.
 verify-claude-t3-launchers() {
     local target="$_T3_DOTFILES_ROOT/scripts/claude-provider.zsh"
+    local -a backends=("$@")
+    (( $# )) || backends=($_T3_CLAUDE_BACKENDS)
+    _t3_check_backend_args claude $_T3_CLAUDE_BACKENDS $_T3_LEGACY_BACKENDS -- $backends || return 1
     local backend link failed=0
-    for backend in $_T3_CLAUDE_BACKENDS; do
+    for backend in $backends; do
         link="$T3_CLAUDE_LAUNCHER_DIR/claude-t3-$backend"
         if [[ ! -L "$link" || "${link:A}" != "${target:A}" ]]; then
             error "claude-t3-$backend is not linked to $target (run link-claude-t3-launchers)"
@@ -472,5 +520,120 @@ verify-codex-t3-launchers() {
             success "codex-t3-$backend starts the Codex CLI"
         fi
     done
+    return $failed
+}
+
+# Check a Linux or WSL2 box serving T3 Code headless on Copilot: the T3
+# background service (`t3 service install`, a systemd user unit) runs at boot
+# with nobody logged in, and its Claude provider runs claude-t3-copilot.
+# Inside WSL only the Linux side can be checked; the Windows side that boots
+# the distro is in docs/LAPTOP_MIGRATION.md.
+verify-t3-headless() {
+    [[ "$OSTYPE" == linux* ]] || { error "verify-t3-headless is for Linux hosts (Fedora, or a WSL2 distro)"; return 1; }
+    local failed=0 wsl=0 unit=t3code.service
+    [[ -n "${WSL_DISTRO_NAME-}" ]] && wsl=1
+
+    if [[ -d /run/systemd/system ]]; then
+        success "systemd is running"
+    elif (( wsl )); then
+        error "systemd is not running: add [boot] systemd=true to /etc/wsl.conf, then run wsl --shutdown from Windows"
+        failed=1
+    else
+        error "systemd is not running; t3 service needs a systemd user manager"
+        failed=1
+    fi
+
+    # Without lingering the user manager, and the service, stop at logout and
+    # don't start at boot.
+    if [[ "$(loginctl show-user "$USER" -p Linger --value 2>/dev/null)" == yes ]]; then
+        success "Lingering enabled for $USER"
+    else
+        error "Lingering is off: sudo loginctl enable-linger $USER"
+        failed=1
+    fi
+
+    if ! command_exists t3; then
+        error "t3 not installed (npm i -g --prefix ~/.local t3@latest)"
+        failed=1
+    elif ! t3 --version >/dev/null 2>&1; then
+        # The downloaded runtime links libatomic, absent from minimal installs.
+        error "t3 does not start: $(t3 --version 2>&1 | head -1) (libatomic missing? Fedora: libatomic, Ubuntu: libatomic1)"
+        failed=1
+    elif systemctl --user is-active --quiet "$unit" 2>/dev/null; then
+        success "$unit active ($(t3 --version 2>/dev/null))"
+    else
+        error "$unit not active (t3 service install; logs: systemctl --user status $unit)"
+        failed=1
+    fi
+
+    verify-claude-t3-launchers copilot || failed=1
+    # A laptop serving lid-closed on AC. Under WSL, Windows owns power.
+    local -a bats=("${T3_POWER_SUPPLY_DIR:-/sys/class/power_supply}"/BAT*(N))
+    if (( ! wsl && ${#bats} )); then
+        _t3_headless_laptop_checks || failed=1
+    fi
+    (( wsl )) && warning "Windows side not checked: WSL must start at boot with nobody signed in (docs/LAPTOP_MIGRATION.md, Headless WSL2)"
+    return $failed
+}
+
+# Laptop part of verify-t3-headless: nothing may suspend it while it serves
+# with the lid closed and nobody logged in, and an unattended reboot must come
+# back on the network. Errors for what suspends it, warnings for what only
+# bites on a reboot. Paths are overridable for tests.
+_t3_headless_laptop_checks() {
+    local failed=0 gdm_dir="${T3_GDM_DCONF_DIR:-/etc/dconf/db/gdm.d}" crypttab="${T3_CRYPTTAB:-/etc/crypttab}"
+    local fix="see docs/LAPTOP_MIGRATION.md, Lid-closed Fedora laptop"
+
+    # logind's default for closing the lid on AC power is suspend.
+    local lid
+    lid=$(busctl get-property org.freedesktop.login1 /org/freedesktop/login1 \
+        org.freedesktop.login1.Manager HandleLidSwitchExternalPower 2>/dev/null)
+    if [[ "$lid" == 's "ignore"' ]]; then
+        success "Closing the lid on AC power is ignored"
+    else
+        error "Closing the lid on AC power suspends (logind HandleLidSwitchExternalPower=${${lid#s \"}%\"}); $fix"
+        failed=1
+    fi
+
+    # With nobody logged in the GDM greeter's power settings apply, and it
+    # suspends after a while idle even on AC. Masked sleep targets also cover it.
+    local masked=0
+    [[ "$(systemctl is-enabled suspend.target 2>/dev/null)" == masked ]] && masked=1
+    if (( masked )); then
+        success "Suspend is masked"
+    elif grep -qs "sleep-inactive-ac-type='nothing'" "$gdm_dir"/*(N); then
+        success "Login screen does not suspend on AC"
+    else
+        error "Login screen suspends after idle on AC power; $fix"
+        failed=1
+    fi
+    if (( ! masked )) && (( $+commands[gsettings] )) \
+        && [[ "$(gsettings get org.gnome.settings-daemon.plugins.power sleep-inactive-ac-type 2>/dev/null)" != *nothing* ]]; then
+        warning "Your GNOME session suspends after idle on AC (when logged in); $fix"
+    fi
+
+    # An encrypted root waits for the passphrase at the keyboard on every boot.
+    if lsblk -rno TYPE 2>/dev/null | grep -qx crypt && ! grep -qs 'tpm2-device' "$crypttab"; then
+        warning "Encrypted disk without TPM2 unlock: a reboot waits for the passphrase at the keyboard; $fix"
+    fi
+
+    # Wi-Fi saved for one user or with its password in that user's keyring
+    # connects only after that user logs in.
+    local name type perms flags
+    if (( $+commands[nmcli] )); then
+        while IFS=: read -r name type; do
+            [[ "$type" == 802-11-wireless ]] || continue
+            perms=$(nmcli -g connection.permissions connection show "$name" 2>/dev/null)
+            flags=$(nmcli -g 802-11-wireless-security.psk-flags connection show "$name" 2>/dev/null)
+            if [[ -z "$perms" && "${flags:-0}" == 0 ]]; then
+                success "Wi-Fi '$name' connects at boot"
+            else
+                warning "Wi-Fi '$name' connects only after login; $fix"
+            fi
+        done < <(nmcli -t -f NAME,TYPE connection show --active 2>/dev/null)
+    fi
+
+    [[ "$(systemctl is-enabled sshd 2>/dev/null)" == enabled ]] \
+        || warning "sshd not enabled: no way in for maintenance with the lid closed (sudo systemctl enable --now sshd)"
     return $failed
 }

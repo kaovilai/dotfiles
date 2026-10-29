@@ -54,6 +54,7 @@ for func in \
     verify-claude-t3-launchers \
     link-codex-t3-launchers \
     verify-codex-t3-launchers \
+    verify-t3-headless \
     update-brewfile \
     brewfile-cleanup; do
     functions[$func]="_lazy_load_migrate || return 1; ${func} \"\$@\""

@@ -156,6 +156,7 @@ try:
             probe.bind(('127.0.0.1', 0))
             proxy_port = probe.getsockname()[1]
         env.update({'PATH': tmp + ':' + env['PATH'], 'ENMAAS_TEST_REPO': str(repo),
+                    'CLAUDE_ENMAAS_RUNTIME_DIR': str(Path(tmp) / 'state'),
                     'CLAUDE_ENMAAS_PROXY_PORT': str(proxy_port),
                     'ENMAAS_API_BASE_URL': f'http://127.0.0.1:{gateway.server_port}/v1', 'ENMAAS_API_KEY': 'offline-key-a',
                     'CLAUDE_ENMAAS_MODEL_DIALECTS': 'offline-responses=responses offline-error=chat', 'UV_OFFLINE': '1',
@@ -193,7 +194,7 @@ exit $result
             with urllib.request.urlopen(urllib.request.Request(capture['base'] + '/v1/models',
                  headers={'Authorization': 'Bearer ' + capture['token']}), timeout=2) as response:
                 assert response.status == 200, 'client exit stopped shared proxy'
-        runtime = Path('/tmp') / ('claude-enmaas-proxy-%s-%s' % (os.getuid(), proxy_port))
+        runtime = Path(env['CLAUDE_ENMAAS_RUNTIME_DIR']) / ('claude-enmaas-proxy-%s-%s' % (os.getuid(), proxy_port))
         info = json.loads((runtime / 'proxy.json').read_text())
         assert info['port'] == proxy_port and (runtime.stat().st_mode & 0o777) == 0o700
         assert not any('offline-key-' in p.read_text() for p in runtime.iterdir() if p.is_file())

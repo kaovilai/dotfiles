@@ -30,6 +30,8 @@ def wait_for(check, description, timeout=15):
 
 
 with tempfile.TemporaryDirectory(prefix='enmaas-lifecycle-') as tmp:
+    env['CLAUDE_ENMAAS_RUNTIME_DIR'] = str(Path(tmp) / 'state')
+    os.environ['CLAUDE_ENMAAS_RUNTIME_DIR'] = env['CLAUDE_ENMAAS_RUNTIME_DIR']
     program = Path(tmp) / 'proxy.py'
     emitted = subprocess.run(['zsh', '-f', '-c',
         'source "$ENMAAS_TEST_REPO/zsh/functions/claude/providers/enmaas-proxy.zsh"; _claude_enmaas_proxy_program'],
@@ -63,7 +65,7 @@ with tempfile.TemporaryDirectory(prefix='enmaas-lifecycle-') as tmp:
     with socket.socket() as probe:
         probe.bind(('127.0.0.1', 0))
         port = probe.getsockname()[1]
-    root = Path('/tmp') / ('claude-enmaas-proxy-%s-%s' % (os.getuid(), port))
+    root = Path(env['CLAUDE_ENMAAS_RUNTIME_DIR']) / ('claude-enmaas-proxy-%s-%s' % (os.getuid(), port))
     info = None
     try:
         with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
@@ -87,12 +89,26 @@ with tempfile.TemporaryDirectory(prefix='enmaas-lifecycle-') as tmp:
         assert json.loads((root / 'proxy.json').read_text())['pid'] == original_pid
         assert (root / 'config.json').read_bytes() == original_config
         changed['model_list'][-1]['litellm_params']['model'] = 'openai/responses/new-chat'
-        rejected = controller('ensure', port, changed, ('new-chat',))
-        assert rejected.returncode != 0 and 'routing changed' in rejected.stderr, rejected.stderr
-        rejected = controller('ensure', port, key='different-key')
-        assert rejected.returncode != 0 and 'gateway/key' in rejected.stderr, rejected.stderr
-        assert helper['ready'](info, root), 'config mismatch stopped existing service'
-        print('PASS: selection changes reuse; incompatible routing/key requires explicit restart')
+        # While a client connection is open the proxy counts as serving: a key
+        # change reuses it with a notice, a route it cannot serve is refused.
+        with socket.create_connection(('127.0.0.1', port), timeout=2):
+            wait_for(lambda: helper['busy'](port), 'open client connection not seen as busy')
+            rejected = controller('ensure', port, changed, ('new-chat',))
+            assert rejected.returncode != 0 and 'routing changed' in rejected.stderr, rejected.stderr
+            reused = controller('ensure', port, key='different-key')
+            assert reused.returncode == 0 and 'serving requests' in reused.stderr, reused.stderr
+            assert json.loads((root / 'proxy.json').read_text())['pid'] == original_pid
+        assert helper['ready'](info, root), 'config mismatch stopped a busy service'
+        print('PASS: busy proxy is reused on key change; incompatible routing requires explicit restart')
+
+        # Idle: the same key change restarts the proxy with a new identity.
+        wait_for(lambda: not helper['busy'](port), 'closed client connection still busy')
+        restarted = controller('ensure', port, key='different-key')
+        assert restarted.returncode == 0 and 'restarting the idle proxy' in restarted.stderr, restarted.stderr
+        info = json.loads((root / 'proxy.json').read_text())
+        assert info['pid'] != original_pid
+        original_pid, original_token = info['pid'], info['token']
+        print('PASS: idle proxy restarts on key change')
 
         # Kill only the recorded, birth-time-verified group owned by this fixture.
         assert helper['owned'](info)

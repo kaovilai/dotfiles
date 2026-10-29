@@ -30,6 +30,7 @@ import shutil
 import statistics
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.request
 from collections import Counter, defaultdict
@@ -45,7 +46,8 @@ PROXIES = {
     "4141": ("copilot-api", None),
     "4142": ("vertex", os.path.expanduser("~/.config/claude-vertex-proxy.yaml")),
     "4145": ("openai", os.path.expanduser("~/.config/claude-openai-proxy.yaml")),
-    "4146": ("enmaas", f"/tmp/claude-enmaas-proxy-{UID}-4146/config.json"),
+    "4146": ("enmaas", [f"~/.local/state/claude-enmaas-proxy-{UID}-4146/config.json",
+                        f"/tmp/claude-enmaas-proxy-{UID}-4146/config.json"]),  # pre-move path until restart
     "4147": ("codex-hosted-only", ["~/.local/state/hosted-only-codex-4147/config.yaml",
                                    "~/.local/state/glm-hybrid-codex-4147/config.yaml"]),  # legacy path until cutover
     "4148": ("claude-hosted-only", ["~/.local/state/hosted-only-claude-4148/config.yaml",
@@ -1052,6 +1054,35 @@ def load_claude_throttles(since):
     return load_transcripts("claude-throttle", "LLM_USAGE_CLAUDE_DIRS", "~/.claude/projects", parse_claude_throttles, since)
 
 
+def load_timings(since):
+    """Per-request latency lines (timings-YYYY-MM.jsonl) from copilot-api's
+    bundled monitor plugin (plugin/gateway/monitor.mjs, loaded via
+    COPILOT_API_PLUGINS by claude-copilot).
+
+    They carry no token counts, so they feed the latency/TTFT series only and
+    never increase request or token totals. `model` is the requested model;
+    `actual_model`, when present, is the one upstream served.
+    """
+    out = []
+    for path in glob.glob(os.path.join(STATE, "timings-*.jsonl")):
+        try:
+            with open(path) as handle:
+                for line in handle:
+                    try:
+                        rec = json.loads(line)
+                        t = float(rec["t"])
+                    except (ValueError, KeyError, TypeError):
+                        continue
+                    if t < since:
+                        continue
+                    out.append({"t": t, "port": str(rec.get("port") or "4141"),
+                                "served": rec.get("actual_model") or rec.get("model") or "unknown",
+                                "ms": rec.get("ms"), "ttft_ms": rec.get("ttft_ms")})
+        except OSError:
+            continue
+    return out
+
+
 def throttle_spans(events, now, window=MB_HOUR):
     """Throttle intervals per provider that overlap the last `window` seconds.
 
@@ -1135,9 +1166,6 @@ def quota_spans(quota, now, window=MB_HOUR):
 
 
 CLAUDE_FAMILIES = ("opus", "sonnet", "haiku", "fable")
-INFLIGHT_STALE_S = 900  # keep in step with litellm_usage_log.INFLIGHT_STALE_S
-
-
 def reroute_kind(ev):
     """None for a direct call, else why the served model differs from the requested one.
 
@@ -1161,7 +1189,8 @@ def reroute_kind(ev):
 def read_inflight(now):
     """Live in-flight requests from the proxies' inflight-<port>-<pid>.json files.
 
-    Skips files of dead pids and entries older than INFLIGHT_STALE_S (crash/restart leftovers).
+    Skips files of dead pids (crash/restart leftovers). Entries from a live pid
+    are kept regardless of age: a long stream must not disappear mid-request.
     Returns (entries, ports that report in-flight at all).
     """
     entries, reporting = [], set()
@@ -1183,8 +1212,10 @@ def read_inflight(now):
                 age = max(0.0, now - float(req["t"]))
             except (KeyError, TypeError, ValueError):
                 continue
-            if age <= INFLIGHT_STALE_S:
-                entries.append({"port": port, "model": strip_model(req.get("model") or req.get("requested")), "seconds": int(age)})
+            # The monitor plugin writes "unknown" until the request body is parsed.
+            model = req.get("model") if req.get("model") not in (None, "", "unknown") else None
+            model = model or req.get("actual_model") or req.get("requested") or req.get("model")
+            entries.append({"port": port, "model": strip_model(model), "seconds": int(age)})
     return entries, reporting
 
 
@@ -1379,8 +1410,9 @@ def menubar_data(now=None, up_ports=None, share_window="15m", share_metric="requ
 
     # Usage by model / proxy and reroutes over the hour; transcript rows are flagged by `source`.
     hour = recent + extra
+    overrides = provider_overrides()
     by_model = defaultdict(lambda: {"requests": 0, "reroutes": 0, "sources": set()})
-    by_proxy = defaultdict(lambda: {"requests": 0, "models": Counter()})
+    by_proxy = defaultdict(lambda: {"requests": 0, "models": Counter(), "provider": "other"})
     reroutes = defaultdict(lambda: {"count": 0, "count_15m": 0})
     for e in hour:
         model, pname = strip_model(e.get("served")), proxy_name({**e, "port": e.get("port")}) if e.get("via") != "transcript" else "copilot-api"
@@ -1392,6 +1424,7 @@ def menubar_data(now=None, up_ports=None, share_window="15m", share_metric="requ
         bp = by_proxy[pname]
         bp["requests"] += 1
         bp["models"][model] += 1
+        bp["provider"] = event_provider(e, overrides)[0]
         if kind:
             frm = family(e["requested"]) if family(e["requested"]) in CLAUDE_FAMILIES else strip_model(e["requested"])
             r = reroutes[(frm, model, kind, pname)]
@@ -1408,13 +1441,49 @@ def menubar_data(now=None, up_ports=None, share_window="15m", share_metric="requ
             if cls:
                 series[{"429": "e429", "5xx": "e5xx", "oth": "eother"}[cls]][i] += 1
     by_vendor = {}  # per-minute requests by model vendor (proxy log + copilot transcripts), for the floating window's stacked bars
+    tps_vendor = {}  # same minutes, completion tokens per second
+    tps_total = [0.0] * 60
     for e in hour:
         i = int((e["t"] - minute0) // 60)
         if 0 <= i < 60:
-            by_vendor.setdefault(model_vendor(e.get("served"))[0], [0] * 60)[i] += 1
+            key = model_vendor(e.get("served"))[0]
+            by_vendor.setdefault(key, [0] * 60)[i] += 1
+            out = e.get("out") or 0
+            if out:
+                tps_vendor.setdefault(key, [0.0] * 60)[i] += out
+                tps_total[i] += out
     series["by_vendor"] = by_vendor
-    overrides = provider_overrides()
+    series["tps"] = [round(v / 60, 2) for v in tps_total]
+    series["tps_by_vendor"] = {k: [round(v / 60, 2) for v in vals] for k, vals in tps_vendor.items()}
+    # Latency / TTFT are distributions, so plot the per-minute median (a stacked bar would be meaningless).
+    lat_min, ttft_min = defaultdict(list), defaultdict(list)
+    lat_vendor, ttft_vendor = defaultdict(lambda: defaultdict(list)), defaultdict(lambda: defaultdict(list))
+    lat_prov, ttft_prov = defaultdict(lambda: defaultdict(list)), defaultdict(lambda: defaultdict(list))
+    timings = load_timings(now - MB_HOUR)  # copilot-api: timing-only rows (no token counts)
+    for e in hour + timings:
+        i = int((e["t"] - minute0) // 60)
+        if not (0 <= i < 60):
+            continue
+        vendor = model_vendor(e.get("served"))[0]
+        prov = event_provider(e, overrides)[0]
+        if e.get("ms") is not None:
+            lat_min[i].append(e["ms"])
+            lat_vendor[vendor][i].append(e["ms"])
+            lat_prov[prov][i].append(e["ms"])
+        if e.get("ttft_ms") is not None:
+            ttft_min[i].append(e["ttft_ms"])
+            ttft_vendor[vendor][i].append(e["ttft_ms"])
+            ttft_prov[prov][i].append(e["ttft_ms"])
+    def med(vals):
+        return round(statistics.median(vals), 1) if vals else 0
+    series["latency"] = [med(lat_min[i]) for i in range(60)]
+    series["ttft"] = [med(ttft_min[i]) for i in range(60)]
+    series["latency_by_vendor"] = {k: [med(v[i]) for i in range(60)] for k, v in lat_vendor.items()}
+    series["ttft_by_vendor"] = {k: [med(v[i]) for i in range(60)] for k, v in ttft_vendor.items()}
+    series["latency_by_provider"] = {k: [med(v[i]) for i in range(60)] for k, v in lat_prov.items()}
+    series["ttft_by_provider"] = {k: [med(v[i]) for i in range(60)] for k, v in ttft_prov.items()}
     by_provider = {}  # same minutes, split by provider (the floating window draws one rate line per provider)
+    tps_provider = {}
     labels = {}
     for e in hour:
         i = int((e["t"] - minute0) // 60)
@@ -1422,13 +1491,21 @@ def menubar_data(now=None, up_ports=None, share_window="15m", share_metric="requ
             key, label = event_provider(e, overrides)
             labels[key] = label
             by_provider.setdefault(key, [0] * 60)[i] += 1
+            out = e.get("out") or 0
+            if out:
+                tps_provider.setdefault(key, [0.0] * 60)[i] += out
     series_by_provider = {"bucket_s": 60, "start": iso_utc(minute0),
-                          "providers": [{"key": k, "label": labels[k], "requests": v} for k, v in sorted(by_provider.items(), key=lambda kv: -sum(kv[1]))]}
+                          "providers": [{"key": k, "label": labels[k], "requests": v,
+                                         "tps": [round(x / 60, 2) for x in tps_provider.get(k, [0.0] * 60)],
+                                         "latency": [med(lat_prov[k][i]) if k in lat_prov else 0 for i in range(60)],
+                                         "ttft": [med(ttft_prov[k][i]) if k in ttft_prov else 0 for i in range(60)]}
+                                        for k, v in sorted(by_provider.items(), key=lambda kv: -sum(kv[1]))]}
     last_bad = [e for e in events if not e.get("ok", True)]
     last = last_bad[-1] if last_bad else None
     mine_inflight = [f for f in flights]
     oldest = max(mine_inflight, key=lambda f: f["seconds"], default=None)
     by_flight = Counter(f["model"] for f in flights)
+    cop_flights = [f for f in flights if f["port"] == "4141"]
 
     copilot_up = up.get("4141", False)
     quota, quota_note = copilot_quota(now) if copilot_up else (None, "copilot-api (:4141) is down")
@@ -1461,15 +1538,23 @@ def menubar_data(now=None, up_ports=None, share_window="15m", share_metric="requ
         "any_down": any(p["state"] == "down" and p["expected"] for p in proxies),
         "totals": {w: {k: v for k, v in counts(recent + extra, win).items() if k != "tokens"}
                    for w, win in (("m15", MB_RECENT), ("h1", MB_HOUR))},  # proxy logs + copilot (transcript-derived)
+        # Token totals for the window header when it shows tok/s instead of req/15m.
+        "tokens": {w: {"in": sum(e.get("in", 0) for e in hour if e["t"] >= now - win),
+                       "out": sum(e.get("out", 0) for e in hour if e["t"] >= now - win)}
+                   for w, win in (("m15", MB_RECENT), ("h1", MB_HOUR))},
+        "latency": {"p50": pct([e["ms"] for e in hour if e.get("ms") is not None], 50),
+                    "p95": pct([e["ms"] for e in hour if e.get("ms") is not None], 95),
+                    "ttft_p50": pct([e["ttft_ms"] for e in hour if e.get("ttft_ms") is not None], 50),
+                    "ttft_p95": pct([e["ttft_ms"] for e in hour if e.get("ttft_ms") is not None], 95)},
         "throttled": active_throttle(events, now), "spike": spike,
         "inflight": {"available": bool(reporting), "count": len(flights), "oldest_s": oldest["seconds"] if oldest else 0,
                      "oldest": ({"proxy": PROXIES.get(oldest["port"], (f":{oldest['port']}", None))[0], "model": oldest["model"],
                                  "seconds": oldest["seconds"]} if oldest else None),
                      "by_model": dict(by_flight.most_common()),
-                     "note": None if reporting else "no proxy reports in-flight yet (restart proxies with the updated usage callback: llm-proxy-restart); copilot-api cannot report it"},
-        "by_model": [{"model": m, "requests": v["requests"], "share": round(v["requests"] / total, 3), "reroutes": v["reroutes"],
+                     "note": None if reporting else "no proxy reports in-flight yet (restart proxies with the updated usage callback: llm-proxy-restart)"},
+        "by_model": [{"model": m, "vendor": model_vendor(m)[0], "requests": v["requests"], "share": round(v["requests"] / total, 3), "reroutes": v["reroutes"],
                       "sources": sorted(v["sources"])} for m, v in sorted(by_model.items(), key=lambda x: -x[1]["requests"])[:8]],
-        "by_proxy": [{"proxy": n, "requests": v["requests"], "source": "transcript" if n == "copilot-api" else "proxy-log",
+        "by_proxy": [{"proxy": n, "provider": v["provider"], "requests": v["requests"], "source": "transcript" if n == "copilot-api" else "proxy-log",
                       "models": [{"model": m, "requests": c} for m, c in v["models"].most_common(4)]}
                      for n, v in sorted(by_proxy.items(), key=lambda x: -x[1]["requests"])],
         "reroutes": [{"from": f, "to": t, "kind": k, "proxy": pr, **v}
@@ -1484,7 +1569,9 @@ def menubar_data(now=None, up_ports=None, share_window="15m", share_metric="requ
                     "attribution": "Claude Code/Codex transcript calls for models absent from the proxy log; approximates copilot-api traffic (may include direct-API sessions)",
                     "m15": cop["m15"], "h1": cop["h1"],
                     "models": [{"model": m, "requests": c} for m, c in Counter(strip_model(e.get("served")) for e in extra).most_common(5)],
-                    "inflight": None, "inflight_note": "n/a (copilot-api has no usage callback)",
+                    "inflight": ({"count": len(cop_flights), "oldest_s": max((f["seconds"] for f in cop_flights), default=0)}
+                                 if "4141" in reporting else None),
+                    "inflight_note": None if "4141" in reporting else "n/a (copilot-api has no in-flight reporter; restart copilot-api on the patched build)",
                     "quota": quota, "quota_note": quota_note},
         "top_models": [{"model": m["model"], "requests": m["requests"]} for m in sorted(
             ({"model": k, "requests": v["requests"]} for k, v in by_model.items()), key=lambda x: -x["requests"])[:5]],
@@ -1577,7 +1664,7 @@ LOGO_SHA = "ab8cbcc6ce806b923c547628132957c8a8b61509"
 LOGO_LICENSE_SHA256 = "add9d7531d1b21646317a8958e38fc727506fa39d24bdecb44154d943c82753a"
 LOGO_NOTICES = os.path.join(os.path.dirname(os.path.dirname(os.path.realpath(__file__))), "THIRD_PARTY_NOTICES.md")
 # key -> (file under packages/static-png/light/, mono, sha256). mono = single-colour glyph the helper tints with the
-# menubar text colour (saved as <key>.mono.png); colour logos are saved as <key>.png. No upstream icon for enmaas / other.
+# menubar text colour (saved as <key>.mono.png); colour logos are saved as <key>.png. `other` has no upstream icon.
 LOGO_FILES = {
     "claude": ("claude-color", False, "97b53fb85b3bf401ffeb8ee7c5ebad734ce9f6edc3038f242021c53bcc18e23d"),
     "anthropic": ("anthropic", True, "389105af72687ae02e5dfbbafe24ed99a84a77a6cf6ea339c13993615b64b37e"),
@@ -1587,6 +1674,13 @@ LOGO_FILES = {
     "gemini": ("gemini-color", False, "10c628f55d22a9725b9f9fccce7cf062b9fb68da5f7736e87010e0594d7ba6db"),
     "github-copilot": ("githubcopilot", True, "984fc3fb2708c83fcc870eabfb2a9a4cd4a2a059ac18f78200119dc37f95ce8c"),
     "vertex": ("vertexai-color", False, "d5cd06f2f2162b220a487dfb3f94ade0f7d4a8395598356e70fc623e110ccfd1"),
+}
+# key -> (file, absolute url, sha256, owner) for icons outside lobe-icons. EnMaaS is a Red Hat gateway, so it
+# uses the public logo from the Red Hat design system; the hat is cropped out of this horizontal asset.
+LOGO_EXTRA = {
+    "enmaas": ("enmaas.avif",
+               "https://raw.githubusercontent.com/RedHat-UX/red-hat-design-system/e801537727f045454a5b1fc0c32ee8efbccae266/docs/assets/logo-redhat.avif",
+               "7adce7f3803a0612b58b9bb0c0b4505b2bc2830f77b2ccb98f903b26d32c8490", "Red Hat"),
 }
 
 
@@ -1598,6 +1692,28 @@ def user_logos_dir():
     return os.path.join(os.environ.get("LLM_USAGE_CONFIG_DIR") or os.path.expanduser("~/.config/llm-usage"), "logos")
 
 
+def _redhat_hat(src_avif, dest_png):
+    """Crop the hat out of the Red Hat horizontal logo and save a transparent square PNG."""
+    try:
+        from PIL import Image
+    except ImportError:
+        return False
+    with tempfile.TemporaryDirectory() as td:
+        decoded = os.path.join(td, "logo.png")
+        res = subprocess.run(["sips", "-s", "format", "png", src_avif, "--out", decoded],
+                             capture_output=True)
+        if res.returncode or not os.path.exists(decoded):
+            return False
+        im = Image.open(decoded).convert("RGBA")
+    hat = im.crop((0, 0, int(im.width * 0.27), im.height))
+    hat = hat.crop(hat.getbbox())
+    side = max(hat.size)
+    canvas = Image.new("RGBA", (side, side), (0, 0, 0, 0))
+    canvas.paste(hat, ((side - hat.width) // 2, (side - hat.height) // 2))
+    canvas.resize((256, 256), Image.LANCZOS).save(dest_png)
+    return True
+
+
 def logo_fetch(from_dir=None, verify=True):
     """Download (or copy from a local checkout of the repo) the pinned logo PNGs + LICENSE; sha256-verified."""
     import hashlib
@@ -1607,12 +1723,14 @@ def logo_fetch(from_dir=None, verify=True):
         if from_dir:
             with open(os.path.join(from_dir, rel), "rb") as handle:
                 return handle.read()
-        req = urllib.request.Request(base + rel, headers={"User-Agent": "llm-usage"})
+        req = urllib.request.Request(rel if rel.startswith("http") else base + rel, headers={"User-Agent": "llm-usage"})
         with urllib.request.urlopen(req, timeout=30) as resp:
             return resp.read()
 
     wanted = [(f"packages/static-png/light/{f}.png", f"{key}.mono.png" if mono else f"{key}.png", sha)
               for key, (f, mono, sha) in LOGO_FILES.items()] + [("LICENSE", "LICENSE", LOGO_LICENSE_SHA256)]
+    if not from_dir:  # fixtures only carry the lobe-icons tree
+        wanted += [(url, dest, sha) for dest, url, sha, _ in LOGO_EXTRA.values()]
     blobs = []
     for rel, dest, sha in wanted:  # fetch + verify everything before touching the target dir
         try:
@@ -1631,9 +1749,19 @@ def logo_fetch(from_dir=None, verify=True):
         with open(os.path.join(out, dest + ".tmp"), "wb") as handle:
             handle.write(data)
         os.replace(os.path.join(out, dest + ".tmp"), os.path.join(out, dest))
+    for rel, dest, got, data in blobs:
+        if dest.endswith(".avif"):
+            avif, png = os.path.join(out, dest), os.path.join(out, dest[:-5] + ".png")
+            if _redhat_hat(avif, png):
+                print(f"menubar: cropped {dest} -> {os.path.basename(png)}")
+            else:
+                print(f"menubar: could not crop {dest} (needs sips + Pillow); drop enmaas.png in {user_logos_dir()}",
+                      file=sys.stderr)
     lines = ["# Logo sources", "",
              f"- Repository: https://github.com/{LOGO_REPO}", f"- Commit: {LOGO_SHA}", "- License: MIT (see LICENSE in this directory; copied from the repository)",
-             "- The logos are trademarks of their respective owners (Anthropic, OpenAI, Z.ai / Zhipu AI, DeepSeek, Google, GitHub / Microsoft),",
+             "- Extra icons use their own pinned source; see the table below.",
+             "- enmaas.png is the hat cropped from logo-redhat.avif (Red Hat design system).",
+             "- The logos are trademarks of their respective owners (Anthropic, OpenAI, Z.ai / Zhipu AI, DeepSeek, Google, GitHub / Microsoft, Red Hat),",
              "  stored here for personal status-bar display only and not redistributed with the dotfiles.",
              f"- Fetched by `llm-usage menubar logos fetch`; notices: {LOGO_NOTICES}", "", "| key | file | upstream | sha256 |", "|---|---|---|---|"]
     lines += [f"| {dest[:-4] if dest.endswith('.png') else dest} | {dest} | {rel} | {got} |" for rel, dest, got, _ in blobs if dest != "LICENSE"]

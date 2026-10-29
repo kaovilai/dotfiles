@@ -576,10 +576,10 @@ claude-ollama() {
 claude-ollama-kill() {
     local port="$(_claude_ollama_port)"
     local -a pids
-    # -sTCP:LISTEN: without it, lsof also matches processes with an
-    # established/in-flight connection TO this port (e.g. our own curl
+    # Listeners only: matching every socket on the port also hits processes
+    # with an established/in-flight connection TO it (e.g. our own curl
     # health-checks mid-request) -- narrow to the actual listening server.
-    pids=("${(f)$(lsof -ti "tcp:${port}" -sTCP:LISTEN 2>/dev/null)}")
+    pids=("${(f)$(_claude_listen_pids "${port}")}")
     if [[ -z "${pids[1]}" ]]; then
         echo "No process listening on port ${port}."
         return 1
@@ -587,7 +587,7 @@ claude-ollama-kill() {
     echo "Killing ollama serve on port ${port} (pid: ${pids[*]})..."
     kill "${pids[@]}" 2>/dev/null
     sleep 1
-    pids=("${(f)$(lsof -ti "tcp:${port}" -sTCP:LISTEN 2>/dev/null)}")
+    pids=("${(f)$(_claude_listen_pids "${port}")}")
     if [[ -n "${pids[1]}" ]]; then
         echo "Still alive, sending SIGKILL..."
         kill -9 "${pids[@]}" 2>/dev/null

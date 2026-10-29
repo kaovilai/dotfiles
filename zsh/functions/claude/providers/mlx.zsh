@@ -205,7 +205,7 @@ claude-mlx-kill() {
     for i in {1..2}; do
         port="${ports[$i]}"
         label="${labels[$i]}"
-        pids=("${(f)$(lsof -ti "tcp:${port}" -sTCP:LISTEN 2>/dev/null)}")
+        pids=("${(f)$(_claude_listen_pids "${port}")}")
         if [[ -z "${pids[1]}" ]]; then
             echo "No process listening on port ${port} (${label})."
             continue
@@ -213,7 +213,7 @@ claude-mlx-kill() {
         echo "Killing ${label} on port ${port} (pid: ${pids[*]})..."
         kill "${pids[@]}" 2>/dev/null
         sleep 1
-        pids=("${(f)$(lsof -ti "tcp:${port}" -sTCP:LISTEN 2>/dev/null)}")
+        pids=("${(f)$(_claude_listen_pids "${port}")}")
         if [[ -n "${pids[1]}" ]]; then
             echo "Still alive, sending SIGKILL..."
             kill -9 "${pids[@]}" 2>/dev/null

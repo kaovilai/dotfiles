@@ -558,7 +558,7 @@ alias claude-vertex-proxy='claude-vertex'
 claude-vertex-kill() {
     local port="${CLAUDE_VERTEX_PROXY_PORT:-4142}"
     local -a pids
-    pids=("${(f)$(lsof -ti "tcp:${port}" -sTCP:LISTEN 2>/dev/null)}")
+    pids=("${(f)$(_claude_listen_pids "${port}")}")
     if [[ -z "${pids[1]}" ]]; then
         echo "No process listening on port ${port}."
         return 1
@@ -566,7 +566,7 @@ claude-vertex-kill() {
     echo "Killing claude-vertex proxy on port ${port} (pid: ${pids[*]})..."
     kill "${pids[@]}" 2>/dev/null
     sleep 1
-    pids=("${(f)$(lsof -ti "tcp:${port}" -sTCP:LISTEN 2>/dev/null)}")
+    pids=("${(f)$(_claude_listen_pids "${port}")}")
     if [[ -n "${pids[1]}" ]]; then
         echo "Still alive, sending SIGKILL..."
         kill -9 "${pids[@]}" 2>/dev/null

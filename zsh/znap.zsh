@@ -1,24 +1,16 @@
-# Configure znap caching
+# Configure znap caching. znap aborts ("Could not find repos dir") when the
+# dir is missing, which is every first shell on a new machine.
+[[ -d ~/.zsh-snap ]] || mkdir -p ~/.zsh-snap
 zstyle ':znap:*' repos-dir ~/.zsh-snap
 # Extend cache TTL to reduce network requests and speed up shell startup
 zstyle ':znap:*:*' ttl 604800  # Cache for 7 days (in seconds)
 
-autoload -Uz compinit
-# Run full compinit when:
-#   - the dump doesn't exist yet (first run), OR
-#   - the dump is older than 24h (mh+24 = modified more than 24h ago)
-# Otherwise use -C to skip the fpath security scan for faster startup.
-() {
-  # Optimization: Use native Zsh extended globbing qualifiers efficiently
-  setopt local_options extended_glob
-  local _zcompdump="${ZDOTDIR:-$HOME}/.zcompdump"
-  local -a stale_dump=($_zcompdump(#qN.mh+24))
-  if [[ ! -f $_zcompdump ]] || (( ${#stale_dump} > 0 )); then
-    compinit          # no dump or stale: rebuild and re-check fpath security
-  else
-    compinit -C       # dump is fresh: skip security scan for faster startup
-  fi
-}
+# Do NOT call compinit here: zsh-autocomplete runs it itself (its README says to
+# remove all compinit calls). An early compinit runs before the plugin prepends
+# its Completions dir to fpath, so the dump lacks its `#autoload` helpers; the
+# plugin then sees _comp_setup + a readable dump, skips its own compinit, and
+# completion widgets (e.g. Up-arrow history) fail with
+# "command not found: _autocomplete__history_lines".
 
 # Download Znap, if it's not there yet.
 [[ -f ~/git/zsh-snap/znap.zsh ]] ||

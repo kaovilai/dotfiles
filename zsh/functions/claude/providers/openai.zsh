@@ -235,7 +235,7 @@ claude-openai() {
 # claude-openai-kill: stop the litellm proxy claude-openai started.
 claude-openai-kill() {
     local port="${CLAUDE_OPENAI_PROXY_PORT:-4145}" pids
-    pids=("${(f)$(lsof -ti "tcp:${port}" -sTCP:LISTEN 2>/dev/null)}")
+    pids=("${(f)$(_claude_listen_pids "${port}")}")
     if [[ -z "${pids[1]}" ]]; then
         echo "No process listening on port ${port} (claude-openai proxy)."
         return 0
@@ -243,7 +243,7 @@ claude-openai-kill() {
     echo "Killing claude-openai proxy on port ${port} (pid: ${pids[*]})..."
     kill "${pids[@]}" 2>/dev/null
     sleep 1
-    pids=("${(f)$(lsof -ti "tcp:${port}" -sTCP:LISTEN 2>/dev/null)}")
+    pids=("${(f)$(_claude_listen_pids "${port}")}")
     [[ -n "${pids[1]}" ]] && kill -9 "${pids[@]}" 2>/dev/null
     return 0
 }

@@ -23,8 +23,10 @@ dotted module next to the proxy config:
 2. Hosted web search (`web_search`, `web_search_preview` tools) on `rits/`
    models: vLLM accepts the tool and silently ignores it, so the model neither
    searches nor knows it cannot and answers from stale training data. The tools
-   are dropped for those models; GPT keeps its native web search. Codex cannot
-   gate this per model (its `web_search` setting is global), so it happens here.
+   are dropped, and hosted_only_hooks (loaded first) replaces them with an
+   in-band note telling the model to route the lookup to a search-capable
+   provider. GPT keeps its native web search. Codex cannot gate this per model
+   (its `web_search` setting is global), so it happens here as a backstop.
 
 A failure in here must never break a request: it is logged and the request goes
 on unchanged.

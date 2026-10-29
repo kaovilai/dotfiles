@@ -1,0 +1,91 @@
+#compdef llm-usage
+
+# Completion for the llm-usage shell function (dotfiles/scripts/llm-usage).
+# Keep the subcommands/flags in sync with argparse in that script.
+_llm-usage() {
+  local -a commands
+  commands=(
+    'summary:usage table grouped by --by (default model)'
+    'routes:requested -> served model matrix; flags reroutes'
+    'tail:recent requests; -f follows live'
+    'errors:failed requests grouped by status + message'
+    'top:live dashboard'
+    'status:which proxies are up and whether they log usage'
+    'serve:browser dashboard (localhost only)'
+    'menubar-data:compact JSON for the menubar helper'
+    'menubar:macOS menubar monitor (build/run/install/...)'
+  )
+
+  _arguments -C \
+    '1:command:->command' \
+    '*::argument:->args'
+
+  case $state in
+    command)
+      _describe -t commands 'llm-usage command' commands
+      ;;
+    args)
+      case $words[1] in
+        summary)
+          _arguments \
+            '--since[time window]:window:(30m 24h 7d today all)' \
+            '--source[sources]:source:(auto proxy claude codex all)' \
+            '--by[group by, comma list]:field:(model requested route proxy client role upstream provider dialect status source day hour ctx)' \
+            '--json[output JSON]'
+          ;;
+        routes)
+          _arguments \
+            '--since[time window]:window:(30m 24h 7d today all)' \
+            '--source[sources]:source:(proxy claude codex all)'
+          ;;
+        tail)
+          _arguments \
+            '(-f --follow)'{-f,--follow}'[follow new requests]' \
+            '-n[number of requests]:count:' \
+            '--since[time window]:window:(30m 24h 7d today all)'
+          ;;
+        errors)
+          _arguments \
+            '--since[time window]:window:(30m 24h 7d today all)' \
+            '--source[sources]:source:(proxy claude codex all)' \
+            '-n[number of errors]:count:' \
+            '--spikes[show error bursts with a sparkline]' \
+            '--bucket[spike bucket size]:bucket:(auto minute hour)'
+          ;;
+        top)
+          _arguments \
+            '--since[time window]:window:(30m 24h 7d today all)' \
+            '-n[rows]:count:' \
+            '--interval[refresh seconds]:seconds:'
+          ;;
+        serve)
+          _arguments \
+            '--port[port]:port:' \
+            '--host[bind address]:host:' \
+            '--open[open in the default browser]' \
+            '--cache[reuse payload for N seconds]:seconds:' \
+            '--reset-colors[forget stored model -> color assignments]'
+          ;;
+        menubar-data)
+          _arguments \
+            '--share-window[traffic-share window]:window:(15m 1h)' \
+            '--share-metric[traffic-share metric]:metric:(requests tokens)'
+          ;;
+        menubar)
+          _arguments \
+            '--force[build: rebuild even when up to date]' \
+            '--dry-run[install/uninstall: print what would happen, change nothing]' \
+            '1:action:(build run install uninstall status logos window)'
+          if (( CURRENT == 3 )); then
+            case $words[2] in
+              logos) _values 'logos action' fetch ;;
+              window) _values 'window action' show hide toggle ;;
+            esac
+          fi
+          ;;
+      esac
+      ;;
+  esac
+}
+
+_llm-usage "$@"
