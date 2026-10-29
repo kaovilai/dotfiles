@@ -239,7 +239,7 @@ assert out2["type"] == "input_text" and "source file /tmp/slides/5.png" in out2[
 assert out3["type"] == "input_image" and user["type"] == "input_image"
 sha0 = hashlib.sha1(imgs[0]).hexdigest()
 assert f"proxy copy {cache_dir}/{sha0}.png (kept 5 days)" in out1["text"], out1["text"]
-one = responses_req(); h.prune_images(one, budget=1000, cache_dir=cache_dir, cache_days=1, attachments_dir=att_dir)
+one = responses_req(); h.prune_images(one, budget=1000, cache_dir=os.path.join(work, "cache1"), cache_days=1, attachments_dir=att_dir)
 assert "(kept 1 day)" in one["input"][2]["output"][0]["text"]            # note states the days in effect
 assert open(f"{cache_dir}/{sha0}.png", "rb").read() == imgs[0]
 # same request again (next turn replays history): same text, no new cache files, stable prefix
