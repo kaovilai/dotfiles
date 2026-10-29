@@ -56,6 +56,42 @@ HOSTED_ONLY_IMAGE_BUDGET_BYTES=123 HOSTED_ONLY_IMAGE_CACHE_DAYS=2 _hosted_only_p
 _hosted_only_proxy_vars codex
 [[ "$_hop_image_budget" == 8388608 && "$_hop_image_cache_days" == 5 ]] || fail "image knob defaults: $_hop_image_budget $_hop_image_cache_days"
 
+# Dry run (HOSTED_ONLY_CHECK_OUT): "down|fresh|stale <fp> <token hash>", return 1, nothing started or written.
+(
+    chk_port=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1])')
+    export HOSTED_ONLY_CODEX_PROXY_PORT=$chk_port ENMAAS_API_KEY=check-key HOSTED_ONLY_CHECK_OUT="$tmp/check-out"
+    uv() { :; }   # dependency probe only; the dry run never runs it
+    _hosted_only_proxy_vars codex
+    _hosted_only_proxy_ensure codex 2>/dev/null && fail "dry run must return 1"
+    read -r verdict fp tokfp < "$tmp/check-out"
+    [[ "$verdict" == down && ${#fp} == 64 && ${#tokfp} == 64 ]] || fail "down verdict: $(<"$tmp/check-out")"
+    [[ ! -e "$_hop_runtime/config.yaml" ]] || fail "dry run wrote a config"
+    python3 -c 'import sys
+from http.server import BaseHTTPRequestHandler, HTTPServer
+class H(BaseHTTPRequestHandler):
+    def do_GET(self): self.send_response(200); self.end_headers()
+    def log_message(self, *a): pass
+HTTPServer(("127.0.0.1", int(sys.argv[1])), H).serve_forever()' "$chk_port" &
+    srv=$!
+    for i in {1..50}; do curl -sf --max-time 1 "http://127.0.0.1:$chk_port/health/liveliness" -o /dev/null && break; sleep 0.1; done
+    _hosted_only_proxy_ensure codex 2>/dev/null
+    [[ "$(cut -d' ' -f1 "$tmp/check-out")" == stale ]] || { kill $srv; fail "no fingerprint should read stale: $(<"$tmp/check-out")"; }
+    mkdir -p "$_hop_runtime"; print -r -- "$fp $tokfp" > "$_hop_runtime/fingerprint"
+    _hosted_only_proxy_ensure codex 2>/dev/null
+    [[ "$(cut -d' ' -f1 "$tmp/check-out")" == fresh ]] || { kill $srv; fail "matching fingerprint should read fresh: $(<"$tmp/check-out")"; }
+    print -r -- "$fp" > "$_hop_runtime/fingerprint"     # pre-split file: one field, token unknown -> unchanged
+    _hosted_only_proxy_ensure codex 2>/dev/null
+    [[ "$(cut -d' ' -f1 "$tmp/check-out")" == fresh ]] || { kill $srv; fail "one-field fingerprint should read fresh: $(<"$tmp/check-out")"; }
+    print -r -- "$fp otherhash" > "$_hop_runtime/fingerprint"
+    _hosted_only_proxy_ensure codex 2>/dev/null
+    [[ "$(cut -d' ' -f1 "$tmp/check-out")" == stale ]] || { kill $srv; fail "token change should read stale: $(<"$tmp/check-out")"; }
+    HOSTED_ONLY_IMAGE_BUDGET_BYTES=1 _hosted_only_proxy_ensure codex 2>/dev/null
+    [[ "$(cut -d' ' -f1 "$tmp/check-out")" == stale ]] || { kill $srv; fail "knob change should read stale: $(<"$tmp/check-out")"; }
+    kill $srv 2>/dev/null
+    [[ "$(print -r -- "$fp $tokfp" >| "$_hop_runtime/fingerprint"; ls "$_hop_runtime")" == fingerprint ]] || fail "dry run left files: $(ls "$_hop_runtime")"
+    exit 0
+) || exit 1
+
 # New knob names win; retired GLM_HYBRID_* names still work
 HOSTED_ONLY_CODEX_PROXY_PORT=4157 _hosted_only_proxy_vars codex
 [[ "$_hop_port" == 4157 && "$_hop_runtime" == *hosted-only-codex-4157 ]] || fail "HOSTED_ONLY port: $_hop_port"
@@ -93,6 +129,30 @@ if _hosted_only_proxy_stop codex 2>/dev/null; then kill $pid; fail "stop killed 
 kill -0 $pid 2>/dev/null || fail "foreign listener was killed"
 kill $pid; wait $pid 2>/dev/null || true
 unset HOSTED_ONLY_CODEX_PROXY_PORT
+
+# Hook hash: comments, docstrings and formatting don't count; code does.
+local h0 h1 h2
+print -r -- 'X = 1' > "$tmp/hook.py"
+h0=$(_hosted_only_code_hash "$tmp/hook.py")
+print -r -- $'"""doc"""\n# comment\nX  =  1  # trailing' > "$tmp/hook.py"
+h1=$(_hosted_only_code_hash "$tmp/hook.py")
+print -r -- 'X = 2' > "$tmp/hook.py"
+h2=$(_hosted_only_code_hash "$tmp/hook.py")
+[[ -n "$h0" && "$h0" == "$h1" ]] || fail "comment-only hook edit changed the hash"
+[[ "$h0" != "$h2" ]] || fail "hook code edit not detected"
+
+# Busy: an open client connection to the port counts, a bare listener doesn't.
+python3 -c 'import socket,time
+s=socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1); s.bind(("127.0.0.1",'$port')); s.listen()
+c,_=s.accept(); time.sleep(60)' &
+pid=$!
+for i in {1..30}; do lsof -ti "tcp:$port" -sTCP:LISTEN >/dev/null 2>&1 && break; sleep 0.1; done
+_hosted_only_busy $port && { kill $pid; fail "idle listener reported busy"; }
+python3 -c 'import socket,time; c=socket.create_connection(("127.0.0.1",'$port')); time.sleep(5)' &
+local client=$!
+for i in {1..30}; do _hosted_only_busy $port && break; sleep 0.1; done
+_hosted_only_busy $port || { kill $pid $client; fail "open client connection not reported busy"; }
+kill $pid $client; wait $pid $client 2>/dev/null || true
 
 # Retired names stay defined
 local fn

@@ -18,12 +18,15 @@
 #
 # Lifecycle: first launch starts the proxy, later launches reuse it; session
 # exit leaves it running. Private runtime dir
-# /tmp/claude-enmaas-proxy-<uid>-<port> (0700/0600); config references
+# ~/.local/state/claude-enmaas-proxy-<uid>-<port> (0700/0600); config references
 # os.environ/ENMAAS_API_KEY and Claude children only get the local token.
-# Gateway/key/dependency/route/hook changes fail with a restart instruction
-# instead of disrupting active sessions. claude-enmaas-kill stops only the
-# recorded, birth-time-verified proxy process group (disconnects every
-# session using it).
+# Gateway/key/dependency/route/hook changes restart the proxy when no request
+# is in flight; while it is serving one, the running proxy is reused with a
+# notice (a route change it cannot serve fails with a restart instruction).
+# Hook changes are compared by AST, so comment/docstring edits don't count.
+# claude-enmaas-kill stops only the recorded, birth-time-verified proxy process
+# group, or an earlier proxy of ours whose state files are gone (disconnects
+# every session using it).
 #
 # The same proxy also serves Codex (codex-t3-enmaas, scripts/codex-provider.zsh:
 # /v1/responses and /v1/chat/completions) so GLM and DeepSeek work there too.
@@ -444,6 +447,9 @@ claude-enmaas() (
         ANTHROPIC_DEFAULT_SONNET_MODEL="$sonnet" ANTHROPIC_DEFAULT_HAIKU_MODEL="$haiku" \
         ANTHROPIC_DEFAULT_FABLE_MODEL="$fable" CLAUDE_CODE_USE_VERTEX=0 \
         CLAUDE_CODE_USE_BEDROCK=0 CLAUDE_CODE_USE_FOUNDRY=0 ANTHROPIC_CUSTOM_HEADERS=''
+    # Entitled EnMaaS models are rits/* only (no OpenAI/Claude entitlement),
+    # so web search is unavailable; nudge hook routes searches to RH Luna.
+    export T3_WEB_SEARCH_DELEGATE="codex_rh_codex_api:gpt-5.6-luna"
     # Preserve the terminal input while waiting on an owned child so TERM/HUP
     # traps run immediately even when Claude is still running interactively.
     _claude_invoke --settings "$settings" "$@" <&0 &
@@ -493,6 +499,42 @@ _claude_enmaas_codex_proxy() (
         "${CLAUDE_ENMAAS_PROXY_START_TIMEOUT:-60}" "$glm" "$ds" "${glm}#responses" "${ds}#responses") || return 1
     jq -nc --argjson s "$service" --arg port "$port" --arg glm "$glm" --arg ds "$ds" \
         '{token: $s.token, port: ($port | tonumber), glm: $glm, deepseek: $ds}'
+)
+
+# Dry run for `llm-proxy-restart required`: {"state": down|fresh|stale,
+# "changed": [...], "busy": bool} for the shared proxy against the config this
+# shell would launch with (same discovery and hook env as the Codex path, so
+# the required routes are the hosted ids and their Responses siblings). Never
+# starts, stops or rewrites anything.
+_claude_enmaas_check() (
+    emulate -L zsh
+    unsetopt monitor
+    umask 077
+    local dep
+    for dep in python3 jq curl lsof; do
+        command -v "$dep" &>/dev/null || { print -ru2 -- "claude-enmaas: missing dependency: ${dep}."; return 1; }
+    done
+    [[ -n "${ENMAAS_API_KEY-}" && "$ENMAAS_API_KEY" != *[[:cntrl:]]* ]] || {
+        print -ru2 -- 'claude-enmaas: ENMAAS_API_KEY is not set or contains a control character.'
+        return 1
+    }
+    local root port glm ds models config tmp
+    root=$(_claude_enmaas_root "${ENMAAS_API_BASE_URL:-https://api.enmaas.devshift.net}") || return 1
+    port=$(_claude_enmaas_port) || return 1
+    glm=$(_claude_enmaas_glm_id) ds=$(_claude_enmaas_deepseek_id)
+    models=$(_claude_enmaas_catalog "$root") || return 1
+    local -a ids
+    ids=("${(@f)$(jq -r '.data[].id' <<< "$models")}" "$glm" "$ds")
+    ids=("${(@u)ids:#}")
+    export ENMAAS_API_KEY
+    _claude_enmaas_hook_env || return 1
+    config=$(_claude_enmaas_config "$root" '' "$models" "${ids[@]}") || return 1
+    tmp=$(command mktemp -d "${TMPDIR:-/tmp}/enmaas-check.XXXXXXXX") || return 1
+    trap 'command rm -rf -- "$tmp"' EXIT
+    _claude_enmaas_proxy_program > "$tmp/proxy.py" || return 1
+    print -rn -- "$config" | python3 "$tmp/proxy.py" check "$port" \
+        "${CLAUDE_OPENAI_PROXY_LITELLM_VERSION:-1.97.0}" "${CLAUDE_OPENAI_PROXY_FASTAPI_VERSION:-0.136.3}" \
+        0 "$glm" "$ds" "${glm}#responses" "${ds}#responses"
 )
 
 # Live shells may still carry the pre-rename claude-enmaas-kill alias, which

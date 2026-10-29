@@ -15,13 +15,19 @@
 #   codex-hosted-only-restart  hosted-only, Codex flavor   :4147 (= codex-{glm-hybrid,glm-only}-restart)
 #   llm-proxy-restart [name ...|all|--list]   several at once; no args or `all`
 #                              restarts only the ones currently listening
+#   llm-proxy-restart required [name ...]     restarts only the listening proxies
+#                              whose running process is behind what a launch
+#                              would start now (config, hooks, knobs, key,
+#                              versions), using each launcher's own fingerprint
+#                              check in dry-run mode; up-to-date ones are left
+#                              serving
 
 # _llm_proxy_wait_down <port>: up to 15s for the listener to go away, one dot
 # per half-second so the wait is visible.
 _llm_proxy_wait_down() {
     local i waiting=0
     for i in {1..30}; do
-        [[ -z "$(lsof -ti "tcp:$1" -sTCP:LISTEN 2>/dev/null)" ]] && { (( waiting )) && print -u2; return 0; }
+        [[ -z "$(_claude_listen_pids "$1")" ]] && { (( waiting )) && print -u2; return 0; }
         (( waiting )) || { print -nu2 -- "restart: waiting for :$1 to free "; waiting=1; }
         print -nu2 -- .
         sleep 0.5
@@ -38,7 +44,7 @@ _llm_proxy_wait_down() {
 _llm_proxy_wait_up() {
     local i waiting=0
     for i in {1..30}; do
-        [[ -n "$(lsof -ti "tcp:$1" -sTCP:LISTEN 2>/dev/null)" ]] && { (( waiting )) && print -u2; print -ru2 -- "restart: $2 up on :$1"; return 0; }
+        [[ -n "$(_claude_listen_pids "$1")" ]] && { (( waiting )) && print -u2; print -ru2 -- "restart: $2 up on :$1"; return 0; }
         (( waiting )) || { print -nu2 -- "restart: waiting for $2 on :$1 "; waiting=1; }
         print -nu2 -- .
         sleep 0.5
@@ -104,10 +110,38 @@ codex-hosted-only-restart() {
 codex-glm-hybrid-restart() { codex-hosted-only-restart; }
 codex-glm-only-restart() { codex-hosted-only-restart; }
 
+# Staleness checks for `llm-proxy-restart required`. Each prints one word
+# (`down`, `fresh`, `stale`, or `unknown` when the launcher failed before it
+# could compare), optionally followed by ": <reasons>".
+# _llm_proxy_check_via <env-var> <launcher...>: run a launcher in its dry-run
+# mode (the env var names the verdict file) and report the first word written.
+_llm_proxy_check_via() {
+    local var="$1" out verdict; shift
+    out=$(command mktemp "${TMPDIR:-/tmp}/llm-proxy-check.XXXXXXXX") || { print -r -- unknown; return 1; }
+    ( export "$var=$out"; "$@" >/dev/null 2>&1 )
+    verdict=$(<"$out") 2>/dev/null
+    command rm -f -- "$out"
+    print -r -- "${${verdict%% *}:-unknown}"
+}
+_llm_proxy_check_copilot() { _llm_proxy_check_via _CLAUDE_PROXY_SYNC_CHECK claude-copilot --version; }
+_llm_proxy_check_vertex() { _llm_proxy_check_via _CLAUDE_PROXY_SYNC_CHECK _claude_vertex_prepare; }
+_llm_proxy_check_openai() { _llm_proxy_check_via _CLAUDE_PROXY_SYNC_CHECK _claude_openai_prepare; }
+_llm_proxy_check_glm_claude() { _llm_proxy_check_via HOSTED_ONLY_CHECK_OUT _hosted_only_proxy_ensure claude; }
+_llm_proxy_check_glm_codex() { _llm_proxy_check_via HOSTED_ONLY_CHECK_OUT _hosted_only_proxy_ensure codex; }
+_llm_proxy_check_enmaas() {
+    local report
+    report=$(_claude_enmaas_check 2>/dev/null) || { print -r -- unknown; return 1; }
+    jq -r '.state + (if (.changed // []) | length > 0 then ": " + (.changed | join(", ")) else "" end)' <<< "$report" 2>/dev/null \
+        || print -r -- unknown
+}
+
 llm-proxy-restart() {
     local -A fn=(
         copilot claude-copilot-restart vertex claude-vertex-restart openai claude-openai-restart
         enmaas claude-enmaas-restart glm-claude claude-hosted-only-restart glm-codex codex-hosted-only-restart)
+    local -A chk=(
+        copilot _llm_proxy_check_copilot vertex _llm_proxy_check_vertex openai _llm_proxy_check_openai
+        enmaas _llm_proxy_check_enmaas glm-claude _llm_proxy_check_glm_claude glm-codex _llm_proxy_check_glm_codex)
     local -A port=(
         copilot "${COPILOT_API_PORT:-4141}" vertex "${CLAUDE_VERTEX_PROXY_PORT:-4142}"
         openai "${CLAUDE_OPENAI_PROXY_PORT:-4145}" enmaas "$(_claude_enmaas_port 2>/dev/null || print 4146)"
@@ -116,23 +150,36 @@ llm-proxy-restart() {
     if [[ "${1-}" == --list ]]; then
         local n
         for n in $order; do
-            print -r -- "$n :${port[$n]} $([[ -n "$(lsof -ti "tcp:${port[$n]}" -sTCP:LISTEN 2>/dev/null)" ]] && print up || print down)"
+            print -r -- "$n :${port[$n]} $([[ -n "$(_claude_listen_pids "${port[$n]}")" ]] && print up || print down)"
         done
         return 0
     fi
+    local required=0
+    [[ "${1-}" == required ]] && { required=1; shift; }
     if (( ! $# )) || [[ "$1" == all ]]; then
         local n
         for n in $order; do
-            [[ -n "$(lsof -ti "tcp:${port[$n]}" -sTCP:LISTEN 2>/dev/null)" ]] && targets+=($n)
+            [[ -n "$(_claude_listen_pids "${port[$n]}")" ]] && targets+=($n)
         done
         (( ${#targets} )) || { print -ru2 -- "llm-proxy-restart: no proxy is listening; nothing to restart."; return 0; }
     else
         targets=("$@")
     fi
-    local t rc=0
+    local t rc=0 verdict
     for t in $targets; do
-        [[ -n "${fn[$t]-}" ]] || { print -ru2 -- "llm-proxy-restart: unknown '$t' (choose: $order, all, --list)"; rc=1; continue; }
-        print -ru2 -- "== restarting $t (:${port[$t]})"
+        [[ -n "${fn[$t]-}" ]] || { print -ru2 -- "llm-proxy-restart: unknown '$t' (choose: $order, all, required, --list)"; rc=1; continue; }
+        if (( required )); then
+            [[ -n "$(_claude_listen_pids "${port[$t]}")" ]] || { print -ru2 -- "== $t (:${port[$t]}) not running; skipped"; continue; }
+            verdict=$(${chk[$t]})
+            case "$verdict" in
+                fresh)  print -ru2 -- "== $t (:${port[$t]}) up to date; left running"; continue ;;
+                stale*) print -ru2 -- "== $t (:${port[$t]}) changed${verdict#stale}; restarting" ;;
+                down)   print -ru2 -- "== $t (:${port[$t]}) listener does not answer its health check; restarting" ;;
+                *)      print -ru2 -- "== $t (:${port[$t]}) could not be checked (its launcher failed; run it by hand for the error); skipped"; rc=1; continue ;;
+            esac
+        else
+            print -ru2 -- "== restarting $t (:${port[$t]})"
+        fi
         ${fn[$t]} || { print -ru2 -- "llm-proxy-restart: $t failed"; rc=1; }
     done
     return $rc

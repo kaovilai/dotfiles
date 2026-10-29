@@ -243,7 +243,7 @@ def ev(sec_ago, port="4148", **kw):
 def err(sec_ago, code=429, **kw):
     return ev(sec_ago, **{"ok": False, "status": code, "upstream_status": code, "error": "boom", **kw})
 copilot_server = {}
-def run(name, events=(), up="4141,4147,4148", extra_env=None, inflight=None, transcripts=None, raw_lines=None, state=None, cli=(), transcript_lines=None):
+def run(name, events=(), up="4141,4147,4148", extra_env=None, inflight=None, timings=None, transcripts=None, raw_lines=None, state=None, cli=(), transcript_lines=None):
     state = state or tempfile.mkdtemp(dir=tmp)
     os.makedirs(state, exist_ok=True)
     lines = [json.dumps(e) for e in events] + list(raw_lines or [])
@@ -251,6 +251,10 @@ def run(name, events=(), up="4141,4147,4148", extra_env=None, inflight=None, tra
         with open(f"{state}/events-{now:%Y-%m}.jsonl", "w") as h: h.write("\n".join(lines) + "\n")
     for fname, doc in (inflight or {}).items():
         with open(f"{state}/{fname}", "w") as h: json.dump(doc, h)
+    if timings:
+        with open(f"{state}/timings-{now:%Y-%m}.jsonl", "w") as h:
+            for rec in timings:
+                h.write(json.dumps(rec) + "\n")
     claude = tempfile.mkdtemp(dir=tmp)
     if transcripts or transcript_lines:
         os.makedirs(f"{claude}/proj")
@@ -343,7 +347,8 @@ assert d["by_proxy"][0]["models"], d["by_proxy"]
 d = run("reroute-other", [ev(60, requested="gemini-3", served="gpt-6-luna")])
 assert d["reroutes"][0]["kind"] == "other", d["reroutes"]
 
-# in-flight: live entries counted, oldest reported; stale (>15m) and dead-pid entries evicted
+# in-flight: live entries counted, oldest reported; dead-pid files evicted, but a
+# live pid's long-running entry is kept (a stream must not vanish at 15 minutes)
 dead = subprocess.Popen(["true"]); dead.wait()
 t0 = now.timestamp()
 fl = {
@@ -351,14 +356,41 @@ fl = {
         "a": {"t": t0 - 42, "model": GLM, "requested": SON}, "b": {"t": t0 - 5, "model": DS},
         "stale": {"t": t0 - 1200, "model": GLM}}},
     "inflight-4147-%d.json" % dead.pid: {"pid": dead.pid, "port": "4147", "updated": t0, "requests": {"x": {"t": t0 - 3, "model": GLM}}},
+    "inflight-4141-%d.json" % os.getppid(): {"pid": os.getppid(), "port": "4141", "updated": t0, "requests": {"c": {"t": t0 - 2, "model": "gpt-6-luna"},
+        # copilot-api monitor plugin shape: "unknown" until the body is parsed
+        "d": {"t": t0 - 1, "model": "unknown", "actual_model": "claude-haiku-5-5", "user_agent": "x", "session_id": None, "ttft_ms": None}}},
 }
 d = run("inflight", [ev(30)], inflight=fl)
 f = d["inflight"]
-assert f["available"] and f["count"] == 2 and 41 <= f["oldest_s"] <= 45, f
-assert f["oldest"]["model"] == "glm-5.3" and f["oldest"]["proxy"] == "claude-hosted-only" and f["by_model"] == {"glm-5.3": 1, "deepseek-v4.1-flash": 1}, f
-assert proxy(d, 4148)["inflight"]["count"] == 2 and proxy(d, 4147)["inflight"] is None, (proxy(d, 4148)["inflight"], proxy(d, 4147)["inflight"])
-assert proxy(d, 4141)["inflight"] is None and d["copilot"]["inflight"] is None, "copilot in-flight must be n/a, never invented"
-assert run("inflight-none", [ev(30)])["inflight"]["available"] is False
+assert f["available"] and f["count"] == 5 and 1190 <= f["oldest_s"] <= 1210, f
+assert f["oldest"]["model"] == "glm-5.3" and f["oldest"]["proxy"] == "claude-hosted-only", f
+assert f["by_model"] == {"glm-5.3": 2, "deepseek-v4.1-flash": 1, "gpt-6-luna": 1, "claude-haiku-5-5": 1}, f
+assert proxy(d, 4148)["inflight"]["count"] == 3 and proxy(d, 4147)["inflight"] is None, (proxy(d, 4148)["inflight"], proxy(d, 4147)["inflight"])
+assert proxy(d, 4141)["inflight"]["count"] == 2 and d["copilot"]["inflight"]["count"] == 2, (proxy(d, 4141)["inflight"], d["copilot"]["inflight"])
+n = run("inflight-none", [ev(30)])
+assert n["inflight"]["available"] is False and n["copilot"]["inflight"] is None, "no 4141 file must stay n/a, never invented"
+
+# tokens/s: completion tokens per second per minute, same vendor/provider split as the request chart
+t = run("tps", [ev(30, out=600)])
+assert len(t["series"]["tps"]) == 60 and abs(max(t["series"]["tps"]) - 10.0) < 0.01, t["series"]["tps"]
+assert abs(max(t["series"]["tps_by_vendor"]["glm"]) - 10.0) < 0.01, t["series"]["tps_by_vendor"]
+assert abs(max(t["series_by_provider"]["providers"][0]["tps"]) - 10.0) < 0.01, t["series_by_provider"]
+assert t["tokens"]["m15"] == {"in": 5, "out": 600}, t["tokens"]
+
+# latency / ttft: per-minute median (ms) plus a one-hour p50/p95 summary
+lt = run("latency", [ev(30, ms=800, ttft_ms=200)])
+assert abs(max(lt["series"]["latency"]) - 800) < 0.01, lt["series"]["latency"]
+assert abs(max(lt["series"]["ttft"]) - 200) < 0.01, lt["series"]["ttft"]
+assert abs(max(lt["series"]["latency_by_vendor"]["glm"]) - 800) < 0.01, lt["series"]["latency_by_vendor"]
+assert lt["latency"] == {"p50": 800, "p95": 800, "ttft_p50": 200, "ttft_p95": 200}, lt["latency"]
+assert abs(max(lt["series"]["latency_by_provider"]["enmaas"]) - 800) < 0.01, lt["series"]["latency_by_provider"]
+prov = lt["series_by_provider"]["providers"][0]
+assert prov["key"] == "enmaas" and abs(max(prov["latency"]) - 800) < 0.01 and abs(max(prov["ttft"]) - 200) < 0.01, prov
+
+# copilot-api timing rows: latency/TTFT only, never counted as extra requests
+tw = run("timings", [ev(30)], timings=[{"t": now.timestamp() - 30, "port": "4141", "model": "gpt-6-luna", "ms": 900, "ttft_ms": 200}])
+assert abs(max(tw["series"]["latency_by_provider"]["github-copilot"]) - 900) < 0.01, tw["series"]["latency_by_provider"]
+assert tw["totals"]["m15"]["requests"] == 1, tw["totals"]
 
 # copilot: transcript-derived usage (models absent from the proxy log), quota from /usage when reachable
 tr = [(60, "claude-opus-5-5", 100), (120, "claude-opus-5-5", 50), (1800, "claude-opus-5-5", 25), (30, "zai-org/GLM-5.3", 999)]
@@ -622,8 +654,8 @@ if [[ -x /usr/bin/swiftc ]] || command -v swiftc >/dev/null; then
     [[ "$(dump_of empty | head -1)" == "title: ● 0" && "$(dump_of empty)" == *"Last error: none logged"* ]] || fail "empty title/menu: $(dump_of empty | head -3)"
     [[ "$(dump_of old | head -1)" == "title: ⚠ 429 "* ]] || fail "old-events title: $(dump_of old | head -1)"
     dump=$(dump_of inflight)
-    [[ "${dump%%$'\n'*}" == "title: ● 1 ⏳2" ]] || fail "in-flight title: ${dump%%$'\n'*}"
-    [[ "$dump" == *"2 in flight · oldest glm-5.3 waiting 4"* ]] || fail "in-flight row: $dump"
+    [[ "${dump%%$'\n'*}" == "title: ● 1 ⏳4" ]] || fail "in-flight title: ${dump%%$'\n'*}"
+    [[ "$dump" == *"4 in flight · oldest glm-5.3 waiting"* ]] || fail "in-flight row: $dump"
     [[ "$(dump_of normal)" == *"n/a · no proxy reports in-flight"* ]] || fail "in-flight n/a row"
     dump=$(dump_of reroute-alias)
     [[ "${dump%%$'\n'*}" == "title: ● 4 ↪3" ]] || fail "reroute title: ${dump%%$'\n'*}"
@@ -797,6 +829,80 @@ python3 -m py_compile "$repo/scripts/litellm_usage_log.py" "$usage" || fail "py_
     done
     llm-proxy-restart --list >/dev/null || { print -ru2 -- "FAIL: llm-proxy-restart --list"; exit 1; }
     llm-proxy-restart nope 2>/dev/null && { print -ru2 -- "FAIL: unknown target accepted"; exit 1; }
+    llm-proxy-restart required nope 2>/dev/null && { print -ru2 -- "FAIL: required: unknown target accepted"; exit 1; }
+
+    # `required`: only listening proxies whose dry-run check says stale (or
+    # whose listener fails its health check) restart; fresh ones stay; an
+    # unanswerable check is reported and fails the command without restarting.
+    _claude_listen_pids() { case "$1" in "${COPILOT_API_PORT:-4141}"|"${CLAUDE_OPENAI_PROXY_PORT:-4145}"|"$(_hosted_only_knob CODEX_PROXY_PORT 4147)"|"${CLAUDE_VERTEX_PROXY_PORT:-4142}") print 1 ;; esac; }
+    _llm_proxy_check_copilot() { print fresh; }
+    _llm_proxy_check_openai() { print "stale: hook code or knobs"; }
+    _llm_proxy_check_glm_codex() { print down; }
+    _llm_proxy_check_vertex() { print unknown; }
+    _llm_proxy_check_enmaas() { print "FAIL: enmaas is not listening and must not be checked" >&2; print stale; }
+    # the dispatcher runs inside $(...) below, so the stubs record to a file
+    local log="$tmp/restarted"; : > "$log"
+    restarted() { tr '\n' ' ' < "$log" | sed 's/ $//'; }
+    claude-copilot-restart() { print -r -- copilot >> "$log"; }
+    claude-openai-restart() { print -r -- openai >> "$log"; }
+    codex-hosted-only-restart() { print -r -- glm-codex >> "$log"; }
+    claude-vertex-restart() { print -r -- vertex >> "$log"; }
+    claude-enmaas-restart() { print -r -- enmaas >> "$log"; }
+    local out rc=0
+    out=$(llm-proxy-restart required 2>&1) || rc=$?
+    [[ "$rc" == 1 ]] || { print -ru2 -- "FAIL: required should fail when a check is unanswerable (rc=$rc): $out"; exit 1; }
+    [[ "$(restarted)" == "openai glm-codex" ]] || { print -ru2 -- "FAIL: required restarted '$(restarted)', want 'openai glm-codex': $out"; exit 1; }
+    [[ "$out" == *"copilot"*"up to date; left running"* && "$out" == *"openai"*"changed: hook code or knobs; restarting"* \
+       && "$out" == *"glm-codex"*"health check; restarting"* && "$out" == *"vertex"*"could not be checked"* && "$out" != *FAIL* ]] || { print -ru2 -- "FAIL: required output: $out"; exit 1; }
+    # explicit names: a non-listening one is skipped, not restarted
+    : > "$log"
+    out=$(llm-proxy-restart required enmaas openai 2>&1) || { print -ru2 -- "FAIL: required enmaas openai: $out"; exit 1; }
+    [[ "$(restarted)" == openai && "$out" == *"enmaas"*"not running; skipped"* ]] || { print -ru2 -- "FAIL: required with names: '$(restarted)' $out"; exit 1; }
+    # `all` still restarts every listener without checking
+    : > "$log"
+    llm-proxy-restart all >/dev/null 2>&1
+    [[ "$(restarted)" == "copilot vertex openai glm-codex" ]] || { print -ru2 -- "FAIL: all restarted '$(restarted)'"; exit 1; }
+    exit 0
+) || exit 1
+
+# copilot records its fingerprint with the same inputs it compares against at
+# launch; a narrower record formula made every launch see a stale gateway.
+[[ "$(grep -cF 'cfp=$(_claude_proxy_fp "$(_claude_file_hash "${capi_data}/github_token" "${capi_data}/config.json" "$monitor")" "$port" "$plugins" "$monitor_dir")' "$repo/zsh/functions/claude/providers/copilot.zsh")" == 2 ]] \
+    || fail "copilot launch-time and recorded fingerprints use different inputs"
+
+# _claude_proxy_sync dry run (_CLAUDE_PROXY_SYNC_CHECK): verdict file, return 1, no kill.
+(
+    source "$repo/zsh/functions/claude/common.zsh" >/dev/null 2>&1
+    export XDG_STATE_HOME="$tmp/sync-state"
+    local verdict="$tmp/verdict" killed="$tmp/killed" port
+    port=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1])')
+    fakekill() { : > "$killed"; }
+    export _CLAUDE_PROXY_SYNC_CHECK="$verdict"
+    # nothing listening -> down
+    _claude_proxy_sync t sync-test "http://127.0.0.1:$port/health" fp1 fakekill 1 && { print -ru2 -- "FAIL: dry run must return 1"; exit 1; }
+    [[ "$(<"$verdict")" == down ]] || { print -ru2 -- "FAIL: down verdict: $(<"$verdict")"; exit 1; }
+    python3 -c 'import sys
+from http.server import BaseHTTPRequestHandler, HTTPServer
+class H(BaseHTTPRequestHandler):
+    def do_GET(self): self.send_response(200); self.end_headers()
+    def log_message(self, *a): pass
+HTTPServer(("127.0.0.1", int(sys.argv[1])), H).serve_forever()' "$port" &
+    local srv=$!
+    for i in {1..50}; do curl -sf --max-time 1 "http://127.0.0.1:$port/health" -o /dev/null && break; sleep 0.1; done
+    # running, no record: adopt=1 -> fresh, adopt=0 -> stale
+    _claude_proxy_sync t sync-test "http://127.0.0.1:$port/health" fp1 fakekill 1; [[ "$(<"$verdict")" == fresh ]] || { kill $srv; print -ru2 -- "FAIL: adopt fresh: $(<"$verdict")"; exit 1; }
+    _claude_proxy_sync t sync-test "http://127.0.0.1:$port/health" fp1 fakekill 0; [[ "$(<"$verdict")" == stale ]] || { kill $srv; print -ru2 -- "FAIL: no-record stale: $(<"$verdict")"; exit 1; }
+    [[ ! -e "$XDG_STATE_HOME/claude-sync-test.fingerprint" ]] || { kill $srv; print -ru2 -- "FAIL: dry run recorded a fingerprint"; exit 1; }
+    # recorded: same -> fresh, different -> stale; nothing killed either way
+    _claude_proxy_record sync-test fp1
+    _claude_proxy_sync t sync-test "http://127.0.0.1:$port/health" fp1 fakekill 1; [[ "$(<"$verdict")" == fresh ]] || { kill $srv; print -ru2 -- "FAIL: recorded fresh: $(<"$verdict")"; exit 1; }
+    _claude_proxy_sync t sync-test "http://127.0.0.1:$port/health" fp2 fakekill 1; [[ "$(<"$verdict")" == stale ]] || { kill $srv; print -ru2 -- "FAIL: recorded stale: $(<"$verdict")"; exit 1; }
+    [[ ! -e "$killed" ]] || { kill $srv; print -ru2 -- "FAIL: dry run killed the proxy"; exit 1; }
+    # without the variable the live path still restarts a stale idle proxy
+    unset _CLAUDE_PROXY_SYNC_CHECK
+    _claude_proxy_sync t sync-test "http://127.0.0.1:$port/health" fp2 fakekill 1 2>/dev/null
+    [[ -e "$killed" ]] || { kill $srv; print -ru2 -- "FAIL: live path did not restart the stale proxy"; exit 1; }
+    kill $srv 2>/dev/null
     exit 0
 ) || exit 1
 

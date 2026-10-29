@@ -442,14 +442,46 @@ assert (froot/'proxy.log').stat().st_mode & 0o777==0o600
 info=json.loads((froot/'proxy.json').read_text())
 assert info['hooks'] and info['hooks']!=''
 
-# ensure(): owned + ready -> reuse; hook knob change -> refuse restart.
-patched={'owned':lambda i:True,'ready':lambda i,r:True}
+# ensure(): owned + ready -> reuse; hook knob change -> reuse while serving a
+# request, restart when idle.
+patched={'owned':lambda i:True,'ready':lambda i,r:True,'stray':lambda port,root:set()}
 with patch.dict(os.environ, env), patch.dict(ns, patched), patch.object(ns['subprocess'],'Popen',side_effect=AssertionError('reuse must not spawn')):
     assert g['ensure'](froot, 4166, fresh(), ['1.97.0','0.136.3'], 3, [])['token']==info['token']
-with patch.dict(os.environ, dict(env, HOSTED_ONLY_VISION_FALLBACK='1')), patch.dict(ns, patched):
-    try: g['ensure'](froot, 4166, fresh(), ['1.97.0','0.136.3'], 3, [])
-    except RuntimeError as error: assert 'hook code or knobs changed' in str(error), error
-    else: raise AssertionError('changed hook knob accepted by a running proxy')
-print('ok - hook digest, dotted callbacks next to config, proxy log, env passthrough, reuse and hook-change refusal (all mocked)')
+with patch.dict(os.environ, dict(env, HOSTED_ONLY_VISION_FALLBACK='1')), patch.dict(ns, dict(patched, busy=lambda port:True)), \
+     patch.object(ns['subprocess'],'Popen',side_effect=AssertionError('busy proxy must be reused, not restarted')):
+    assert g['ensure'](froot, 4166, fresh(), ['1.97.0','0.136.3'], 3, [])['token']==info['token']
+# check(): dry run for `llm-proxy-restart required` -- verdict only, no spawn/stop/write.
+with patch.dict(os.environ, env), patch.object(ns['subprocess'],'Popen',side_effect=AssertionError('check must not spawn')):
+    with patch.dict(ns, {'owned':lambda i:False,'listeners':lambda port:set()}):
+        assert g['check'](froot, 4166, fresh(), ['1.97.0','0.136.3'], [])=={'state':'down','changed':[],'busy':False}
+    with patch.dict(ns, {'owned':lambda i:False,'listeners':lambda port:{1},'busy':lambda port:False}):
+        assert g['check'](froot, 4166, fresh(), ['1.97.0','0.136.3'], [])['state']=='stale'
+    with patch.dict(ns, dict(patched, busy=lambda port:False)):
+        assert g['check'](froot, 4166, fresh(), ['1.97.0','0.136.3'], [])=={'state':'fresh','changed':[],'busy':False}
+        assert g['check'](froot, 4166, fresh(), ['1.98.0','0.136.3'], [])['changed']==['gateway/key or dependency settings']
+    with patch.dict(os.environ, dict(env, HOSTED_ONLY_VISION_FALLBACK='1')), patch.dict(ns, dict(patched, busy=lambda port:True)):
+        verdict=g['check'](froot, 4166, fresh(), ['1.97.0','0.136.3'], [])
+        assert verdict=={'state':'stale','changed':['hook code or knobs'],'busy':True}, verdict
+    assert json.loads((froot/'proxy.json').read_text())==info, 'check must not rewrite state'
+stopped=[]; spawned.clear()
+def fake_stop(root, info, port=None):
+    stopped.append(info['pid']); (root/'proxy.json').unlink()
+idle=dict(patched, busy=lambda port:False, stop=fake_stop, wait_port_free=lambda port:None, listeners=lambda port:set(),
+          owned=lambda i:bool(i), birth=lambda pid:'t0')
+with patch.dict(os.environ, dict(env, HOSTED_ONLY_VISION_FALLBACK='1')), patch.dict(ns, idle), \
+     patch.object(ns['subprocess'],'Popen',spawn), patch.object(ns['socket'],'socket',OpenSocket):
+    g['ensure'](froot, 4166, fresh(), ['1.97.0','0.136.3'], 3, [])
+assert stopped==[info['pid']] and len(spawned)==1, (stopped, spawned)
+assert json.loads((froot/'proxy.json').read_text())['hooks']!=info['hooks']
+
+# A comment/docstring-only hook edit keeps the digest; a code edit changes it.
+first=files[0]; original=first.read_text()
+with patch.dict(os.environ, env):
+    before=g['hook_digest'](files)
+    first.write_text('"""doc"""\n# a comment\n' + original + '\n# trailing\n'); same=g['hook_digest'](files)
+    first.write_text(original + '\nEXTRA = 1\n'); changed=g['hook_digest'](files)
+first.write_text(original)
+assert before==same and before!=changed, 'hook digest must ignore comments but see code'
+print('ok - hook digest (AST, comment-insensitive), dotted callbacks next to config, proxy log, env passthrough, reuse, busy reuse and idle restart (all mocked)')
 PY
 print 'All claude-enmaas unit/launcher tests passed.'

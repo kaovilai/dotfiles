@@ -173,41 +173,104 @@ _claude_picker_extras() {
 # from the one recorded when it was started, and _claude_proxy_record stores
 # it once the new process is healthy. State: ~/.local/state/claude-<name>.fingerprint.
 
+# sha256 hex of stdin. sha256sum (coreutils) where present, else shasum
+# (macOS base system). Fedora ships no shasum unless perl-Digest-SHA is
+# installed; without this fallback every fingerprint hashed to "" and matched,
+# which silently disabled hot reload.
+_claude_sha256() {
+    if (( $+commands[sha256sum] )); then
+        sha256sum | cut -d' ' -f1
+    else
+        shasum -a 256 | cut -d' ' -f1
+    fi
+}
+
 # sha256 over the args (unit-separator joined).
 _claude_proxy_fp() {
     local IFS=$'\x1f'
-    print -rn -- "$*" | shasum -a 256 | cut -d' ' -f1
+    print -rn -- "$*" | _claude_sha256
 }
 
 # Combined hash of the given files' contents; missing files hash as "missing".
 _claude_file_hash() {
     local f
     for f in "$@"; do
-        if [[ -r "$f" ]]; then shasum -a 256 < "$f" | cut -d' ' -f1; else print -r -- "missing"; fi
-    done | shasum -a 256 | cut -d' ' -f1
+        if [[ -r "$f" ]]; then _claude_sha256 < "$f"; else print -r -- "missing"; fi
+    done | _claude_sha256
+}
+
+# Port probes for the proxy kill/restart/hot-reload paths. lsof where
+# installed (macOS base system), else ss (iproute, in Fedora's base install;
+# lsof is not). ss -p only reports pids of processes this user owns, which
+# covers every proxy these wrappers start.
+# _claude_listen_pids <port>: pids listening on TCP <port>, one per line.
+_claude_listen_pids() {
+    if (( $+commands[lsof] )); then
+        lsof -ti "tcp:$1" -sTCP:LISTEN 2>/dev/null
+    elif (( $+commands[ss] )); then
+        ss -Hltnp "sport = :$1" 2>/dev/null | grep -o 'pid=[0-9]*' | cut -d= -f2 | sort -u
+    else
+        print -ru2 -- "neither lsof nor ss found; install one: $(_claude_pkg_install_hint lsof)"
+        return 1
+    fi
+}
+
+# _claude_port_serving <port>: true while a client connection to a listener
+# on <port> is ESTABLISHED (the proxy is serving a request).
+_claude_port_serving() {
+    if (( $+commands[lsof] )); then
+        lsof -nP -iTCP:"$1" -sTCP:ESTABLISHED -Fn 2>/dev/null | grep -q -- "^n.*:$1->"
+    elif (( $+commands[ss] )); then
+        [[ -n "$(ss -Htn state established "sport = :$1" 2>/dev/null)" ]]
+    else
+        return 1
+    fi
 }
 
 # _claude_proxy_sync <label> <name> <health-url> <fingerprint> <kill-fn> <adopt>
-# Running + fingerprint differs -> kill via <kill-fn> and wait for the port to
-# free so the caller's normal start path relaunches it. Running with no
+# Running + fingerprint differs -> when idle, kill via <kill-fn> and wait for
+# the port to free so the caller's normal start path relaunches it; while it is
+# serving a request, reuse it (the change applies on a later idle launch). Running with no
 # recorded fingerprint: adopt=1 records the current one and leaves the process
 # alone; adopt=0 treats it as stale and restarts.
+# Dry run: with _CLAUDE_PROXY_SYNC_CHECK=<file> (set by `llm-proxy-restart
+# required`) the verdict `down`, `fresh` or `stale` is written to that file and
+# the function returns 1 so the launcher stops there; nothing is killed,
+# recorded or started.
 _claude_proxy_sync() {
     local label="$1" name="$2" health="$3" fp="$4" killfn="$5" adopt="$6"
     local state="${XDG_STATE_HOME:-$HOME/.local/state}/claude-${name}.fingerprint"
-    curl -sf --max-time 2 "$health" -o /dev/null || return 0
+    local check="${_CLAUDE_PROXY_SYNC_CHECK-}"
+    if ! curl -sf --max-time 2 "$health" -o /dev/null; then
+        [[ -n "$check" ]] && { print -r -- down >| "$check"; return 1; }
+        return 0
+    fi
     local recorded
     recorded=$(cat "$state" 2>/dev/null)
+    if [[ -n "$check" ]]; then
+        if [[ "$recorded" == "$fp" || ( -z "$recorded" && "$adopt" == 1 ) ]]; then
+            print -r -- fresh >| "$check"
+        else
+            print -r -- stale >| "$check"
+        fi
+        return 1
+    fi
     [[ "$recorded" == "$fp" ]] && return 0
     if [[ -z "$recorded" && "$adopt" == 1 ]]; then
         mkdir -p "${state:h}" && print -r -- "$fp" >| "$state"
         return 0
     fi
-    if [[ "${CLAUDE_PROVIDER_NO_RESTART-}" == 1 ]]; then
-        echo "${label}: running proxy configuration differs; restart it explicitly after active sessions finish." >&2
-        return 1
+    # Serving a request right now (ESTABLISHED socket on the proxy's port):
+    # keep the running process rather than cut that request off. The change
+    # applies on the first launch that finds the proxy idle. This is what
+    # CLAUDE_PROVIDER_NO_RESTART (set by the T3 bridge) used to guard by
+    # refusing every changed launch.
+    local port="${${health#*://*:}%%/*}"
+    if [[ "$port" == <-> ]] && _claude_port_serving "$port"; then
+        echo "${label}: config or credentials changed, but the proxy is serving requests; reusing it until it is idle." >&2
+        return 0
     fi
-    echo "${label}: config or credentials changed -- restarting..." >&2
+    echo "${label}: config or credentials changed -- restarting the idle proxy..." >&2
     "$killfn" >/dev/null 2>&1
     local j
     for j in {1..20}; do

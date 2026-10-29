@@ -37,30 +37,44 @@ claude-copilot() {
     # config edit restarts the gateway. A running gateway with no recorded
     # fingerprint is adopted.
     local capi_data="${COPILOT_API_HOME:-$HOME/.local/share/copilot-api}"
+    local repo_dir="${COPILOT_API_DIR:-$HOME/git/copilot-api}"
+    # llm-usage reads live in-flight requests (inflight-<port>-<pid>.json) and
+    # per-request latency/TTFT rows (timings-YYYY-MM.jsonl) written by
+    # copilot-api's bundled monitor plugin (caozhiyuan/copilot-api#454).
+    # Part of the fingerprint so an idle gateway restarts to load it.
+    local monitor="$repo_dir/plugin/gateway/monitor.mjs"
+    local plugins="${COPILOT_API_PLUGINS-}" monitor_dir="${COPILOT_API_MONITOR_DIR:-${LLM_USAGE_DIR:-$HOME/.local/state/llm-usage}}"
+    [[ -z "$plugins" && -r "$monitor" ]] && plugins="[\"$monitor\"]"
     local cfp
-    cfp=$(_claude_proxy_fp "$(_claude_file_hash "${capi_data}/github_token" "${capi_data}/config.json")" "$port")
+    cfp=$(_claude_proxy_fp "$(_claude_file_hash "${capi_data}/github_token" "${capi_data}/config.json" "$monitor")" "$port" "$plugins" "$monitor_dir")
     _claude_proxy_sync claude-copilot copilot-api "${base}/v1/models" "$cfp" claude-copilot-kill 1 || return 1
 
     # Start the gateway if nothing is serving yet
     if ! curl -sf --max-time 2 "${base}/v1/models" -o /dev/null; then
         local -a runner
-        local repo_dir="${COPILOT_API_DIR:-$HOME/git/copilot-api}"
-        local have_checkout=0 have_bun=0
+        local have_checkout=0 bun_bin=${commands[bun]-}
         [[ -d "$repo_dir/.git" ]] && have_checkout=1
-        command -v bun &>/dev/null && have_bun=1
-        if (( have_checkout && have_bun )); then
+        # WSL appends the Windows PATH, where a Windows-side npm `bun` shim
+        # (/mnt/c/.../npm/bun) can resolve; it cannot run this Linux checkout.
+        # The bun.sh installer's location is used when PATH has no Linux bun.
+        [[ "$bun_bin" == /mnt/[a-z]/* ]] && bun_bin=
+        [[ -z "$bun_bin" && -x "$HOME/.bun/bin/bun" ]] && bun_bin="$HOME/.bun/bin/bun"
+        if (( have_checkout )) && [[ -n "$bun_bin" ]]; then
             # Local origin/dev checkout — bun runs the TS source directly, so
             # uncommitted work-in-progress fixes are picked up with no build step.
-            runner=(env NODE_USE_SYSTEM_CA=1 bun run --cwd "$repo_dir" ./src/main.ts)
+            runner=(env NODE_USE_SYSTEM_CA=1 "$bun_bin" run --cwd "$repo_dir" ./src/main.ts)
         elif (( ! have_checkout )); then
             echo "❌ No local checkout at ${repo_dir} (git clone -b dev https://github.com/kaovilai/copilot-api ${repo_dir}), or set COPILOT_API_DIR to point elsewhere." >&2
             return 1
-        elif (( ! have_bun )); then
+        else
             echo "❌ bun not found. Install it with: $(_claude_pkg_install_hint bun 'curl -fsSL https://bun.sh/install | bash')" >&2
             echo "   (upstream/published bunx/npx fallback is disabled by default -- see the comments above this function)" >&2
             return 1
         fi
         echo "Starting copilot-api on ${base} (log: ${log})..." >&2
+        if [[ -n "$plugins" ]]; then
+            export COPILOT_API_PLUGINS="$plugins" COPILOT_API_MONITOR_DIR="$monitor_dir"
+        fi
         _claude_proxy_start "$log" "${runner[@]}" start --port "${port}" || return 1
         local i
         for i in {1..60}; do
@@ -73,8 +87,11 @@ claude-copilot() {
             echo "   Or run interactively once: ${runner[*]} start --port ${port}" >&2
             return 1
         fi
-        # re-hash after start: the gateway may rewrite config.json itself
-        cfp=$(_claude_proxy_fp "$(_claude_file_hash "${capi_data}/github_token" "${capi_data}/config.json")" "$port")
+        # re-hash after start: the gateway may rewrite config.json itself. Same
+        # inputs as the launch-time fingerprint above, or the record never
+        # matches and every idle launch (and `llm-proxy-restart required`)
+        # restarts a gateway that is already current.
+        cfp=$(_claude_proxy_fp "$(_claude_file_hash "${capi_data}/github_token" "${capi_data}/config.json" "$monitor")" "$port" "$plugins" "$monitor_dir")
         _claude_proxy_record copilot-api "$cfp"
     fi
 
@@ -177,12 +194,12 @@ claude-copilot() {
 claude-copilot-kill() {
     local port="${COPILOT_API_PORT:-4141}"
     local -a pids
-    # -sTCP:LISTEN: without it, lsof also matches processes with an
-    # established connection TO this port -- which includes the very Claude
+    # Listeners only: matching every socket on the port also hits processes
+    # with an established connection TO it -- which includes the very Claude
     # Code session routing through the gateway (and our own in-flight curl
     # health-checks), so an unfiltered kill takes them down too. Same guard
     # claude-ollama-kill uses too.
-    pids=("${(f)$(lsof -ti "tcp:${port}" -sTCP:LISTEN 2>/dev/null)}")
+    pids=("${(f)$(_claude_listen_pids "${port}")}")
     if [[ -z "${pids[1]}" ]]; then
         echo "No process listening on port ${port}."
         return 1
@@ -190,7 +207,7 @@ claude-copilot-kill() {
     echo "Killing copilot-api on port ${port} (pid: ${pids[*]})..."
     kill "${pids[@]}" 2>/dev/null
     sleep 1
-    pids=("${(f)$(lsof -ti "tcp:${port}" -sTCP:LISTEN 2>/dev/null)}")
+    pids=("${(f)$(_claude_listen_pids "${port}")}")
     if [[ -n "${pids[1]}" ]]; then
         echo "Still alive, sending SIGKILL..."
         kill -9 "${pids[@]}" 2>/dev/null

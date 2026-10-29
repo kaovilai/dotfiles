@@ -145,8 +145,42 @@ $glm_params
   master_key: os.environ/HOSTED_ONLY_PROXY_TOKEN"
 }
 
+# _hosted_only_code_hash <file...>: sha256 over the Python files' ASTs, so a
+# comment, docstring or formatting edit to a hook does not count as a change.
+_hosted_only_code_hash() {
+    python3 -I - "$@" <<'PY'
+import ast, hashlib, sys
+digest = hashlib.sha256()
+for path in sys.argv[1:]:
+    data = open(path, 'rb').read()
+    try:
+        tree = ast.parse(data)
+    except SyntaxError:
+        digest.update(data)
+        continue
+    for node in ast.walk(tree):
+        body = getattr(node, 'body', None)
+        if (isinstance(body, list) and body and isinstance(body[0], ast.Expr)
+                and isinstance(body[0].value, ast.Constant) and isinstance(body[0].value.value, str)):
+            node.body = body[1:] or [ast.Pass()]
+    digest.update(ast.dump(tree).encode() + b'\0')
+print(digest.hexdigest())
+PY
+}
+
+# _hosted_only_busy <port>: 0 when the proxy is serving a client right now
+# (an ESTABLISHED socket whose local end is the port).
+_hosted_only_busy() {
+    lsof -nP -iTCP:"$1" -sTCP:ESTABLISHED -Fn 2>/dev/null | grep -q -- "^n.*:$1->"
+}
+
 # _hosted_only_proxy_ensure <flavor>: proxy healthy with the current config, or
 # return 1 (stderr says why). Sets _hop_base/_hop_token. Writes nothing to stdout.
+#
+# A running proxy whose recorded fingerprint differs (config, hooks, knobs,
+# key, versions) is restarted when no request is in flight. While it is serving
+# one it is reused with a notice instead of failing the launch; only a token
+# change, which the new client could not authenticate with, still refuses.
 _hosted_only_proxy_ensure() {
     _hosted_only_proxy_vars "$1" || return 1
     local health="$_hop_base/health/liveliness"
@@ -159,11 +193,29 @@ _hosted_only_proxy_ensure() {
     [[ -r "$hooks" ]] || { print -ru2 -- "hosted-only: missing $hooks"; return 1; }
     [[ -r "$usage_log" ]] || { print -ru2 -- "hosted-only: missing $usage_log"; return 1; }
 
-    local config fp hooks_text
+    local config fp hooks_hash token_fp
     config=$(_hosted_only_proxy_config)
-    hooks_text="$(<"$hooks")$(<"$usage_log")"
-    fp=$(print -rn -- "$config"$'\x1f'"$hooks_text"$'\x1f'"$ENMAAS_API_KEY"$'\x1f'"$_hop_token"$'\x1f'"$litellm_version $fastapi_version $_hop_vision_fallback $_hop_limit_rewrite $_hop_limit_retry $_hop_client_retry $_hop_upstream_retries $_hop_image_budget $_hop_image_cache_days" \
+    hooks_hash=$(_hosted_only_code_hash "$hooks" "$usage_log") || return 1
+    fp=$(print -rn -- "$config"$'\x1f'"$hooks_hash"$'\x1f'"$ENMAAS_API_KEY"$'\x1f'"$litellm_version $fastapi_version $_hop_vision_fallback $_hop_limit_rewrite $_hop_limit_retry $_hop_client_retry $_hop_upstream_retries $_hop_image_budget $_hop_image_cache_days" \
         | shasum -a 256 | cut -d' ' -f1)
+    token_fp=$(print -rn -- "$_hop_token" | shasum -a 256 | cut -d' ' -f1)
+
+    # Dry run for `llm-proxy-restart required`: HOSTED_ONLY_CHECK_OUT=<file>
+    # gets "down|fresh|stale <fingerprint> <token hash>" and nothing is
+    # touched; the return of 1 stops the launcher here.
+    if [[ -n "${HOSTED_ONLY_CHECK_OUT-}" ]]; then
+        local chk_fp= chk_token= verdict=down
+        if curl -sf --max-time 2 "$health" -o /dev/null; then
+            read -r chk_fp chk_token < "$_hop_runtime/fingerprint" 2>/dev/null
+            if [[ "$chk_fp" == "$fp" && ( -z "$chk_token" || "$chk_token" == "$token_fp" ) ]]; then
+                verdict=fresh
+            else
+                verdict=stale
+            fi
+        fi
+        print -r -- "$verdict $fp $token_fp" >| "$HOSTED_ONLY_CHECK_OUT"
+        return 1
+    fi
 
     local old_umask=$(umask) lockfd result=0
     umask 077
@@ -174,12 +226,32 @@ _hosted_only_proxy_ensure() {
             print -ru2 -- "hosted-only: timed out waiting for another $_hop_flavor proxy start."
             return 1
         }
+        local start=1 rec_fp= rec_token=
         if curl -sf --max-time 2 "$health" -o /dev/null; then
-            if [[ "$(<"$_hop_runtime/fingerprint" 2>/dev/null)" != "$fp" ]]; then
-                print -ru2 -- "hosted-only: the running $_hop_flavor proxy on port $_hop_port has a different config or key (or predates the hosted-only rename); stop it after active sessions finish."
-                result=1
+            start=0
+            # "<fingerprint> <token hash>"; files from before the split hold one
+            # field, and an unknown token hash is taken as unchanged.
+            read -r rec_fp rec_token < "$_hop_runtime/fingerprint" 2>/dev/null
+            if [[ "$rec_fp" != "$fp" || ( -n "$rec_token" && "$rec_token" != "$token_fp" ) ]]; then
+                if ! _hosted_only_busy "$_hop_port"; then
+                    print -ru2 -- "hosted-only: $_hop_flavor proxy config, hooks or key changed; restarting the idle proxy on :$_hop_port."
+                    local flavor="$_hop_flavor" i
+                    _hosted_only_proxy_stop "$flavor" >/dev/null || result=1
+                    _hosted_only_proxy_vars "$flavor"
+                    for i in {1..30}; do
+                        [[ -z "$(lsof -ti "tcp:$_hop_port" -sTCP:LISTEN 2>/dev/null)" ]] && break
+                        sleep 0.5
+                    done
+                    (( result )) || start=1
+                elif [[ -n "$rec_token" && "$rec_token" != "$token_fp" ]]; then
+                    print -ru2 -- "hosted-only: the running $_hop_flavor proxy on :$_hop_port uses a different proxy token and is serving requests; run ${_hop_flavor}-hosted-only-restart once they finish."
+                    result=1
+                else
+                    print -ru2 -- "hosted-only: $_hop_flavor proxy config, hooks or key changed, but it is serving requests; reusing it (${_hop_flavor}-hosted-only-restart applies the change now)."
+                fi
             fi
-        else
+        fi
+        if (( start && ! result )); then
             print -r -- "$config" >| "$_hop_runtime/config.yaml" || return 1
             cp -f "$hooks" "$_hop_runtime/hosted_only_hooks.py" || return 1
             cp -f "$usage_log" "$_hop_runtime/litellm_usage_log.py" || return 1
@@ -202,7 +274,7 @@ _hosted_only_proxy_ensure() {
             done
             print -u2
             if curl -sf --max-time 2 "$health" -o /dev/null; then
-                print -r -- "$fp" >| "$_hop_runtime/fingerprint"
+                print -r -- "$fp $token_fp" >| "$_hop_runtime/fingerprint"
             else
                 print -ru2 -- "hosted-only: $_hop_flavor proxy not ready on port $_hop_port; see $_hop_runtime/proxy.log"
                 result=1
