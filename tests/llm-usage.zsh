@@ -858,6 +858,21 @@ python3 -m py_compile "$repo/scripts/litellm_usage_log.py" "$usage" || fail "py_
     : > "$log"
     out=$(llm-proxy-restart required enmaas openai 2>&1) || { print -ru2 -- "FAIL: required enmaas openai: $out"; exit 1; }
     [[ "$(restarted)" == openai && "$out" == *"enmaas"*"not running; skipped"* ]] || { print -ru2 -- "FAIL: required with names: '$(restarted)' $out"; exit 1; }
+    # `required-on-idle`: stale proxies are cut only when no request is in
+    # flight on their port; a proxy busy past the deadline is reported, not cut.
+    : > "$log"
+    typeset -gi serving_polls=0
+    _claude_port_serving() { [[ "$1" == "${CLAUDE_OPENAI_PROXY_PORT:-4145}" ]] && (( ++serving_polls <= 3 )); }
+    out=$(llm-proxy-restart required-on-idle openai glm-codex 2>&1) || { print -ru2 -- "FAIL: required-on-idle: $out"; exit 1; }
+    [[ "$(restarted)" == "glm-codex openai" ]] || { print -ru2 -- "FAIL: on-idle restarted '$(restarted)', want 'glm-codex openai' (idle one first): $out"; exit 1; }
+    [[ "$out" == *"openai"*"will restart at the next idle moment"* && "$out" == *"openai"*"waiting for an idle moment"* \
+       && "$out" == *"openai"*"idle; restarting now"* && "$out" == *"glm-codex"*"idle; restarting now"* ]] || { print -ru2 -- "FAIL: on-idle output: $out"; exit 1; }
+    : > "$log"
+    _claude_port_serving() { [[ "$1" == "${CLAUDE_OPENAI_PROXY_PORT:-4145}" ]]; }   # never idle
+    out=$(LLM_PROXY_RESTART_IDLE_TIMEOUT=1 llm-proxy-restart required-on-idle openai copilot 2>&1) && { print -ru2 -- "FAIL: busy past deadline must fail: $out"; exit 1; }
+    [[ "$(restarted)" == "" && "$out" == *"openai"*"still serving requests at the deadline"*"not restarted"* && "$out" == *"copilot"*"up to date"* ]] || { print -ru2 -- "FAIL: deadline: '$(restarted)' $out"; exit 1; }
+    _claude_port_serving() { return 1; }
+
     # `all` still restarts every listener without checking
     : > "$log"
     llm-proxy-restart all >/dev/null 2>&1

@@ -21,6 +21,14 @@
 #                              versions), using each launcher's own fingerprint
 #                              check in dry-run mode; up-to-date ones are left
 #                              serving
+#   llm-proxy-restart required-on-idle [name ...]   same selection, but each
+#                              stale proxy is cut only at a moment with no
+#                              request in flight (no ESTABLISHED client socket
+#                              on its port), polled every half second, so a
+#                              session waiting on a response is not cut off.
+#                              Gives up on a proxy still busy after
+#                              LLM_PROXY_RESTART_IDLE_TIMEOUT seconds
+#                              (default 1800) and reports it.
 
 # _llm_proxy_wait_down <port>: up to 15s for the listener to go away, one dot
 # per half-second so the wait is visible.
@@ -136,6 +144,7 @@ _llm_proxy_check_enmaas() {
 }
 
 llm-proxy-restart() {
+    zmodload zsh/datetime 2>/dev/null
     local -A fn=(
         copilot claude-copilot-restart vertex claude-vertex-restart openai claude-openai-restart
         enmaas claude-enmaas-restart glm-claude claude-hosted-only-restart glm-codex codex-hosted-only-restart)
@@ -154,8 +163,11 @@ llm-proxy-restart() {
         done
         return 0
     fi
-    local required=0
-    [[ "${1-}" == required ]] && { required=1; shift; }
+    local required=0 on_idle=0
+    case "${1-}" in
+        required) required=1; shift ;;
+        required-on-idle) required=1; on_idle=1; shift ;;
+    esac
     if (( ! $# )) || [[ "$1" == all ]]; then
         local n
         for n in $order; do
@@ -165,22 +177,61 @@ llm-proxy-restart() {
     else
         targets=("$@")
     fi
-    local t rc=0 verdict
+    local t rc=0 verdict why
+    local -a pending
     for t in $targets; do
-        [[ -n "${fn[$t]-}" ]] || { print -ru2 -- "llm-proxy-restart: unknown '$t' (choose: $order, all, required, --list)"; rc=1; continue; }
+        [[ -n "${fn[$t]-}" ]] || { print -ru2 -- "llm-proxy-restart: unknown '$t' (choose: $order, all, required, required-on-idle, --list)"; rc=1; continue; }
         if (( required )); then
             [[ -n "$(_claude_listen_pids "${port[$t]}")" ]] || { print -ru2 -- "== $t (:${port[$t]}) not running; skipped"; continue; }
             verdict=$(${chk[$t]})
             case "$verdict" in
                 fresh)  print -ru2 -- "== $t (:${port[$t]}) up to date; left running"; continue ;;
-                stale*) print -ru2 -- "== $t (:${port[$t]}) changed${verdict#stale}; restarting" ;;
-                down)   print -ru2 -- "== $t (:${port[$t]}) listener does not answer its health check; restarting" ;;
+                stale*) why="changed${verdict#stale}" ;;
+                down)   why="listener does not answer its health check" ;;
                 *)      print -ru2 -- "== $t (:${port[$t]}) could not be checked (its launcher failed; run it by hand for the error); skipped"; rc=1; continue ;;
             esac
+            if (( on_idle )); then
+                print -ru2 -- "== $t (:${port[$t]}) $why; will restart at the next idle moment"
+                pending+=($t)
+                continue
+            fi
+            print -ru2 -- "== $t (:${port[$t]}) $why; restarting"
         else
             print -ru2 -- "== restarting $t (:${port[$t]})"
         fi
         ${fn[$t]} || { print -ru2 -- "llm-proxy-restart: $t failed"; rc=1; }
     done
+    # required-on-idle: verdicts are in; now cut each pending proxy at the
+    # first half-second poll that finds no request in flight on its port,
+    # whichever goes quiet first, until the shared deadline.
+    if (( ${#pending} )); then
+        local timeout="${LLM_PROXY_RESTART_IDLE_TIMEOUT:-1800}" deadline started polls=0
+        [[ "$timeout" == <-> ]] || timeout=1800
+        started=$EPOCHSECONDS deadline=$(( started + timeout ))
+        local -a still
+        local -A announced
+        while (( ${#pending} )); do
+            still=()
+            for t in $pending; do
+                if _claude_port_serving "${port[$t]}"; then
+                    if (( EPOCHSECONDS >= deadline )); then
+                        print -ru2 -- "== $t (:${port[$t]}) still serving requests at the deadline (${timeout}s); not restarted (rerun later, or \`required\` to cut it now)"
+                        rc=1
+                        continue
+                    fi
+                    (( ${+announced[$t]} )) || { print -ru2 -- "== $t (:${port[$t]}) serving a request; waiting for an idle moment"; announced[$t]=1; }
+                    still+=($t)
+                    continue
+                fi
+                print -ru2 -- "== $t (:${port[$t]}) idle; restarting now"
+                ${fn[$t]} || { print -ru2 -- "llm-proxy-restart: $t failed"; rc=1; }
+            done
+            pending=($still)
+            if (( ${#pending} )); then
+                sleep 0.5
+                (( ++polls % 120 == 0 )) && print -ru2 -- "== still waiting for an idle moment on: $pending ($(( EPOCHSECONDS - started ))s)"
+            fi
+        done
+    fi
     return $rc
 }
