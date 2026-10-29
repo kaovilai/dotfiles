@@ -97,9 +97,32 @@ retired GLM_HYBRID_* name as a fallback.
      only a non-retryable status stops it. The text avoids OpenCode's retry
      regexes (session/retry.ts: 429/500/502/503/504/524, rate limit, try again,
      overloaded, resource exhausted, at capacity).
+
+6. Image budget prune (all models, every endpoint): praxis caps each request
+   body at 10 MiB (DEFAULT_MAX_BODY_BYTES; redhat-et/pricetag-metering#115)
+   and answers 413. Claude Code and Codex resend the whole history every
+   turn with every viewed image inline as base64 (Codex's only AttachmentStore
+   in the open-source tree is the inline passthrough; its compaction is
+   token-based and prices each image at ~1.8k tokens whatever its bytes), so a
+   review loop that renders and views a few slides per round crosses the cap
+   after ~50 images even when every image was shrunk to 1000 px (thread
+   53d71f17, 2026-10-28: 54 images, 9.9 MB base64). When the content fields
+   serialize to more than HOSTED_ONLY_IMAGE_BUDGET_BYTES (default 8 MiB; 0
+   turns this off), inline image blocks are replaced oldest-first with a text
+   block until the body fits. The text names where the image still lives, so
+   the model can re-view it on demand: the path from the tool call that
+   produced it (Codex view_image `path`, Claude Read `file_path`, matched by
+   call_id / tool_use_id), the T3 attachment file when the bytes match one in
+   ~/.t3/userdata/attachments (a pasted image), and a copy this proxy keeps in
+   HOSTED_ONLY_IMAGE_CACHE_DIR (default $XDG_STATE_HOME/hosted-only-image-cache,
+   content-addressed, expired after HOSTED_ONLY_IMAGE_CACHE_DAYS, default 5;
+   0 keeps no copies). The same bytes always give the same text, so the
+   replaced prefix stays stable for prompt caching across turns.
 """
 
+import base64
 import email.utils
+import hashlib
 import json
 import logging
 import math
@@ -132,6 +155,17 @@ DEEPSEEK_MODEL = knob("DEEPSEEK_MODEL", "rits/deepseek-ai/DeepSeek-V4.1-Flash-10
 VISION_FALLBACK = knob("VISION_FALLBACK", "1") != "0"
 IMAGE_BLOCK_TYPES = ("image", "input_image", "image_url")
 LIMIT_REWRITE = knob("LIMIT_REWRITE", "1") != "0"
+IMAGE_BUDGET_BYTES = int_knob("IMAGE_BUDGET_BYTES", 8 * 1024 * 1024, 0)
+IMAGE_CACHE_DAYS = int_knob("IMAGE_CACHE_DAYS", 5, 0)
+IMAGE_CACHE_DIR = knob(
+    "IMAGE_CACHE_DIR",
+    os.path.join(
+        os.environ.get("XDG_STATE_HOME") or os.path.expanduser("~/.local/state"),
+        "hosted-only-image-cache",
+    ),
+)
+T3_ATTACHMENTS_DIR = os.path.expanduser("~/.t3/userdata/attachments")
+PRUNE_MARKER = "[image-pruned]"
 LIMIT_DEFAULT_RETRY_SECONDS = int_knob("RATE_LIMIT_DEFAULT_RETRY_SECONDS", 60, 1)
 CLIENT_RETRY_MAX_SECONDS = int_knob("CLIENT_RETRY_MAX_SECONDS", 60, 0)
 BUDGET_EXHAUSTED_TEXT = "token budget exhausted"
@@ -168,6 +202,244 @@ def is_empty_instruction(item):
             for b in content
         )
     return content is None
+
+
+def image_payload(block):
+    """(base64 text, mime) of an inline image block; None for URLs/file ids."""
+    kind = block.get("type")
+    if kind == "input_image":
+        url = block.get("image_url")
+    elif kind == "image_url":
+        url = block.get("image_url")
+        if isinstance(url, dict):
+            url = url.get("url")
+    elif kind == "image":
+        source = block.get("source")
+        if not isinstance(source, dict) or source.get("type") != "base64":
+            return None
+        data = source.get("data")
+        if not isinstance(data, str) or not data:
+            return None
+        return data, str(source.get("media_type") or "image/png")
+    else:
+        return None
+    if not isinstance(url, str) or not url.startswith("data:"):
+        return None
+    header, sep, data = url.partition(",")
+    if not sep or ";base64" not in header or not data:
+        return None
+    return data, header[len("data:"):].split(";", 1)[0] or "image/png"
+
+
+def collect_image_blocks(node, out, parent=None, key=None, anchor=None):
+    """Inline image blocks in document order as (parent list, index, block,
+    id of the enclosing tool call/result), oldest first."""
+    if isinstance(node, dict):
+        if node.get("type") in IMAGE_BLOCK_TYPES and image_payload(node):
+            if isinstance(parent, list):
+                out.append((parent, key, node, anchor))
+            return
+        own = node.get("call_id") or node.get("tool_use_id")
+        if isinstance(own, str):
+            anchor = own
+        for k, v in node.items():
+            if isinstance(v, (dict, list)):
+                collect_image_blocks(v, out, node, k, anchor)
+    elif isinstance(node, list):
+        for i, v in enumerate(node):
+            collect_image_blocks(v, out, node, i, anchor)
+
+
+def _path_from_args(args):
+    if isinstance(args, str):
+        try:
+            args = json.loads(args)
+        except ValueError:
+            return None
+    if not isinstance(args, dict):
+        return None
+    for name in ("path", "file_path", "image_path", "image"):
+        value = args.get(name)
+        if isinstance(value, str) and value.strip() and "/" in value:
+            return value.strip()
+    return None
+
+
+def tool_path_index(data):
+    """tool call id -> file path argument, for Responses function_call items,
+    Anthropic tool_use blocks and chat tool_calls."""
+    index = {}
+    for item in data.get("input") if isinstance(data.get("input"), list) else []:
+        if isinstance(item, dict) and item.get("type") == "function_call":
+            path = _path_from_args(item.get("arguments"))
+            if path and isinstance(item.get("call_id"), str):
+                index[item["call_id"]] = path
+    for message in data.get("messages") if isinstance(data.get("messages"), list) else []:
+        if not isinstance(message, dict):
+            continue
+        for block in message.get("content") if isinstance(message.get("content"), list) else []:
+            if isinstance(block, dict) and block.get("type") == "tool_use":
+                path = _path_from_args(block.get("input"))
+                if path and isinstance(block.get("id"), str):
+                    index[block["id"]] = path
+        for call in message.get("tool_calls") if isinstance(message.get("tool_calls"), list) else []:
+            if isinstance(call, dict):
+                path = _path_from_args((call.get("function") or {}).get("arguments"))
+                if path and isinstance(call.get("id"), str):
+                    index[call["id"]] = path
+    return index
+
+
+_ATTACHMENT_INDEX = {"stamp": None, "by_sha": {}, "hashed": {}}
+
+
+def attachment_match(sha, directory=None):
+    """Path of a T3 attachment whose bytes hash to sha, else None. Files are
+    hashed once per (size, mtime); the index is rebuilt when the dir changes."""
+    directory = directory or T3_ATTACHMENTS_DIR
+    try:
+        stamp = (directory, os.stat(directory).st_mtime_ns)
+    except OSError:
+        return None
+    state = _ATTACHMENT_INDEX
+    if state["stamp"] != stamp:
+        by_sha, hashed = {}, state["hashed"]
+        with os.scandir(directory) as entries:
+            for entry in entries:
+                if not entry.is_file(follow_symlinks=False):
+                    continue
+                if not entry.name.lower().endswith((".png", ".jpg", ".jpeg", ".gif", ".webp")):
+                    continue
+                st = entry.stat(follow_symlinks=False)
+                key = (entry.path, st.st_size, st.st_mtime_ns)
+                digest = hashed.get(key)
+                if digest is None:
+                    try:
+                        with open(entry.path, "rb") as stream:
+                            digest = hashlib.sha1(stream.read()).hexdigest()
+                    except OSError:
+                        continue
+                    hashed[key] = digest
+                by_sha[digest] = entry.path
+        live = set(by_sha.values())
+        state["hashed"] = {k: v for k, v in hashed.items() if k[0] in live}
+        state["by_sha"], state["stamp"] = by_sha, stamp
+    return state["by_sha"].get(sha)
+
+
+_CACHE_SWEEP = {"at": 0.0}
+_MIME_EXT = {"image/jpeg": "jpg", "image/jpg": "jpg", "image/gif": "gif", "image/webp": "webp"}
+
+
+def cache_image(raw, sha, mime, directory=None, days=None, now=None):
+    """Keep a copy of pruned image bytes at <dir>/<sha>.<ext>; returns the path
+    or None when caching is off or failed. Expired copies are swept hourly."""
+    days = IMAGE_CACHE_DAYS if days is None else days
+    directory = directory or IMAGE_CACHE_DIR
+    if days <= 0:
+        return None
+    now = time.time() if now is None else now
+    try:
+        os.makedirs(directory, mode=0o700, exist_ok=True)
+        path = os.path.join(directory, f"{sha}.{_MIME_EXT.get(mime, 'png')}")
+        if os.path.exists(path):
+            os.utime(path, (now, now))
+        else:
+            tmp = f"{path}.{os.getpid()}.tmp"
+            fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            with os.fdopen(fd, "wb") as stream:
+                stream.write(raw)
+            os.replace(tmp, path)
+        if now - _CACHE_SWEEP["at"] > 3600:
+            _CACHE_SWEEP["at"] = now
+            cutoff = now - days * 86400
+            with os.scandir(directory) as entries:
+                for entry in entries:
+                    try:
+                        if entry.is_file(follow_symlinks=False) and entry.stat().st_mtime < cutoff:
+                            os.unlink(entry.path)
+                    except OSError:
+                        pass
+        return path
+    except OSError as error:
+        LOG.warning("hosted_only_hooks: image cache unavailable: %s", error)
+        return None
+
+
+def prune_placeholder(source, attachment, cached):
+    where = []
+    if source:
+        where.append(f"source file {source}")
+    if attachment:
+        where.append(f"T3 attachment {attachment}")
+    if cached:
+        where.append(f"proxy copy {cached} (kept {IMAGE_CACHE_DAYS} days)")
+    tail = ("; it is still at " + ", ".join(where) + ". View that path again if you need the image.") if where else (
+        ". Re-create and view it again if you need it.")
+    return f"{PRUNE_MARKER} Image removed by the local proxy to keep this request under the gateway's body limit{tail}"
+
+
+def prune_replacement(block, text):
+    kind = block.get("type")
+    if kind == "input_image":
+        return {"type": "input_text", "text": text}
+    return {"type": "text", "text": text}
+
+
+CONTENT_KEYS = ("messages", "input", "system", "instructions", "tools")
+
+
+def content_size(data):
+    """Approximate serialized size of the request's content fields (the body
+    LiteLLM sends upstream, minus its own bookkeeping keys)."""
+    size = 0
+    for key in CONTENT_KEYS:
+        value = data.get(key)
+        if value is not None:
+            size += len(json.dumps(value, separators=(",", ":")))
+    return size
+
+
+def prune_images(data, budget=None, cache_dir=None, cache_days=None, attachments_dir=None):
+    """Replace inline images, oldest first, until the content fits the budget.
+    Returns the number of images replaced."""
+    budget = IMAGE_BUDGET_BYTES if budget is None else budget
+    if budget <= 0 or not has_image(data.get("messages") or data.get("input")):
+        return 0
+    size = before = content_size(data)
+    if size <= budget:
+        return 0
+    blocks = []
+    collect_image_blocks(data.get("messages"), blocks)
+    collect_image_blocks(data.get("input"), blocks)
+    if not blocks:
+        return 0
+    index = tool_path_index(data)
+    pruned = 0
+    for parent, key, block, anchor in blocks:
+        if size <= budget:
+            break
+        payload = image_payload(block)
+        if payload is None or parent[key] is not block:
+            continue
+        encoded, mime = payload
+        try:
+            raw = base64.b64decode(encoded, validate=False)
+        except (ValueError, TypeError):
+            raw = None
+        sha = hashlib.sha1(raw).hexdigest() if raw else None
+        cached = cache_image(raw, sha, mime, cache_dir, cache_days) if raw else None
+        attachment = attachment_match(sha, attachments_dir) if sha else None
+        text = prune_placeholder(index.get(anchor), attachment, cached)
+        parent[key] = prune_replacement(block, text)
+        size -= len(encoded) - len(text)
+        pruned += 1
+    if pruned:
+        LOG.warning(
+            "hosted_only_hooks: pruned %d of %d inline images for %s (content %d -> ~%d bytes, budget %d)",
+            pruned, len(blocks), data.get("model"), before, size, budget,
+        )
+    return pruned
 
 
 # Hosted vLLM models (rits/) have no server-side web search: upstream accepts
@@ -918,6 +1190,10 @@ class HostedOnlyHooks(CustomLogger):
     async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
         if LIMIT_REWRITE:
             install_reset_after_headers()
+        try:
+            prune_images(data)
+        except Exception:
+            LOG.exception("hosted_only_hooks: image prune skipped")
         model = str(data.get("model") or "")
         if not model.startswith(GLM_MODEL_PREFIXES):
             return data

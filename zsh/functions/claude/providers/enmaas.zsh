@@ -31,7 +31,9 @@
 # as dotted modules; a boot failure is logged to <runtime>/proxy.log):
 #   hosted_only_hooks      rits/ models only: grammar-tool strip, thinking-off,
 #                          empty developer item filter, GLM->DeepSeek image
-#                          reroute. All models: 429 reset rewrite.
+#                          reroute. All models: 429 reset rewrite, image budget
+#                          prune (old inline images -> path notes before the
+#                          gateway's 10 MiB body cap 413s).
 #   unwrap_tools_middleware  rits/ models: Codex additional_tools -> tools
 #   enmaas_proxy_hooks     rits/ ids on /v1/responses use their Responses
 #                          passthrough route; hosted web_search tools dropped

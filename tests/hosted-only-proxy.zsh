@@ -50,7 +50,11 @@ HOSTED_ONLY_UPSTREAM_RETRIES=5 _hosted_only_proxy_vars codex
 [[ "$_hop_upstream_retries" == 5 ]] || fail "upstream retries var: $_hop_upstream_retries"
 _hosted_only_proxy_vars codex
 [[ "$_hop_upstream_retries" == 0 ]] || fail "upstream retries default: $_hop_upstream_retries"
-[[ "$(<"$repo/scripts/hosted-only-proxy.zsh")" == *'$_hop_client_retry $_hop_upstream_retries"'* ]] || fail "upstream retries not in fingerprint"
+[[ "$(<"$repo/scripts/hosted-only-proxy.zsh")" == *'$_hop_client_retry $_hop_upstream_retries $_hop_image_budget $_hop_image_cache_days"'* ]] || fail "upstream retries / image knobs not in fingerprint"
+HOSTED_ONLY_IMAGE_BUDGET_BYTES=123 HOSTED_ONLY_IMAGE_CACHE_DAYS=2 _hosted_only_proxy_vars codex
+[[ "$_hop_image_budget" == 123 && "$_hop_image_cache_days" == 2 ]] || fail "image knobs: $_hop_image_budget $_hop_image_cache_days"
+_hosted_only_proxy_vars codex
+[[ "$_hop_image_budget" == 8388608 && "$_hop_image_cache_days" == 5 ]] || fail "image knob defaults: $_hop_image_budget $_hop_image_cache_days"
 
 # New knob names win; retired GLM_HYBRID_* names still work
 HOSTED_ONLY_CODEX_PROXY_PORT=4157 _hosted_only_proxy_vars codex
@@ -132,6 +136,95 @@ assert h.has_image({"messages": [{"content": [{"type": "image"}]}]})
 assert not h.has_image({"messages": [{"content": "hi"}]})
 assert h.is_empty_instruction({"role": "developer", "content": [{"type": "input_text", "text": " "}]})
 assert not h.is_empty_instruction({"role": "user", "content": ""})
+
+# Image budget prune (item 6): oldest inline images -> path notes until the body fits
+import base64, hashlib, os, tempfile
+assert h.IMAGE_BUDGET_BYTES == 8 * 1024 * 1024 and h.IMAGE_CACHE_DAYS == 5
+work = tempfile.mkdtemp()
+cache_dir, att_dir = os.path.join(work, "cache"), os.path.join(work, "attachments")
+os.mkdir(att_dir)
+def png(seed, size=4000):
+    return b"\x89PNG" + bytes([seed]) * size
+imgs = [png(i) for i in range(4)]
+b64 = [base64.b64encode(i).decode() for i in imgs]
+# imgs[3] is a pasted T3 attachment (byte-identical file in the attachments dir)
+with open(os.path.join(att_dir, "thread-att.png"), "wb") as f:
+    f.write(imgs[3])
+def data_url(s): return "data:image/png;base64," + s
+def responses_req():
+    return {"model": "rits/deepseek-ai/DeepSeek-V4.1-Flash-1017", "instructions": "sys", "input": [
+        {"role": "user", "content": [{"type": "input_text", "text": "look"}]},
+        {"type": "function_call", "name": "view_image", "call_id": "c1", "arguments": json.dumps({"path": "/tmp/slides/4.png"})},
+        {"type": "function_call_output", "call_id": "c1", "output": [{"type": "input_image", "image_url": data_url(b64[0])}]},
+        {"type": "function_call", "name": "view_image", "call_id": "c2", "arguments": json.dumps({"path": "/tmp/slides/5.png"})},
+        {"type": "function_call_output", "call_id": "c2", "output": [{"type": "input_image", "image_url": data_url(b64[1])}]},
+        {"type": "function_call", "name": "view_image", "call_id": "c3", "arguments": json.dumps({"path": "/tmp/slides/6.png"})},
+        {"type": "function_call_output", "call_id": "c3", "output": [{"type": "input_image", "image_url": data_url(b64[2])}]},
+        {"role": "user", "content": [{"type": "input_text", "text": "and this"}, {"type": "input_image", "image_url": data_url(b64[3])}]},
+    ], "proxy_server_request": {"body": "x" * 100000}}   # LiteLLM bookkeeping must not count
+req = responses_req()
+full = h.content_size(req)
+assert full > 4 * len(b64[0]), full
+kw = dict(cache_dir=cache_dir, cache_days=5, attachments_dir=att_dir)
+assert h.prune_images(responses_req(), budget=full, **kw) == 0        # fits: untouched
+assert h.prune_images(responses_req(), budget=0, **kw) == 0           # 0 = off
+# budget leaves room for exactly two images: the two oldest go, the two newest stay
+budget = full - 2 * len(b64[0]) + 1000     # two notes (~330 B each) fit, a third image does not
+req = responses_req()
+assert h.prune_images(req, budget=budget, **kw) == 2
+assert h.content_size(req) <= budget
+out1, out2, out3, user = req["input"][2]["output"][0], req["input"][4]["output"][0], req["input"][6]["output"][0], req["input"][7]["content"][1]
+assert out1["type"] == "input_text" and h.PRUNE_MARKER in out1["text"] and "source file /tmp/slides/4.png" in out1["text"], out1
+assert out2["type"] == "input_text" and "source file /tmp/slides/5.png" in out2["text"], out2
+assert out3["type"] == "input_image" and user["type"] == "input_image"
+sha0 = hashlib.sha1(imgs[0]).hexdigest()
+assert f"proxy copy {cache_dir}/{sha0}.png (kept 5 days)" in out1["text"], out1["text"]
+assert open(f"{cache_dir}/{sha0}.png", "rb").read() == imgs[0]
+# same request again (next turn replays history): same text, no new cache files, stable prefix
+req2 = responses_req()
+h.prune_images(req2, budget=budget, **kw)
+assert req2["input"][2]["output"][0] == out1 and sorted(os.listdir(cache_dir)) == sorted(f"{hashlib.sha1(i).hexdigest()}.png" for i in imgs[:2])
+# prune everything: the pasted image is named by its T3 attachment file; no tool path for it
+req = responses_req()
+assert h.prune_images(req, budget=1000, **kw) == 4
+note = req["input"][7]["content"][1]
+assert note["type"] == "input_text" and f"T3 attachment {att_dir}/thread-att.png" in note["text"] and "source file" not in note["text"], note
+assert "View that path again" in note["text"]
+# cache off: no copy, note still names the source file
+req = responses_req()
+h.prune_images(req, budget=1000, cache_dir=os.path.join(work, "nocache"), cache_days=0, attachments_dir=att_dir)
+assert "proxy copy" not in req["input"][2]["output"][0]["text"] and not os.path.exists(os.path.join(work, "nocache"))
+# no path known at all: generic note
+req = {"model": "m", "input": [{"role": "user", "content": [{"type": "input_image", "image_url": data_url(b64[0])}]}]}
+h.prune_images(req, budget=10, cache_dir=os.path.join(work, "nocache"), cache_days=0, attachments_dir=att_dir)
+assert "Re-create and view it again" in req["input"][0]["content"][0]["text"]
+# Anthropic /v1/messages shape: Read tool_use/tool_result pairs, image -> text block
+msgs = {"model": "rits/zai-org/glm-5-3", "system": "s", "messages": [
+    {"role": "assistant", "content": [{"type": "tool_use", "id": "t1", "name": "Read", "input": {"file_path": "/Users/x/shot.png"}}]},
+    {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t1", "content": [
+        {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": b64[0]}}]}]},
+    {"role": "user", "content": [{"type": "text", "text": "hi"}, {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": b64[1]}}]},
+]}
+assert h.prune_images(msgs, budget=len(b64[1]) + 1500, **kw) == 1
+blk = msgs["messages"][1]["content"][0]["content"][0]
+assert blk["type"] == "text" and "source file /Users/x/shot.png" in blk["text"], blk
+assert msgs["messages"][2]["content"][1]["type"] == "image"                 # newest survives
+assert not h.has_image({"messages": msgs["messages"][:2]})                    # pruned block is no longer an image
+# chat completions shape
+chat_req = {"model": "m", "messages": [
+    {"role": "assistant", "tool_calls": [{"id": "k1", "type": "function", "function": {"name": "shot", "arguments": json.dumps({"path": "/tmp/a.png"})}}]},
+    {"role": "tool", "tool_call_id": "k1", "content": [{"type": "image_url", "image_url": {"url": data_url(b64[0])}}]},
+]}
+assert h.prune_images(chat_req, budget=10, **kw) == 1
+assert chat_req["messages"][1]["content"][0]["type"] == "text"
+# URL / file_id images carry no bytes and are never counted or replaced
+ref = {"model": "m", "input": [{"role": "user", "content": [{"type": "input_image", "file_id": "f1"}, {"type": "input_image", "image_url": "https://x/y.png"}]}]}
+assert h.prune_images(ref, budget=1, **kw) == 0 and ref["input"][0]["content"][0]["type"] == "input_image"
+# expiry sweep: a stale copy goes, a fresh one stays
+stale = os.path.join(cache_dir, "deadbeef.png"); open(stale, "wb").write(b"x"); os.utime(stale, (1, 1))
+h._CACHE_SWEEP["at"] = 0
+h.cache_image(imgs[2], hashlib.sha1(imgs[2]).hexdigest(), "image/png", cache_dir, 5)
+assert not os.path.exists(stale) and os.path.exists(f"{cache_dir}/{sha0}.png")
 class E(Exception):
     status_code = 429
 out = h.rewrite_limit(E("token budget exhausted"), {"model": "m", "proxy_server_request": {"url": "/v1/responses"}}, now=1_700_000_000)
