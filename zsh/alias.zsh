@@ -55,6 +55,10 @@ for func in \
     link-codex-t3-launchers \
     verify-codex-t3-launchers \
     verify-t3-headless \
+    sync-claude-plugins \
+    fleet-sync \
+    export-t3-providers \
+    import-t3-providers \
     update-brewfile \
     brewfile-cleanup; do
     functions[$func]="_lazy_load_migrate || return 1; ${func} \"\$@\""

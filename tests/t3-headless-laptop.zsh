@@ -39,7 +39,17 @@ local out
 STUB_LID=suspend STUB_SUSPEND=static STUB_SSHD=disabled STUB_CRYPT=1 \
     STUB_PERMS="user:tiger:" STUB_FLAGS=1 STUB_USER_SLEEP="'suspend'"
 : > "$T3_CRYPTTAB"
-if out=$(_t3_headless_laptop_checks 2>&1); then fail "defaults passed: $out"; fi
+# stdin held open with nothing to read: no check may wait on it (an empty
+# gdm.d once ran grep with no file arguments, which then read stdin)
+mkfifo "$tmp/stdin"
+exec 3<>"$tmp/stdin"
+_t3_headless_laptop_checks <&3 >"$tmp/out" 2>&1 &
+local pid=$! i
+for i in {1..30}; do kill -0 $pid 2>/dev/null || break; sleep 0.1; done
+if kill -0 $pid 2>/dev/null; then kill $pid; fail "a check read stdin"; fi
+if wait $pid; then fail "defaults passed: $(<"$tmp/out")"; fi
+exec 3<&-
+out=$(<"$tmp/out")
 [[ "$out" == *"Closing the lid on AC power suspends (logind HandleLidSwitchExternalPower=suspend)"* ]] || fail "lid not reported: $out"
 [[ "$out" == *"Login screen suspends after idle"* ]] || fail "greeter suspend not reported: $out"
 [[ "$out" == *"Your GNOME session suspends"* ]] || fail "session suspend not reported: $out"

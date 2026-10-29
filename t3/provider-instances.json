@@ -1,0 +1,450 @@
+{
+  "providerInstances": {
+    "claude_copilot": {
+      "driver": "claudeAgent",
+      "displayName": "Claude · Copilot",
+      "environment": [
+        {
+          "name": "CLAUDE_CODE_FORK_SUBAGENT",
+          "value": "1",
+          "sensitive": false
+        },
+        {
+          "name": "CLAUDE_CODE_AUTO_MODE_SERVER",
+          "value": "0",
+          "sensitive": false
+        }
+      ],
+      "enabled": true,
+      "config": {
+        "binaryPath": "@HOME@/.local/bin/claude-t3-copilot",
+        "customModels": []
+      }
+    },
+    "claude_vertex": {
+      "driver": "claudeAgent",
+      "displayName": "Claude · Vertex",
+      "environment": [
+        {
+          "name": "CLAUDE_CODE_FORK_SUBAGENT",
+          "value": "1",
+          "sensitive": false
+        }
+      ],
+      "enabled": false,
+      "config": {
+        "binaryPath": "@HOME@/.local/bin/claude-t3-vertex",
+        "customModels": []
+      }
+    },
+    "claude_enmass": {
+      "driver": "claudeAgent",
+      "displayName": "Claude · EnMaaS",
+      "environment": [
+        {
+          "name": "CLAUDE_CODE_FORK_SUBAGENT",
+          "value": "1",
+          "sensitive": false
+        }
+      ],
+      "enabled": true,
+      "config": {
+        "binaryPath": "@HOME@/.local/bin/claude-t3-enmaas",
+        "customModels": [
+          {
+            "slug": "rits/zai-org/glm-5-3[1m]",
+            "name": "GLM 5.3 (1M)",
+            "capabilities": {
+              "optionDescriptors": [
+                {
+                  "id": "effort",
+                  "label": "Reasoning",
+                  "type": "select",
+                  "options": [
+                    {
+                      "id": "low",
+                      "label": "Low"
+                    },
+                    {
+                      "id": "medium",
+                      "label": "Medium",
+                      "isDefault": true
+                    },
+                    {
+                      "id": "high",
+                      "label": "High"
+                    },
+                    {
+                      "id": "xhigh",
+                      "label": "Extra High"
+                    },
+                    {
+                      "id": "max",
+                      "label": "Max"
+                    }
+                  ]
+                }
+              ]
+            }
+          },
+          {
+            "slug": "rits/zai-org/glm-5-3",
+            "name": "GLM 5.3 (200k, legacy)",
+            "capabilities": {
+              "optionDescriptors": [
+                {
+                  "id": "effort",
+                  "label": "Reasoning",
+                  "type": "select",
+                  "options": [
+                    {
+                      "id": "low",
+                      "label": "Low"
+                    },
+                    {
+                      "id": "medium",
+                      "label": "Medium",
+                      "isDefault": true
+                    },
+                    {
+                      "id": "high",
+                      "label": "High"
+                    },
+                    {
+                      "id": "xhigh",
+                      "label": "Extra High"
+                    },
+                    {
+                      "id": "max",
+                      "label": "Max"
+                    }
+                  ]
+                }
+              ]
+            }
+          },
+          {
+            "slug": "rits/deepseek-ai/DeepSeek-V4.1-Flash-1017[1m]",
+            "name": "DeepSeek V4.1 Flash (1M, vision)",
+            "capabilities": {
+              "optionDescriptors": [
+                {
+                  "id": "effort",
+                  "label": "Reasoning",
+                  "type": "select",
+                  "options": [
+                    {
+                      "id": "low",
+                      "label": "Low"
+                    },
+                    {
+                      "id": "medium",
+                      "label": "Medium",
+                      "isDefault": true
+                    },
+                    {
+                      "id": "high",
+                      "label": "High"
+                    },
+                    {
+                      "id": "xhigh",
+                      "label": "Extra High"
+                    },
+                    {
+                      "id": "max",
+                      "label": "Max"
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "codex_enmass": {
+      "driver": "codex",
+      "displayName": "Codex · EnMaaS",
+      "enabled": true,
+      "config": {
+        "binaryPath": "@HOME@/.local/bin/codex-t3-enmaas",
+        "homePath": "",
+        "shadowHomePath": "",
+        "launchArgs": "-c model_provider=\"enmaas\" -c model_providers.enmaas.name=\"EnMaaS\" -c model_providers.enmaas.base_url=\"https://api.enmaas.devshift.net/v1\" -c model_providers.enmaas.env_key=\"ENMAAS_API_KEY\" -c model_providers.enmaas.wire_api=\"responses\" -c model_providers.enmaas.requires_openai_auth=false -c model_context_window=1000000 -c review_model=\"rits/zai-org/glm-5-3\" -c approvals_reviewer=auto_review",
+        "customModels": [
+          {
+            "slug": "rits/zai-org/glm-5-3",
+            "name": "GLM 5.3 (1M)",
+            "capabilities": {
+              "optionDescriptors": [
+                {
+                  "id": "reasoningEffort",
+                  "label": "Reasoning",
+                  "type": "select",
+                  "options": [
+                    {
+                      "id": "low",
+                      "label": "Low"
+                    },
+                    {
+                      "id": "medium",
+                      "label": "Medium"
+                    },
+                    {
+                      "id": "high",
+                      "label": "High",
+                      "isDefault": true
+                    },
+                    {
+                      "id": "xhigh",
+                      "label": "Extra High"
+                    }
+                  ],
+                  "currentValue": "high"
+                }
+              ]
+            }
+          },
+          {
+            "slug": "rits/deepseek-ai/DeepSeek-V4.1-Flash-1017",
+            "name": "DeepSeek V4.1 Flash (1M, vision)",
+            "capabilities": {
+              "optionDescriptors": [
+                {
+                  "id": "reasoningEffort",
+                  "label": "Reasoning",
+                  "type": "select",
+                  "options": [
+                    {
+                      "id": "low",
+                      "label": "Low"
+                    },
+                    {
+                      "id": "medium",
+                      "label": "Medium"
+                    },
+                    {
+                      "id": "high",
+                      "label": "High",
+                      "isDefault": true
+                    },
+                    {
+                      "id": "xhigh",
+                      "label": "Extra High"
+                    }
+                  ],
+                  "currentValue": "high"
+                }
+              ]
+            }
+          }
+        ]
+      },
+      "environment": []
+    },
+    "claude_glm_only": {
+      "driver": "claudeAgent",
+      "displayName": "Claude · Hosted Only",
+      "environment": [
+        {
+          "name": "CLAUDE_CODE_FORK_SUBAGENT",
+          "value": "1",
+          "sensitive": false
+        },
+        {
+          "name": "ANTHROPIC_DEFAULT_OPUS_MODEL",
+          "value": "rits/deepseek-ai/DeepSeek-V4.1-Flash-1017[1m]",
+          "sensitive": false
+        },
+        {
+          "name": "ANTHROPIC_DEFAULT_SONNET_MODEL",
+          "value": "rits/deepseek-ai/DeepSeek-V4.1-Flash-1017[1m]",
+          "sensitive": false
+        },
+        {
+          "name": "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+          "value": "rits/deepseek-ai/DeepSeek-V4.1-Flash-1017[1m]",
+          "sensitive": false
+        },
+        {
+          "name": "ANTHROPIC_DEFAULT_FABLE_MODEL",
+          "value": "rits/deepseek-ai/DeepSeek-V4.1-Flash-1017[1m]",
+          "sensitive": false
+        },
+        {
+          "name": "CLAUDE_CODE_SUBAGENT_MODEL",
+          "value": "rits/deepseek-ai/DeepSeek-V4.1-Flash-1017[1m]",
+          "sensitive": false
+        },
+        {
+          "name": "CLAUDE_CODE_SUBAGENT_MODEL_FORCE",
+          "value": "1",
+          "sensitive": false
+        },
+        {
+          "name": "CLAUDE_CODE_AUTO_MODE_SERVER",
+          "value": "0",
+          "sensitive": false
+        }
+      ],
+      "enabled": true,
+      "config": {
+        "binaryPath": "@HOME@/.local/bin/claude-t3-hosted-only",
+        "customModels": [
+          {
+            "slug": "rits/zai-org/glm-5-3[1m]",
+            "name": "GLM 5.3 (1M)",
+            "capabilities": {
+              "optionDescriptors": [
+                {
+                  "id": "effort",
+                  "label": "Reasoning",
+                  "type": "select",
+                  "options": [
+                    {
+                      "id": "low",
+                      "label": "Low"
+                    },
+                    {
+                      "id": "medium",
+                      "label": "Medium",
+                      "isDefault": true
+                    },
+                    {
+                      "id": "high",
+                      "label": "High"
+                    },
+                    {
+                      "id": "xhigh",
+                      "label": "Extra High"
+                    },
+                    {
+                      "id": "max",
+                      "label": "Max"
+                    }
+                  ]
+                }
+              ]
+            }
+          },
+          {
+            "slug": "rits/deepseek-ai/DeepSeek-V4.1-Flash-1017[1m]",
+            "name": "DeepSeek V4.1 Flash (1M, vision)",
+            "capabilities": {
+              "optionDescriptors": [
+                {
+                  "id": "effort",
+                  "label": "Reasoning",
+                  "type": "select",
+                  "options": [
+                    {
+                      "id": "low",
+                      "label": "Low"
+                    },
+                    {
+                      "id": "medium",
+                      "label": "Medium",
+                      "isDefault": true
+                    },
+                    {
+                      "id": "high",
+                      "label": "High"
+                    },
+                    {
+                      "id": "xhigh",
+                      "label": "Extra High"
+                    },
+                    {
+                      "id": "max",
+                      "label": "Max"
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "codex_glm_only": {
+      "driver": "codex",
+      "displayName": "Codex · Hosted Only",
+      "enabled": true,
+      "config": {
+        "binaryPath": "@HOME@/.local/bin/codex-t3-hosted-only",
+        "homePath": "",
+        "shadowHomePath": "",
+        "launchArgs": "",
+        "customModels": [
+          {
+            "slug": "rits/zai-org/glm-5-3",
+            "name": "GLM 5.3 (1M)",
+            "capabilities": {
+              "optionDescriptors": [
+                {
+                  "id": "reasoningEffort",
+                  "label": "Reasoning",
+                  "type": "select",
+                  "options": [
+                    {
+                      "id": "low",
+                      "label": "Low"
+                    },
+                    {
+                      "id": "medium",
+                      "label": "Medium"
+                    },
+                    {
+                      "id": "high",
+                      "label": "High",
+                      "isDefault": true
+                    },
+                    {
+                      "id": "xhigh",
+                      "label": "Extra High"
+                    }
+                  ],
+                  "currentValue": "high"
+                }
+              ]
+            }
+          },
+          {
+            "slug": "rits/deepseek-ai/DeepSeek-V4.1-Flash-1017",
+            "name": "DeepSeek V4.1 Flash (1M, vision)",
+            "capabilities": {
+              "optionDescriptors": [
+                {
+                  "id": "reasoningEffort",
+                  "label": "Reasoning",
+                  "type": "select",
+                  "options": [
+                    {
+                      "id": "low",
+                      "label": "Low"
+                    },
+                    {
+                      "id": "medium",
+                      "label": "Medium"
+                    },
+                    {
+                      "id": "high",
+                      "label": "High",
+                      "isDefault": true
+                    },
+                    {
+                      "id": "xhigh",
+                      "label": "Extra High"
+                    }
+                  ],
+                  "currentValue": "high"
+                }
+              ]
+            }
+          }
+        ]
+      },
+      "environment": []
+    }
+  }
+}

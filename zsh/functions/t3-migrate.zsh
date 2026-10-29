@@ -477,14 +477,18 @@ _t3_codex_launcher_prereqs() {
 
 # Point each codex-t3-<backend> launcher at this checkout's
 # scripts/codex-provider.zsh. Existing symlinks are repointed; anything else
-# at a launcher path is left alone and reported.
+# at a launcher path is left alone and reported. Backend args limit it to a
+# subset, like link-claude-t3-launchers.
 link-codex-t3-launchers() {
     local target="$_T3_DOTFILES_ROOT/scripts/codex-provider.zsh"
     [[ -x "$target" ]] || { error "Launcher script missing or not executable: $target"; return 1; }
+    local -a backends=("$@")
+    (( $# )) || backends=($_T3_CODEX_BACKENDS $_T3_LEGACY_BACKENDS)
+    _t3_check_backend_args codex $_T3_CODEX_BACKENDS $_T3_LEGACY_BACKENDS -- $backends || return 1
     mkdir -p "$T3_CLAUDE_LAUNCHER_DIR" || { error "Failed to create $T3_CLAUDE_LAUNCHER_DIR"; return 1; }
 
     local backend link failed=0
-    for backend in $_T3_CODEX_BACKENDS $_T3_LEGACY_BACKENDS; do
+    for backend in $backends; do
         link="$T3_CLAUDE_LAUNCHER_DIR/codex-t3-$backend"
         if [[ -L "$link" && "${link:A}" == "${target:A}" ]]; then
             success "codex-t3-$backend already linked"
@@ -507,8 +511,11 @@ link-codex-t3-launchers() {
 # CLI. `--version` skips credentials, so this is safe to run any time.
 verify-codex-t3-launchers() {
     local target="$_T3_DOTFILES_ROOT/scripts/codex-provider.zsh"
+    local -a backends=("$@")
+    (( $# )) || backends=($_T3_CODEX_BACKENDS)
+    _t3_check_backend_args codex $_T3_CODEX_BACKENDS $_T3_LEGACY_BACKENDS -- $backends || return 1
     local backend link failed=0
-    for backend in $_T3_CODEX_BACKENDS; do
+    for backend in $backends; do
         link="$T3_CLAUDE_LAUNCHER_DIR/codex-t3-$backend"
         if [[ ! -L "$link" || "${link:A}" != "${target:A}" ]]; then
             error "codex-t3-$backend is not linked to $target (run link-codex-t3-launchers)"
@@ -567,6 +574,34 @@ verify-t3-headless() {
     fi
 
     verify-claude-t3-launchers copilot || failed=1
+    # EnMaaS backends, where linked (setup-t3-headless.zsh --enmaas)
+    local -a en_claude=() en_codex=() b
+    for b in enmaas hosted-only; do
+        [[ -L "$T3_CLAUDE_LAUNCHER_DIR/claude-t3-$b" ]] && en_claude+=($b)
+        [[ -L "$T3_CLAUDE_LAUNCHER_DIR/codex-t3-$b" ]] && en_codex+=($b)
+    done
+    if (( ${#en_claude} + ${#en_codex} )); then
+        (( ${#en_claude} )) && { verify-claude-t3-launchers $en_claude || failed=1; }
+        (( ${#en_codex} )) && { verify-codex-t3-launchers $en_codex || failed=1; }
+        if zsh -fc 'source "$1" >/dev/null 2>&1; [[ -n "${ENMAAS_API_KEY-}" && -n "${ENMAAS_API_BASE_URL-}" ]]' _ \
+            "${CLAUDE_PROVIDER_CREDENTIALS_FILE:-$HOME/secrets.zsh}"; then
+            success "EnMaaS key and base URL set"
+        else
+            error "EnMaaS launchers linked but ENMAAS_API_KEY / ENMAAS_API_BASE_URL missing from ${CLAUDE_PROVIDER_CREDENTIALS_FILE:-~/secrets.zsh}"
+            failed=1
+        fi
+    fi
+
+    # Optional: T3 Connect reaches the phone without it.
+    if (( $+commands[tailscale] )); then
+        local ts_state
+        ts_state=$(tailscale status --json 2>/dev/null | jq -r '.BackendState // empty' 2>/dev/null)
+        if [[ "$ts_state" == Running ]]; then
+            success "Tailscale connected ($(tailscale status --json | jq -r '.Self.DNSName | rtrimstr(".")'))"
+        else
+            warning "Tailscale installed but not connected (${ts_state:-tailscaled not running}): sudo tailscale up"
+        fi
+    fi
     # A laptop serving lid-closed on AC. Under WSL, Windows owns power.
     local -a bats=("${T3_POWER_SUPPLY_DIR:-/sys/class/power_supply}"/BAT*(N))
     if (( ! wsl && ${#bats} )); then
@@ -590,6 +625,9 @@ _t3_headless_laptop_checks() {
         org.freedesktop.login1.Manager HandleLidSwitchExternalPower 2>/dev/null)
     if [[ "$lid" == 's "ignore"' ]]; then
         success "Closing the lid on AC power is ignored"
+    elif [[ -z "$lid" ]]; then
+        error "Could not read logind's lid setting (is systemd-logind running?); $fix"
+        failed=1
     else
         error "Closing the lid on AC power suspends (logind HandleLidSwitchExternalPower=${${lid#s \"}%\"}); $fix"
         failed=1
@@ -597,11 +635,13 @@ _t3_headless_laptop_checks() {
 
     # With nobody logged in the GDM greeter's power settings apply, and it
     # suspends after a while idle even on AC. Masked sleep targets also cover it.
+    # No files: grep must not run without file args, it would read stdin.
     local masked=0
+    local -a gdm_files=("$gdm_dir"/*(N))
     [[ "$(systemctl is-enabled suspend.target 2>/dev/null)" == masked ]] && masked=1
     if (( masked )); then
         success "Suspend is masked"
-    elif grep -qs "sleep-inactive-ac-type='nothing'" "$gdm_dir"/*(N); then
+    elif (( ${#gdm_files} )) && grep -qs "sleep-inactive-ac-type='nothing'" $gdm_files; then
         success "Login screen does not suspend on AC"
     else
         error "Login screen suspends after idle on AC power; $fix"
@@ -636,4 +676,162 @@ _t3_headless_laptop_checks() {
     [[ "$(systemctl is-enabled sshd 2>/dev/null)" == enabled ]] \
         || warning "sshd not enabled: no way in for maintenance with the lid closed (sudo systemctl enable --now sshd)"
     return $failed
+}
+
+# sync-claude-plugins [--update] [--dry-run]: make this machine's Claude
+# plugins match ~/.claude/settings.json, which lists the marketplaces
+# (extraKnownMarketplaces) and enabled plugins. Claude Code registers some of
+# those marketplaces itself at startup but installs no plugins, and their
+# caches are not in the config repo. Adds missing marketplaces (a directory
+# source's Mac home becomes this home) and installs every enabled plugin not
+# installed yet. --update also refreshes all marketplaces and updates each
+# enabled plugin. Used by scripts/setup-t3-headless.zsh and fleet-sync.
+sync-claude-plugins() {
+    local update=0 dry=0 a
+    for a; do
+        case $a in
+            --update) update=1 ;;
+            --dry-run) dry=1 ;;
+            *) error "sync-claude-plugins: unknown option $a (--update, --dry-run)"; return 2 ;;
+        esac
+    done
+    local claude="${CLAUDE_PROVIDER_NATIVE_BINARY:-$HOME/.local/bin/claude}"
+    local cs="$HOME/.claude/settings.json" known="$HOME/.claude/plugins/known_marketplaces.json"
+    local installed="$HOME/.claude/plugins/installed_plugins.json" mname msrc pid saved
+    local -i added=0 inst=0 upd=0 fail=0
+    [[ -r "$cs" ]] || { warning "No $cs; skipping Claude plugins"; return 0; }
+    [[ -x "$claude" ]] || { warning "Claude Code not found at $claude; skipping Claude plugins"; return 0; }
+
+    # `claude plugin marketplace add` also records the source in settings.json,
+    # which is shared through git: it would swap in this home's directory paths
+    # and add entries under a marketplace's own name. The file is put back
+    # afterwards; what got installed lives in the gitignored
+    # known_marketplaces.json / installed_plugins.json.
+    saved=$(mktemp) && cp -p "$cs" "$saved" || return 1
+    {
+        while IFS=$'\t' read -r mname msrc; do
+            [[ "$msrc" == /Users/* ]] && msrc="$HOME/${msrc#/Users/*/}"
+            # Match by source too: a marketplace registers under the name in
+            # its own manifest, which can differ from settings.json's key.
+            jq -e --arg n "$mname" --arg s "$msrc" \
+                'has($n) or any(.[]; .source | (.repo // .url // .path) == $s)' "$known" >/dev/null 2>&1 && continue
+            if [[ "$msrc" == /* && ! -d "$msrc" ]]; then
+                warning "Marketplace $mname: $msrc not found; skipped"; (( fail++ )); continue
+            fi
+            if _t3_plugin_cli $dry "$claude" marketplace add "$msrc"; then (( added++ ))
+            else warning "Could not add marketplace $mname ($msrc)"; (( fail++ )); fi
+        done < <(jq -r '.extraKnownMarketplaces // {} | to_entries[] | [.key, (.value.source | .repo // .url // .path)] | @tsv' "$cs")
+
+        (( update )) && { _t3_plugin_cli $dry "$claude" marketplace update || { warning "Marketplace update failed"; (( fail++ )); }; }
+
+        for pid in ${(f)"$(jq -r '.enabledPlugins // {} | to_entries[] | select(.value == true) | .key' "$cs")"}; do
+            if jq -e --arg i "$pid" '.plugins[$i]' "$installed" >/dev/null 2>&1; then
+                (( update )) || continue
+                if _t3_plugin_cli $dry "$claude" update "$pid"; then (( upd++ ))
+                else warning "Could not update plugin $pid"; (( fail++ )); fi
+            elif _t3_plugin_cli $dry "$claude" install "$pid"; then (( inst++ ))
+            else warning "Could not install plugin $pid"; (( fail++ )); fi
+        done
+    } always {
+        cat "$saved" > "$cs"   # cat, not mv: keeps the file and its mode in place
+        rm -f "$saved"
+    }
+    success "Claude plugins$( (( dry )) && print -n ' (dry run, would be)'): $added marketplaces added, $inst installed$( (( update )) && print -n ", $upd updated")$( (( fail )) && print -n ", $fail problems above")"
+    (( ! fail ))
+}
+
+# _t3_plugin_cli <dry> <claude> <plugin args...>: one `claude plugin` call,
+# run from $HOME (no project scope), output kept off the terminal unless it
+# fails.
+_t3_plugin_cli() {
+    local dry=$1 claude=$2 out; shift 2
+    print -ru2 -- "+ claude plugin ${(j: :)${(q-)@}}"
+    (( dry )) && return 0
+    out=$(cd ~ && "$claude" plugin "$@" 2>&1) && return 0
+    print -ru2 -- "$out" | tail -3
+    return 1
+}
+
+# fleet-sync: fast-forward the dotfiles, Claude config and copilot-api
+# checkouts and apply the changes (scripts/fleet-sync.zsh; --help for flags).
+fleet-sync() {
+    zsh "$_T3_DOTFILES_ROOT/scripts/fleet-sync.zsh" "$@"
+}
+
+# Provider instances that run this repo's launchers (binaryPath ending in
+# /claude-t3-<backend> or /codex-t3-<backend>) travel between machines through
+# t3/provider-instances.json, with the home directory written as @HOME@.
+typeset -g _T3_PROVIDER_TEMPLATE="$_T3_DOTFILES_ROOT/t3/provider-instances.json"
+typeset -g _T3_LAUNCHER_RE='/(claude|codex)-t3-[^/]+$'
+
+# export-t3-providers: write this machine's launcher-backed T3 provider
+# instances to t3/provider-instances.json. Environment entries marked
+# sensitive are left out (re-enter them in T3 on the other machine).
+export-t3-providers() {
+    local settings="$T3CODE_HOME/userdata/settings.json" out="$_T3_PROVIDER_TEMPLATE" dropped
+    [[ -r "$settings" ]] || { error "No $settings"; return 1; }
+    mkdir -p "${out:h}" || return 1
+    dropped=$(jq -r --arg re "$_T3_LAUNCHER_RE" '[.providerInstances // {} | to_entries[]
+        | select((.value.config.binaryPath // "") | test($re)) | .key as $k
+        | .value.environment[]? | select(.sensitive) | "\($k).\(.name)"] | join(", ")' "$settings") || return 1
+    jq --arg home "$HOME" --arg re "$_T3_LAUNCHER_RE" '
+        {providerInstances: (.providerInstances // {}
+            | with_entries(select((.value.config.binaryPath // "") | test($re)))
+            | map_values(.environment = [.environment[]? | select(.sensitive | not)]
+                | walk(if type == "string" then split($home) | join("@HOME@") else . end)))}' \
+        "$settings" > "$out.tmp" && mv "$out.tmp" "$out" || { rm -f "$out.tmp"; return 1; }
+    [[ -n "$dropped" ]] && warning "Left out sensitive environment values: $dropped"
+    success "Exported $(jq '.providerInstances | length' "$out") provider instances to $out"
+}
+
+# import-t3-providers [--dry-run] [id ...]: add the instances from
+# t3/provider-instances.json (@HOME@ -> this home) to this machine's T3
+# settings; all of them, or the given ids. Skips an instance whose launcher is
+# not linked here. One already present is updated only while it still equals
+# what the previous import wrote (nobody changed it here); a local edit is
+# kept and reported. Record of imports:
+# ${XDG_STATE_HOME:-~/.local/state}/t3-provider-imports.json.
+import-t3-providers() {
+    local dry=0
+    [[ "${1-}" == --dry-run ]] && { dry=1; shift; }
+    local settings="$T3CODE_HOME/userdata/settings.json"
+    local rec="${XDG_STATE_HOME:-$HOME/.local/state}/t3-provider-imports.json"
+    [[ -r "$_T3_PROVIDER_TEMPLATE" ]] || { warning "No $_T3_PROVIDER_TEMPLATE; run export-t3-providers where the providers are set up"; return 0; }
+    local want cur='{}' prev='{}' id bin
+    want=$(jq -c --arg home "$HOME" '.providerInstances // {}
+        | walk(if type == "string" then split("@HOME@") | join($home) else . end)' "$_T3_PROVIDER_TEMPLATE") || return 1
+    [[ -r "$settings" ]] && { cur=$(jq -c '.providerInstances // {}' "$settings") || return 1; }
+    [[ -r "$rec" ]] && { prev=$(jq -c . "$rec" 2>/dev/null) || prev='{}'; }
+    local -a apply=() added=() updated=() kept=() current=()
+    for id in ${(f)"$(jq -r 'keys[]' <<<"$want")"}; do
+        (( $# )) && (( ! ${@[(Ie)$id]} )) && continue
+        bin=$(jq -r --arg i "$id" '.[$i].config.binaryPath // ""' <<<"$want")
+        [[ "$bin" == /* && ! -x "$bin" ]] && continue   # launcher not linked on this machine
+        if ! jq -e --arg i "$id" 'has($i)' <<<"$cur" >/dev/null; then
+            added+=("$id"); apply+=("$id")
+        elif jq -en --arg i "$id" --argjson c "$cur" --argjson w "$want" '$c[$i] == $w[$i]' >/dev/null; then
+            current+=("$id")
+        elif jq -en --arg i "$id" --argjson c "$cur" --argjson p "$prev" '$c[$i] == $p[$i]' >/dev/null; then
+            updated+=("$id"); apply+=("$id")
+        else
+            kept+=("$id")
+        fi
+    done
+    (( ${#kept} )) && warning "Changed on this machine, not updated: ${(j:, :)kept} (edit t3/provider-instances.json or the instance in T3)"
+    if (( ${#apply} )) && (( ! dry )); then
+        local ids
+        ids=$(print -rl -- $apply | jq -Rsc 'split("\n") | map(select(length > 0))')
+        mkdir -p "${settings:h}" "${rec:h}" || return 1
+        { [[ -r "$settings" ]] && cat "$settings" || print '{}'; } |
+            jq --argjson w "$want" --argjson ids "$ids" \
+                'reduce $ids[] as $i (.; .providerInstances[$i] = $w[$i])' > "$settings.tmp" &&
+            mv "$settings.tmp" "$settings" || { rm -f "$settings.tmp"; error "Could not update $settings"; return 1; }
+    fi
+    if (( ! dry )) && (( ${#apply} + ${#current} )); then
+        local ids
+        ids=$(print -rl -- $apply $current | jq -Rsc 'split("\n") | map(select(length > 0))')
+        jq -n --argjson p "$prev" --argjson w "$want" --argjson ids "$ids" \
+            'reduce $ids[] as $i ($p; .[$i] = $w[$i])' > "$rec.tmp" && mv "$rec.tmp" "$rec"
+    fi
+    success "T3 providers$( (( dry )) && print -n ' (dry run)'): ${#added} added${added:+ (${(j:, :)added})}, ${#updated} updated${updated:+ (${(j:, :)updated})}, ${#current} current"
 }

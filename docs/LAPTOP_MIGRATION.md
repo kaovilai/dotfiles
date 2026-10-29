@@ -186,6 +186,16 @@ Every backend needs `python3` and `jq` from the Brewfile. Beyond that:
 
 ##### Copilot-only Linux host (Fedora, WSL2)
 
+`scripts/setup-t3-headless.zsh` also brings over your Claude config: it clones the private `kaovilai/.claude` repo to `~/.config/claude` and links `~/.claude` to it as on the Mac (`gh auth login` first), then installs every plugin `settings.json` enables from its `extraKnownMarketplaces`. `claude plugin marketplace add` rewrites marketplace entries in `settings.json` with this machine's paths, so the script restores that file afterwards; installed plugins are tracked in the gitignored `plugins/*.json`. MCP servers are in `~/.claude.json`, not the repo; re-add them with `claude mcp add`. Hooks reach their scripts through `$HOME`, so the same `settings.json` works on both machines. The script does everything in this section and the headless one below that can run unattended, then runs `verify-t3-headless` and lists what is left (GitHub login without a terminal, shared Wi-Fi, TPM unlock, the Windows-side task, `t3 pair`). Rerun it any time; finished steps are skipped. `--dry-run` shows the commands without running them, `--no-power` skips the laptop power settings, `--no-tailscale` skips Tailscale. With Tailscale it installs the package, starts `tailscaled`, runs `sudo tailscale up` when you're at a terminal, and makes you its operator: `t3 pair --tailscale` runs `tailscale serve` as you, which Linux allows only root or the operator to change. For Tailscale SSH as the way in with the lid shut, also run `sudo tailscale set --ssh`.
+
+```bash
+sudo dnf install -y zsh git        # Ubuntu / WSL2: sudo apt install -y zsh git
+git clone https://github.com/kaovilai/dotfiles ~/git/dotfiles
+zsh ~/git/dotfiles/scripts/setup-t3-headless.zsh
+```
+
+The manual steps follow for reference.
+
 A Linux machine, or WSL2 on Windows 11, can serve as another T3 Code environment on Copilot alone, with no EnMaaS, Vertex or `~/secrets.zsh`. Tested on Fedora 44 and on Ubuntu 24.04 with a simulated WSL PATH (both arm64 containers). The wrappers fall back to `sha256sum` and `ss` where macOS has `shasum` and `lsof`.
 
 On WSL2, install a distro first from PowerShell (`wsl --install -d Ubuntu-24.04`) and run everything below inside it. Keep both checkouts in the Linux filesystem (`~/git`), not under `/mnt/c`: the Windows drive is slow and Windows git checks files out with CRLF line endings. `link-claude-t3-launchers` warns about either, and about a tool on PATH that resolves to a Windows program under `/mnt/c`.
@@ -209,6 +219,38 @@ claude-t3-copilot --prepare          # starts the gateway on :4141, prints the t
 ```
 
 In T3 Code, add a Claude provider instance whose `binaryPath` is `/home/<user>/.local/bin/claude-t3-copilot`. With the desktop app on Windows that's its WSL backend, so the path is the Linux one; a headless box runs the T3 server itself, below.
+
+##### EnMaaS on a Linux host (--enmaas)
+
+EnMaaS works from a personal machine: the gateway (`api.enmaas.devshift.net`) is public and access comes from your API key, which you request or revoke in Atlas key management (VPN needed for that step only). Not approved in Works Council countries. `setup-t3-headless.zsh --enmaas` adds:
+
+- `lsof`, `uv`, `shasum` (`perl-Digest-SHA`) and `ps` (`procps-ng`); on Ubuntu `lsof perl procps` plus uv from astral's installer. The EnMaaS proxy code calls `lsof`, `shasum` and `ps` directly.
+- The Codex CLI (`npm i -g --prefix ~/.local @openai/codex`).
+- `ENMAAS_API_BASE_URL` / `ENMAAS_API_KEY` in `~/secrets.zsh` (mode 600): asked for with hidden input when you run it from a terminal. `~/secrets.zsh` is not synced; the rest of yours stays on the Mac.
+- A one-time download of the pinned LiteLLM. On a cold uv cache the first proxy boot spends its whole startup timeout downloading and fails.
+- `claude-t3-{enmaas,hosted-only}` and `codex-t3-{enmaas,hosted-only}`, then `--prepare` of both Claude backends to prove the key works.
+
+T3 provider instances come from the Mac: `export-t3-providers` there writes every launcher-backed instance (model pins, Codex launch arguments, env) to `t3/provider-instances.json`, home directory as `@HOME@`, values marked sensitive left out. Commit it; `setup-t3-headless.zsh` and `fleet-sync` run `import-t3-providers`, which adds instances whose launcher is linked on that machine and updates ones nobody changed locally since the last import.
+
+Tested on Fedora 44: real prompts through all four launchers. The default models (Codex's `gpt-*` default, Claude's main tier) can be ones your key is not entitled to, on the Mac too; T3 threads pick the model from the instance's list.
+
+##### Keeping machines in sync (fleet-sync)
+
+The dotfiles, Claude config (`~/.config/claude`) and copilot-api checkouts are git repos, so the fleet stays in step by editing on one machine, pushing, and letting the others fast-forward. `fleet-sync` (`scripts/fleet-sync.zsh`) does the fast-forward and applies what changed:
+
+- A changed Claude config installs newly enabled plugins (`sync-claude-plugins`). Once a day it also refreshes marketplaces and updates plugins.
+- A changed copilot-api reinstalls dependencies when `bun.lock` changed and stops the gateway if it is idle, so the next session runs the new code.
+- It never commits, merges or discards. A repo with uncommitted changes, unpushed commits or a diverged branch is skipped with a warning; fix it by hand (commit and push, or `git pull` with your merge of choice).
+
+```bash
+fleet-sync --dry-run      # fetch and report what would move
+fleet-sync                # fast-forward + apply
+fleet-sync --update-plugins
+fleet-sync --install-timer   # Linux: hourly systemd user timer (setup-t3-headless.zsh installs it)
+journalctl --user -u fleet-sync
+```
+
+The timer runs with nobody logged in, so `gh` must keep its token outside the desktop keyring for the private config repo: `setup-t3-headless.zsh` logs in with `gh auth login --insecure-storage` (token in `~/.config/gh/hosts.yml`, mode 600). Not synced, on purpose: MCP servers (`~/.claude.json`), T3 settings and every login.
 
 ##### Headless host (Fedora or WSL2)
 
