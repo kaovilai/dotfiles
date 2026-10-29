@@ -115,7 +115,7 @@ retired GLM_HYBRID_* name as a fallback.
    call_id / tool_use_id), the T3 attachment file when the bytes match one in
    ~/.t3/userdata/attachments (a pasted image), and a copy this proxy keeps in
    HOSTED_ONLY_IMAGE_CACHE_DIR (default $XDG_STATE_HOME/hosted-only-image-cache,
-   content-addressed, expired after HOSTED_ONLY_IMAGE_CACHE_DAYS, default 5;
+   content-addressed, expired after HOSTED_ONLY_IMAGE_CACHE_DAYS, default 1;
    0 keeps no copies). The same bytes always give the same text, so the
    replaced prefix stays stable for prompt caching across turns.
 """
@@ -156,7 +156,7 @@ VISION_FALLBACK = knob("VISION_FALLBACK", "1") != "0"
 IMAGE_BLOCK_TYPES = ("image", "input_image", "image_url")
 LIMIT_REWRITE = knob("LIMIT_REWRITE", "1") != "0"
 IMAGE_BUDGET_BYTES = int_knob("IMAGE_BUDGET_BYTES", 8 * 1024 * 1024, 0)
-IMAGE_CACHE_DAYS = int_knob("IMAGE_CACHE_DAYS", 5, 0)
+IMAGE_CACHE_DAYS = int_knob("IMAGE_CACHE_DAYS", 1, 0)
 IMAGE_CACHE_DIR = knob(
     "IMAGE_CACHE_DIR",
     os.path.join(
@@ -366,14 +366,15 @@ def cache_image(raw, sha, mime, directory=None, days=None, now=None):
         return None
 
 
-def prune_placeholder(source, attachment, cached):
+def prune_placeholder(source, attachment, cached, days=None):
+    days = IMAGE_CACHE_DAYS if days is None else days
     where = []
     if source:
         where.append(f"source file {source}")
     if attachment:
         where.append(f"T3 attachment {attachment}")
     if cached:
-        where.append(f"proxy copy {cached} (kept {IMAGE_CACHE_DAYS} days)")
+        where.append(f"proxy copy {cached} (kept {days} day{'' if days == 1 else 's'})")
     tail = ("; it is still at " + ", ".join(where) + ". View that path again if you need the image.") if where else (
         ". Re-create and view it again if you need it.")
     return f"{PRUNE_MARKER} Image removed by the local proxy to keep this request under the gateway's body limit{tail}"
@@ -430,7 +431,7 @@ def prune_images(data, budget=None, cache_dir=None, cache_days=None, attachments
         sha = hashlib.sha1(raw).hexdigest() if raw else None
         cached = cache_image(raw, sha, mime, cache_dir, cache_days) if raw else None
         attachment = attachment_match(sha, attachments_dir) if sha else None
-        text = prune_placeholder(index.get(anchor), attachment, cached)
+        text = prune_placeholder(index.get(anchor), attachment, cached, cache_days)
         parent[key] = prune_replacement(block, text)
         size -= len(encoded) - len(text)
         pruned += 1

@@ -91,7 +91,7 @@ _hosted_only_proxy_vars() {
     # Image budget prune (hosted_only_hooks.py item 6): content bytes before
     # old inline images become path notes; days a pruned copy is kept.
     typeset -g _hop_image_budget="$(_hosted_only_knob IMAGE_BUDGET_BYTES $((8 * 1024 * 1024)))"
-    typeset -g _hop_image_cache_days="$(_hosted_only_knob IMAGE_CACHE_DAYS 5)"
+    typeset -g _hop_image_cache_days="$(_hosted_only_knob IMAGE_CACHE_DAYS 1)"
 }
 
 _hosted_only_proxy_config() {
