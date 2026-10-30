@@ -8,8 +8,8 @@
 #   ... -Distro FedoraLinux-43     # default: your default WSL distro
 #   ... -Remove                    # delete the task (power settings stay)
 #
-# "Run whether user is logged on or not" stores your Windows password with the
-# task: for a Microsoft account that is the account password, not the PIN.
+# Registered as S4U: runs at boot with nobody signed in and no password stored,
+# so PIN-only / passwordless Microsoft accounts work.
 param(
     [string]$Distro,
     [switch]$Remove
@@ -44,12 +44,13 @@ $settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit ([TimeSpan]::Zero) 
     -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
     -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1)
 $user = "$env:USERDOMAIN\$env:USERNAME"
-$secure = Read-Host "Windows password for $user (stored with the task)" -AsSecureString
-$password = [Net.NetworkCredential]::new('', $secure).Password
+# S4U: runs whether or not anyone is signed in, with no stored password, so it
+# works for passwordless / PIN-only Microsoft accounts. No network credentials.
+$principal = New-ScheduledTaskPrincipal -UserId $user -LogonType S4U -RunLevel Highest
 
 Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction SilentlyContinue
 Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger -Settings $settings `
-    -User $user -Password $password | Out-Null
+    -Principal $principal | Out-Null
 Write-Host "Registered '$TaskName': wsl -d $Distro at startup, nobody signed in"
 
 powercfg /change standby-timeout-ac 0
