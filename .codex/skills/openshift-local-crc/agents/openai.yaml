@@ -1,0 +1,3 @@
+interface:
+  display_name: "OpenShift Local (CRC)"
+  short_description: "Operate and upgrade local OpenShift Local/CRC clusters"

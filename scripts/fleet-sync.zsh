@@ -149,6 +149,29 @@ if [[ -n "${before[dotfiles]-}" ]]; then
     import-t3-providers || (( problems++ ))
 fi
 
+# Codex skills in the dotfiles are symlinks into ~/.codex/skills. Existing
+# user-local skills are left alone so this never overwrites local work.
+_link_codex_skills() {
+    local source_root="$dotfiles_dir/.codex/skills"
+    local target_root="${CODEX_HOME:-$HOME/.codex}/skills"
+    local skill target
+    [[ -d "$source_root" ]] || return 0
+    mkdir -p "$target_root" || return 1
+    for skill in "$source_root"/*(N/); do
+        target="$target_root/${skill:t}"
+        if [[ -L "$target" && "$(readlink "$target")" == "$skill" ]]; then
+            continue
+        fi
+        if [[ -e "$target" ]]; then
+            warning "codex skill ${skill:t}: $target already exists; left untouched"
+            continue
+        fi
+        ln -s "$skill" "$target" || return 1
+        success "codex skill ${skill:t}: linked"
+    done
+}
+_link_codex_skills || (( problems++ ))
+
 if [[ -n "${before[copilot-api]-}" ]]; then
     if [[ -n "$(git -C "$capi_dir" diff --name-only "${before[copilot-api]}" HEAD -- bun.lock package.json)" ]]; then
         progress "copilot-api dependencies changed"

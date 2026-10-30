@@ -34,6 +34,8 @@ export HOME="$tmp/home" XDG_STATE_HOME="$tmp/state" COPILOT_API_PORT=59997
 export FLEET_DOTFILES_DIR="$tmp/dot" FLEET_CLAUDE_DIR="$tmp/cfg" COPILOT_API_DIR="$tmp/capi"
 export CLAUDE_PROVIDER_NATIVE_BINARY="$HOME/.local/bin/claude" STUB_LOG="$tmp/calls"
 mkdir -p "$HOME/.claude/plugins" "$HOME/.local/bin" "$HOME/.bun/bin"
+mkdir -p "$tmp/dot/.codex/skills/example"
+print -r -- "example skill" > "$tmp/dot/.codex/skills/example/SKILL.md"
 print -r -- '{"enabledPlugins":{"x@m":true,"off@m":false},"extraKnownMarketplaces":{"m":{"source":{"source":"github","repo":"o/m"}}}}' > "$HOME/.claude/settings.json"
 cp "$HOME/.claude/settings.json" "$tmp/settings.orig"
 cat > "$HOME/.local/bin/claude" <<'EOF'
@@ -56,6 +58,7 @@ calls() { cat "$STUB_LOG"; }
 # 1. In sync, no plugin stamp yet: daily plugin pass adds the marketplace,
 #    refreshes, installs the enabled plugin only; settings.json put back
 run || fail "first run rc=$rc: $out"
+[[ -L "$HOME/.codex/skills/example" ]] || fail "codex skill not linked: $out"
 [[ "$(calls)" == *"plugin marketplace add o/m"* ]] || fail "marketplace not added: $(calls)"
 [[ "$(calls)" == *"plugin marketplace update"* ]] || fail "marketplaces not refreshed: $(calls)"
 [[ "$(calls)" == *"plugin install x@m"* && "$(calls)" != *"off@m"* ]] || fail "plugin install wrong: $(calls)"
