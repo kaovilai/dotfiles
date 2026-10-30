@@ -155,6 +155,7 @@ _link_codex_skills() {
     local source_root="$dotfiles_dir/.codex/skills"
     local target_root="${CODEX_HOME:-$HOME/.codex}/skills"
     local skill target
+    (( dry )) && return 0
     [[ -d "$source_root" ]] || return 0
     mkdir -p "$target_root" || return 1
     for skill in "$source_root"/*(N/); do
