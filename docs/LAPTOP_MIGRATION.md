@@ -277,7 +277,13 @@ Provider instance in `~/.t3/userdata/settings.json` (merge into an existing file
 
 The copilot-api gateway the launcher starts lives in the service's cgroup, so `t3 service restart` and `t3 update` stop it too; the next session starts it again.
 
-**WSL2, Windows side (untested).** WSL only runs while something holds the distro open, and only for a signed-in user unless a task starts it.
+**WSL2, Windows side (untested).** WSL only runs while something holds the distro open, and only for a signed-in user unless a task starts it. `scripts/wsl-keepalive.ps1` does steps 2 and 3 (the setup script prints the exact path), from an elevated PowerShell; `-Distro <name>` picks a distro other than the default, `-Remove` deletes the task:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File \\wsl.localhost\FedoraLinux-NN\home\<you>\git\dotfiles\scripts\wsl-keepalive.ps1
+```
+
+By hand:
 
 1. Enable systemd in the distro, then restart WSL from PowerShell with `wsl --shutdown`:
    ```ini
@@ -315,7 +321,7 @@ zsh ~/git/dotfiles/scripts/setup-t3-headless.zsh --enmaas       # first run: sys
 # PowerShell: wsl --shutdown, reopen the distro, then rerun the same command to finish
 ```
 
-Then the Windows side above, with the Fedora name in the keepalive task. Notes for this host:
+Then the Windows side above (`wsl-keepalive.ps1` picks up Fedora once it is the default distro: `wsl --set-default FedoraLinux-NN`). Notes for this host:
 
 - Run T3 only as the distro's `t3code.service`, reached through Tailscale inside the distro. Don't also point the Windows T3 Code desktop app at a WSL backend: that path (desktop starting and authenticating the backend) has open startup, token and port 3773 bugs in pingdotgg/t3code.
 - WSL caps the VM at half of Windows' RAM. For kind, agents and Go builds together, raise it in `%UserProfile%\.wslconfig`, then `wsl --shutdown`:

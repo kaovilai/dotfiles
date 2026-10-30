@@ -422,7 +422,7 @@ EOF
 fi
 
 if (( wsl )); then
-    manual+=("Windows side, so WSL runs at boot with nobody signed in: scheduled task + powercfg in docs/LAPTOP_MIGRATION.md (Headless host, WSL2). Distro name: ${WSL_DISTRO_NAME:-<distro>}")
+    manual+=("Windows side, so WSL runs at boot with nobody signed in (scheduled task + no sleep on AC), from an elevated PowerShell: powershell -ExecutionPolicy Bypass -File \\\\wsl.localhost\\${WSL_DISTRO_NAME:-<distro>}${root//\//\\}\\scripts\\wsl-keepalive.ps1")
 fi
 if (( ts_up )); then
     manual+=("Pair your phone over the tailnet: t3 pair --tailscale   (the phone needs Tailscale too; plain t3 pair goes through T3 Connect)")
