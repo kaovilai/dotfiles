@@ -1,5 +1,5 @@
 #!/usr/bin/env zsh
-# Set up a Fedora machine or a WSL2 (Ubuntu) distro as a headless T3 Code host
+# Set up a Fedora machine or a WSL2 distro (Fedora or Ubuntu) as a headless T3 Code host
 # on GitHub Copilot: no EnMaaS, Vertex or ~/secrets.zsh. Safe to rerun; every
 # step skips what is already done.
 #

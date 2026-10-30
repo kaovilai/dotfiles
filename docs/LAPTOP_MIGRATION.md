@@ -198,7 +198,7 @@ The manual steps follow for reference.
 
 A Linux machine, or WSL2 on Windows 11, can serve as another T3 Code environment on Copilot alone, with no EnMaaS, Vertex or `~/secrets.zsh`. Tested on Fedora 44 and on Ubuntu 24.04 with a simulated WSL PATH (both arm64 containers). The wrappers fall back to `sha256sum` and `ss` where macOS has `shasum` and `lsof`.
 
-On WSL2, install a distro first from PowerShell (`wsl --install -d Ubuntu-24.04`) and run everything below inside it. Keep both checkouts in the Linux filesystem (`~/git`), not under `/mnt/c`: the Windows drive is slow and Windows git checks files out with CRLF line endings. `link-claude-t3-launchers` warns about either, and about a tool on PATH that resolves to a Windows program under `/mnt/c`.
+On WSL2, install a distro first from PowerShell (Fedora, see "Fedora on WSL2" below; or `wsl --install -d Ubuntu-24.04`) and run everything below inside it. Keep both checkouts in the Linux filesystem (`~/git`), not under `/mnt/c`: the Windows drive is slow and Windows git checks files out with CRLF line endings. `link-claude-t3-launchers` warns about either, and about a tool on PATH that resolves to a Windows program under `/mnt/c`.
 
 ```bash
 sudo dnf install zsh git jq curl python3                 # Fedora
@@ -287,7 +287,8 @@ The copilot-api gateway the launcher starts lives in the service's cgroup, so `t
    ```
 2. Start the distro at boot and keep it running, from an elevated PowerShell. "Run whether user is logged on or not" needs the account password (a Microsoft account's password, not the PIN):
    ```powershell
-   $a = New-ScheduledTaskAction -Execute 'wsl.exe' -Argument '-d Ubuntu-24.04 --exec /bin/sleep infinity'
+   # -d: your distro's name from `wsl --list` (FedoraLinux-NN, Ubuntu-24.04, ...)
+   $a = New-ScheduledTaskAction -Execute 'wsl.exe' -Argument '-d FedoraLinux-NN --exec /bin/sleep infinity'
    $t = New-ScheduledTaskTrigger -AtStartup
    $s = New-ScheduledTaskSettingsSet -ExecutionTimeLimit ([TimeSpan]::Zero) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
    Register-ScheduledTask -TaskName 'WSL keepalive' -Action $a -Trigger $t -Settings $s -User $env:USERNAME -Password (Read-Host 'Windows password')
@@ -297,6 +298,38 @@ The copilot-api gateway the launcher starts lives in the service's cgroup, so `t
 4. For maintenance without a screen, enable Windows' OpenSSH server (then `wsl` from the SSH session) or run Tailscale with SSH inside the distro.
 
 After a reboot, check from inside the distro with `verify-t3-headless`.
+
+**Fedora on WSL2 (the distro to pick).** Same package manager and versions as a Fedora laptop, so one setup path for the fleet: Fedora's repos carry a current Node, `uv` and podman, where Ubuntu 24.04 needs NodeSource and astral's installer. The setup script handles both; neither has run on real WSL yet (Fedora 44 was tested in a container, Ubuntu 24.04 in a container with a simulated WSL PATH).
+
+```powershell
+wsl --list --online              # pick the newest FedoraLinux-NN
+wsl --install FedoraLinux-NN     # asks for a Linux user and password
+```
+
+Inside the distro:
+
+```bash
+sudo dnf install -y zsh git
+git clone https://github.com/kaovilai/dotfiles ~/git/dotfiles   # ext4, not /mnt/c
+zsh ~/git/dotfiles/scripts/setup-t3-headless.zsh --enmaas       # first run: systemd in /etc/wsl.conf
+# PowerShell: wsl --shutdown, reopen the distro, then rerun the same command to finish
+```
+
+Then the Windows side above, with the Fedora name in the keepalive task. Notes for this host:
+
+- Run T3 only as the distro's `t3code.service`, reached through Tailscale inside the distro. Don't also point the Windows T3 Code desktop app at a WSL backend: that path (desktop starting and authenticating the backend) has open startup, token and port 3773 bugs in pingdotgg/t3code.
+- WSL caps the VM at half of Windows' RAM. For kind, agents and Go builds together, raise it in `%UserProfile%\.wslconfig`, then `wsl --shutdown`:
+  ```ini
+  [wsl2]
+  memory=24GB   # size to the machine
+  swap=8GB
+  ```
+- Containers: podman or docker-ce inside the distro, not Docker Desktop's WSL integration. Rootless podman under kind needs cgroup v2 (`stat -fc %T /sys/fs/cgroup` prints `cgroup2fs`). kind's recommended inotify limits, for this host and the laptop alike:
+  ```bash
+  printf 'fs.inotify.max_user_watches=524288\nfs.inotify.max_user_instances=512\n' |
+      sudo tee /etc/sysctl.d/99-kind-inotify.conf && sudo sysctl --system
+  ```
+- No sshd is set up here (the laptop step skips WSL). To send the EnMaaS key from the Mac instead of pasting it at the prompt, run `sudo tailscale set --ssh` in the distro and pipe the two `export` lines over ssh into `~/secrets.zsh` (mode 600).
 
 **Lid-closed Fedora laptop.** Plugged in with the lid shut and nobody logged in, a stock Fedora Workstation suspends on lid close, suspends again after a while idle at the login screen, and after a reboot can sit at the disk passphrase or come up without Wi-Fi. On a machine with a battery, `verify-t3-headless` checks each of these. The settings below are untested here (the test containers have no logind, GDM or TPM).
 
