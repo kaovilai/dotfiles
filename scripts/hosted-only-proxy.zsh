@@ -193,10 +193,18 @@ _hosted_only_proxy_ensure() {
     [[ -r "$hooks" ]] || { print -ru2 -- "hosted-only: missing $hooks"; return 1; }
     [[ -r "$usage_log" ]] || { print -ru2 -- "hosted-only: missing $usage_log"; return 1; }
 
-    local config fp hooks_hash token_fp
+    local config fp hooks_hash token_fp dns_hash='' dns_host=''
     config=$(_hosted_only_proxy_config)
     hooks_hash=$(_hosted_only_code_hash "$hooks" "$usage_log") || return 1
-    fp=$(print -rn -- "$config"$'\x1f'"$hooks_hash"$'\x1f'"$ENMAAS_API_KEY"$'\x1f'"$litellm_version $fastapi_version $_hop_vision_fallback $_hop_limit_rewrite $_hop_limit_retry $_hop_client_retry $_hop_upstream_retries $_hop_image_budget $_hop_image_cache_days" \
+    # DoH fallback for the gateway name only, same shim as the EnMaaS proxy;
+    # HOSTED_ONLY_DNS_FALLBACK=0 drops it and changes the fingerprint.
+    if [[ "$(_hosted_only_knob DNS_FALLBACK 1)" != 0 ]]; then
+        dns_hash=$(_hosted_only_code_hash "$_HOSTED_ONLY_SCRIPTS/dns_fallback.py") || return 1
+        dns_host=$(_hosted_only_knob ENMAAS_BASE_URL "${ENMAAS_API_BASE_URL:-https://api.enmaas.devshift.net}")
+        dns_host="${dns_host#*://}"
+        dns_host="${dns_host%%/*}"
+    fi
+    fp=$(print -rn -- "$config"$'\x1f'"$hooks_hash"$'\x1f'"$dns_hash"$'\x1f'"$ENMAAS_API_KEY"$'\x1f'"$litellm_version $fastapi_version $_hop_vision_fallback $_hop_limit_rewrite $_hop_limit_retry $_hop_client_retry $_hop_upstream_retries $_hop_image_budget $_hop_image_cache_days" \
         | shasum -a 256 | cut -d' ' -f1)
     token_fp=$(print -rn -- "$_hop_token" | shasum -a 256 | cut -d' ' -f1)
 
@@ -255,11 +263,17 @@ _hosted_only_proxy_ensure() {
             print -r -- "$config" >| "$_hop_runtime/config.yaml" || return 1
             cp -f "$hooks" "$_hop_runtime/hosted_only_hooks.py" || return 1
             cp -f "$usage_log" "$_hop_runtime/litellm_usage_log.py" || return 1
+            local -a dns_env=()
+            if [[ -n "$dns_hash" ]]; then
+                cp -f "$_HOSTED_ONLY_SCRIPTS/dns_fallback.py" "$_hop_runtime/sitecustomize.py" || return 1
+                dns_env=(PYTHONPATH="$_hop_runtime" ENMAAS_DNS_FALLBACK_HOSTS="$dns_host")
+            fi
             rm -f "$_hop_runtime/fingerprint"
             ENMAAS_API_KEY="$ENMAAS_API_KEY" HOSTED_ONLY_PROXY_TOKEN="$_hop_token" \
                 HOSTED_ONLY_GLM_MODEL="$_hop_glm" HOSTED_ONLY_DEEPSEEK_MODEL="$_hop_deepseek" HOSTED_ONLY_VISION_FALLBACK="$_hop_vision_fallback" \
                 HOSTED_ONLY_LIMIT_REWRITE="$_hop_limit_rewrite" HOSTED_ONLY_RATE_LIMIT_DEFAULT_RETRY_SECONDS="$_hop_limit_retry" HOSTED_ONLY_CLIENT_RETRY_MAX_SECONDS="$_hop_client_retry" LITELLM_LOG="$(_hosted_only_knob LITELLM_LOG ERROR)" \
                 HOSTED_ONLY_IMAGE_BUDGET_BYTES="$_hop_image_budget" HOSTED_ONLY_IMAGE_CACHE_DAYS="$_hop_image_cache_days" \
+                env "${dns_env[@]}" \
                 python3 "$_HOSTED_ONLY_SCRIPTS/claude-provider.py" --background "$_hop_runtime/proxy.log" \
                 uv tool run --with "fastapi==$fastapi_version" --from "litellm[proxy]==$litellm_version" litellm \
                 --config "$_hop_runtime/config.yaml" --host 127.0.0.1 --port "$_hop_port" --telemetry False || return 1

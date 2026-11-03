@@ -311,13 +311,19 @@ _claude_vertex_get_models() {
     fi
 
     local models_json
-    models_json=$(_claude_vertex_publisher_models) || echo "⚠️  Couldn't fetch Model Garden catalog -- using hardcoded fallbacks per tier." >&2
+    local fetched=1
+    models_json=$(_claude_vertex_publisher_models) || { fetched=0; echo "⚠️  Couldn't fetch Model Garden catalog -- using hardcoded fallbacks per tier." >&2; }
 
     local opus sonnet haiku
     opus=$(_claude_vertex_resolve_tier_model opus "claude-opus-4-8" "$models_json")
     sonnet=$(_claude_vertex_resolve_tier_model sonnet "claude-sonnet-5" "$models_json")
     haiku=$(_claude_vertex_resolve_tier_model haiku "claude-haiku-4-5" "$models_json")
 
+    # Fallbacks picked while offline must not be cached as if probed.
+    if (( ! fetched )); then
+        print -r -- "${opus} ${sonnet} ${haiku}"
+        return 0
+    fi
     mkdir -p "${_claude_vertex_models_file:h}"
     {
         echo "PROJECT=${ANTHROPIC_VERTEX_PROJECT_ID}"

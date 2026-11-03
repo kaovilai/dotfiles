@@ -170,7 +170,7 @@ def signature(key, token):
 # Hook modules (CLAUDE_ENMAAS_HOOK_FILES, newline separated absolute paths, in
 # callback order) are copied next to the config and loaded as dotted modules:
 # LiteLLM splits a callback on '.', so a file path or `file.py:name` cannot work.
-HOOK_ENV_PREFIXES = ('HOSTED_ONLY_', 'GLM_HYBRID_', 'ENMAAS_RESPONSES_')
+HOOK_ENV_PREFIXES = ('HOSTED_ONLY_', 'GLM_HYBRID_', 'ENMAAS_RESPONSES_', 'ENMAAS_DNS_')
 CHILD_ENV_PREFIXES = HOOK_ENV_PREFIXES + ('LLM_USAGE_',)
 
 
@@ -215,6 +215,27 @@ def install_hooks(root, files):
         with os.fdopen(fd, 'wb') as stream:
             stream.write(path.read_bytes())
     return [path.stem + '.proxy_handler_instance' for path in files]
+
+
+def dns_shim():
+    # scripts/dns_fallback.py, installed as sitecustomize.py so the LiteLLM
+    # child falls back to DoH when the system resolver cannot answer for the
+    # gateway name. Off with CLAUDE_ENMAAS_DNS_FALLBACK=0.
+    if os.environ.get('CLAUDE_ENMAAS_DNS_FALLBACK', '1') == '0':
+        return None
+    path = Path(os.environ.get('CLAUDE_ENMAAS_DNS_SHIM') or '')
+    return path if path.name and path.is_file() else None
+
+
+def proxy_digest(files):
+    shim = dns_shim()
+    return hook_digest(files + ([shim] if shim else []))
+
+
+def install_shim(root, shim):
+    fd = os.open(root / 'sitecustomize.py', os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(fd, 'wb') as stream:
+        stream.write(shim.read_bytes())
 
 
 def stop(root, info, port=None):
@@ -269,7 +290,7 @@ def check(root, port, config, versions, required):
     if not ready(info, info_root):
         return {'state': 'stale', 'changed': ['recorded proxy is not ready'], 'busy': busy(port)}
     changed, _, _, _ = changes(info_root, info, root, config, versions, os.environ['ENMAAS_API_KEY'],
-                               hook_digest(hook_files()), required)
+                               proxy_digest(hook_files()), required)
     return {'state': 'stale' if changed else 'fresh', 'changed': changed, 'busy': busy(port)}
 
 
@@ -277,7 +298,8 @@ def ensure(root, port, config, versions, timeout, required):
     info_root, info = locate(root, port)
     key = os.environ['ENMAAS_API_KEY']
     files = hook_files()
-    hooks = hook_digest(files)
+    shim = dns_shim()
+    hooks = proxy_digest(files)
     if owned(info):
         if not ready(info, info_root):
             raise RuntimeError('recorded proxy is not ready; run claude-enmaas-kill before relaunching')
@@ -320,6 +342,8 @@ def ensure(root, port, config, versions, timeout, required):
     config['general_settings']['master_key'] = token
     if files:
         config.setdefault('litellm_settings', {})['callbacks'] = install_hooks(root, files)
+    if shim:
+        install_shim(root, shim)
     write_private(root / 'config.json', config)
     args = ['uv', 'tool', 'run', '--with', 'fastapi==' + versions[1],
             '--from', 'litellm[proxy]==' + versions[0], 'litellm',
@@ -329,6 +353,12 @@ def ensure(root, port, config, versions, timeout, required):
            ('PATH', 'HOME', 'TMPDIR', 'UV_CACHE_DIR', 'UV_OFFLINE', 'XDG_CACHE_HOME', 'XDG_STATE_HOME', 'LANG', 'LC_ALL')
            or k.startswith(CHILD_ENV_PREFIXES)}
     env.update(ENMAAS_API_KEY=key, LITELLM_LOG=os.environ.get('CLAUDE_ENMAAS_LITELLM_LOG') or 'ERROR')
+    if shim:
+        # PYTHONPATH is this launch's runtime dir only, so sitecustomize.py
+        # reaches the LiteLLM child and nothing else on the machine.
+        env.update(PYTHONPATH=str(root),
+                   ENMAAS_DNS_FALLBACK_HOSTS=os.environ.get('ENMAAS_DNS_FALLBACK_HOSTS', ''),
+                   ENMAAS_DNS_DOH_URLS=os.environ.get('ENMAAS_DNS_DOH_URLS', ''))
     # A boot failure (bad config, hook import error) must leave a trace.
     log = root / 'proxy.log'
     logfd = os.open(log, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)

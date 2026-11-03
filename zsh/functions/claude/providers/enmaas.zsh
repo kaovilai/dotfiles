@@ -69,6 +69,17 @@ _claude_enmaas_hook_env() {
     done
     export CLAUDE_ENMAAS_HOOK_FILES="${files%$'\n'}"
     export ENMAAS_RESPONSES_ROUTES="$(_claude_enmaas_glm_id),$(_claude_enmaas_deepseek_id)"
+    # DoH fallback for the gateway name only (scripts/dns_fallback.py, loaded
+    # as sitecustomize in the proxy child). CLAUDE_ENMAAS_DNS_FALLBACK=0 off.
+    export CLAUDE_ENMAAS_DNS_SHIM="$_CLAUDE_ENMAAS_SCRIPTS/dns_fallback.py"
+    export ENMAAS_DNS_FALLBACK_HOSTS="$(_claude_enmaas_gateway_host)"
+}
+
+# Host the gateway URL points at: the only name the DoH fallback may resolve.
+_claude_enmaas_gateway_host() {
+    local url="${1:-${ENMAAS_API_BASE_URL:-https://api.enmaas.devshift.net}}"
+    url="${url#*://}"
+    print -r -- "${url%%/*}"
 }
 
 _claude_enmaas_root() {
@@ -150,7 +161,17 @@ _claude_enmaas_catalog() {
     else
         print -ru2 -- 'claude-enmaas: OpenAI catalog discovery unavailable; GPT models may be omitted. Exact supported IDs can still be pinned with CLAUDE_ENMAAS_MODEL_DIALECTS.'
     fi
-    _claude_enmaas_models "$a" "$b" "$r"
+    local merged cache="${XDG_CACHE_HOME:-$HOME/.cache}/claude-enmaas-catalog.json"
+    merged=$(_claude_enmaas_models "$a" "$b" "$r") || return 1
+    # Offline (e.g. flaky wifi) the last good catalog keeps a restart from
+    # failing with "no usable models" after the old proxy was already stopped.
+    if jq -e '.data | length > 0' <<< "$merged" &>/dev/null; then
+        mkdir -p "${cache:h}" && print -r -- "$merged" >| "$cache"
+    elif [[ -s "$cache" ]] && jq -e '.data | length > 0' "$cache" &>/dev/null; then
+        print -ru2 -- 'claude-enmaas: catalog unreachable; using the last cached catalog.'
+        merged=$(<"$cache")
+    fi
+    print -r -- "$merged"
 }
 
 _claude_enmaas_models() {

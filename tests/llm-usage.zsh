@@ -831,6 +831,62 @@ python3 -m py_compile "$repo/scripts/litellm_usage_log.py" "$usage" || fail "py_
     llm-proxy-restart nope 2>/dev/null && { print -ru2 -- "FAIL: unknown target accepted"; exit 1; }
     llm-proxy-restart required nope 2>/dev/null && { print -ru2 -- "FAIL: required: unknown target accepted"; exit 1; }
 
+    # EnMaaS restarts resolve the gateway name before stopping anything: one
+    # stale manual resolver breaks only that name, so it must not cost a
+    # working proxy, and the failure has to name the service DNS setting.
+    local dnsbin="$tmp/dnsbin" dnslog="$tmp/dns-calls"
+    mkdir -p "$dnsbin"
+    cat > "$dnsbin/python3" <<'SH'
+#!/bin/zsh
+[[ -z "$DNS_STUB_DOWN" ]] || exit 2   # getaddrinfo "no such host"
+[[ -z "$DNS_STUB_BLIND" ]] || exit 3  # could not even try
+print -r -- 203.0.113.9
+SH
+    cat > "$dnsbin/networksetup" <<'SH'
+#!/bin/zsh
+case "$1" in
+  -listallnetworkservices) print -r -- 'An asterisk (*) denotes that a network service is disabled.'; print -r -- Wi-Fi; print -r -- 'USB LAN' ;;
+  -getdnsservers) if [[ "$2" == Wi-Fi ]]; then print -r -- "There aren't any DNS Servers set on Wi-Fi."; else print -r -- 1.1.1.1; fi ;;
+esac
+SH
+    cat > "$dnsbin/scutil" <<'SH'
+#!/bin/zsh
+print -r -- 'resolver #1'
+print -r -- '  nameserver[0] : 192.168.1.1'
+SH
+    chmod +x "$dnsbin"/*
+    (
+        path=("$dnsbin" $path)
+        rehash
+        _claude_enmaas_port() { print -r -- 4146; }
+        claude-enmaas-kill() { print -r -- killed >> "$dnslog"; }
+        claude-enmaas() { print -r -- started >> "$dnslog"; return 0; }
+        _llm_proxy_wait_down() { return 0; }
+        _llm_proxy_wait_up() { return 0; }
+        : > "$dnslog"
+        local out rc=0
+        out=$(claude-enmaas-restart 2>&1) || rc=$?
+        [[ $rc == 0 ]] || fail "enmaas restart with working DNS (rc=$rc): $out"
+        [[ "$out" == *"dns api.enmaas.devshift.net -> 203.0.113.9"* ]] || fail "dns resolve line missing: $out"
+        [[ "$(<"$dnslog")" == $'killed\nstarted' ]] || fail "restart did not stop then start: $(<"$dnslog")"
+        : > "$dnslog"
+        export DNS_STUB_DOWN=1
+        rc=0 out=$(claude-enmaas-restart 2>&1) || rc=$?
+        [[ $rc == 1 ]] || fail "unresolvable gateway must fail the restart (rc=$rc): $out"
+        [[ "$out" == *"dns api.enmaas.devshift.net does not resolve"* && "$out" == *"forwarders in use: 192.168.1.1"* \
+           && "$out" == *"Wi-Fi: (DHCP)"* && "$out" == *"USB LAN: 1.1.1.1"* && "$out" == *"setdnsservers"* ]] \
+            || fail "dns report: $out"
+        [[ ! -s "$dnslog" ]] || fail "restart stopped a proxy while DNS was broken"
+        # A resolver that cannot be queried at all must not block a restart.
+        unset DNS_STUB_DOWN
+        export DNS_STUB_BLIND=1
+        : > "$dnslog"
+        rc=0 out=$(claude-enmaas-restart 2>&1) || rc=$?
+        [[ $rc == 0 && "$out" == *"could not check dns"* ]] || fail "uncheckable DNS must not block (rc=$rc): $out"
+        [[ "$(<"$dnslog")" == $'killed\nstarted' ]] || fail "uncheckable DNS skipped the restart: $(<"$dnslog")"
+        exit 0
+    ) || exit 1
+
     # `required`: only listening proxies whose dry-run check says stale (or
     # whose listener fails its health check) restart; fresh ones stay; an
     # unanswerable check is reported and fails the command without restarting.

@@ -77,6 +77,20 @@ claude-copilot() {
         fi
         _claude_proxy_start "$log" "${runner[@]}" start --port "${port}" || return 1
         local i
+        # Restart-only (llm-proxy-restart): the gateway reaching /v1/models
+        # needs GitHub, which may be down (flaky wifi). It is started and keeps
+        # retrying on its own, so success is the process listening, not the
+        # upstream answering; the model fetch below is skipped too.
+        if [[ -n "${_CLAUDE_COPILOT_RESTART_ONLY-}" ]]; then
+            for i in {1..60}; do
+                [[ -n "$(_claude_listen_pids "$port")" ]] && break
+                sleep 1
+            done
+            [[ -n "$(_claude_listen_pids "$port")" ]] || { echo "❌ copilot-api not listening on ${base} after 60s (log: ${log})." >&2; return 1; }
+            cfp=$(_claude_proxy_fp "$(_claude_file_hash "${capi_data}/github_token" "${capi_data}/config.json" "$monitor")" "$port" "$plugins" "$monitor_dir")
+            _claude_proxy_record copilot-api "$cfp"
+            return 0
+        fi
         for i in {1..60}; do
             curl -sf --max-time 2 "${base}/v1/models" -o /dev/null && break
             sleep 1
@@ -95,6 +109,7 @@ claude-copilot() {
         _claude_proxy_record copilot-api "$cfp"
     fi
 
+    [[ -n "${_CLAUDE_COPILOT_RESTART_ONLY-}" ]] && return 0
     local models_json
     models_json=$(curl -sf --max-time 10 "${base}/v1/models") || {
         echo "❌ Failed to fetch ${base}/v1/models" >&2

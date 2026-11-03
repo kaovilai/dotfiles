@@ -14,7 +14,11 @@
 #   claude-hosted-only-restart hosted-only, Claude flavor  :4148 (= claude-{glm-hybrid,glm-only}-restart)
 #   codex-hosted-only-restart  hosted-only, Codex flavor   :4147 (= codex-{glm-hybrid,glm-only}-restart)
 #   llm-proxy-restart [name ...|all|--list]   several at once; no args or `all`
-#                              restarts only the ones currently listening
+#                              restarts only the ones currently listening.
+#                              A proxy whose restart fails is retried until it
+#                              comes up (round-robin, per-proxy exponential
+#                              backoff 2s..60s, e.g. flaky wifi); a leading
+#                              --no-retry makes it fail once instead.
 #   llm-proxy-restart required [name ...]     restarts only the listening proxies
 #                              whose running process is behind what a launch
 #                              would start now (config, hooks, knobs, key,
@@ -29,6 +33,109 @@
 #                              Gives up on a proxy still busy after
 #                              LLM_PROXY_RESTART_IDLE_TIMEOUT seconds
 #                              (default 1800) and reports it.
+#
+# Every EnMaaS-backed restart (enmaas, glm-claude, glm-codex) resolves the
+# gateway name before it stops anything: a stale manual DNS server left on one
+# network service outranks the router's DHCP answer and breaks only that name,
+# so a restart would swap a working proxy for one that cannot reach the
+# gateway. When the name does not resolve, the command prints the resolvers in
+# use and each service's own DNS setting instead.
+
+# _llm_proxy_gateway_host [url]: host[:port] of the gateway the EnMaaS
+# proxies talk to; defaults to the shared ENMAAS_API_BASE_URL.
+_llm_proxy_gateway_host() {
+    local url="${1:-${ENMAAS_API_BASE_URL:-https://api.enmaas.devshift.net}}"
+    url="${url#*://}"
+    print -r -- "${url%%/*}"
+}
+
+# _llm_proxy_dns_addresses <host>: one resolved address per line, via libc
+# getaddrinfo because that is what the proxies themselves resolve with.
+# Exit 2 when the name does not resolve, 3 when it could not be checked at
+# all (that must not block a restart, unlike an answer of "no such host").
+_llm_proxy_dns_addresses() {
+    command -v python3 >/dev/null 2>&1 || return 3
+    python3 - "$1" <<'PY'
+import socket, sys
+try:
+    infos = socket.getaddrinfo(sys.argv[1], None, proto=socket.IPPROTO_TCP)
+except socket.gaierror:
+    sys.exit(2)
+except Exception:
+    sys.exit(3)
+seen = []
+for info in infos:
+    addr = info[4][0]
+    if addr not in seen:
+        seen.append(addr)
+print('\n'.join(seen))
+PY
+}
+
+# _llm_proxy_dns_doh <host>: addresses from DNS-over-HTTPS, for the case the
+# system resolver cannot answer. Same servers the proxy shim uses.
+_llm_proxy_dns_doh() {
+    local host="$1" url answer addrs
+    for url in "https://1.1.1.1/dns-query?name=$host&type=A" \
+               "https://1.0.0.1/dns-query?name=$host&type=A" \
+               "https://dns.google/resolve?name=$host&type=A"; do
+        answer=$(command curl -sS --max-time 5 -H 'accept: application/dns-json' "$url" 2>/dev/null) || continue
+        addrs=$(print -r -- "$answer" | jq -r '(.Answer // [])[] | select(.type == 1 or .type == 28) | .data' 2>/dev/null \
+            | awk '!seen[$0]++')
+        [[ -n "$addrs" ]] || continue
+        print -r -- "$addrs"
+        return 0
+    done
+    return 1
+}
+
+# _llm_proxy_dns_report <host>: why a name is not resolving, and the fix.
+_llm_proxy_dns_report() {
+    local host="$1" svc servers forwarders
+    local -a services manual
+    print -ru2 -- "restart: dns $host does not resolve"
+    forwarders=$(scutil --dns 2>/dev/null | awk -F': ' '/nameserver\[[0-9]+\]/{print $2}' \
+        | awk '!seen[$0]++' | tr '\n' ' ')
+    print -ru2 -- "  forwarders in use: ${${forwarders% }:-unknown}"
+    print -ru2 -- '  per-service DNS (networksetup; (DHCP) = taken from the router):'
+    services=(${(f)"$(networksetup -listallnetworkservices 2>/dev/null)"})
+    for svc in $services[2,-1]; do
+        [[ -n "$svc" ]] || continue
+        servers=$(networksetup -getdnsservers "$svc" 2>/dev/null | tr '\n' ' ')
+        servers=${servers% }
+        if [[ -z "$servers" || "$servers" == "There aren't any DNS Servers set on"* ]]; then
+            print -ru2 -- "    $svc: (DHCP)"
+        else
+            print -ru2 -- "    $svc: $servers  (manual)"
+            manual+=("$svc")
+        fi
+    done
+    print -ru2 -- '  fix: a manual server on an active service outranks DHCP. Reset the flagged one to a'
+    print -ru2 -- '       known-good resolver, or to the router, then flush the cache:'
+    print -ru2 -- "    networksetup -setdnsservers \"${manual[1]:-Wi-Fi}\" 1.1.1.1 8.8.8.8"
+    print -ru2 -- "    networksetup -setdnsservers \"${manual[1]:-Wi-Fi}\" Empty   # back to DHCP"
+    print -ru2 -- '    sudo dscacheutil -flushcache; sudo killall -HUP mDNSResponder'
+}
+
+# _llm_proxy_dns_probe <host> <label>: gate a restart on the gateway name.
+_llm_proxy_dns_probe() {
+    local host="$1" label="$2" addrs rc=0
+    addrs=$(_llm_proxy_dns_addresses "$host") || rc=$?
+    case "$rc" in
+        0) print -ru2 -- "restart: dns $host -> ${(j:, :)${(f)addrs}}"; return 0 ;;
+        2) if addrs=$(_llm_proxy_dns_doh "$host"); then
+               print -ru2 -- "restart: dns $host -> ${(j:, :)${(f)addrs}} (system resolver failed; DoH)"
+               return 0
+           fi
+           _llm_proxy_dns_report "$host"
+           print -ru2 -- "restart: not restarting $label while its gateway name is unresolvable"
+           return 1 ;;
+    esac
+    # Cannot tell (resolver tools unavailable, e.g. a locked-down sandbox):
+    # say so and let the restart try, instead of blocking on a guess.
+    print -ru2 -- "restart: could not check dns for $host; restarting $label anyway"
+    return 0
+}
 
 # _llm_proxy_wait_down <port>: up to 15s for the listener to go away, one dot
 # per half-second so the wait is visible.
@@ -68,7 +175,7 @@ claude-copilot-restart() {
     # claude-copilot exports into the calling shell, so run it in a subshell;
     # starting the gateway happens before `claude --version` runs.
     print -ru2 -- 'restart: copilot starting'
-    ( claude-copilot --version >/dev/null ) || return 1
+    ( _CLAUDE_COPILOT_RESTART_ONLY=1 claude-copilot --version >/dev/null ) || return 1
     _llm_proxy_wait_up "${COPILOT_API_PORT:-4141}" copilot
 }
 
@@ -89,16 +196,26 @@ claude-openai-restart() {
 }
 
 claude-enmaas-restart() {
+    local host rc
+    host=$(_llm_proxy_gateway_host)
+    _llm_proxy_dns_probe "$host" enmaas || return 1
     claude-enmaas-kill >/dev/null 2>&1  # non-zero when nothing runs; a stuck listener is caught below
     _llm_proxy_wait_down "$(_claude_enmaas_port)" || return 1
     # Model discovery (three catalog fetches) runs before the proxy boots, so
     # this step is the slow one; keep the user informed instead of blanking.
     print -ru2 -- 'restart: enmaas starting (model discovery, then proxy boot)'
-    claude-enmaas --version >/dev/null || return 1
+    claude-enmaas --version >/dev/null || {
+        # A launcher failure is usually config, but DNS can change between the
+        # probe above and here; only re-explain it when that is what broke.
+        rc=0; _llm_proxy_dns_addresses "$host" >/dev/null || rc=$?
+        if (( rc == 2 )); then _llm_proxy_dns_report "$host"; fi
+        return 1
+    }
     _llm_proxy_wait_up "$(_claude_enmaas_port)" enmaas
 }
 
 claude-hosted-only-restart() {
+    _llm_proxy_dns_probe "$(_llm_proxy_gateway_host "${HOSTED_ONLY_ENMAAS_BASE_URL:-}")" 'hosted-only claude' || return 1
     _hosted_only_proxy_stop claude || return 1
     _llm_proxy_wait_down "$(_hosted_only_knob CLAUDE_PROXY_PORT 4148)" || return 1
     print -ru2 -- 'restart: hosted-only claude starting'
@@ -109,6 +226,7 @@ claude-glm-hybrid-restart() { claude-hosted-only-restart; }
 claude-glm-only-restart() { claude-hosted-only-restart; }
 
 codex-hosted-only-restart() {
+    _llm_proxy_dns_probe "$(_llm_proxy_gateway_host "${HOSTED_ONLY_ENMAAS_BASE_URL:-}")" 'hosted-only codex' || return 1
     _hosted_only_proxy_stop codex || return 1
     _llm_proxy_wait_down "$(_hosted_only_knob CODEX_PROXY_PORT 4147)" || return 1
     print -ru2 -- 'restart: hosted-only codex starting'
@@ -163,7 +281,8 @@ llm-proxy-restart() {
         done
         return 0
     fi
-    local required=0 on_idle=0
+    local required=0 on_idle=0 retry=1
+    [[ "${1-}" == --no-retry ]] && { retry=0; shift; }
     case "${1-}" in
         required) required=1; shift ;;
         required-on-idle) required=1; on_idle=1; shift ;;
@@ -178,7 +297,7 @@ llm-proxy-restart() {
         targets=("$@")
     fi
     local t rc=0 verdict why
-    local -a pending
+    local -a pending failed
     for t in $targets; do
         [[ -n "${fn[$t]-}" ]] || { print -ru2 -- "llm-proxy-restart: unknown '$t' (choose: $order, all, required, required-on-idle, --list)"; rc=1; continue; }
         if (( required )); then
@@ -199,7 +318,7 @@ llm-proxy-restart() {
         else
             print -ru2 -- "== restarting $t (:${port[$t]})"
         fi
-        ${fn[$t]} || { print -ru2 -- "llm-proxy-restart: $t failed"; rc=1; }
+        ${fn[$t]} || { print -ru2 -- "llm-proxy-restart: $t failed"; failed+=($t); }
     done
     # required-on-idle: verdicts are in; now cut each pending proxy at the
     # first half-second poll that finds no request in flight on its port,
@@ -224,7 +343,7 @@ llm-proxy-restart() {
                     continue
                 fi
                 print -ru2 -- "== $t (:${port[$t]}) idle; restarting now"
-                ${fn[$t]} || { print -ru2 -- "llm-proxy-restart: $t failed"; rc=1; }
+                ${fn[$t]} || { print -ru2 -- "llm-proxy-restart: $t failed"; failed+=($t); }
             done
             pending=($still)
             if (( ${#pending} )); then
@@ -233,5 +352,31 @@ llm-proxy-restart() {
             fi
         done
     fi
+    # A failed restart (typically a start step that needs the network) is
+    # retried until it succeeds: round-robin over the failed proxies, each with
+    # its own exponential backoff (2s doubling to a 60s cap), so one stuck
+    # proxy never blocks the others. Ctrl-C aborts. --no-retry fails once.
+    if (( ${#failed} && retry )); then
+        local -A delay due
+        local now
+        for t in $failed; do delay[$t]=2; due[$t]=$(( EPOCHSECONDS + 2 )); done
+        print -ru2 -- "== retrying with backoff until up: $failed (Ctrl-C to stop)"
+        while (( ${#failed} )); do
+            now=$EPOCHSECONDS
+            for t in $failed; do
+                (( now >= due[$t] )) || continue
+                print -ru2 -- "== retry $t (:${port[$t]})"
+                if ${fn[$t]}; then
+                    failed=(${failed:#$t})
+                else
+                    delay[$t]=$(( delay[$t] * 2 > 60 ? 60 : delay[$t] * 2 ))
+                    due[$t]=$(( EPOCHSECONDS + delay[$t] ))
+                    print -ru2 -- "== $t still failing; next try in ${delay[$t]}s"
+                fi
+            done
+            (( ${#failed} )) && sleep 1
+        done
+    fi
+    (( ${#failed} )) && rc=1
     return $rc
 }

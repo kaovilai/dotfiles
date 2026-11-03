@@ -6,6 +6,7 @@ setopt err_exit pipe_fail
 umask 077
 local repo="${0:A:h:h}" tmp run_pid=''
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/claude-enmaas-tests.XXXXXXXX")
+export XDG_CACHE_HOME="$tmp/cache"
 trap '[[ -n "$run_pid" ]] && kill -TERM "$run_pid" 2>/dev/null; rm -rf -- "$tmp"' EXIT
 
 # Load actual shared helpers without unrelated wrapper startup configuration.
@@ -305,6 +306,7 @@ export CLAUDE_ENMAAS_PROXY_START_TIMEOUT=3
 # Discovery is advisory; exact selections still work with an empty/broken catalog.
 for catalog in empty unavailable; do
     touch "$tmp/catalog-$catalog"
+    rm -f "$tmp/cache/claude-enmaas-catalog.json"
     rc=0; claude-enmaas >"$tmp/stdout" 2>"$tmp/stderr" || rc=$?
     _claude_enmaas_assert "$catalog catalog without explicit model fails" test "$rc" = 1
     claude-enmaas --model undiscovered-exact >"$tmp/stdout" 2>"$tmp/stderr"
