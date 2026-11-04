@@ -1,6 +1,28 @@
 {
   "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "exec_command|Bash|Shell",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash $HOME/.claude/hooks/inject-commit-attribution.sh",
+            "statusMessage": "Checking AI commit attribution"
+          }
+        ]
+      }
+    ],
     "PostToolUse": [
+      {
+        "matcher": "exec_command|Bash|Shell",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash $HOME/.claude/hooks/nudge-missing-ai-trailer.sh",
+            "statusMessage": "Checking commit AI trailer"
+          }
+        ]
+      },
       {
         "matcher": "Edit|Write",
         "hooks": [

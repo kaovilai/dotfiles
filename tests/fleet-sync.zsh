@@ -36,6 +36,10 @@ export CLAUDE_PROVIDER_NATIVE_BINARY="$HOME/.local/bin/claude" STUB_LOG="$tmp/ca
 mkdir -p "$HOME/.claude/plugins" "$HOME/.local/bin" "$HOME/.bun/bin"
 mkdir -p "$tmp/dot/.codex/skills/example"
 print -r -- "example skill" > "$tmp/dot/.codex/skills/example/SKILL.md"
+mkdir -p "$tmp/dot/.codex" "$tmp/cfg/skills/skills-compress/scripts"
+print -r -- '{"hooks":{"PreToolUse":[{"matcher":"exec_command","hooks":[{"type":"command","command":"true"}]}]}}' > "$tmp/dot/.codex/hooks.json"
+print -r -- $'#!/bin/sh\necho "sync-harnesses $*" >> "$STUB_LOG"' > "$tmp/cfg/skills/skills-compress/scripts/sync-harnesses.sh"
+chmod +x "$tmp/cfg/skills/skills-compress/scripts/sync-harnesses.sh"
 print -r -- '{"enabledPlugins":{"x@m":true,"off@m":false},"extraKnownMarketplaces":{"m":{"source":{"source":"github","repo":"o/m"}}}}' > "$HOME/.claude/settings.json"
 cp "$HOME/.claude/settings.json" "$tmp/settings.orig"
 cat > "$HOME/.local/bin/claude" <<'EOF'
@@ -59,6 +63,9 @@ calls() { cat "$STUB_LOG"; }
 #    refreshes, installs the enabled plugin only; settings.json put back
 run || fail "first run rc=$rc: $out"
 [[ -L "$HOME/.codex/skills/example" ]] || fail "codex skill not linked: $out"
+[[ -f "$HOME/.codex/hooks.json" ]] || fail "codex hooks.json not installed: $out"
+cmp -s "$tmp/dot/.codex/hooks.json" "$HOME/.codex/hooks.json" || fail "codex hooks.json drifted: $(<"$HOME/.codex/hooks.json")"
+[[ "$(calls)" == *"sync-harnesses"* ]] || fail "sync-harnesses not called: $(calls)"
 [[ "$(calls)" == *"plugin marketplace add o/m"* ]] || fail "marketplace not added: $(calls)"
 [[ "$(calls)" == *"plugin marketplace update"* ]] || fail "marketplaces not refreshed: $(calls)"
 [[ "$(calls)" == *"plugin install x@m"* && "$(calls)" != *"off@m"* ]] || fail "plugin install wrong: $(calls)"
@@ -67,7 +74,8 @@ cmp -s "$tmp/settings.orig" "$HOME/.claude/settings.json" || fail "settings.json
 
 # 2. In sync, stamp fresh: nothing to do, no plugin calls
 run || fail "second run rc=$rc: $out"
-[[ -z "$(calls)" ]] || fail "idle run touched plugins: $(calls)"
+local idle_calls; idle_calls=$(calls | grep -v '^sync-harnesses ' || true)
+[[ -z "$idle_calls" ]] || fail "idle run touched plugins: $idle_calls"
 
 # 3. Claude config moved upstream: fast-forward, plugin sync without --update
 upstream cfg skills.md new-skill

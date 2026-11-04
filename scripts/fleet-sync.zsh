@@ -173,6 +173,33 @@ _link_codex_skills() {
 }
 _link_codex_skills || (( problems++ ))
 
+# Codex hooks are real files, not symlinks: install the dotfiles-owned
+# hooks.json, then let sync-harnesses.sh link the Claude hook scripts and
+# refresh Codex trust. This keeps ~/.codex/hooks and ~/.claude/hooks in step.
+_sync_codex_hooks() {
+    local src="$dotfiles_dir/.codex/hooks.json"
+    local dst="${CODEX_HOME:-$HOME/.codex}/hooks.json"
+    local sync="$claude_dir/skills/skills-compress/scripts/sync-harnesses.sh"
+
+    (( dry )) && return 0
+    [[ -f "$src" ]] || { warning "codex hooks: $src missing"; return 1; }
+    jq empty "$src" >/dev/null 2>&1 || { warning "codex hooks: invalid JSON in $src"; return 1; }
+
+    mkdir -p "${dst:h}" || return 1
+    if [[ ! -f "$dst" ]] || ! cmp -s "$src" "$dst"; then
+        cp "$src" "$dst" || return 1
+        success "codex hooks: installed hooks.json"
+    fi
+
+    if [[ -x "$sync" ]]; then
+        "$sync" >/dev/null || { warning "codex hooks: sync-harnesses failed"; return 1; }
+    else
+        warning "codex hooks: sync-harnesses missing ($sync)"
+        return 1
+    fi
+}
+_sync_codex_hooks || (( problems++ ))
+
 if [[ -n "${before[copilot-api]-}" ]]; then
     if [[ -n "$(git -C "$capi_dir" diff --name-only "${before[copilot-api]}" HEAD -- bun.lock package.json)" ]]; then
         progress "copilot-api dependencies changed"
