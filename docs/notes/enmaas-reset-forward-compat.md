@@ -38,7 +38,7 @@ Examples:
 |---|---|---|---|
 | `unhandled_header` | upstream response header matching `/rate\|retry\|reset\|quota\|limit/i` that we neither parse nor know to be informational | `<name>=<value, 60 chars>` | `update hosted_only_hooks.parse_reset_headers to parse <name>` |
 | `unhandled_body_field` | JSON error body key (top level or under `error`) matching the same pattern that we ignore | `<key>=<value, 60 chars>` | `update hosted_only_hooks.parse_reset_body to parse <key>` |
-| `estimate_mismatch` | upstream gave a reset for a quota and our `next-month-utc` estimate differs by more than max(60 s, min(5%, 5 min)) (non-UTC month boundary, rolling window, ...) | `next-month-utc: estimate <iso>, upstream <iso>` | `estimate rule next-month-utc is wrong: upstream says <iso>; update limit_reset` |
+| `estimate_mismatch` | upstream gave a reset for a quota and our `next-month-utc` estimate differs by more than max(60 s, min(5%, 5 min)) (non-UTC month boundary, rolling window, ...) | `next-month-utc: estimate <iso>, upstream <iso>` | `estimate rule next-month-utc is wrong: upstream says <iso>; check HOSTED_ONLY_QUOTA_MONTH_TZ, else update limit_reset` |
 | `kind_mismatch` | upstream error type/reason says quota but the `token budget exhausted` text rule says rate-limit, or the reverse; we follow upstream | `upstream says <kind>, text rule says <kind>` | `update hosted_only_hooks.limit_reset: classify with the upstream error type/reason, ...` |
 | `shape_changed` | 429 body is JSON (not plain text) and nothing in it is recognised (no reset, no known type/reason) | `json error body keys: <sorted keys>` | `update hosted_only_hooks.parse_reset_body / limit_reset: ...` |
 
@@ -50,13 +50,28 @@ exhausted` produces no drift.
 
 1. `retry-after-ms`; 2. `Retry-After` (seconds or HTTP-date); 3. JSON body
 `error.reset_at` / `resets_at` (epoch or RFC3339), `reset_after_seconds`,
-`retry_after` (`_seconds`, `_ms`); 4. OpenAI `x-ratelimit-reset-{requests,tokens,...}`
+`retry_after` (`_seconds`, `_ms`), and the camelCase spellings
+`resetAt`/`resetsAt`/`resetAfterSeconds`/`retryAfter`/`retryAfterSeconds`/
+`retryAfterMs` (redhat-et/enmaas-platform `docs/policy-contract.md` returns
+`retryAfterSeconds`); 4. OpenAI `x-ratelimit-reset-{requests,tokens,...}`
 (`1s`, `6m0s`, `1h2m3.5s`, or bare seconds; the dimension with
 `x-ratelimit-remaining-*` = 0 decides, else the earliest); 5. Anthropic
 `anthropic-ratelimit-unified-reset`, `-{requests,tokens,input-tokens,output-tokens}-reset`
 (RFC3339 or epoch), `-unified-{5h,7d}-reset`; 6. IETF `RateLimit`
 (`reset=`/`t=`, `remaining=`/`r=`) and `RateLimit-Reset`; 7. `reset_at` /
-`x-ratelimit-reset`; Copilot `x-usage-ratelimit-{session,weekly}` (`rem=<pct>&rst=<ISO>`, rank 6, exhausted one decides). Names verified in source: praxis `token_rate_limit`
+`x-ratelimit-reset`; Copilot `x-usage-ratelimit-{session,weekly}` (`rem=<pct>&rst=<ISO>`, rank 6, exhausted one decides).
+
+The quota month window follows the metering database, not this code:
+`pricetag-metering` buckets with `date_trunc('month', NOW())`
+(`internal/storage/quota.go`), i.e. the Postgres session TimeZone, and formats
+`MonthEnds` with `.UTC()` afterwards. The CNPG cluster sets no `timezone`/`TZ`
+(`pricetag/deploy/openshift/database/cnpg/10-cluster-enmaas.yaml`), so the
+image default UTC applies. `HOSTED_ONLY_QUOTA_MONTH_TZ` moves the estimate if
+that ever changes. The 429 covers both monthly gates in
+`internal/storage/postgres.go` (`HasAccess = token quota AND USD budget AND
+model allowed`): `MONTHLY_TOKEN_QUOTA` (10B in
+`pricetag-metering/deploy/metering-service.yaml`) and
+`quota_policy.default_monthly_usd` ($600 default). Names verified in source: praxis `token_rate_limit`
 (`filters/src/token_rate_limit/mod.rs`) sends `Retry-After` and
 `X-RateLimit-{Limit,Remaining,Reset}-Tokens`, reset as bare integer seconds;
 LiteLLM sends `retry-after`, `x-ratelimit-{limit,remaining,reset}-{input,output}-tokens`

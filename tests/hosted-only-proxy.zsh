@@ -434,6 +434,18 @@ check(an(Ex(headers={"retry-after": str(5 * 86400)})), NOW + 5 * 86400, "upstrea
 # plain text unchanged: estimates, no drift
 check(an(E("token budget exhausted")), NEXT, "estimate:next-month-utc", "quota")
 check(an(E("slow down")), NOW + 60, "estimate:default")
+# camelCase reset fields (redhat-et/enmaas-platform policy contract) parse, no drift
+camel = {"error": {"type": "rate_limit_error", "retryAfterSeconds": 120}}
+check(an(Ex(json.dumps(camel), body=camel)), NOW + 120, "upstream-body:retryAfterSeconds", "rate-limit")
+check(an(Ex(body={"error": {"type": "rate_limit_error", "retryAfterMs": 1500}})), NOW + 1.5, "upstream-body:retryAfterMs")
+check(an(Ex(body={"error": {"type": "rate_limit_error", "resetsAt": iso(NOW + 300)}})), NOW + 300, "upstream-body:resetsAt")
+# quota month window follows HOSTED_ONLY_QUOTA_MONTH_TZ, default UTC
+os.environ["HOSTED_ONLY_QUOTA_MONTH_TZ"] = "America/New_York"
+tz_bounds = h.month_bounds(NOW)
+assert tz_bounds[1] == NEXT + 4 * 3600, (tz_bounds, NEXT)  # Nov 1 00:00 EDT = 04:00Z
+check(an(E("token budget exhausted")), NEXT + 4 * 3600, "estimate:next-month-utc", "quota")
+os.environ.pop("HOSTED_ONLY_QUOTA_MONTH_TZ")
+
 # unknown header -> unhandled_header (value sample, hint names the parser); reset still used
 info = an(Ex(headers={"retry-after": "30", "x-quota-window-end": "2026-11-01", "x-request-id": "abc", "x-litellm-key-spend": "1", "x-should-retry": "true"}))
 assert info["reset"] == NOW + 30 and len(info["drift"]) == 1, info

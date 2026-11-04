@@ -55,9 +55,13 @@ retired GLM_HYBRID_* name as a fallback.
      handler fixes, nor the chat 402, which must not look retryable);
    - praxis-proxy `reject_budget_exhausted()` (filters/src/metering/mod.rs):
      429, plain-text body exactly `token budget exhausted`, no headers. That
-     is the monthly token quota (pricetag-metering internal/storage/quota.go
-     buckets by `date_trunc('month', NOW())`, assumed UTC) -> first instant of
-     the next UTC month;
+     answer covers both monthly gates pricetag-metering applies in
+     internal/storage/postgres.go (`HasAccess = token quota AND USD budget AND
+     model allowed`): the token quota (`MONTHLY_TOKEN_QUOTA`, 10B in
+     deploy/metering-service.yaml) and the monthly USD budget
+     (`quota_policy.default_monthly_usd`, $600 default). Month window is
+     `date_trunc('month', NOW())` in the Postgres session TZ, so the estimate is
+     the next month start in HOSTED_ONLY_QUOTA_MONTH_TZ (default UTC);
    - any other 429 (per-minute RPM/TPM; GLM is reportedly 100 RPM / 1M TPM)
      -> now + HOSTED_ONLY_RATE_LIMIT_DEFAULT_RETRY_SECONDS (default 60).
    Other statuses are never touched, except Copilot-style limit answers (402;
@@ -130,6 +134,7 @@ import os
 import re
 import time
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 from urllib.parse import parse_qs
 
 from fastapi import HTTPException
@@ -598,11 +603,29 @@ def exc_text(exc):
     return str(getattr(exc, "message", None) or exc)
 
 
+def month_tz():
+    """Timezone the quota month rolls over in.
+
+    pricetag-metering buckets with SQL `date_trunc('month', NOW())`
+    (internal/storage/quota.go), i.e. the Postgres session TimeZone, and only
+    formats the answer with .UTC() (internal/storage/postgres.go `MonthEnds`).
+    The CNPG cluster sets no `timezone`/`TZ`, so the image default (UTC) applies;
+    set HOSTED_ONLY_QUOTA_MONTH_TZ if a deployment ever changes that."""
+    name = (os.environ.get("HOSTED_ONLY_QUOTA_MONTH_TZ") or "UTC").strip()
+    try:
+        return ZoneInfo(name)
+    except Exception:
+        LOG.warning("HOSTED_ONLY_QUOTA_MONTH_TZ=%r is not a known timezone; using UTC", name)
+        return timezone.utc
+
+
 def month_bounds(now):
-    """(start, next start) of the UTC calendar month containing `now`, epoch s."""
-    at = datetime.fromtimestamp(now, timezone.utc)
-    start = datetime(at.year, at.month, 1, tzinfo=timezone.utc)
-    nxt = datetime(at.year + (at.month == 12), at.month % 12 + 1, 1, tzinfo=timezone.utc)
+    """(start, next start) of the calendar month containing `now`, epoch s, in
+    the quota timezone (see month_tz)."""
+    zone = month_tz()
+    at = datetime.fromtimestamp(now, zone)
+    start = datetime(at.year, at.month, 1, tzinfo=zone)
+    nxt = datetime(at.year + (at.month == 12), at.month % 12 + 1, 1, tzinfo=zone)
     return start.timestamp(), nxt.timestamp()
 
 
@@ -620,10 +643,16 @@ HEADER_INFO_RE = re.compile(
     r"|rate_limit_type)$"
 )
 ANTHROPIC_DIMS = ("requests", "tokens", "input-tokens", "output-tokens")
-BODY_RESET_KEYS = (
-    "reset_at", "resets_at", "reset_after_seconds",
-    "retry_after", "retry_after_seconds", "retry_after_ms",
+# Reset fields in a JSON error body, grouped by unit. Snake_case is what our
+# #107 proposal and most gateways send; camelCase is what enmaas-policy returns
+# (`retryAfterSeconds`, docs/policy-contract.md in redhat-et/enmaas-platform).
+BODY_RESET_EPOCH_KEYS = ("reset_at", "resets_at", "resetAt", "resetsAt")
+BODY_RESET_MS_KEYS = ("retry_after_ms", "retryAfterMs", "reset_after_ms", "resetAfterMs")
+BODY_RESET_SECONDS_KEYS = (
+    "reset_after_seconds", "retry_after", "retry_after_seconds",
+    "resetAfterSeconds", "retryAfter", "retryAfterSeconds",
 )
+BODY_RESET_KEYS = BODY_RESET_EPOCH_KEYS + BODY_RESET_MS_KEYS + BODY_RESET_SECONDS_KEYS
 BODY_INFO_KEYS = {"rate_limit_type"}
 QUOTA_NAMES = {
     "insufficient_quota", "quota_exceeded", "quota_exhausted", "budget_exceeded",
@@ -838,6 +867,7 @@ def body_kind(err):
 def parse_reset_body(body, now):
     """(candidates, kind, handled keys) from a JSON error body shaped like our #107
     proposal: error.{reset_at,resets_at,reset_after_seconds,retry_after,type,code,reason}.
+    camelCase spellings are accepted too (enmaas-policy `retryAfterSeconds`).
     Update this function when EnMaaS puts the reset anywhere else."""
     if not body:
         return [], None, set()
@@ -851,11 +881,11 @@ def parse_reset_body(body, now):
         else:
             continue
         handled.add(key)
-        if key in ("reset_at", "resets_at"):
+        if key in BODY_RESET_EPOCH_KEYS:
             epoch = parse_when(raw, now)
         else:
             seconds = parse_duration(raw)
-            if seconds is not None and key == "retry_after_ms":
+            if seconds is not None and key in BODY_RESET_MS_KEYS:
                 seconds /= 1000
             epoch = now + seconds if seconds is not None and seconds > 0 else None
         if epoch is not None:
@@ -973,7 +1003,7 @@ def analyze_limit(exc, model, now):
                 drift.append(drift_item(
                     "estimate_mismatch",
                     f"next-month-utc: estimate {datetime.fromtimestamp(estimate, timezone.utc):%Y-%m-%dT%H:%M:%SZ}, upstream {shown}",
-                    f"estimate rule next-month-utc is wrong: upstream says {shown}; update limit_reset",
+                    f"estimate rule next-month-utc is wrong: upstream says {shown}; check HOSTED_ONLY_QUOTA_MONTH_TZ, else update limit_reset",
                 ))
     elif router and LAST_LIMIT_RESET.get(model, 0) > now:
         reset, source = LAST_LIMIT_RESET[model], "reuse:last-reset"
