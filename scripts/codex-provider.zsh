@@ -124,7 +124,7 @@ if [[ "$backend" == enmaas ]]; then
                 | .supports_search_tool = false | .upgrade = null;
             {models: ([.models[] | select(.slug != $glm and .slug != $ds)] + [
                 ($base | hosted | .slug = $glm | .display_name = "GLM 5.3" | .priority = 13
-                    | .input_modalities = ["text"] | .context_window = 272000 | .max_context_window = 272000),
+                    | .input_modalities = ["text"] | .context_window = 1048576 | .max_context_window = 1048576),
                 ($base | hosted | .slug = $ds | .display_name = "DeepSeek V4.1 Flash" | .priority = 14
                     | .input_modalities = ["text", "image"] | .context_window = 1048576 | .max_context_window = 1048576)])}' \
             > "$catalog.tmp" && mv -f "$catalog.tmp" "$catalog" && print -r -- "$shape" >| "$catalog.version" || {
@@ -190,7 +190,10 @@ export HOSTED_ONLY_PROXY_TOKEN="$_hop_token"
 typeset ds="${_hop_deepseek:-${HOSTED_ONLY_DEEPSEEK_MODEL:-${GLM_HYBRID_DEEPSEEK_MODEL:-rits/deepseek-ai/DeepSeek-V4.1-Flash-1017}}}"
 typeset reviewer="${HOSTED_ONLY_REVIEW_MODEL:-$ds}"
 typeset main="${HOSTED_ONLY_MODEL:-$_hop_glm}"
-typeset -i glm_ctx="${HOSTED_ONLY_GLM_CONTEXT:-272000}" ds_ctx="${HOSTED_ONLY_DEEPSEEK_CONTEXT:-1048576}"
+# Both hosted models serve the same window on EnMaaS (vLLM max_model_len
+# 1048576; verified 2026-11-05: GLM took 300k and 900k prompts, 1.1M answered
+# 400 "maximum context length is 1048576 tokens").
+typeset -i glm_ctx="${HOSTED_ONLY_GLM_CONTEXT:-1048576}" ds_ctx="${HOSTED_ONLY_DEEPSEEK_CONTEXT:-1048576}"
 if [[ "$reviewer" != "$_hop_glm" && "$reviewer" != "$ds" ]]; then
     print -ru2 -- "codex-provider: HOSTED_ONLY_REVIEW_MODEL must be $_hop_glm or $ds (the proxy routes only those)."
     exit 1

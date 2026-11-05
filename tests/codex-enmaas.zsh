@@ -171,7 +171,12 @@ try:
             sent_tools = sent['body']['tools']
             assert [t['type'] for t in sent_tools] == ['custom', 'function'], sent_tools
             assert 'format' not in sent_tools[0], 'grammar format must be stripped for vLLM'
-            assert [i.get('role') for i in sent['body']['input']] == ['user'], 'empty developer item must be dropped'
+            # the empty developer item is dropped; the search nudge (web_search was
+            # stripped above) may leave its non-empty note as a developer item
+            sent_input = sent['body']['input']
+            assert [i.get('role') for i in sent_input if i.get('role') == 'user'] == ['user'], sent_input
+            assert all('[web-search-unavailable]' in str(i) for i in sent_input if i.get('role') == 'developer'), \
+                'empty developer item must be dropped (only the search note may remain)'
         print('PASS: GLM and DeepSeek /v1/responses: passthrough, grammar strip, no web_search, no empty developer item')
 
         # 3. GPT is untouched: same tools, same input, its own id.

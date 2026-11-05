@@ -52,9 +52,9 @@ _hosted_only_proxy_vars codex
 [[ "$_hop_upstream_retries" == 0 ]] || fail "upstream retries default: $_hop_upstream_retries"
 [[ "$(<"$repo/scripts/hosted-only-proxy.zsh")" == *'$_hop_client_retry $_hop_upstream_retries $_hop_fallback $_hop_image_budget $_hop_image_cache_days"'* ]] || fail "upstream retries / fallback / image knobs not in fingerprint"
 # fallback + outage knobs are one fingerprint component: a change restarts an idle proxy
-[[ "$_hop_fallback" == "1 600000 1 60 600" ]] || fail "fallback knob defaults: $_hop_fallback"
+[[ "$_hop_fallback" == "1 1 60 600" ]] || fail "fallback knob defaults: $_hop_fallback"
 HOSTED_ONLY_FALLBACK=0 _hosted_only_proxy_vars codex
-[[ "$_hop_fallback" == "0 600000 1 60 600" ]] || fail "HOSTED_ONLY_FALLBACK not read: $_hop_fallback"
+[[ "$_hop_fallback" == "0 1 60 600" ]] || fail "HOSTED_ONLY_FALLBACK not read: $_hop_fallback"
 _hosted_only_proxy_vars codex
 HOSTED_ONLY_IMAGE_BUDGET_BYTES=123 HOSTED_ONLY_IMAGE_CACHE_DAYS=2 _hosted_only_proxy_vars codex
 [[ "$_hop_image_budget" == 123 && "$_hop_image_cache_days" == 2 ]] || fail "image knobs: $_hop_image_budget $_hop_image_cache_days"
@@ -622,7 +622,7 @@ assert "reset_source" not in ev and "rewritten" not in ev, ev
 # Model fallback (item 7): GLM <-> DeepSeek for image-free requests, via per-request `fallbacks`
 import asyncio
 GLM, DS = h.GLM_MODEL, h.DEEPSEEK_MODEL
-assert GLM != DS and h.FALLBACK is True and h.FALLBACK_MAX_BYTES == 600000
+assert GLM != DS and h.FALLBACK is True
 text = [{"role": "user", "content": "hi"}]
 pic = [{"role": "user", "content": [{"type": "image", "source": {}}]}]
 assert h.fallback_target({"model": DS, "messages": text}) == GLM
@@ -632,9 +632,9 @@ assert h.fallback_target({"model": DS, "messages": pic}) is None                
 assert h.fallback_target({"model": GLM, "messages": pic}) is None
 assert h.fallback_target({"model": "gpt-5.5", "messages": text}) is None                  # other models: none
 assert h.fallback_target({"model": DS, "messages": text, "fallbacks": ["mine"]}) is None  # client's own list wins
-big = [{"role": "user", "content": "x" * 700000}]
-assert h.fallback_target({"model": DS, "messages": big}) is None                          # too big for GLM's window
-assert h.fallback_target({"model": GLM, "messages": big}) == DS                           # DeepSeek holds 1M
+big = [{"role": "user", "content": "x" * 4000000}]                                        # ~1M tokens: both windows are 1048576
+assert h.fallback_target({"model": DS, "messages": big}) == GLM
+assert h.fallback_target({"model": GLM, "messages": big}) == DS
 h.FALLBACK = False
 assert h.fallback_target({"model": DS, "messages": text}) is None
 h.FALLBACK = True

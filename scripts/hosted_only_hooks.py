@@ -136,9 +136,9 @@ retired GLM_HYBRID_* name as a fallback.
    image gets a per-request LiteLLM `fallbacks` list naming the other model
    (fallback_target), so a gateway 504 or a 429 on one model is answered by the
    other instead of failing the turn (DeepSeek hung 2026-11-05). Image requests
-   keep no fallback (GLM is text-only), and DeepSeek requests above
-   HOSTED_ONLY_FALLBACK_MAX_BYTES (default 600000) stay put because GLM's window
-   is 272k vs 1M. The failed model is not retried (UPSTREAM_RETRIES defaults to
+   keep no fallback (GLM is text-only); both models serve the same
+   1,048,576-token window on EnMaaS (verified 2026-11-05), so there is no size
+   gate. The failed model is not retried (UPSTREAM_RETRIES defaults to
    0), and LiteLLM never walks back to a model it already tried. If both fail the
    client sees the second error, which still goes through the rewrite in item 5.
    HOSTED_ONLY_FALLBACK=0 turns this off.
@@ -179,7 +179,6 @@ GLM_MODEL = knob("GLM_MODEL", os.environ.get("GLM_HYBRID_MODEL", "rits/zai-org/g
 DEEPSEEK_MODEL = knob("DEEPSEEK_MODEL", "rits/deepseek-ai/DeepSeek-V4.1-Flash-1017")
 VISION_FALLBACK = knob("VISION_FALLBACK", "1") != "0"
 FALLBACK = knob("FALLBACK", "1") != "0"
-FALLBACK_MAX_BYTES = int_knob("FALLBACK_MAX_BYTES", 600000, 0)
 IMAGE_BLOCK_TYPES = ("image", "input_image", "image_url")
 LIMIT_REWRITE = knob("LIMIT_REWRITE", "1") != "0"
 IMAGE_BUDGET_BYTES = int_knob("IMAGE_BUDGET_BYTES", 8 * 1024 * 1024, 0)
@@ -1294,10 +1293,12 @@ def fallback_target(data):
     fails after its retries (any error: 504, 502, 429, ...); the failed model is
     never retried, so two requests cannot ping-pong. Only for requests that
     carry no image: GLM is text-only (an image would turn the upstream outage
-    into a 400 "not a multimodal model" that hides the real error). DeepSeek ->
-    GLM is skipped when the request is too big for GLM's 272k window
-    (HOSTED_ONLY_FALLBACK_MAX_BYTES of content, default 600000 ~ 150k tokens).
-    A client-set `fallbacks` is left alone. HOSTED_ONLY_FALLBACK=0 turns it off."""
+    into a 400 "not a multimodal model" that hides the real error). Both models
+    serve the same 1,048,576-token window on EnMaaS (verified 2026-11-05: GLM
+    took 300k and 900k prompts, 1.1M answered 400 "maximum context length is
+    1048576 tokens"), so whatever one model accepted fits the other and there is
+    no size gate. A client-set `fallbacks` is left alone. HOSTED_ONLY_FALLBACK=0
+    turns it off."""
     if not FALLBACK or data.get("fallbacks") or GLM_MODEL == DEEPSEEK_MODEL:
         return None
     model = str(data.get("model") or "")
@@ -1308,8 +1309,6 @@ def fallback_target(data):
     else:
         return None
     if has_image(data.get("messages") or data.get("input")):
-        return None
-    if other == GLM_MODEL and FALLBACK_MAX_BYTES and content_size(data) > FALLBACK_MAX_BYTES:
         return None
     return other
 
