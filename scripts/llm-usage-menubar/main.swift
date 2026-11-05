@@ -718,6 +718,23 @@ func shortLabel(_ key: String, _ label: String) -> String { key == "github-copil
 
 func textWidth(_ s: String, _ font: NSFont) -> CGFloat { ceil((s as NSString).size(withAttributes: [.font: font]).width) }
 
+/// Wait bar: empty until the oldest in-flight request has waited waitBarStartS, full at waitBarFullS; green -> yellow -> red as it fills.
+let waitBarStartS = 2.0, waitBarFullS = 10.0
+func waitFraction(_ seconds: Int) -> CGFloat { CGFloat(min(max((Double(seconds) - waitBarStartS) / (waitBarFullS - waitBarStartS), 0), 1)) }
+func waitColor(_ f: CGFloat) -> NSColor {
+    NSColor(hue: 0.33 * (1 - f), saturation: 0.85, brightness: 0.9, alpha: 1)  // hue 0.33 = green, 0 = red (passing through yellow)
+}
+func drawWaitBar(_ r: NSRect, seconds: Int) {
+    guard r.width >= 8 else { return }
+    let track = NSRect(x: r.minX, y: r.midY - 2.5, width: r.width, height: 5)
+    NSColor.quaternaryLabelColor.setFill()
+    NSBezierPath(roundedRect: track, xRadius: 2.5, yRadius: 2.5).fill()
+    let f = waitFraction(seconds)
+    guard f > 0 else { return }
+    waitColor(f).setFill()
+    NSBezierPath(roundedRect: NSRect(x: track.minX, y: track.minY, width: max(track.width * f, 5), height: track.height), xRadius: 2.5, yRadius: 2.5).fill()
+}
+
 func compactRate(_ v: Double) -> String { v >= 10 ? String(Int(v.rounded())) : String(format: "%.1f", v) }
 
 func compactMs(_ ms: Double) -> String { ms >= 1000 ? String(format: "%.1fs", ms / 1000) : String(format: "%.0fms", ms) }
@@ -1040,14 +1057,16 @@ final class MonitorView: NSView {
         guard !parts.isEmpty else { return }
         let text = parts.joined(separator: " · ")
         let font = NSFont.systemFont(ofSize: 9, weight: .semibold)
-        let w = min(textWidth(text, font) + 14, r.width - 8)
+        let barW: CGFloat = (d["inflight"]["count"].int ?? 0) > 0 ? 34 : 0  // wait bar after the text, only while something is in flight
+        let w = min(textWidth(text, font) + 14 + barW, r.width - 8)
         let laneCount = Set(spanItems(d).map { $0.provider }).count
         let pill = NSRect(x: r.minX + 4, y: r.maxY - 6 - CGFloat(laneCount) * 3.5 - 13, width: w, height: 13)  // top-left, under the throttle lanes
         NSColor.windowBackgroundColor.withAlphaComponent(0.8).setFill()
         NSBezierPath(roundedRect: pill, xRadius: 6.5, yRadius: 6.5).fill()
         stateColor(summary).setFill()
         NSBezierPath(ovalIn: NSRect(x: pill.minX + 4, y: pill.midY - 2.5, width: 5, height: 5)).fill()
-        drawStr(text, in: NSRect(x: pill.minX + 12, y: pill.minY + 0.5, width: pill.width - 14, height: 12), font: font)
+        drawStr(text, in: NSRect(x: pill.minX + 12, y: pill.minY + 0.5, width: pill.width - 14 - barW, height: 12), font: font)
+        if barW > 0 { drawWaitBar(NSRect(x: pill.maxX - barW - 2, y: pill.minY, width: barW - 4, height: pill.height), seconds: d["inflight"]["oldest_s"].int ?? 0) }
     }
 
     // MARK: graph
@@ -1443,6 +1462,10 @@ final class MonitorView: NSView {
                 ? ((fl["count"].int ?? 0) > 0 ? ("\(fl["count"].int ?? 0) · \(compactDuration(fl["oldest_s"].int ?? 0))", true) : ("0", false)) : ("n/a", false)
             drawStr("In flight", in: r, color: .secondaryLabelColor)
             drawStr(value, in: r, font: valueFont, color: strong ? .labelColor : .secondaryLabelColor, align: .right)
+            if fl["available"].bool {
+                let x0 = r.minX + textWidth("In flight", bodyFont) + 8, x1 = r.maxX - textWidth(value, valueFont) - 8
+                drawWaitBar(NSRect(x: x0, y: r.minY, width: x1 - x0, height: r.height), seconds: fl["oldest_s"].int ?? 0)
+            }
         }
 
         let models = shareEntries(d["share"]["models"]), providers = shareEntries(d["share"]["providers"])
