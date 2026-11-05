@@ -716,16 +716,15 @@ func textWidth(_ s: String, _ font: NSFont) -> CGFloat { ceil((s as NSString).si
 
 /// Wait bar: empty until the oldest in-flight request has waited waitBarStartS, full at waitBarFullS; green -> yellow -> red as it fills.
 let waitBarStartS = 2.0, waitBarFullS = 10.0
-func waitFraction(_ seconds: Int) -> CGFloat { CGFloat(min(max((Double(seconds) - waitBarStartS) / (waitBarFullS - waitBarStartS), 0), 1)) }
+func waitFraction(_ seconds: Double) -> CGFloat { CGFloat(min(max((seconds - waitBarStartS) / (waitBarFullS - waitBarStartS), 0), 1)) }
 func waitColor(_ f: CGFloat) -> NSColor {
     NSColor(hue: 0.33 * (1 - f), saturation: 0.85, brightness: 0.9, alpha: 1)  // hue 0.33 = green, 0 = red (passing through yellow)
 }
-func drawWaitBar(_ r: NSRect, seconds: Int) {
+func drawWaitBar(_ r: NSRect, fraction f: CGFloat) {
     guard r.width >= 8 else { return }
     let track = NSRect(x: r.minX, y: r.midY - 2.5, width: r.width, height: 5)
     NSColor.quaternaryLabelColor.setFill()
     NSBezierPath(roundedRect: track, xRadius: 2.5, yRadius: 2.5).fill()
-    let f = waitFraction(seconds)
     guard f > 0 else { return }
     waitColor(f).setFill()
     NSBezierPath(roundedRect: NSRect(x: track.minX, y: track.minY, width: max(track.width * f, 5), height: track.height), xRadius: 2.5, yRadius: 2.5).fill()
@@ -736,8 +735,58 @@ func compactRate(_ v: Double) -> String { v >= 10 ? String(Int(v.rounded())) : S
 func compactMs(_ ms: Double) -> String { ms >= 1000 ? String(format: "%.1fs", ms / 1000) : String(format: "%.0fms", ms) }
 
 final class MonitorView: NSView {
-    var data: J? { didSet { needsDisplay = true } }
+    var data: J? {
+        didSet {
+            waitDataAt = Date()
+            if waitFirstData {  // headless renders get a sane needle without a running timer
+                waitFirstData = false
+                waitNeedle = waitTarget(at: waitDataAt ?? Date())
+            }
+            needsDisplay = true
+        }
+    }
     var now = Date()
+
+    // Tachometer-style needle for the wait bar: rises in real time while a
+    // request is in flight, eases down (no snap) when one completes, and
+    // climbs again from wherever it is when the next request arrives. The
+    // target extrapolates the polled oldest_s by the data's age, so the rise is
+    // smooth between polls; easing only smooths the join to a new target.
+    private var waitNeedle: CGFloat = 0
+    private var waitTick: Date?
+    private var waitDataAt: Date?
+    private var waitFirstData = true
+    private var waitTimer: Timer?
+
+    func startWaitAnimation() {
+        guard waitTimer == nil else { return }
+        waitTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 20.0, repeats: true) { [weak self] _ in self?.tickWait() }
+        if let t = waitTimer { RunLoop.main.add(t, forMode: .common) }  // keep moving while a menu tracks
+    }
+
+    private func waitTarget(at t: Date) -> CGFloat {
+        guard let d = data, (d["inflight"]["count"].int ?? 0) > 0 else { return 0 }
+        let oldest = Double(d["inflight"]["oldest_s"].int ?? 0) + t.timeIntervalSince(waitDataAt ?? t)
+        return waitFraction(oldest)
+    }
+
+    private func tickWait(_ t: Date = Date()) {
+        let dt = min(max(t.timeIntervalSince(waitTick ?? t), 0), 0.5)
+        waitTick = t
+        let target = waitTarget(at: t)
+        let tau: Double = target >= waitNeedle ? 0.25 : 0.4  // fall a touch lazier than the rise
+        let next = waitNeedle + (target - waitNeedle) * CGFloat(1 - exp(-dt / tau))
+        let moving = abs(next - waitNeedle) > 0.0015 || abs(target - waitNeedle) > 0.0015
+        if moving {
+            waitNeedle = next
+            needsDisplay = true
+        } else {
+            waitNeedle = target
+        }
+    }
+
+    /// The bar stays visible while the needle drains, not just while count > 0.
+    var waitBarVisible: Bool { waitNeedle > 0.001 || (data?["inflight"]["count"].int ?? 0) > 0 }
     var stale = false
     var layout: MonitorLayout = .horizontal { didSet { needsDisplay = true } }
     var graphMode: GraphMode = .both { didSet { needsDisplay = true } }
@@ -1053,7 +1102,7 @@ final class MonitorView: NSView {
         guard !parts.isEmpty else { return }
         let text = parts.joined(separator: " · ")
         let font = NSFont.systemFont(ofSize: 9, weight: .semibold)
-        let barW: CGFloat = (d["inflight"]["count"].int ?? 0) > 0 ? 34 : 0  // wait bar after the text, only while something is in flight
+        let barW: CGFloat = waitBarVisible ? 34 : 0  // wait bar after the text, while something is in flight or the needle drains
         let w = min(textWidth(text, font) + 14 + barW, r.width - 8)
         let laneCount = Set(spanItems(d).map { $0.provider }).count
         let pill = NSRect(x: r.minX + 4, y: r.maxY - 6 - CGFloat(laneCount) * 3.5 - 13, width: w, height: 13)  // top-left, under the throttle lanes
@@ -1062,7 +1111,7 @@ final class MonitorView: NSView {
         stateColor(summary).setFill()
         NSBezierPath(ovalIn: NSRect(x: pill.minX + 4, y: pill.midY - 2.5, width: 5, height: 5)).fill()
         drawStr(text, in: NSRect(x: pill.minX + 12, y: pill.minY + 0.5, width: pill.width - 14 - barW, height: 12), font: font)
-        if barW > 0 { drawWaitBar(NSRect(x: pill.maxX - barW - 2, y: pill.minY, width: barW - 4, height: pill.height), seconds: d["inflight"]["oldest_s"].int ?? 0) }
+        if barW > 0 { drawWaitBar(NSRect(x: pill.maxX - barW - 2, y: pill.minY, width: barW - 4, height: pill.height), fraction: waitNeedle) }
     }
 
     // MARK: graph
@@ -1457,9 +1506,9 @@ final class MonitorView: NSView {
                 ? ((fl["count"].int ?? 0) > 0 ? ("\(fl["count"].int ?? 0) · \(compactDuration(fl["oldest_s"].int ?? 0))", true) : ("0", false)) : ("n/a", false)
             drawStr("In flight", in: r, color: .secondaryLabelColor)
             drawStr(value, in: r, font: valueFont, color: strong ? .labelColor : .secondaryLabelColor, align: .right)
-            if fl["available"].bool {
+            if fl["available"].bool, waitBarVisible {
                 let x0 = r.minX + textWidth("In flight", bodyFont) + 8, x1 = r.maxX - textWidth(value, valueFont) - 8
-                drawWaitBar(NSRect(x: x0, y: r.minY, width: x1 - x0, height: r.height), seconds: fl["oldest_s"].int ?? 0)
+                drawWaitBar(NSRect(x: x0, y: r.minY, width: x1 - x0, height: r.height), fraction: waitNeedle)
             }
         }
 
@@ -2029,6 +2078,9 @@ final class AppController: NSObject, NSMenuDelegate, NSWindowDelegate {
         // the throttle expired: poll right away so the title returns to normal
         let th = d["throttled"]
         if th.exists, let reset = parseISO(th["reset_at"].str), reset <= c.now { poll() }
+        // a request is in flight: poll every tick so a completion reaches the
+        // needle within ~5 s instead of the 30 s background cadence
+        if (d["inflight"]["count"].int ?? 0) > 0 { poll() }
     }
 
     func render(title s: Summary, stale: Bool) {
@@ -2143,6 +2195,7 @@ final class AppController: NSObject, NSMenuDelegate, NSWindowDelegate {
     // MARK: floating window
     func updateWindow() {
         guard let p = panel, p.isVisible else { return }
+        monitorView.startWaitAnimation()  // 20 Hz needle; no-op once started
         monitorView.now = Date()
         monitorView.stale = lastError != nil && data != nil
         monitorView.graphMode = windowGraph
