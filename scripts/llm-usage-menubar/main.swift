@@ -734,24 +734,39 @@ func compactRate(_ v: Double) -> String { v >= 10 ? String(Int(v.rounded())) : S
 
 func compactMs(_ ms: Double) -> String { ms >= 1000 ? String(format: "%.1fs", ms / 1000) : String(format: "%.0fms", ms) }
 
+/// One live in-flight request (see llm-usage read_inflight): id is stable for
+/// the request's whole life, seconds is its age at the sample.
+struct Flight { let id: String; let model: String; let seconds: Double }
+
 final class MonitorView: NSView {
     var data: J? {
         didSet {
             waitDataAt = Date()
-            if waitFirstData {  // headless renders get a sane needle without a running timer
+            if waitFirstData {  // headless renders get sane bars without a running timer
                 waitFirstData = false
+                if flights.isEmpty, let rows = data?["inflight"]["requests"].arr, !rows.isEmpty {
+                    flights = rows.compactMap { row in
+                        guard let id = row["id"].str else { return nil }
+                        return Flight(id: id, model: row["model"].str ?? "", seconds: row["seconds"].dbl ?? 0)
+                    }
+                    flightsAt = waitDataAt
+                }
                 waitNeedle = waitTarget(at: waitDataAt ?? Date())
+                for f in flights { barShown[f.id] = waitTarget(at: waitDataAt ?? Date(), for: f) }
             }
             needsDisplay = true
         }
     }
     var now = Date()
 
-    // Tachometer-style needle for the wait bar: rises in real time while a
-    // request is in flight, eases down (no snap) when one completes, and
-    // climbs again from wherever it is when the next request arrives. The
-    // target extrapolates the polled oldest_s by the data's age, so the rise is
-    // smooth between polls; easing only smooths the join to a new target.
+    // Tachometer bars, one per in-flight request: a bar rises in real time
+    // while its request runs, eases down (no snap) when that request finishes,
+    // and bars stack upward as new requests arrive while older ones are still
+    // unfinished. The aggregate needle (oldest request) stays for the compact
+    // overlay pill.
+    var flights: [Flight] = [] { didSet { flightsAt = Date(); needsDisplay = true } }
+    private var flightsAt: Date?
+    private var barShown: [String: CGFloat] = [:]
     private var waitNeedle: CGFloat = 0
     private var waitTick: Date?
     private var waitDataAt: Date?
@@ -764,29 +779,58 @@ final class MonitorView: NSView {
         if let t = waitTimer { RunLoop.main.add(t, forMode: .common) }  // keep moving while a menu tracks
     }
 
-    private func waitTarget(at t: Date) -> CGFloat {
-        guard let d = data, (d["inflight"]["count"].int ?? 0) > 0 else { return 0 }
-        let oldest = Double(d["inflight"]["oldest_s"].int ?? 0) + t.timeIntervalSince(waitDataAt ?? t)
+    private func waitTarget(at t: Date, for f: Flight? = nil) -> CGFloat {
+        if let f {
+            return waitFraction(f.seconds + t.timeIntervalSince(flightsAt ?? t))
+        }
+        guard let oldest = flights.map({ $0.seconds + t.timeIntervalSince(flightsAt ?? t) }).max() else { return 0 }
         return waitFraction(oldest)
     }
 
     private func tickWait(_ t: Date = Date()) {
         let dt = min(max(t.timeIntervalSince(waitTick ?? t), 0), 0.5)
         waitTick = t
+        var moved = false
+        // per-request bars: present -> rise toward its age; gone -> drain out
+        let live = Set(flights.map { $0.id })
+        for f in flights {
+            let target = waitTarget(at: t, for: f)
+            let shown = barShown[f.id] ?? 0
+            let next = shown + (target - shown) * CGFloat(1 - exp(-dt / 0.25))
+            if next > 0.0015 { barShown[f.id] = next; moved = moved || abs(next - shown) > 0.0015 }
+            else { barShown[f.id] = target > 0 ? target : 0 }
+        }
+        for (id, shown) in barShown where !live.contains(id) {
+            let next = shown * CGFloat(exp(-dt / 0.4))
+            if next > 0.01 { barShown[id] = next } else { barShown.removeValue(forKey: id) }
+            moved = true
+        }
+        // aggregate needle for the overlay pill
         let target = waitTarget(at: t)
-        let tau: Double = target >= waitNeedle ? 0.25 : 0.4  // fall a touch lazier than the rise
+        let tau: Double = target >= waitNeedle ? 0.25 : 0.4
         let next = waitNeedle + (target - waitNeedle) * CGFloat(1 - exp(-dt / tau))
-        let moving = abs(next - waitNeedle) > 0.0015 || abs(target - waitNeedle) > 0.0015
-        if moving {
+        if abs(next - waitNeedle) > 0.0015 || abs(target - waitNeedle) > 0.0015 {
             waitNeedle = next
-            needsDisplay = true
+            moved = true
         } else {
             waitNeedle = target
         }
+        if moved { needsDisplay = true }
     }
 
-    /// The bar stays visible while the needle drains, not just while count > 0.
-    var waitBarVisible: Bool { waitNeedle > 0.001 || (data?["inflight"]["count"].int ?? 0) > 0 }
+    /// Bars stay visible while they drain, not just while requests are live.
+    var waitBarVisible: Bool { waitNeedle > 0.001 || !flights.isEmpty || !barShown.isEmpty }
+    /// Bar values to draw, oldest request at the bottom (stack grows upward).
+    var flightBars: [(id: String, fraction: CGFloat)] {
+        var rows = barShown.filter { $0.value > 0.001 }.map { (id: $0.key, fraction: $0.value) }
+        let order = flights.map { $0.id }
+        rows.sort { a, b in
+            let ia = order.firstIndex(of: a.id) ?? Int.max
+            let ib = order.firstIndex(of: b.id) ?? Int.max
+            return ia > ib  // flights[] is oldest-first, so draw newest first => oldest ends up at the bottom
+        }
+        return rows
+    }
     var stale = false
     var layout: MonitorLayout = .horizontal { didSet { needsDisplay = true } }
     var graphMode: GraphMode = .both { didSet { needsDisplay = true } }
@@ -1094,6 +1138,26 @@ final class MonitorView: NSView {
     }
 
     /// History layout: no text rows, so a small pill carries the state (and in-flight count) over the graph.
+    /// One thin bar per in-flight request in the stats row, oldest at the
+    /// bottom: a new request adds a bar on top while older ones are unfinished,
+    /// each with its own length and colour for its own age.
+    func drawFlightStack(_ r: NSRect) {
+        let bars = flightBars
+        guard !bars.isEmpty, r.width >= 8 else { return }
+        let h: CGFloat = 2, gap: CGFloat = 1
+        let rows = max(1, Int((r.height + gap) / (h + gap)))
+        let shown = Array(bars.prefix(rows))  // bars[0] is the oldest: keep the ones most likely to matter
+        var y = r.midY - (CGFloat(shown.count) * (h + gap) - gap) / 2
+        for bar in shown {
+            let track = NSRect(x: r.minX, y: y, width: r.width, height: h)
+            NSColor.quaternaryLabelColor.setFill()
+            NSBezierPath(roundedRect: track, xRadius: h / 2, yRadius: h / 2).fill()
+            waitColor(bar.fraction).setFill()
+            NSBezierPath(roundedRect: NSRect(x: track.minX, y: y, width: max(track.width * bar.fraction, 3), height: h), xRadius: h / 2, yRadius: h / 2).fill()
+            y += h + gap
+        }
+    }
+
     func drawOverlay(summary: Summary, live: [SpanItem], d: J, in r: NSRect) {
         var parts: [String] = []
         if summary.state != "normal" { parts.append(headerText(summary, live: live, d: d)) }
@@ -1508,7 +1572,7 @@ final class MonitorView: NSView {
             drawStr(value, in: r, font: valueFont, color: strong ? .labelColor : .secondaryLabelColor, align: .right)
             if fl["available"].bool, waitBarVisible {
                 let x0 = r.minX + textWidth("In flight", bodyFont) + 8, x1 = r.maxX - textWidth(value, valueFont) - 8
-                drawWaitBar(NSRect(x: x0, y: r.minY, width: x1 - x0, height: r.height), fraction: waitNeedle)
+                drawFlightStack(NSRect(x: x0, y: r.minY, width: x1 - x0, height: r.height))
             }
         }
 
@@ -2056,7 +2120,10 @@ final class AppController: NSObject, NSMenuDelegate, NSWindowDelegate {
         // countdown in the title without hitting the CLI
         Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in self?.tick() }
         // `llm-usage menubar window show|hide|toggle` drops a one-line command file; no IPC beyond that
-        Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in self?.checkWindowCommand() }
+        Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
+            self?.checkWindowCommand()
+            self?.refreshInflight()  // cheap file reads: catches a missed FS event
+        }
         watchInflightDirs()
         if windowVisible { showWindow() }
     }
@@ -2114,16 +2181,45 @@ final class AppController: NSObject, NSMenuDelegate, NSWindowDelegate {
     }
 
     /// Coalesce a burst of file events (a request start rewrites the file, and
-    /// several proxies write side by side) into one poll.
+    /// several proxies write side by side) into one cheap in-flight read.
     private func inflightChanged() {
         guard !inflightPollPending else { return }
         inflightPollPending = true
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
             guard let self = self else { return }
             self.inflightPollPending = false
-            self.poll()
-            self.tick()
+            self.refreshInflight()
         }
+    }
+
+    /// The in-flight files are tiny and rewritten on every request boundary, so
+    /// the app reads them itself on each event (microseconds) instead of
+    /// spawning `llm-usage menubar-data` (process + full aggregation). The full
+    /// poll keeps its own slow cadence, Activity-Monitor style: sample the hot
+    /// metric cheaply and often, refresh everything else rarely.
+    func refreshInflight() {
+        let now = Date()
+        var flights: [(age: Double, id: String, model: String)] = []
+        for dir in inflightDirs() {
+            let entries = (try? FileManager.default.contentsOfDirectory(atPath: dir)) ?? []
+            for name in entries where name.hasPrefix("inflight-") && name.hasSuffix(".json") {
+                let path = dir + "/" + name
+                guard let data = FileManager.default.contents(atPath: path),
+                      let doc = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+                      let pid = (doc["pid"] as? NSNumber)?.int32Value,
+                      kill(pid, 0) == 0 || errno == EPERM,
+                      let requests = doc["requests"] as? [String: Any]
+                else { continue }
+                let port = (doc["port"] as? String) ?? "?"
+                for (rid, raw) in requests {
+                    guard let req = raw as? [String: Any], let t = (req["t"] as? NSNumber)?.doubleValue else { continue }
+                    let model = (req["actual_model"] as? String) ?? (req["requested"] as? String) ?? (req["model"] as? String) ?? ""
+                    flights.append((max(0, now.timeIntervalSince1970 - t), "\(port):\(rid)", model))
+                }
+            }
+        }
+        flights.sort { $0.age > $1.age }  // oldest first: bars stack upward above it
+        monitorView.flights = flights.prefix(16).map { Flight(id: $0.id, model: $0.model, seconds: $0.age) }
     }
 
     func context() -> MenuContext {
@@ -2211,6 +2307,7 @@ final class AppController: NSObject, NSMenuDelegate, NSWindowDelegate {
                 switch result {
                 case .success(let j):
                     self.data = j
+                    self.refreshInflight()  // keep the bar list fresh with every full poll too
                     self.lastGood = Date()
                     self.lastError = nil
                     self.notifyIfNeeded(j)

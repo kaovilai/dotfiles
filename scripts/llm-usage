@@ -1215,7 +1215,7 @@ def read_inflight(now):
             # The monitor plugin writes "unknown" until the request body is parsed.
             model = req.get("model") if req.get("model") not in (None, "", "unknown") else None
             model = model or req.get("actual_model") or req.get("requested") or req.get("model")
-            entries.append({"port": port, "model": strip_model(model), "seconds": int(age)})
+            entries.append({"port": port, "id": "%s:%s" % (port, rid), "model": strip_model(model), "seconds": int(age)})
     return entries, reporting
 
 
@@ -1548,6 +1548,9 @@ def menubar_data(now=None, up_ports=None, share_window="15m", share_metric="requ
                     "ttft_p95": pct([e["ttft_ms"] for e in hour if e.get("ttft_ms") is not None], 95)},
         "throttled": active_throttle(events, now), "spike": spike,
         "inflight": {"available": bool(reporting), "count": len(flights), "oldest_s": oldest["seconds"] if oldest else 0,
+                     "requests": [{"id": f["id"], "proxy": PROXIES.get(f["port"], (f":{f['port']}", None))[0],
+                                   "model": f["model"], "seconds": f["seconds"]}
+                                  for f in sorted(flights, key=lambda f: -f["seconds"])[:16]],
                      "oldest": ({"proxy": PROXIES.get(oldest["port"], (f":{oldest['port']}", None))[0], "model": oldest["model"],
                                  "seconds": oldest["seconds"]} if oldest else None),
                      "by_model": dict(by_flight.most_common()),
