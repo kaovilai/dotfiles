@@ -21,9 +21,11 @@
 #                  (import-t3-providers); shells and launchers read it in place.
 #   LiteLLM proxies  every listening proxy (EnMaaS, hosted-only, vertex, openai)
 #                  that is behind what a launch would start now (hooks, config,
-#                  knobs, key) is restarted when idle (llm-proxy-sync); a busy
-#                  one is left running and reported, the next run catches it.
-#                  Checked on every run, not only after a pull.
+#                  knobs, key) is restarted when idle (llm-proxy-sync). One that
+#                  is serving a request gets a detached watcher
+#                  (llm-proxy-watch.zsh, log in ~/.local/state/llm-proxy-sync)
+#                  that restarts it at the first idle moment. Checked on every
+#                  run, not only after a pull.
 # Marketplace refresh + plugin updates (network-heavy) run once a day, or now
 # with --update-plugins. --dry-run fetches but changes nothing.
 # Exit status: 0 when everything is in sync or was updated, 1 when a repo was
@@ -40,7 +42,7 @@ for arg in "$@"; do
         --update-plugins) update_plugins=1 ;;
         --install-timer) timer=install ;;
         --remove-timer) timer=remove ;;
-        -h|--help) sed -n '2,31p' "${0:A}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        -h|--help) sed -n '2,33p' "${0:A}" | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) print -ru2 -- "fleet-sync: unknown option $arg (see --help)"; exit 2 ;;
     esac
 done
@@ -215,8 +217,9 @@ _sync_codex_hooks || (( problems++ ))
 # LiteLLM proxies (:4146 EnMaaS, :4147/:4148 hosted-only, vertex, openai) load
 # their hooks and config at start, and a running T3 session never launches
 # anything, so a pulled change would keep serving the old code for days. Each
-# listening proxy behind what a launch would start now is restarted when idle;
-# a busy one is left and reported, the next sync catches it (llm-proxy-sync).
+# listening proxy behind what a launch would start now is restarted when idle; a
+# busy one gets a detached watcher that restarts it at the first idle moment
+# (llm-proxy-sync).
 _sync_proxies() {
     source "$root/zsh/functions/claude/load.zsh" || return 1
     # The hosted-only fingerprint includes the gateway key; without it the

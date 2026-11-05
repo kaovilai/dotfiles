@@ -396,6 +396,22 @@ _llm_proxy_sync_confirm() {
     return 1
 }
 
+# _llm_proxy_sync_tables: fills the CALLER's `fn` (restart command), `chk`
+# (staleness check) and `port` associative arrays for the LiteLLM proxies that
+# llm-proxy-sync and llm-proxy-watch manage (declare them `local -A` first).
+_llm_proxy_sync_tables() {
+    fn=(
+        vertex claude-vertex-restart openai claude-openai-restart enmaas claude-enmaas-restart
+        glm-claude claude-hosted-only-restart glm-codex codex-hosted-only-restart)
+    chk=(
+        vertex _llm_proxy_check_vertex openai _llm_proxy_check_openai enmaas _llm_proxy_check_enmaas
+        glm-claude _llm_proxy_check_glm_claude glm-codex _llm_proxy_check_glm_codex)
+    port=(
+        vertex "${CLAUDE_VERTEX_PROXY_PORT:-4142}" openai "${CLAUDE_OPENAI_PROXY_PORT:-4145}"
+        enmaas "$(_claude_enmaas_port 2>/dev/null || print 4146)"
+        glm-claude "$(_hosted_only_knob CLAUDE_PROXY_PORT 4148)" glm-codex "$(_hosted_only_knob CODEX_PROXY_PORT 4147)")
+}
+
 # llm-proxy-sync [--dry-run] [--quiet]
 # The unattended cousin of `llm-proxy-restart required`, run by
 # scripts/fleet-sync.zsh: a pulled hook or config change reaches a running proxy
@@ -403,10 +419,13 @@ _llm_proxy_sync_confirm() {
 # anything, so a stale proxy kept serving the old code. For every LiteLLM proxy
 # (vertex, openai, enmaas, hosted-only codex and claude) that is listening and
 # behind what a launch would start now (the same fingerprint check as
-# `required`): restart it when no request is in flight, otherwise leave it and
-# say so; the next sync catches it. copilot-api is not covered (fleet-sync stops
-# it itself). Returns 1 when a restart did not bring the proxy back, 2 on a bad
-# option; a proxy that cannot be checked is reported and left running.
+# `required`): restart it when no request is in flight. One that is serving a
+# request is not cut off: a detached watcher (llm-proxy-watch) waits for the
+# first idle moment and restarts it then, however long that takes up to its
+# deadline, so the change lands without anyone coming back to it. copilot-api is
+# not covered (fleet-sync stops it itself). Returns 1 when a restart did not
+# bring the proxy back or a watcher could not start, 2 on a bad option; a proxy
+# that cannot be checked is reported and left running.
 llm-proxy-sync() {
     local dry=0 quiet=0 a
     for a in "$@"; do
@@ -416,16 +435,8 @@ llm-proxy-sync() {
             *) print -ru2 -- "llm-proxy-sync: unknown option '$a' (--dry-run, --quiet)"; return 2 ;;
         esac
     done
-    local -A fn=(
-        vertex claude-vertex-restart openai claude-openai-restart enmaas claude-enmaas-restart
-        glm-claude claude-hosted-only-restart glm-codex codex-hosted-only-restart)
-    local -A chk=(
-        vertex _llm_proxy_check_vertex openai _llm_proxy_check_openai enmaas _llm_proxy_check_enmaas
-        glm-claude _llm_proxy_check_glm_claude glm-codex _llm_proxy_check_glm_codex)
-    local -A port=(
-        vertex "${CLAUDE_VERTEX_PROXY_PORT:-4142}" openai "${CLAUDE_OPENAI_PROXY_PORT:-4145}"
-        enmaas "$(_claude_enmaas_port 2>/dev/null || print 4146)"
-        glm-claude "$(_hosted_only_knob CLAUDE_PROXY_PORT 4148)" glm-codex "$(_hosted_only_knob CODEX_PROXY_PORT 4147)")
+    local -A fn chk port
+    _llm_proxy_sync_tables
     local -a order=(vertex openai enmaas glm-codex glm-claude)
     local t verdict why rc=0
     for t in $order; do
@@ -438,7 +449,16 @@ llm-proxy-sync() {
             *) print -ru2 -- "== $t (:${port[$t]}) could not be checked ($verdict; run its launcher by hand for the error); left running"; continue ;;
         esac
         if _claude_port_serving "${port[$t]}"; then
-            print -ru2 -- "== $t (:${port[$t]}) $why; serving a request, left running (restarts at a later sync once idle, or now: llm-proxy-restart required-on-idle $t)"
+            if (( dry )); then
+                print -ru2 -- "== $t (:${port[$t]}) $why; serving a request, would start a watcher that restarts it when idle"
+            elif _llm_proxy_watch_alive "$t"; then
+                print -ru2 -- "== $t (:${port[$t]}) $why; serving a request, a watcher is already waiting for an idle moment (log: $(_llm_proxy_watch_dir)/watch-$t.log)"
+            elif _llm_proxy_watch_start "$t"; then
+                print -ru2 -- "== $t (:${port[$t]}) $why; serving a request, watcher started: restarts it at the first idle moment (log: $(_llm_proxy_watch_dir)/watch-$t.log)"
+            else
+                print -ru2 -- "== $t (:${port[$t]}) $why; serving a request and no watcher could start; run when idle: llm-proxy-restart required-on-idle $t"
+                rc=1
+            fi
             continue
         fi
         if (( dry )); then
@@ -453,5 +473,112 @@ llm-proxy-sync() {
             rc=1
         fi
     done
+    return $rc
+}
+
+# --- idle watcher -----------------------------------------------------------
+# State (one pid file and log per proxy) lives in the llm-proxy-sync state dir.
+_llm_proxy_watch_dir() { print -r -- "${XDG_STATE_HOME:-$HOME/.local/state}/llm-proxy-sync"; }
+_llm_proxy_now() { zmodload zsh/datetime 2>/dev/null; print -r -- "$EPOCHSECONDS"; }
+_llm_proxy_watch_pause() { sleep 0.5; }
+
+# _llm_proxy_watch_alive <name>: true while a watcher for <name> runs. The pid
+# must also still be an llm-proxy-watch process, so a recycled pid does not count.
+_llm_proxy_watch_alive() {
+    local pid file="$(_llm_proxy_watch_dir)/watch-$1.pid"
+    [[ -r "$file" ]] || return 1
+    pid=$(<"$file")
+    [[ "$pid" == <-> ]] && kill -0 "$pid" 2>/dev/null \
+        && [[ "$(ps -p "$pid" -o args= 2>/dev/null)" == *llm-proxy-watch* ]]
+}
+
+# _llm_proxy_watch_log <name> <message...>: timestamped line in the watcher log,
+# echoed to stderr too (visible when run by hand, in the journal when run as a unit).
+_llm_proxy_watch_log() {
+    local t="$1"; shift
+    local line
+    zmodload zsh/datetime 2>/dev/null
+    line="$(strftime '%Y-%m-%dT%H:%M:%S%z' $EPOCHSECONDS) $t: $*"
+    print -ru2 -- "$line"
+    print -r -- "$line" >> "$(_llm_proxy_watch_dir)/watch-$t.log" 2>/dev/null
+    return 0
+}
+
+# _llm_proxy_watch_start <name>: start a detached `llm-proxy-watch <name>`.
+# Under a systemd service (the fleet-sync timer is a oneshot unit) children die
+# with the unit, so the watcher goes out as its own transient user unit; anywhere
+# else it is detached with nohup and outlives the shell.
+_llm_proxy_watch_start() {
+    local t="$1" dir
+    dir=$(_llm_proxy_watch_dir)
+    mkdir -p "$dir" || return 1
+    local -a cmd=(zsh "${_CLAUDE_SCRIPTS_DIR}/llm-proxy-watch.zsh" "$t")
+    [[ -r "${cmd[2]}" ]] || return 1
+    if [[ -n "${INVOCATION_ID-}" ]] && (( $+commands[systemd-run] )); then
+        systemd-run --user --quiet --collect --unit="llm-proxy-watch-$t" -- "${cmd[@]}" >/dev/null 2>&1 && return 0
+    fi
+    ( nohup "${cmd[@]}" >>"$dir/watch-$t.log" 2>&1 </dev/null & )
+}
+
+# llm-proxy-watch <name>
+# What the detached watcher runs (scripts/llm-proxy-watch.zsh). Polls the
+# proxy's port twice a second; the first moment with no request in flight (two
+# polls in a row) it checks the proxy is still behind the current code, since
+# someone may have restarted it meanwhile, and restarts it. Ends when the proxy
+# is current, gone, restarted, or still busy at LLM_PROXY_WATCH_TIMEOUT seconds
+# (default 43200, 12 h); the next fleet-sync starts a new watcher in that case.
+# One watcher per proxy.
+llm-proxy-watch() {
+    local t="${1-}"
+    local -A fn chk port
+    _llm_proxy_sync_tables
+    [[ -n "${fn[$t]-}" ]] || { print -ru2 -- "llm-proxy-watch: unknown proxy '$t' (choose: ${(kj: :)fn})"; return 2; }
+    local dir pidfile
+    dir=$(_llm_proxy_watch_dir)
+    mkdir -p "$dir" || return 1
+    pidfile="$dir/watch-$t.pid"
+    if _llm_proxy_watch_alive "$t" && [[ "$(<"$pidfile")" != "$$" ]]; then
+        _llm_proxy_watch_log "$t" "another watcher is already waiting; this one exits"
+        return 0
+    fi
+    print -r -- "$$" >| "$pidfile"
+    local timeout="${LLM_PROXY_WATCH_TIMEOUT:-43200}" idle=0 verdict
+    [[ "$timeout" == <-> ]] || timeout=43200
+    local deadline=$(( $(_llm_proxy_now) + timeout ))
+    local rc=0
+    {
+        _llm_proxy_watch_log "$t" "serving a request; waiting for an idle moment (gives up after ${timeout}s)"
+        while true; do
+            if [[ -z "$(_claude_listen_pids "${port[$t]}")" ]]; then
+                _llm_proxy_watch_log "$t" "proxy is not running any more; nothing to do"
+                break
+            fi
+            if (( $(_llm_proxy_now) >= deadline )); then
+                _llm_proxy_watch_log "$t" "still busy at the deadline; giving up (the next fleet-sync starts a new watcher)"
+                rc=1
+                break
+            fi
+            if _claude_port_serving "${port[$t]}"; then idle=0; else (( ++idle )); fi
+            if (( idle >= 2 )); then
+                verdict=$(${chk[$t]})
+                case "$verdict" in
+                    fresh) _llm_proxy_watch_log "$t" "already restarted with the current code; nothing to do"; break ;;
+                    stale*|down) ;;
+                    *) _llm_proxy_watch_log "$t" "could not be checked ($verdict); giving up"; rc=1; break ;;
+                esac
+                _llm_proxy_watch_log "$t" "idle; restarting ($verdict)"
+                if ${fn[$t]} || _llm_proxy_sync_confirm "${port[$t]}"; then
+                    _llm_proxy_watch_log "$t" "restarted with the current code"
+                else
+                    _llm_proxy_watch_log "$t" "restart did not bring it back; run: ${fn[$t]}"
+                    rc=1
+                fi
+                break
+            fi
+            _llm_proxy_watch_pause
+        done
+    } always {
+        [[ -r "$pidfile" && "$(<"$pidfile")" == "$$" ]] && rm -f "$pidfile"
+    }
     return $rc
 }
