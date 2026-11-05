@@ -517,7 +517,9 @@ _llm_proxy_watch_start() {
     if [[ -n "${INVOCATION_ID-}" ]] && (( $+commands[systemd-run] )); then
         systemd-run --user --quiet --collect --unit="llm-proxy-watch-$t" -- "${cmd[@]}" >/dev/null 2>&1 && return 0
     fi
-    ( nohup "${cmd[@]}" >>"$dir/watch-$t.log" 2>&1 </dev/null & )
+    # stderr to /dev/null: llm-proxy-watch logs to the file itself, and nohup
+    # redirecting stderr into the same file would write every line twice.
+    ( nohup "${cmd[@]}" >>"$dir/watch-$t.log" 2>/dev/null </dev/null & )
 }
 
 # llm-proxy-watch <name>
