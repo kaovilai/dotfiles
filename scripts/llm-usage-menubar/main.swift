@@ -2057,7 +2057,73 @@ final class AppController: NSObject, NSMenuDelegate, NSWindowDelegate {
         Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in self?.tick() }
         // `llm-usage menubar window show|hide|toggle` drops a one-line command file; no IPC beyond that
         Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in self?.checkWindowCommand() }
+        watchInflightDirs()
         if windowVisible { showWindow() }
+    }
+
+    // Event-driven in-flight updates: the monitor plugin (copilot-api) and
+    // litellm_usage_log rewrite inflight-<port>-<pid>.json on every request
+    // start and end (atomic tmp+rename, ~50 ms), so watching the directory
+    // turns the wait bar's rise and fall into a reaction to the actual request
+    // boundary instead of the poll cadence. The timers above stay as backstops.
+    private var inflightWatches: [(source: DispatchSourceFileSystemObject, path: String)] = []
+    private var inflightPollPending = false
+
+    private func inflightDirs() -> [String] {
+        let env = ProcessInfo.processInfo.environment
+        let home = NSHomeDirectory()
+        var dirs = [env["LLM_USAGE_DIR"] ?? "\(home)/.local/state/llm-usage"]
+        if let monitor = env["COPILOT_API_MONITOR_DIR"], !monitor.isEmpty { dirs.append(monitor) }
+        var seen = Set<String>()
+        return dirs.filter { seen.insert($0).inserted }
+    }
+
+    private func watchInflightDirs() {
+        for dir in inflightDirs() {
+            watchInflightDir(dir)
+        }
+    }
+
+    private func watchInflightDir(_ dir: String) {
+        try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        let fd = open(dir, O_EVTONLY)
+        guard fd >= 0 else { return }
+        let source = DispatchSource.makeFileSystemObjectSource(fileDescriptor: fd, eventMask: [.write, .rename, .delete], queue: .main)
+        source.setEventHandler { [weak self, weak source] in
+            guard let self = self else { return }
+            // the directory itself went away (or was replaced): re-open it
+            let events = source?.data ?? []
+            if events.contains(.delete) || events.contains(.rename) {
+                self.rewatchInflightDir(dir)
+                return
+            }
+            self.inflightChanged()
+        }
+        source.setCancelHandler { close(fd) }
+        source.resume()
+        inflightWatches.append((source, dir))
+    }
+
+    private func rewatchInflightDir(_ dir: String) {
+        for (source, path) in inflightWatches where path == dir {
+            source.cancel()
+        }
+        inflightWatches.removeAll { $0.path == dir }
+        watchInflightDir(dir)
+        inflightChanged()
+    }
+
+    /// Coalesce a burst of file events (a request start rewrites the file, and
+    /// several proxies write side by side) into one poll.
+    private func inflightChanged() {
+        guard !inflightPollPending else { return }
+        inflightPollPending = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
+            guard let self = self else { return }
+            self.inflightPollPending = false
+            self.poll()
+            self.tick()
+        }
     }
 
     func context() -> MenuContext {
