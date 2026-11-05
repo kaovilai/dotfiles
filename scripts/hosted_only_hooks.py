@@ -67,6 +67,14 @@ retired GLM_HYBRID_* name as a fallback.
    Other statuses are never touched, except Copilot-style limit answers (402;
    503 `upstream rate limited`; any status with error.code `rate_limited`; see
    is_limit_error): 503 `metering system unavailable` is not a limit. HOSTED_ONLY_LIMIT_REWRITE=0 turns this off.
+   Upstream outages (502/504/408/524 and litellm timeout/connection errors, see
+   is_outage_error) take the same client shapes below with the reason `Upstream
+   unavailable (<status>); retrying later.` and a wait of
+   HOSTED_ONLY_OUTAGE_RETRY_SECONDS (default 60) that doubles per consecutive
+   failure of a model up to HOSTED_ONLY_OUTAGE_RETRY_MAX_SECONDS (default 600),
+   so T3 Code holds the thread and resumes instead of failing it on a gateway
+   504 (DeepSeek hung 2026-11-05). 500 stays untouched.
+   HOSTED_ONLY_OUTAGE_REWRITE=0 turns this off.
    Drift: when upstream starts sending limit data this code does not parse (an
    unknown rate/retry/reset/quota/limit header or JSON key, an unrecognised
    JSON body, a monthly reset that is not the next UTC month start, a
@@ -1040,19 +1048,65 @@ def format_wait(seconds):
     )
 
 
+OUTAGE_REWRITE = knob("OUTAGE_REWRITE", "1") != "0"
+OUTAGE_STATUSES = (408, 502, 504, 524)
+OUTAGE_ERROR_NAMES = ("Timeout", "APITimeoutError", "APIConnectionError")
+OUTAGE_BASE_SECONDS = int_knob("OUTAGE_RETRY_SECONDS", 60, 1)
+OUTAGE_MAX_SECONDS = int_knob("OUTAGE_RETRY_MAX_SECONDS", 600, 1)
+OUTAGE_STREAK_WINDOW = 900  # failures this close together count as one outage
+OUTAGE_STREAK = {}  # model -> (consecutive failures, epoch of the last one)
+
+
+def is_outage_error(exc):
+    """True for a transient upstream fault: gateway timeout/bad gateway (408, 502,
+    504, 524) or a litellm timeout/connection error. 500 is left alone (vLLM uses
+    it for real request errors) and so is 503 (`metering system unavailable`
+    is a gateway answer, `upstream rate limited` is a limit)."""
+    if not OUTAGE_REWRITE or is_limit_error(exc):
+        return False
+    return status_of(exc) in OUTAGE_STATUSES or type(exc).__name__ in OUTAGE_ERROR_NAMES
+
+
+def outage_wait(model, now):
+    """Seconds a client should wait after an outage answer: HOSTED_ONLY_OUTAGE_
+    RETRY_SECONDS (default 60), doubling per consecutive failure of the same model
+    up to HOSTED_ONLY_OUTAGE_RETRY_MAX_SECONDS (default 600). A failure more than
+    15 min after the previous one starts over."""
+    count, last = OUTAGE_STREAK.get(model, (0, 0.0))
+    count = count + 1 if now - last <= OUTAGE_STREAK_WINDOW else 1
+    OUTAGE_STREAK[model] = (count, now)
+    return min(OUTAGE_BASE_SECONDS * 2 ** (count - 1), OUTAGE_MAX_SECONDS)
+
+
 def rewrite_limit(exc, request_data, now=None):
-    """HTTPException replacing a 429, or None to leave the error as it is."""
-    if not is_limit_error(exc):
+    """HTTPException replacing a 429 (or an upstream outage answer, see
+    is_outage_error), or None to leave the error as it is. An outage gets the
+    same reset-bearing shape as a rate limit so T3 Code holds the thread and
+    resumes at the reset time instead of failing it."""
+    outage = is_outage_error(exc)
+    if not outage and not is_limit_error(exc):
         return None
     now = time.time() if now is None else now
     model = str(request_data.get("model") or "")
-    info = analyze_limit(exc, model, now)
-    warn_drift(info["drift"])
+    if outage:
+        wait = outage_wait(model, now)
+        info = {
+            "reset": now + wait, "monthly": False, "kind": "outage",
+            "source": "estimate:outage", "drift": [], "passthrough": {},
+        }
+        status = status_of(exc)
+        reason = f"Upstream unavailable ({status or type(exc).__name__}); retrying later."
+    else:
+        info = analyze_limit(exc, model, now)
+        warn_drift(info["drift"])
+        reason = None
     reset, monthly = info["reset"], info["monthly"]
-    LAST_LIMIT_RESET[model] = reset
-    LAST_LIMIT_KIND[model] = info["kind"]
+    if not outage:
+        LAST_LIMIT_RESET[model] = reset
+        LAST_LIMIT_KIND[model] = info["kind"]
     seconds = max(1, math.ceil(reset - now))
-    reason = "Monthly token budget exhausted." if monthly else "Rate limit reached."
+    if reason is None:
+        reason = "Monthly token budget exhausted." if monthly else "Rate limit reached."
     url = str((request_data.get("proxy_server_request") or {}).get("url") or "")
     if "/v1/messages" in url:
         body = json.dumps(

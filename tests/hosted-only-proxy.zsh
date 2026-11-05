@@ -571,6 +571,31 @@ out = h.rewrite_limit(St(402, "payment required"), resp, now=NOW)
 assert out.status_code == 429 and out.type == "usage_limit_reached" and out.headers["x-codex-primary-reset-at"] == str(int(NEXT)), out.headers
 assert h.rewrite_limit(St(503, "metering system unavailable"), msgs, now=NOW) is None
 assert h.rewrite_limit(St(500, "boom"), msgs, now=NOW) is None
+# upstream outages (gateway 504 etc.) become reset-bearing answers T3 can auto-resume on
+h.OUTAGE_STREAK.clear()
+for status, want in ((504, True), (502, True), (408, True), (524, True), (500, False), (503, False), (400, False)):
+    assert h.is_outage_error(St(status, "<html>504 Gateway Time-out</html>")) is want, status
+assert h.is_outage_error(type("Timeout", (Exception,), {})("t")) is True
+assert h.is_outage_error(St(429, "slow")) is False  # limits keep their own path
+gw = "<html><body><h1>504 Gateway Time-out</h1></body></html>"
+out = h.rewrite_limit(St(504, gw), msgs, now=NOW)
+assert out.status_code == 503 and "[429]" in out.detail and "(reset after 1m)" in out.detail and "Upstream unavailable (504)" in out.detail, out.detail
+assert h.reset_after_seconds(out.detail.encode()) == 60
+out = h.rewrite_limit(St(504, gw), resp, now=NOW + 5)  # second failure in the window doubles the wait
+assert out.status_code == 429 and out.type == "usage_limit_reached", out.status_code
+assert out.headers["retry-after"] == "120" and out.headers["x-codex-primary-reset-at"] == str(int(NOW + 5 + 120)), out.headers
+out = h.rewrite_limit(St(504, gw), chat, now=NOW + 10)
+assert out.status_code == 429 and out.headers["retry-after"] == "240", (out.status_code, out.headers)
+for i in range(8):
+    out = h.rewrite_limit(St(504, gw), resp, now=NOW + 20 + i)
+assert out.headers["retry-after"] == "600", out.headers  # capped
+out = h.rewrite_limit(St(504, gw), msgs, now=NOW + 5000)  # quiet for a while: starts over
+assert "(reset after 1m)" in out.detail, out.detail
+assert h.LAST_LIMIT_RESET.get("m") != NOW + 5000 + 60  # an outage never poisons the limit-reuse memory
+h.OUTAGE_REWRITE = False
+assert h.rewrite_limit(St(504, gw), msgs, now=NOW) is None
+h.OUTAGE_REWRITE = True
+h.OUTAGE_STREAK.clear()
 # usage logger: non-429 limit answers keep their real upstream status, client sees the rewrite
 ev = ul.error_fields({"exception": St(503, "upstream rate limited", body={"retry_after": 20}), "model": "m", "proxy_server_request": {"url": "/v1/messages"}}, {"error_information": {"error_code": "503"}})
 assert (ev["upstream_status"], ev["status"], ev["rewritten"]) == (503, 503, True) and ev["reset_source"] == "upstream-body:retry_after", ev
