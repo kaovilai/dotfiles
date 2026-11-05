@@ -380,3 +380,78 @@ llm-proxy-restart() {
     (( ${#failed} )) && rc=1
     return $rc
 }
+
+# _llm_proxy_sync_confirm <port>: true once the proxy on <port> answers its
+# health check, waiting up to LLM_PROXY_SYNC_UP_TIMEOUT seconds (default 180).
+# A restart helper gives up after 15 s, but a LiteLLM proxy can need well over a
+# minute to boot on a small host (EnMaaS on WSL took 96 s), so a "failed"
+# restart is only failed if the port stays dead past this.
+_llm_proxy_sync_confirm() {
+    local port="$1" i max="${LLM_PROXY_SYNC_UP_TIMEOUT:-180}"
+    [[ "$max" == <-> ]] || max=180
+    for (( i = 0; i < max; i += 2 )); do
+        curl -sf --max-time 2 "http://127.0.0.1:$port/health/liveliness" -o /dev/null && return 0
+        sleep 2
+    done
+    return 1
+}
+
+# llm-proxy-sync [--dry-run] [--quiet]
+# The unattended cousin of `llm-proxy-restart required`, run by
+# scripts/fleet-sync.zsh: a pulled hook or config change reaches a running proxy
+# only when it restarts, and a T3 session that is already running never launches
+# anything, so a stale proxy kept serving the old code. For every LiteLLM proxy
+# (vertex, openai, enmaas, hosted-only codex and claude) that is listening and
+# behind what a launch would start now (the same fingerprint check as
+# `required`): restart it when no request is in flight, otherwise leave it and
+# say so; the next sync catches it. copilot-api is not covered (fleet-sync stops
+# it itself). Returns 1 when a restart did not bring the proxy back, 2 on a bad
+# option; a proxy that cannot be checked is reported and left running.
+llm-proxy-sync() {
+    local dry=0 quiet=0 a
+    for a in "$@"; do
+        case "$a" in
+            --dry-run) dry=1 ;;
+            --quiet) quiet=1 ;;
+            *) print -ru2 -- "llm-proxy-sync: unknown option '$a' (--dry-run, --quiet)"; return 2 ;;
+        esac
+    done
+    local -A fn=(
+        vertex claude-vertex-restart openai claude-openai-restart enmaas claude-enmaas-restart
+        glm-claude claude-hosted-only-restart glm-codex codex-hosted-only-restart)
+    local -A chk=(
+        vertex _llm_proxy_check_vertex openai _llm_proxy_check_openai enmaas _llm_proxy_check_enmaas
+        glm-claude _llm_proxy_check_glm_claude glm-codex _llm_proxy_check_glm_codex)
+    local -A port=(
+        vertex "${CLAUDE_VERTEX_PROXY_PORT:-4142}" openai "${CLAUDE_OPENAI_PROXY_PORT:-4145}"
+        enmaas "$(_claude_enmaas_port 2>/dev/null || print 4146)"
+        glm-claude "$(_hosted_only_knob CLAUDE_PROXY_PORT 4148)" glm-codex "$(_hosted_only_knob CODEX_PROXY_PORT 4147)")
+    local -a order=(vertex openai enmaas glm-codex glm-claude)
+    local t verdict why rc=0
+    for t in $order; do
+        [[ -n "$(_claude_listen_pids "${port[$t]}")" ]] || continue
+        verdict=$(${chk[$t]})
+        case "$verdict" in
+            fresh) (( quiet )) || print -ru2 -- "== $t (:${port[$t]}) up to date"; continue ;;
+            stale*) why="changed${verdict#stale}" ;;
+            down) why="listener does not answer its health check" ;;
+            *) print -ru2 -- "== $t (:${port[$t]}) could not be checked ($verdict; run its launcher by hand for the error); left running"; continue ;;
+        esac
+        if _claude_port_serving "${port[$t]}"; then
+            print -ru2 -- "== $t (:${port[$t]}) $why; serving a request, left running (restarts at a later sync once idle, or now: llm-proxy-restart required-on-idle $t)"
+            continue
+        fi
+        if (( dry )); then
+            print -ru2 -- "== $t (:${port[$t]}) $why; idle, would restart"
+            continue
+        fi
+        print -ru2 -- "== $t (:${port[$t]}) $why; idle, restarting"
+        if ${fn[$t]} || _llm_proxy_sync_confirm "${port[$t]}"; then
+            print -ru2 -- "== $t (:${port[$t]}) restarted with the current code"
+        else
+            print -ru2 -- "== $t (:${port[$t]}) restart did not bring it back; run: ${fn[$t]}"
+            rc=1
+        fi
+    done
+    return $rc
+}

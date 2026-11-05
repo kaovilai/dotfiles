@@ -31,6 +31,10 @@ up_head() { git -C "$tmp/up-$1.git" rev-parse main; }
 
 mkrepo dot; mkrepo cfg; mkrepo capi
 export HOME="$tmp/home" XDG_STATE_HOME="$tmp/state" COPILOT_API_PORT=59997
+# The LiteLLM proxies fleet-sync may restart: point them at ports nothing uses so a
+# developer's real :4146/:4147/:4148 proxies are never looked at, let alone restarted.
+export CLAUDE_VERTEX_PROXY_PORT=59991 CLAUDE_OPENAI_PROXY_PORT=59992 CLAUDE_ENMAAS_PROXY_PORT=59993
+export HOSTED_ONLY_CODEX_PROXY_PORT=59994 HOSTED_ONLY_CLAUDE_PROXY_PORT=59995
 export FLEET_DOTFILES_DIR="$tmp/dot" FLEET_CLAUDE_DIR="$tmp/cfg" COPILOT_API_DIR="$tmp/capi"
 export CLAUDE_PROVIDER_NATIVE_BINARY="$HOME/.local/bin/claude" STUB_LOG="$tmp/calls"
 mkdir -p "$HOME/.claude/plugins" "$HOME/.local/bin" "$HOME/.bun/bin"
@@ -149,5 +153,15 @@ run || fail "idle gateway run rc=$rc: $out"
 sleep 1
 if kill -0 $gw 2>/dev/null; then kill $gw; fail "gateway process still alive"; fi
 wait $gw 2>/dev/null || true
+
+# 10. LiteLLM proxies: the step is wired in and --help documents it; with nothing
+# listening on the (isolated) proxy ports it is silent and changes nothing
+[[ "$(<"$repo/scripts/fleet-sync.zsh")" == *'llm-proxy-sync $args'* ]] || fail "proxy sync step not wired into fleet-sync"
+run --help || fail "--help rc=$rc"
+[[ "$out" == *"LiteLLM proxies"* && "$out" == *"restarted when idle"* ]] || fail "--help does not describe the proxy step: $out"
+run || fail "run with no proxies rc=$rc: $out"
+[[ "$out" != *"== "* ]] || fail "proxy sync spoke with nothing listening: $out"
+run --dry-run || fail "dry run with no proxies rc=$rc: $out"
+[[ "$out" != *"== "* ]] || fail "proxy sync (dry run) spoke with nothing listening: $out"
 
 print -r -- "ok fleet-sync"
