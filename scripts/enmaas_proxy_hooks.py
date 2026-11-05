@@ -96,6 +96,11 @@ class EnmaasProxyHooks(CustomLogger):
             routed = route_model(model, call_type)
             if routed != model:
                 data["model"] = routed
+            # hosted_only_hooks names fallback models by plain id; they need the
+            # same per-endpoint deployment name as the request itself.
+            fallbacks = data.get("fallbacks")
+            if isinstance(fallbacks, list) and all(isinstance(f, str) for f in fallbacks):
+                data["fallbacks"] = [route_model(f, call_type) for f in fallbacks]
         except Exception:
             LOG.exception("enmaas_proxy_hooks: left the request unchanged")
         return data

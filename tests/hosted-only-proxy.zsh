@@ -50,7 +50,12 @@ HOSTED_ONLY_UPSTREAM_RETRIES=5 _hosted_only_proxy_vars codex
 [[ "$_hop_upstream_retries" == 5 ]] || fail "upstream retries var: $_hop_upstream_retries"
 _hosted_only_proxy_vars codex
 [[ "$_hop_upstream_retries" == 0 ]] || fail "upstream retries default: $_hop_upstream_retries"
-[[ "$(<"$repo/scripts/hosted-only-proxy.zsh")" == *'$_hop_client_retry $_hop_upstream_retries $_hop_image_budget $_hop_image_cache_days"'* ]] || fail "upstream retries / image knobs not in fingerprint"
+[[ "$(<"$repo/scripts/hosted-only-proxy.zsh")" == *'$_hop_client_retry $_hop_upstream_retries $_hop_fallback $_hop_image_budget $_hop_image_cache_days"'* ]] || fail "upstream retries / fallback / image knobs not in fingerprint"
+# fallback + outage knobs are one fingerprint component: a change restarts an idle proxy
+[[ "$_hop_fallback" == "1 600000 1 60 600" ]] || fail "fallback knob defaults: $_hop_fallback"
+HOSTED_ONLY_FALLBACK=0 _hosted_only_proxy_vars codex
+[[ "$_hop_fallback" == "0 600000 1 60 600" ]] || fail "HOSTED_ONLY_FALLBACK not read: $_hop_fallback"
+_hosted_only_proxy_vars codex
 HOSTED_ONLY_IMAGE_BUDGET_BYTES=123 HOSTED_ONLY_IMAGE_CACHE_DAYS=2 _hosted_only_proxy_vars codex
 [[ "$_hop_image_budget" == 123 && "$_hop_image_cache_days" == 2 ]] || fail "image knobs: $_hop_image_budget $_hop_image_cache_days"
 _hosted_only_proxy_vars codex
@@ -577,6 +582,8 @@ for status, want in ((504, True), (502, True), (408, True), (524, True), (500, F
     assert h.is_outage_error(St(status, "<html>504 Gateway Time-out</html>")) is want, status
 assert h.is_outage_error(type("Timeout", (Exception,), {})("t")) is True
 assert h.is_outage_error(St(429, "slow")) is False  # limits keep their own path
+assert h.is_outage_error(St(500, "OpenAIException - Connection error.")) is True   # litellm's refused/dropped connection
+assert h.is_outage_error(St(500, "Invalid message for role `developer`")) is False  # a real request error stays
 gw = "<html><body><h1>504 Gateway Time-out</h1></body></html>"
 out = h.rewrite_limit(St(504, gw), msgs, now=NOW)
 assert out.status_code == 503 and "[429]" in out.detail and "(reset after 1m)" in out.detail and "Upstream unavailable (504)" in out.detail, out.detail
@@ -603,6 +610,56 @@ ev = ul.error_fields({"exception": St(402, "payment required"), "model": "m", "p
 assert (ev["upstream_status"], ev["status"], ev.get("quota")) == (402, 402, True) and ev["reset_source"] == "estimate:next-month-utc", ev
 ev = ul.error_fields({"exception": St(500, "boom"), "model": "m"}, {"error_information": {"error_code": "500"}})
 assert "reset_source" not in ev and "rewritten" not in ev, ev
+
+# Model fallback (item 7): GLM <-> DeepSeek for image-free requests, via per-request `fallbacks`
+import asyncio
+GLM, DS = h.GLM_MODEL, h.DEEPSEEK_MODEL
+assert GLM != DS and h.FALLBACK is True and h.FALLBACK_MAX_BYTES == 600000
+text = [{"role": "user", "content": "hi"}]
+pic = [{"role": "user", "content": [{"type": "image", "source": {}}]}]
+assert h.fallback_target({"model": DS, "messages": text}) == GLM
+assert h.fallback_target({"model": GLM, "messages": text}) == DS
+assert h.fallback_target({"model": DS, "input": [{"role": "user", "content": "hi"}]}) == GLM
+assert h.fallback_target({"model": DS, "messages": pic}) is None                          # GLM is text-only
+assert h.fallback_target({"model": GLM, "messages": pic}) is None
+assert h.fallback_target({"model": "gpt-5.5", "messages": text}) is None                  # other models: none
+assert h.fallback_target({"model": DS, "messages": text, "fallbacks": ["mine"]}) is None  # client's own list wins
+big = [{"role": "user", "content": "x" * 700000}]
+assert h.fallback_target({"model": DS, "messages": big}) is None                          # too big for GLM's window
+assert h.fallback_target({"model": GLM, "messages": big}) == DS                           # DeepSeek holds 1M
+h.FALLBACK = False
+assert h.fallback_target({"model": DS, "messages": text}) is None
+h.FALLBACK = True
+h.GLM_MODEL = DS
+assert h.fallback_target({"model": DS, "messages": text}) is None                         # same model: nothing to fall back to
+h.GLM_MODEL = GLM
+# through the hook: image-free request gets the list; GLM + image is rerouted to DeepSeek and gets none
+hook = h.HostedOnlyHooks()
+out = asyncio.run(hook.async_pre_call_hook(None, None, {"model": DS, "messages": text}, "anthropic_messages"))
+assert out["fallbacks"] == [GLM], out
+h.VISION_FALLBACK = True
+out = asyncio.run(hook.async_pre_call_hook(None, None, {"model": GLM, "messages": pic}, "anthropic_messages"))
+assert out["model"] == DS and "fallbacks" not in out, out
+out = asyncio.run(hook.async_pre_call_hook(None, None, {"model": "gpt-5.5", "messages": text}, "acompletion"))
+assert "fallbacks" not in out, out
+
+# EnMaaS routing: fallback ids follow the request to its per-endpoint deployment name
+import importlib.util, shutil
+cfg = os.path.join(tempfile.mkdtemp(), "cfg")
+os.mkdir(cfg)
+with open(os.path.join(cfg, "config.json"), "w") as f:
+    json.dump({"model_list": [{"model_name": GLM + "#responses"}, {"model_name": DS + "#responses"}]}, f)
+shutil.copy(os.path.join(sys.argv[1], "enmaas_proxy_hooks.py"), cfg)
+spec = importlib.util.spec_from_file_location("enmaas_proxy_hooks", os.path.join(cfg, "enmaas_proxy_hooks.py"))
+eh = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(eh)
+ehook = eh.EnmaasProxyHooks()
+out = asyncio.run(ehook.async_pre_call_hook(None, None, {"model": DS, "fallbacks": [GLM]}, "aresponses"))
+assert out["model"] == DS + "#responses" and out["fallbacks"] == [GLM + "#responses"], out
+out = asyncio.run(ehook.async_pre_call_hook(None, None, {"model": DS, "fallbacks": [GLM]}, "anthropic_messages"))
+assert out["model"] == DS and out["fallbacks"] == [GLM], out
+out = asyncio.run(ehook.async_pre_call_hook(None, None, {"model": "gpt-5.5", "fallbacks": [{"gpt-5.5": ["x"]}]}, "aresponses"))
+assert out["fallbacks"] == [{"gpt-5.5": ["x"]}], out   # dict-style fallbacks are not ours: untouched
 EOF
 
 print -r -- "ok hosted-only-proxy"

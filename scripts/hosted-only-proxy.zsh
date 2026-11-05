@@ -88,6 +88,8 @@ _hosted_only_proxy_vars() {
     typeset -g _hop_limit_retry="$(_hosted_only_knob RATE_LIMIT_DEFAULT_RETRY_SECONDS 60)"
     typeset -g _hop_client_retry="$(_hosted_only_knob CLIENT_RETRY_MAX_SECONDS 60)"
     typeset -g _hop_upstream_retries="$(_hosted_only_knob UPSTREAM_RETRIES 0)"
+    # Model fallback GLM <-> DeepSeek (hosted_only_hooks.py item 7).
+    typeset -g _hop_fallback="$(_hosted_only_knob FALLBACK 1) $(_hosted_only_knob FALLBACK_MAX_BYTES 600000) $(_hosted_only_knob OUTAGE_REWRITE 1) $(_hosted_only_knob OUTAGE_RETRY_SECONDS 60) $(_hosted_only_knob OUTAGE_RETRY_MAX_SECONDS 600)"
     # Image budget prune (hosted_only_hooks.py item 6): content bytes before
     # old inline images become path notes; days a pruned copy is kept.
     typeset -g _hop_image_budget="$(_hosted_only_knob IMAGE_BUDGET_BYTES $((8 * 1024 * 1024)))"
@@ -204,7 +206,7 @@ _hosted_only_proxy_ensure() {
         dns_host="${dns_host#*://}"
         dns_host="${dns_host%%/*}"
     fi
-    fp=$(print -rn -- "$config"$'\x1f'"$hooks_hash"$'\x1f'"$dns_hash"$'\x1f'"$ENMAAS_API_KEY"$'\x1f'"$litellm_version $fastapi_version $_hop_vision_fallback $_hop_limit_rewrite $_hop_limit_retry $_hop_client_retry $_hop_upstream_retries $_hop_image_budget $_hop_image_cache_days" \
+    fp=$(print -rn -- "$config"$'\x1f'"$hooks_hash"$'\x1f'"$dns_hash"$'\x1f'"$ENMAAS_API_KEY"$'\x1f'"$litellm_version $fastapi_version $_hop_vision_fallback $_hop_limit_rewrite $_hop_limit_retry $_hop_client_retry $_hop_upstream_retries $_hop_fallback $_hop_image_budget $_hop_image_cache_days" \
         | shasum -a 256 | cut -d' ' -f1)
     token_fp=$(print -rn -- "$_hop_token" | shasum -a 256 | cut -d' ' -f1)
 

@@ -67,7 +67,8 @@ retired GLM_HYBRID_* name as a fallback.
    Other statuses are never touched, except Copilot-style limit answers (402;
    503 `upstream rate limited`; any status with error.code `rate_limited`; see
    is_limit_error): 503 `metering system unavailable` is not a limit. HOSTED_ONLY_LIMIT_REWRITE=0 turns this off.
-   Upstream outages (502/504/408/524 and litellm timeout/connection errors, see
+   Upstream outages (502/504/408/524, litellm timeout/connection errors and its 500 `Connection
+   error`, see
    is_outage_error) take the same client shapes below with the reason `Upstream
    unavailable (<status>); retrying later.` and a wait of
    HOSTED_ONLY_OUTAGE_RETRY_SECONDS (default 60) that doubles per consecutive
@@ -130,6 +131,17 @@ retired GLM_HYBRID_* name as a fallback.
    content-addressed, expired after HOSTED_ONLY_IMAGE_CACHE_DAYS, default 1;
    0 keeps no copies). The same bytes always give the same text, so the
    replaced prefix stays stable for prompt caching across turns.
+
+7. Model fallback (GLM <-> DeepSeek): a GLM or DeepSeek request without an
+   image gets a per-request LiteLLM `fallbacks` list naming the other model
+   (fallback_target), so a gateway 504 or a 429 on one model is answered by the
+   other instead of failing the turn (DeepSeek hung 2026-11-05). Image requests
+   keep no fallback (GLM is text-only), and DeepSeek requests above
+   HOSTED_ONLY_FALLBACK_MAX_BYTES (default 600000) stay put because GLM's window
+   is 272k vs 1M. The failed model is not retried (UPSTREAM_RETRIES defaults to
+   0), and LiteLLM never walks back to a model it already tried. If both fail the
+   client sees the second error, which still goes through the rewrite in item 5.
+   HOSTED_ONLY_FALLBACK=0 turns this off.
 """
 
 import base64
@@ -166,6 +178,8 @@ GLM_MODEL_PREFIXES = ("rits/",)
 GLM_MODEL = knob("GLM_MODEL", os.environ.get("GLM_HYBRID_MODEL", "rits/zai-org/glm-5-3"))
 DEEPSEEK_MODEL = knob("DEEPSEEK_MODEL", "rits/deepseek-ai/DeepSeek-V4.1-Flash-1017")
 VISION_FALLBACK = knob("VISION_FALLBACK", "1") != "0"
+FALLBACK = knob("FALLBACK", "1") != "0"
+FALLBACK_MAX_BYTES = int_knob("FALLBACK_MAX_BYTES", 600000, 0)
 IMAGE_BLOCK_TYPES = ("image", "input_image", "image_url")
 LIMIT_REWRITE = knob("LIMIT_REWRITE", "1") != "0"
 IMAGE_BUDGET_BYTES = int_knob("IMAGE_BUDGET_BYTES", 8 * 1024 * 1024, 0)
@@ -1051,6 +1065,7 @@ def format_wait(seconds):
 OUTAGE_REWRITE = knob("OUTAGE_REWRITE", "1") != "0"
 OUTAGE_STATUSES = (408, 502, 504, 524)
 OUTAGE_ERROR_NAMES = ("Timeout", "APITimeoutError", "APIConnectionError")
+OUTAGE_CONNECTION_RE = re.compile(r"connection error|connection (refused|reset|aborted)|connect timeout", re.I)
 OUTAGE_BASE_SECONDS = int_knob("OUTAGE_RETRY_SECONDS", 60, 1)
 OUTAGE_MAX_SECONDS = int_knob("OUTAGE_RETRY_MAX_SECONDS", 600, 1)
 OUTAGE_STREAK_WINDOW = 900  # failures this close together count as one outage
@@ -1059,12 +1074,16 @@ OUTAGE_STREAK = {}  # model -> (consecutive failures, epoch of the last one)
 
 def is_outage_error(exc):
     """True for a transient upstream fault: gateway timeout/bad gateway (408, 502,
-    504, 524) or a litellm timeout/connection error. 500 is left alone (vLLM uses
-    it for real request errors) and so is 503 (`metering system unavailable`
-    is a gateway answer, `upstream rate limited` is a limit)."""
+    504, 524), a litellm timeout/connection error, or litellm's 500 `Connection
+    error` (how it reports a refused or dropped connection). Any other 500 is left
+    alone (vLLM uses it for real request errors) and so is 503 (`metering system
+    unavailable` is a gateway answer, `upstream rate limited` is a limit)."""
     if not OUTAGE_REWRITE or is_limit_error(exc):
         return False
-    return status_of(exc) in OUTAGE_STATUSES or type(exc).__name__ in OUTAGE_ERROR_NAMES
+    status = status_of(exc)
+    if status in OUTAGE_STATUSES or type(exc).__name__ in OUTAGE_ERROR_NAMES:
+        return True
+    return status == 500 and bool(OUTAGE_CONNECTION_RE.search(exc_text(exc)))
 
 
 def outage_wait(model, now):
@@ -1261,6 +1280,33 @@ def install_reset_after_headers():
         app.middleware_stack = ResetAfterHeaders(stack)
 
 
+def fallback_target(data):
+    """The other hosted model to fall back to for this request, or None.
+
+    LiteLLM walks a per-request `fallbacks` list of model groups when the call
+    fails after its retries (any error: 504, 502, 429, ...); the failed model is
+    never retried, so two requests cannot ping-pong. Only for requests that
+    carry no image: GLM is text-only (an image would turn the upstream outage
+    into a 400 "not a multimodal model" that hides the real error). DeepSeek ->
+    GLM is skipped when the request is too big for GLM's 272k window
+    (HOSTED_ONLY_FALLBACK_MAX_BYTES of content, default 600000 ~ 150k tokens).
+    A client-set `fallbacks` is left alone. HOSTED_ONLY_FALLBACK=0 turns it off."""
+    if not FALLBACK or data.get("fallbacks") or GLM_MODEL == DEEPSEEK_MODEL:
+        return None
+    model = str(data.get("model") or "")
+    if model == GLM_MODEL:
+        other = DEEPSEEK_MODEL
+    elif model == DEEPSEEK_MODEL:
+        other = GLM_MODEL
+    else:
+        return None
+    if has_image(data.get("messages") or data.get("input")):
+        return None
+    if other == GLM_MODEL and FALLBACK_MAX_BYTES and content_size(data) > FALLBACK_MAX_BYTES:
+        return None
+    return other
+
+
 class HostedOnlyHooks(CustomLogger):
     async def async_post_call_failure_hook(
         self, request_data, original_exception, user_api_key_dict, traceback_str=None
@@ -1316,6 +1362,9 @@ class HostedOnlyHooks(CustomLogger):
             data["thinking"] = {"type": "disabled"}
         if isinstance(data.get("input"), list):
             data["input"] = [i for i in data["input"] if not is_empty_instruction(i)]
+        fallback = fallback_target(data)
+        if fallback:
+            data["fallbacks"] = [fallback]
         return data
 
 
