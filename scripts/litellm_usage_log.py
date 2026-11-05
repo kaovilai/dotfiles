@@ -205,6 +205,16 @@ def _is_limit(hooks, exc):
         return False
 
 
+def _is_outage(hooks, exc):
+    """Transient upstream faults (502/504/timeouts, 503 no_db_connection) as the
+    hooks classify them; their rewrite is a resume hint, not a failure."""
+    check = getattr(hooks, "is_outage_error", None)
+    try:
+        return bool(check and check(exc))
+    except Exception:
+        return False
+
+
 def error_fields(kwargs, slo):
     """status / upstream_status / rewritten / retry_after / error_type / quota for a failed call."""
     exc = kwargs.get("exception")
@@ -248,6 +258,18 @@ def error_fields(kwargs, slo):
                         client = 402
             except Exception:
                 pass
+    elif _is_outage(_hooks_module(), exc):
+        hooks = _hooks_module()
+        if hooks is not None and getattr(hooks, "LIMIT_REWRITE", False):
+            # The hooks rewrote a transient upstream fault (502/504, gateway
+            # 503 no_db_connection) into a reset-bearing answer; the /v1/messages
+            # shape is caught by RESET_AFTER_RE above, this covers the rest.
+            reset = getattr(hooks, "OUTAGE_LOG", {}).get(str(kwargs.get("model") or ""))
+            out["rewritten"] = True
+            out["reset_source"] = "estimate:outage"
+            if isinstance(reset, (int, float)) and reset > 0:
+                out["reset_at"] = int(reset)
+                out["retry_after"] = max(1, int(reset - time.time()))
     if upstream == 429 and QUOTA_RE.search(message):
         out["quota"] = True
     if upstream:

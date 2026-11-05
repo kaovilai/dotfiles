@@ -88,8 +88,22 @@ _hosted_only_proxy_vars() {
     typeset -g _hop_limit_retry="$(_hosted_only_knob RATE_LIMIT_DEFAULT_RETRY_SECONDS 60)"
     typeset -g _hop_client_retry="$(_hosted_only_knob CLIENT_RETRY_MAX_SECONDS 60)"
     typeset -g _hop_upstream_retries="$(_hosted_only_knob UPSTREAM_RETRIES 0)"
-    # Model fallback GLM <-> DeepSeek (hosted_only_hooks.py item 7).
+    # Model fallback GLM <-> DeepSeek (hosted_only_hooks.py item 7) and the
+    # outage rewrite it shares knobs with. ALIAS_MODELS: ids served from the GLM
+    # deployment (claude flavor's claude-sonnet-5-5 alias) that get GLM's vision
+    # reroute and fallback target.
     typeset -g _hop_fallback="$(_hosted_only_knob FALLBACK 1) $(_hosted_only_knob OUTAGE_REWRITE 1) $(_hosted_only_knob OUTAGE_RETRY_SECONDS 60) $(_hosted_only_knob OUTAGE_RETRY_MAX_SECONDS 600)"
+    if [[ "$_hop_flavor" == claude ]]; then
+        typeset -g _hop_aliases="$(_hosted_only_knob ALIAS_MODELS claude-sonnet-5-5)"
+    else
+        typeset -g _hop_aliases="$(_hosted_only_knob ALIAS_MODELS '')"
+    fi
+    # LiteLLM request_timeout per deployment: a hung upstream (connection up,
+    # no answer, no gateway 504) is cut at this many seconds so the outage
+    # rewrite and the model fallback can fire instead of stalling the turn for
+    # LiteLLM's 600 s default. Generous enough for 1M-token prompts (a 900k
+    # prefill took 98 s on the congested gateway).
+    typeset -g _hop_request_timeout="$(_hosted_only_knob REQUEST_TIMEOUT 300)"
     # Image budget prune (hosted_only_hooks.py item 6): content bytes before
     # old inline images become path notes; days a pruned copy is kept.
     typeset -g _hop_image_budget="$(_hosted_only_knob IMAGE_BUDGET_BYTES $((8 * 1024 * 1024)))"
@@ -109,22 +123,26 @@ _hosted_only_proxy_config() {
       api_base: \"$enmaas\""
     fi
     local ds_params="${glm_params//$_hop_glm/$_hop_deepseek}"
+    local timeout_line="      request_timeout: $_hop_request_timeout"
     print -r -- "model_list:
   - model_name: \"$_hop_glm\"
     litellm_params:
 $glm_params
       api_key: os.environ/ENMAAS_API_KEY
+$timeout_line
   - model_name: \"$_hop_deepseek\"
     litellm_params:
 $ds_params
-      api_key: os.environ/ENMAAS_API_KEY"
+      api_key: os.environ/ENMAAS_API_KEY
+$timeout_line"
     # Claude Code only remaps aliases via ANTHROPIC_DEFAULT_*_MODEL; clients that
     # pass an explicit id (T3's picker sends claude-sonnet-5-5) would hit "Invalid
     # model name". Serve that id from GLM so the client keeps Sonnet 5.5 behavior.
     [[ "$_hop_flavor" == claude ]] && print -r -- "  - model_name: \"claude-sonnet-5-5\"
     litellm_params:
 $glm_params
-      api_key: os.environ/ENMAAS_API_KEY"
+      api_key: os.environ/ENMAAS_API_KEY
+$timeout_line"
     print -r -- "litellm_settings:
   drop_params: true"
     print -r -- '  callbacks: ["hosted_only_hooks.proxy_handler_instance", "litellm_usage_log.proxy_handler_instance"]'
@@ -206,7 +224,7 @@ _hosted_only_proxy_ensure() {
         dns_host="${dns_host#*://}"
         dns_host="${dns_host%%/*}"
     fi
-    fp=$(print -rn -- "$config"$'\x1f'"$hooks_hash"$'\x1f'"$dns_hash"$'\x1f'"$ENMAAS_API_KEY"$'\x1f'"$litellm_version $fastapi_version $_hop_vision_fallback $_hop_limit_rewrite $_hop_limit_retry $_hop_client_retry $_hop_upstream_retries $_hop_fallback $_hop_image_budget $_hop_image_cache_days" \
+    fp=$(print -rn -- "$config"$'\x1f'"$hooks_hash"$'\x1f'"$dns_hash"$'\x1f'"$ENMAAS_API_KEY"$'\x1f'"$litellm_version $fastapi_version $_hop_vision_fallback $_hop_limit_rewrite $_hop_limit_retry $_hop_client_retry $_hop_upstream_retries $_hop_fallback $_hop_aliases $_hop_request_timeout $_hop_image_budget $_hop_image_cache_days" \
         | shasum -a 256 | cut -d' ' -f1)
     token_fp=$(print -rn -- "$_hop_token" | shasum -a 256 | cut -d' ' -f1)
 
@@ -273,6 +291,7 @@ _hosted_only_proxy_ensure() {
             rm -f "$_hop_runtime/fingerprint"
             ENMAAS_API_KEY="$ENMAAS_API_KEY" HOSTED_ONLY_PROXY_TOKEN="$_hop_token" \
                 HOSTED_ONLY_GLM_MODEL="$_hop_glm" HOSTED_ONLY_DEEPSEEK_MODEL="$_hop_deepseek" HOSTED_ONLY_VISION_FALLBACK="$_hop_vision_fallback" \
+                HOSTED_ONLY_ALIAS_MODELS="$_hop_aliases" HOSTED_ONLY_OUTAGE_STATE="$_hop_runtime/outage-streak.json" \
                 HOSTED_ONLY_LIMIT_REWRITE="$_hop_limit_rewrite" HOSTED_ONLY_RATE_LIMIT_DEFAULT_RETRY_SECONDS="$_hop_limit_retry" HOSTED_ONLY_CLIENT_RETRY_MAX_SECONDS="$_hop_client_retry" LITELLM_LOG="$(_hosted_only_knob LITELLM_LOG ERROR)" \
                 HOSTED_ONLY_IMAGE_BUDGET_BYTES="$_hop_image_budget" HOSTED_ONLY_IMAGE_CACHE_DAYS="$_hop_image_cache_days" \
                 env "${dns_env[@]}" \

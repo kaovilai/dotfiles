@@ -401,12 +401,15 @@ _llm_proxy_sync_confirm() {
 # llm-proxy-sync and llm-proxy-watch manage (declare them `local -A` first).
 _llm_proxy_sync_tables() {
     fn=(
+        copilot claude-copilot-restart
         vertex claude-vertex-restart openai claude-openai-restart enmaas claude-enmaas-restart
         glm-claude claude-hosted-only-restart glm-codex codex-hosted-only-restart)
     chk=(
+        copilot _llm_proxy_check_copilot
         vertex _llm_proxy_check_vertex openai _llm_proxy_check_openai enmaas _llm_proxy_check_enmaas
         glm-claude _llm_proxy_check_glm_claude glm-codex _llm_proxy_check_glm_codex)
     port=(
+        copilot "${COPILOT_API_PORT:-4141}"
         vertex "${CLAUDE_VERTEX_PROXY_PORT:-4142}" openai "${CLAUDE_OPENAI_PROXY_PORT:-4145}"
         enmaas "$(_claude_enmaas_port 2>/dev/null || print 4146)"
         glm-claude "$(_hosted_only_knob CLAUDE_PROXY_PORT 4148)" glm-codex "$(_hosted_only_knob CODEX_PROXY_PORT 4147)")
@@ -416,16 +419,16 @@ _llm_proxy_sync_tables() {
 # The unattended cousin of `llm-proxy-restart required`, run by
 # scripts/fleet-sync.zsh: a pulled hook or config change reaches a running proxy
 # only when it restarts, and a T3 session that is already running never launches
-# anything, so a stale proxy kept serving the old code. For every LiteLLM proxy
-# (vertex, openai, enmaas, hosted-only codex and claude) that is listening and
-# behind what a launch would start now (the same fingerprint check as
-# `required`): restart it when no request is in flight. One that is serving a
-# request is not cut off: a detached watcher (llm-proxy-watch) waits for the
-# first idle moment and restarts it then, however long that takes up to its
-# deadline, so the change lands without anyone coming back to it. copilot-api is
-# not covered (fleet-sync stops it itself). Returns 1 when a restart did not
-# bring the proxy back or a watcher could not start, 2 on a bad option; a proxy
-# that cannot be checked is reported and left running.
+# anything, so a stale proxy kept serving the old code. For every proxy
+# (copilot-api, vertex, openai, enmaas, hosted-only codex and claude) that is
+# listening and behind what a launch would start now (the same fingerprint
+# check as `required`; copilot-api's includes a hash of the source bun runs):
+# restart it when no request is in flight. One that is serving a request is not
+# cut off: a detached watcher (llm-proxy-watch) waits for the first idle moment
+# and restarts it then, however long that takes up to its deadline, so the
+# change lands without anyone coming back to it. Returns 1 when a restart did
+# not bring the proxy back or a watcher could not start, 2 on a bad option; a
+# proxy that cannot be checked is reported and left running.
 llm-proxy-sync() {
     local dry=0 quiet=0 a
     for a in "$@"; do
@@ -437,7 +440,7 @@ llm-proxy-sync() {
     done
     local -A fn chk port
     _llm_proxy_sync_tables
-    local -a order=(vertex openai enmaas glm-codex glm-claude)
+    local -a order=(copilot vertex openai enmaas glm-codex glm-claude)
     local t verdict why rc=0
     for t in $order; do
         [[ -n "$(_claude_listen_pids "${port[$t]}")" ]] || continue

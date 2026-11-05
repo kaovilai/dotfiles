@@ -15,7 +15,9 @@
 # bounds how long it waits.
 emulate -L zsh
 typeset root="${0:A:h:h}"
-path=(/opt/homebrew/bin /usr/local/bin "$HOME/.local/bin" "$HOME/.bun/bin" $path)
+# Inherited PATH stays first (the caller may pin tool locations); the usual
+# install dirs follow for bare environments (systemd units set a minimal PATH).
+path=($path /opt/homebrew/bin /usr/local/bin "$HOME/.local/bin" "$HOME/.bun/bin")
 source "$root/zsh/functions/claude/load.zsh" || exit 1
 # The hosted-only fingerprint includes the gateway key, so the staleness check
 # needs it; same credential file the launchers read.

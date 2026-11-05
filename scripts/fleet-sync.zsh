@@ -13,13 +13,13 @@
 #
 # After a fast-forward:
 #   Claude config  install newly enabled plugins (sync-claude-plugins)
-#   copilot-api    bun install when bun.lock changed; stop the gateway if it
-#                  is idle so the next session starts the new code. Not
-#                  restarted here: under the timer a process started by this
-#                  run dies with it, and claude-t3-copilot starts it on demand.
+#   copilot-api    bun install when bun.lock changed (before the proxy step,
+#                  so a restart runs the new deps). The gateway itself is
+#                  handled by the proxy step below like every other proxy.
 #   dotfiles       import new or changed T3 provider instances
 #                  (import-t3-providers); shells and launchers read it in place.
-#   LiteLLM proxies  every listening proxy (EnMaaS, hosted-only, vertex, openai)
+#   LiteLLM proxies  every listening proxy (copilot-api, EnMaaS, hosted-only,
+#                  vertex, openai)
 #                  that is behind what a launch would start now (hooks, config,
 #                  knobs, key) is restarted when idle (llm-proxy-sync). One that
 #                  is serving a request gets a detached watcher
@@ -214,6 +214,17 @@ _sync_codex_hooks() {
 }
 _sync_codex_hooks || (( problems++ ))
 
+# copilot-api dependencies are reinstalled before the proxy sync below, so a
+# restart it triggers runs the new code. The gateway itself (stop when idle,
+# watcher when busy) is handled there like every other proxy — its fingerprint
+# covers the source bun runs, so a pull makes it stale.
+if [[ -n "${before[copilot-api]-}" ]]; then
+    if [[ -n "$(git -C "$capi_dir" diff --name-only "${before[copilot-api]}" HEAD -- bun.lock package.json)" ]]; then
+        progress "copilot-api dependencies changed"
+        bun install --cwd "$capi_dir" --frozen-lockfile --silent || { warning "bun install failed in $capi_dir"; (( problems++ )); }
+    fi
+fi
+
 # LiteLLM proxies (:4146 EnMaaS, :4147/:4148 hosted-only, vertex, openai) load
 # their hooks and config at start, and a running T3 session never launches
 # anything, so a pulled change would keep serving the old code for days. Each
@@ -234,22 +245,6 @@ _sync_proxies() {
     llm-proxy-sync $args
 }
 _sync_proxies || (( problems++ ))
-
-if [[ -n "${before[copilot-api]-}" ]]; then
-    if [[ -n "$(git -C "$capi_dir" diff --name-only "${before[copilot-api]}" HEAD -- bun.lock package.json)" ]]; then
-        progress "copilot-api dependencies changed"
-        bun install --cwd "$capi_dir" --frozen-lockfile --silent || { warning "bun install failed in $capi_dir"; (( problems++ )); }
-    fi
-    source "$root/zsh/functions/claude/load.zsh"
-    typeset port="${COPILOT_API_PORT:-4141}"
-    if [[ -z "$(_claude_listen_pids "$port" 2>/dev/null)" ]]; then
-        _note "copilot-api gateway not running; the next session starts the new code"
-    elif _claude_port_serving "$port"; then
-        warning "copilot-api gateway is serving a request; new code applies after: llm-proxy-restart copilot"
-    else
-        claude-copilot-kill >/dev/null && success "copilot-api gateway stopped; the next session starts the new code"
-    fi
-fi
 
 (( problems )) && exit 1
 exit 0

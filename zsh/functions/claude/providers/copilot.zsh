@@ -22,6 +22,22 @@
 # alias copilot-api="npx @jeffreycao/copilot-api@latest start --claude-code"   # upstream/published, disabled
 alias copilot-api="NODE_USE_SYSTEM_CA=1 bun run --cwd \$HOME/git/copilot-api ./src/main.ts start --claude-code"
 
+# _claude_copilot_code_hash <repo_dir>: sha256 over the tracked gateway
+# source (src/ and plugin/) — bun runs the TS working tree, so this is what a
+# launch would start, committed or not. "none"/"empty" keep the fingerprint
+# moving when a checkout appears or loses its files.
+_claude_copilot_code_hash() {
+    local repo="$1" files f
+    [[ -d "$repo/.git" ]] || { print -r -- none; return 0; }
+    files=$(cd -q "$repo" && git ls-files -- src plugin 2>/dev/null) || { print -r -- none; return 0; }
+    [[ -n "$files" ]] || { print -r -- empty; return 0; }
+    {
+        for f in ${(f)files}; do
+            if [[ -r "$repo/$f" ]]; then shasum -a 256 -- "$repo/$f"; else print -r -- "missing $f"; fi
+        done
+    } | shasum -a 256 | cut -d' ' -f1
+}
+
 claude-copilot() {
     if ! command -v jq &>/dev/null; then
         echo "❌ jq not found. Install it with: $(_claude_pkg_install_hint jq)" >&2
@@ -34,8 +50,9 @@ claude-copilot() {
 
     # Hot reload -- see _claude_proxy_sync. copilot-api reads its GitHub OAuth
     # token (github_token) and config.json only at start, so a re-login or
-    # config edit restarts the gateway. A running gateway with no recorded
-    # fingerprint is adopted.
+    # config edit restarts the gateway. The source hash below covers the code
+    # bun actually runs (the TS working tree, so a pulled or uncommitted change
+    # counts too). A running gateway with no recorded fingerprint is adopted.
     local capi_data="${COPILOT_API_HOME:-$HOME/.local/share/copilot-api}"
     local repo_dir="${COPILOT_API_DIR:-$HOME/git/copilot-api}"
     # llm-usage reads live in-flight requests (inflight-<port>-<pid>.json) and
@@ -46,7 +63,7 @@ claude-copilot() {
     local plugins="${COPILOT_API_PLUGINS-}" monitor_dir="${COPILOT_API_MONITOR_DIR:-${LLM_USAGE_DIR:-$HOME/.local/state/llm-usage}}"
     [[ -z "$plugins" && -r "$monitor" ]] && plugins="[\"$monitor\"]"
     local cfp
-    cfp=$(_claude_proxy_fp "$(_claude_file_hash "${capi_data}/github_token" "${capi_data}/config.json" "$monitor")" "$port" "$plugins" "$monitor_dir")
+    cfp=$(_claude_proxy_fp "$(_claude_file_hash "${capi_data}/github_token" "${capi_data}/config.json" "$monitor")" "$(_claude_copilot_code_hash "$repo_dir")" "$port" "$plugins" "$monitor_dir")
     _claude_proxy_sync claude-copilot copilot-api "${base}/v1/models" "$cfp" claude-copilot-kill 1 || return 1
 
     # Start the gateway if nothing is serving yet
@@ -87,7 +104,7 @@ claude-copilot() {
                 sleep 1
             done
             [[ -n "$(_claude_listen_pids "$port")" ]] || { echo "❌ copilot-api not listening on ${base} after 60s (log: ${log})." >&2; return 1; }
-            cfp=$(_claude_proxy_fp "$(_claude_file_hash "${capi_data}/github_token" "${capi_data}/config.json" "$monitor")" "$port" "$plugins" "$monitor_dir")
+            cfp=$(_claude_proxy_fp "$(_claude_file_hash "${capi_data}/github_token" "${capi_data}/config.json" "$monitor")" "$(_claude_copilot_code_hash "$repo_dir")" "$port" "$plugins" "$monitor_dir")
             _claude_proxy_record copilot-api "$cfp"
             return 0
         fi
@@ -105,7 +122,7 @@ claude-copilot() {
         # inputs as the launch-time fingerprint above, or the record never
         # matches and every idle launch (and `llm-proxy-restart required`)
         # restarts a gateway that is already current.
-        cfp=$(_claude_proxy_fp "$(_claude_file_hash "${capi_data}/github_token" "${capi_data}/config.json" "$monitor")" "$port" "$plugins" "$monitor_dir")
+        cfp=$(_claude_proxy_fp "$(_claude_file_hash "${capi_data}/github_token" "${capi_data}/config.json" "$monitor")" "$(_claude_copilot_code_hash "$repo_dir")" "$port" "$plugins" "$monitor_dir")
         _claude_proxy_record copilot-api "$cfp"
     fi
 

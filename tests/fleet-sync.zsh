@@ -92,7 +92,7 @@ upstream capi bun.lock lock2
 run || fail "copilot run rc=$rc: $out"
 [[ "$(head_of capi)" == "$(up_head capi)" ]] || fail "copilot-api not fast-forwarded"
 [[ "$(calls)" == *"bun install --cwd $tmp/capi --frozen-lockfile"* ]] || fail "bun install not run: $(calls)"
-[[ "$out" == *"gateway not running"* ]] || fail "gateway state not reported: $out"
+[[ "$out" != *"copilot (:"* ]] || fail "a gateway that is not running should be silently left alone: $out"
 upstream capi README notes
 run || fail "copilot no-lock run rc=$rc"
 [[ "$(calls)" != *"bun install"* ]] || fail "bun install ran without a lockfile change"
@@ -134,25 +134,63 @@ run || fail "dirty-only run rc=$rc: $out"
 [[ "$out" != *"claude-config: up to date"* && "$(<"$tmp/cfg/file")" == local-edit ]] || fail "dirty-only run misreported or touched the edit: $out"
 git -C "$tmp/cfg" checkout -q -- file
 
-# 9. copilot-api moved while a gateway listens: busy -> left running; idle -> stopped
-python3 -m http.server "$COPILOT_API_PORT" --bind 127.0.0.1 >/dev/null 2>&1 &
+# 9. copilot-api is a proxy like the others now: a healthy stub gateway is
+# adopted (up to date), a stale one that is busy gets the idle watcher, and the
+# watcher restarts it for real once the request finishes. The stub bun spawns
+# the stub gateway when asked to run the gateway source.
+cat > "$tmp/gw.py" <<'PY'
+import sys
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+class H(BaseHTTPRequestHandler):
+    def do_GET(self):
+        body = b'{"data":[]}'
+        self.send_response(200)
+        self.send_header("content-type", "application/json")
+        self.send_header("content-length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+    def log_message(self, *a):
+        pass
+ThreadingHTTPServer(("127.0.0.1", int(sys.argv[1])), H).serve_forever()
+PY
+export GW_STUB="$tmp/gw.py"
+# a stray gateway from an earlier failed run would be adopted and break the
+# case-4 silence assert below; clear the port first
+pkill -f "gw.py $COPILOT_API_PORT" 2>/dev/null || true
+for i in {1..20}; do [[ -z "$(lsof -ti "tcp:$COPILOT_API_PORT" -sTCP:LISTEN 2>/dev/null)" ]] && break; sleep 0.5; done
+print -r -- $'#!/bin/sh\necho "bun $*" >> "$STUB_LOG"\ncase "$*" in *src/main.ts*) nohup python3 "$GW_STUB" "$COPILOT_API_PORT" >/dev/null 2>&1 & ;; esac\nexit 0' > "$HOME/.bun/bin/bun"
+chmod +x "$HOME/.bun/bin/bun"
+export PATH="$HOME/.bun/bin:$HOME/.local/bin:$PATH"   # so the launcher picks the stub bun
+python3 "$GW_STUB" "$COPILOT_API_PORT" >/dev/null 2>&1 &
 gw=$!
-for i in {1..50}; do curl -s -o /dev/null "http://127.0.0.1:$COPILOT_API_PORT/" && break; sleep 0.1; done
-# a request in flight: connected, headers not finished
-python3 -c "import socket,time; s=socket.create_connection(('127.0.0.1',$COPILOT_API_PORT)); s.send(b'GET / HTTP/1.1\r\n'); time.sleep(6)" &
+for i in {1..50}; do curl -sf -o /dev/null "http://127.0.0.1:$COPILOT_API_PORT/v1/models" && break; sleep 0.1; done
+upstream capi src change-1
+run || fail "adopt run rc=$rc: $out"
+[[ "$out" == *"copilot (:$COPILOT_API_PORT) up to date"* ]] || fail "healthy gateway not adopted: $out"
+kill -0 $gw 2>/dev/null || fail "adopted gateway was touched: $out"
+# now make it stale (recorded fingerprint != what a launch would start) and busy
+print -r -- wrong-fp >| "${XDG_STATE_HOME}/claude-copilot-api.fingerprint"
+python3 -c "import socket,time; s=socket.create_connection(('127.0.0.1',$COPILOT_API_PORT)); s.send(b'GET / HTTP/1.1\r\n'); time.sleep(30)" &
 client=$!
 sleep 1
-upstream capi src change-1
-run || fail "busy gateway run rc=$rc: $out"
-[[ "$out" == *"gateway is serving a request"* ]] && kill -0 $gw 2>/dev/null || fail "busy gateway not left alone: $out"
-kill $client 2>/dev/null; wait $client 2>/dev/null || true
-sleep 1
 upstream capi src change-2
-run || fail "idle gateway run rc=$rc: $out"
-[[ "$out" == *"gateway stopped"* ]] || fail "idle gateway not stopped: $out"
-sleep 1
-if kill -0 $gw 2>/dev/null; then kill $gw; fail "gateway process still alive"; fi
-wait $gw 2>/dev/null || true
+run || fail "busy gateway run rc=$rc: $out"
+[[ "$out" == *"copilot (:$COPILOT_API_PORT) changed; serving a request, watcher started"* ]] || fail "busy stale gateway did not get a watcher: $out"
+kill -0 $gw 2>/dev/null || fail "busy gateway was cut off: $out"
+watch_log="$XDG_STATE_HOME/llm-proxy-sync/watch-copilot.log"
+kill $client 2>/dev/null; wait $client 2>/dev/null || true
+watched=0
+for i in {1..120}; do
+    grep -q "restarted with the current code" "$watch_log" 2>/dev/null && { watched=1; break; }
+    sleep 1
+done
+(( watched )) || fail "watcher did not restart the gateway once idle: $(tail -3 "$watch_log" 2>/dev/null)"
+kill -0 $gw 2>/dev/null && fail "old gateway still alive after the watcher restart"
+curl -sf -o /dev/null "http://127.0.0.1:$COPILOT_API_PORT/v1/models" || fail "no gateway listening after the watcher restart"
+run || fail "post-restart run rc=$rc: $out"
+[[ "$out" == *"copilot (:$COPILOT_API_PORT) up to date"* ]] || fail "restarted gateway not current: $out"
+# the spawned gateway shows its resolved interpreter in ps, so match the script path
+pkill -f "$GW_STUB" 2>/dev/null || true; sleep 0.5; wait $gw 2>/dev/null || true
 
 # 10. LiteLLM proxies: the step is wired in and --help documents it; with nothing
 # listening on the (isolated) proxy ports it is silent and changes nothing

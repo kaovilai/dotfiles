@@ -50,11 +50,21 @@ HOSTED_ONLY_UPSTREAM_RETRIES=5 _hosted_only_proxy_vars codex
 [[ "$_hop_upstream_retries" == 5 ]] || fail "upstream retries var: $_hop_upstream_retries"
 _hosted_only_proxy_vars codex
 [[ "$_hop_upstream_retries" == 0 ]] || fail "upstream retries default: $_hop_upstream_retries"
-[[ "$(<"$repo/scripts/hosted-only-proxy.zsh")" == *'$_hop_client_retry $_hop_upstream_retries $_hop_fallback $_hop_image_budget $_hop_image_cache_days"'* ]] || fail "upstream retries / fallback / image knobs not in fingerprint"
+[[ "$(<"$repo/scripts/hosted-only-proxy.zsh")" == *'$_hop_client_retry $_hop_upstream_retries $_hop_fallback $_hop_aliases $_hop_request_timeout $_hop_image_budget $_hop_image_cache_days"'* ]] || fail "upstream retries / fallback / alias / timeout / image knobs not in fingerprint"
 # fallback + outage knobs are one fingerprint component: a change restarts an idle proxy
 [[ "$_hop_fallback" == "1 1 60 600" ]] || fail "fallback knob defaults: $_hop_fallback"
 HOSTED_ONLY_FALLBACK=0 _hosted_only_proxy_vars codex
 [[ "$_hop_fallback" == "0 1 60 600" ]] || fail "HOSTED_ONLY_FALLBACK not read: $_hop_fallback"
+_hosted_only_proxy_vars codex
+# GLM alias ids and the per-deployment request timeout are flavor-dependent knobs
+[[ "$_hop_aliases" == "" ]] || fail "codex flavor has no GLM alias by default: $_hop_aliases"
+[[ "$_hop_request_timeout" == 300 ]] || fail "request timeout default: $_hop_request_timeout"
+_hosted_only_proxy_vars claude
+[[ "$_hop_aliases" == "claude-sonnet-5-5" ]] || fail "claude flavor alias default: $_hop_aliases"
+HOSTED_ONLY_ALIAS_MODELS=x,y _hosted_only_proxy_vars claude
+[[ "$_hop_aliases" == "x,y" ]] || fail "HOSTED_ONLY_ALIAS_MODELS not read: $_hop_aliases"
+HOSTED_ONLY_REQUEST_TIMEOUT=99 _hosted_only_proxy_vars claude
+[[ "$_hop_request_timeout" == 99 ]] || fail "HOSTED_ONLY_REQUEST_TIMEOUT not read: $_hop_request_timeout"
 _hosted_only_proxy_vars codex
 HOSTED_ONLY_IMAGE_BUDGET_BYTES=123 HOSTED_ONLY_IMAGE_CACHE_DAYS=2 _hosted_only_proxy_vars codex
 [[ "$_hop_image_budget" == 123 && "$_hop_image_cache_days" == 2 ]] || fail "image knobs: $_hop_image_budget $_hop_image_cache_days"
@@ -618,6 +628,13 @@ ev = ul.error_fields({"exception": St(402, "payment required"), "model": "m", "p
 assert (ev["upstream_status"], ev["status"], ev.get("quota")) == (402, 402, True) and ev["reset_source"] == "estimate:next-month-utc", ev
 ev = ul.error_fields({"exception": St(500, "boom"), "model": "m"}, {"error_information": {"error_code": "500"}})
 assert "reset_source" not in ev and "rewritten" not in ev, ev
+# outage rewrites are tagged in the usage rows too (504 on the responses route)
+h.OUTAGE_LOG.clear(); h.OUTAGE_STREAK.clear()
+out = h.rewrite_limit(St(504, "<html>504 Gateway Time-out</html>"), {"model": "m9", "proxy_server_request": {"url": "/v1/responses"}}, now=NOW)
+ev = ul.error_fields({"exception": St(504, "<html>504 Gateway Time-out</html>"), "model": "m9", "proxy_server_request": {"url": "/v1/responses"}}, {"error_information": {"error_code": "504"}})
+assert (ev.get("rewritten"), ev.get("reset_source"), ev.get("reset_at")) == (True, "estimate:outage", int(NOW + 60)) and "retry_after" in ev, ev
+ev = ul.error_fields({"exception": St(500, "boom"), "model": "m"}, {"error_information": {"error_code": "500"}})
+assert "reset_source" not in ev and "rewritten" not in ev, ev
 
 # Model fallback (item 7): GLM <-> DeepSeek for image-free requests, via per-request `fallbacks`
 import asyncio
@@ -635,6 +652,18 @@ assert h.fallback_target({"model": DS, "messages": text, "fallbacks": ["mine"]})
 big = [{"role": "user", "content": "x" * 4000000}]                                        # ~1M tokens: both windows are 1048576
 assert h.fallback_target({"model": DS, "messages": big}) == GLM
 assert h.fallback_target({"model": GLM, "messages": big}) == DS
+# GLM aliases (the claude flavor's claude-sonnet-5-5 id) count as GLM: fallback
+# and vision reroute both apply
+h.ALIAS_MODELS = frozenset({"claude-sonnet-5-5"})
+h.VISION_FALLBACK = True    # the import-time env disabled it; the reroute is under test here
+alias_hook = h.HostedOnlyHooks()
+assert h.fallback_target({"model": "claude-sonnet-5-5", "messages": text}) == DS
+assert h.fallback_target({"model": "claude-sonnet-5-5", "messages": pic}) is None
+out = asyncio.run(alias_hook.async_pre_call_hook(None, None, {"model": "claude-sonnet-5-5", "messages": pic}, "anthropic_messages"))
+assert out["model"] == DS and "fallbacks" not in out, out
+out = asyncio.run(alias_hook.async_pre_call_hook(None, None, {"model": "claude-sonnet-5-5", "messages": text}, "anthropic_messages"))
+assert out["fallbacks"] == [DS], out
+h.ALIAS_MODELS = frozenset()
 h.FALLBACK = False
 assert h.fallback_target({"model": DS, "messages": text}) is None
 h.FALLBACK = True
@@ -668,6 +697,22 @@ out = asyncio.run(ehook.async_pre_call_hook(None, None, {"model": DS, "fallbacks
 assert out["model"] == DS and out["fallbacks"] == [GLM], out
 out = asyncio.run(ehook.async_pre_call_hook(None, None, {"model": "gpt-5.5", "fallbacks": [{"gpt-5.5": ["x"]}]}, "aresponses"))
 assert out["fallbacks"] == [{"gpt-5.5": ["x"]}], out   # dict-style fallbacks are not ours: untouched
+
+# Outage backoff survives a proxy restart through HOSTED_ONLY_OUTAGE_STATE
+import importlib, json as _json
+state_file = os.path.join(tempfile.mkdtemp(), "outage-streak.json")
+os.environ["HOSTED_ONLY_OUTAGE_STATE"] = state_file
+importlib.reload(h)
+assert h.OUTAGE_STATE_FILE == state_file
+assert h.outage_wait("persist", 1000) == 60
+importlib.reload(h)                                   # a fresh process reads the file back
+assert h.OUTAGE_STREAK.get("persist") == (1, 1000), h.OUTAGE_STREAK
+assert h.outage_wait("persist", 1100) == 120, h.OUTAGE_STREAK  # streak continued, not restarted
+saved = _json.load(open(state_file))
+assert saved == {"persist": [2, 1100]}, saved
+os.environ.pop("HOSTED_ONLY_OUTAGE_STATE")
+importlib.reload(h)
+assert h.OUTAGE_STATE_FILE == "" and h.outage_wait("persist2", 1000) == 60  # off: in-memory only
 EOF
 
 print -r -- "ok hosted-only-proxy"

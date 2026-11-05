@@ -11,7 +11,7 @@ source "$repo/zsh/functions/claude/proxies.zsh" || fail "proxies.zsh does not so
 source "$repo/scripts/hosted-only-proxy.zsh" || fail "hosted-only-proxy.zsh does not source"   # _hosted_only_knob, as load.zsh provides it
 
 # Fixed ports so the stubs can key on them; nothing real listens here.
-export CLAUDE_VERTEX_PROXY_PORT=59001 CLAUDE_OPENAI_PROXY_PORT=59002
+export COPILOT_API_PORT=59000 CLAUDE_VERTEX_PROXY_PORT=59001 CLAUDE_OPENAI_PROXY_PORT=59002
 export HOSTED_ONLY_CLAUDE_PROXY_PORT=59003 HOSTED_ONLY_CODEX_PROXY_PORT=59004
 _claude_enmaas_port() { print 59005; }
 
@@ -30,11 +30,13 @@ functions[_real_sync_confirm]=$functions[_llm_proxy_sync_confirm]
 # listening: port -> 1; stub_verdict: name -> fresh|stale: why|down|unknown; serving: port -> 1
 _claude_listen_pids() { [[ -n "${listening[$1]-}" ]] && print 1234; return 0; }
 _claude_port_serving() { [[ -n "${serving[$1]-}" ]] || (( FAKE_NOW < BUSY_UNTIL )); }
+_llm_proxy_check_copilot() { print -r -- "${stub_verdict[copilot]-fresh}"; }
 _llm_proxy_check_vertex() { print -r -- "${stub_verdict[vertex]-fresh}"; }
 _llm_proxy_check_openai() { print -r -- "${stub_verdict[openai]-fresh}"; }
 _llm_proxy_check_enmaas() { print -r -- "${stub_verdict[enmaas]-fresh}"; }
 _llm_proxy_check_glm_claude() { print -r -- "${stub_verdict[glm-claude]-fresh}"; }
 _llm_proxy_check_glm_codex() { print -r -- "${stub_verdict[glm-codex]-fresh}"; }
+claude-copilot-restart() { restarted+=(copilot); return ${restart_rc[copilot]-0}; }
 claude-vertex-restart() { restarted+=(vertex); return ${restart_rc[vertex]-0}; }
 claude-openai-restart() { restarted+=(openai); return ${restart_rc[openai]-0}; }
 claude-enmaas-restart() { restarted+=(enmaas); return ${restart_rc[enmaas]-0}; }
@@ -62,12 +64,18 @@ watch() { llm-proxy-watch "$@" >"$outfile" 2>&1; rc=$?; out=$(<"$outfile"); }
 reset; sync
 (( rc == 0 )) && [[ -z "$out" && ${#restarted} -eq 0 ]] || fail "idle host not a no-op: rc=$rc out=$out"
 
-# 2. listening and fresh: left alone, reported (unless --quiet)
-reset; listening=(59005 1 59003 1)
+# 2. listening and fresh: left alone, reported (unless --quiet); copilot is in
+# the default order too (first: its fingerprint covers the source bun runs)
+reset; listening=(59000 1 59005 1 59003 1)
 sync
-(( rc == 0 )) && [[ "$out" == *"enmaas (:59005) up to date"* && "$out" == *"glm-claude (:59003) up to date"* && ${#restarted} -eq 0 ]] || fail "fresh proxies touched: rc=$rc out=$out"
+(( rc == 0 )) && [[ "$out" == *"copilot (:59000) up to date"* && "$out" == *"enmaas (:59005) up to date"* && "$out" == *"glm-claude (:59003) up to date"* && ${#restarted} -eq 0 ]] || fail "fresh proxies touched: rc=$rc out=$out"
 sync --quiet
 [[ -z "$out" ]] || fail "--quiet still printed: $out"
+
+# 2b. copilot stale and idle: restarted like the LiteLLM proxies
+reset; listening=(59000 1); stub_verdict=(copilot "stale: source hash")
+sync
+(( rc == 0 )) && [[ "${restarted[*]}" == copilot && "$out" == *"copilot (:59000) changed: source hash; idle, restarting"* ]] || fail "stale copilot not restarted: rc=$rc restarted=$restarted out=$out"
 
 # 3. stale and idle: restarted, with the reason; the fresh neighbour is left alone
 reset; listening=(59005 1 59003 1); stub_verdict=(enmaas "stale: hooks, knobs")

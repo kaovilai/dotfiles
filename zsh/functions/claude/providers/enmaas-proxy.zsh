@@ -352,7 +352,9 @@ def ensure(root, port, config, versions, timeout, required):
     env = {k: v for k, v in os.environ.items() if k in
            ('PATH', 'HOME', 'TMPDIR', 'UV_CACHE_DIR', 'UV_OFFLINE', 'XDG_CACHE_HOME', 'XDG_STATE_HOME', 'LANG', 'LC_ALL')
            or k.startswith(CHILD_ENV_PREFIXES)}
-    env.update(ENMAAS_API_KEY=key, LITELLM_LOG=os.environ.get('CLAUDE_ENMAAS_LITELLM_LOG') or 'ERROR')
+    env.update(ENMAAS_API_KEY=key, LITELLM_LOG=os.environ.get('CLAUDE_ENMAAS_LITELLM_LOG') or 'ERROR',
+               # hosted_only_hooks outage backoff survives restarts via this file
+               HOSTED_ONLY_OUTAGE_STATE=str(root / 'outage-streak.json'))
     if shim:
         # PYTHONPATH is this launch's runtime dir only, so sitecustomize.py
         # reaches the LiteLLM child and nothing else on the machine.

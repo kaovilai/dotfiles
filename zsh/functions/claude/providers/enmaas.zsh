@@ -203,9 +203,15 @@ _claude_enmaas_models() {
 # multimodal model LiteLLM retries it on after an upstream error (e.g. images).
 _claude_enmaas_config() {
     local root="$1" token="$2" models="$3"; shift 3
+    # request_timeout: cut a hung upstream (no answer, no gateway 504) so the
+    # outage rewrite and model fallback can fire instead of stalling for
+    # LiteLLM's 600 s default. 300 s covers a 1M-token prefill on a congested
+    # gateway (measured 98 s for 900k).
+    local rt="${ENMAAS_REQUEST_TIMEOUT:-300}"
     jq -nc --arg root "$root" --arg token "$token" \
         --arg fb_from "${_claude_enmaas_fallback_from-}" --arg fb_to "${_claude_enmaas_fallback_to-}" \
         --arg routes "${ENMAAS_RESPONSES_ROUTES-}" \
+        --argjson rt "$rt" \
         --argjson models "$models" --args '
         def claude: test("(^|/)claude([/_.-]|$)"; "i");
         def provider($d; $id):
@@ -214,7 +220,8 @@ _claude_enmaas_config() {
           else "openai/" + $id end;
         def entry($id; $d): {model_name: $id, litellm_params: {
           model: provider($d; $id), api_key: "os.environ/ENMAAS_API_KEY",
-          api_base: ($root + (if $d == "anthropic" then "" else "/v1" end))}};
+          api_base: ($root + (if $d == "anthropic" then "" else "/v1" end)),
+          request_timeout: $rt}};
         # "<id>#responses" siblings (Responses passthrough at /v1, upstream id
         # without any bridge prefix) serve Codex on /v1/responses; the proxy hook
         # enmaas_proxy_hooks picks them. Needed for the hosted vLLM models
@@ -223,7 +230,8 @@ _claude_enmaas_config() {
         # send the bridge prefix upstream on a native Responses call).
         ($routes | split(",") | map(select(length > 0))) as $hosted
         | def passthrough($id): {model_name: ($id + "#responses"), litellm_params: {
-            model: ("openai/" + $id), api_key: "os.environ/ENMAAS_API_KEY", api_base: ($root + "/v1")}};
+            model: ("openai/" + $id), api_key: "os.environ/ENMAAS_API_KEY", api_base: ($root + "/v1"),
+            request_timeout: $rt}};
         ($models.data | map({key: .id, value: .}) | from_entries) as $known
         | def dialect($id): ($known[$id] // {}) as $m
             | ($m._enmaas_dialect // $m._enmaas_metadata_dialect //

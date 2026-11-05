@@ -75,7 +75,10 @@ retired GLM_HYBRID_* name as a fallback.
    failure of a model up to HOSTED_ONLY_OUTAGE_RETRY_MAX_SECONDS (default 600),
    so T3 Code holds the thread and resumes instead of failing it on a gateway
    504 (DeepSeek hung 2026-11-05). 500 stays untouched.
-   HOSTED_ONLY_OUTAGE_REWRITE=0 turns this off.
+   HOSTED_ONLY_OUTAGE_REWRITE=0 turns this off. The outage backoff
+   (60 s doubling to 600 s) survives a proxy restart when the launchers point
+   HOSTED_ONLY_OUTAGE_STATE at a state file; litellm_usage_log reads
+   OUTAGE_LOG to tag outage rewrites in the usage rows.
    Drift: when upstream starts sending limit data this code does not parse (an
    unknown rate/retry/reset/quota/limit header or JSON key, an unrecognised
    JSON body, a monthly reset that is not the next UTC month start, a
@@ -134,6 +137,8 @@ retired GLM_HYBRID_* name as a fallback.
 
 7. Model fallback (GLM <-> DeepSeek): a GLM or DeepSeek request without an
    image gets a per-request LiteLLM `fallbacks` list naming the other model
+   (GLM aliases like claude-sonnet-5-5, HOSTED_ONLY_ALIAS_MODELS, count as GLM;
+   the Claude flavor's launcher sets that one)
    (fallback_target), so a gateway 504 or a 429 on one model is answered by the
    other instead of failing the turn (DeepSeek hung 2026-11-05). Image requests
    keep no fallback (GLM is text-only); both models serve the same
@@ -179,6 +184,12 @@ GLM_MODEL = knob("GLM_MODEL", os.environ.get("GLM_HYBRID_MODEL", "rits/zai-org/g
 DEEPSEEK_MODEL = knob("DEEPSEEK_MODEL", "rits/deepseek-ai/DeepSeek-V4.1-Flash-1017")
 VISION_FALLBACK = knob("VISION_FALLBACK", "1") != "0"
 FALLBACK = knob("FALLBACK", "1") != "0"
+# Model ids the proxy serves from the GLM deployment (hosted-only Claude flavor
+# lists claude-sonnet-5-5 so T3's explicit picker id works): they get GLM's
+# vision reroute and GLM's fallback target.
+ALIAS_MODELS = frozenset(
+    a for a in knob("ALIAS_MODELS", "").split(",") if a
+)
 IMAGE_BLOCK_TYPES = ("image", "input_image", "image_url")
 LIMIT_REWRITE = knob("LIMIT_REWRITE", "1") != "0"
 IMAGE_BUDGET_BYTES = int_knob("IMAGE_BUDGET_BYTES", 8 * 1024 * 1024, 0)
@@ -1072,6 +1083,38 @@ OUTAGE_BASE_SECONDS = int_knob("OUTAGE_RETRY_SECONDS", 60, 1)
 OUTAGE_MAX_SECONDS = int_knob("OUTAGE_RETRY_MAX_SECONDS", 600, 1)
 OUTAGE_STREAK_WINDOW = 900  # failures this close together count as one outage
 OUTAGE_STREAK = {}  # model -> (consecutive failures, epoch of the last one)
+OUTAGE_LOG = {}  # model -> reset epoch of the last outage rewrite (litellm_usage_log reads it)
+# Backoff survives a proxy restart when the launcher points
+# HOSTED_ONLY_OUTAGE_STATE at a writable file (both launchers do).
+OUTAGE_STATE_FILE = knob("OUTAGE_STATE", "")
+
+
+def load_outage_state():
+    try:
+        with open(OUTAGE_STATE_FILE) as stream:
+            saved = json.load(stream)
+        for model, row in saved.items():
+            count, last = row
+            OUTAGE_STREAK[model] = (max(1, int(count)), float(last))
+    except (OSError, ValueError, TypeError):
+        pass
+
+
+def save_outage_state(now):
+    try:
+        live = {
+            model: list(row)
+            for model, row in OUTAGE_STREAK.items()
+            if row[1] >= now - 2 * OUTAGE_STREAK_WINDOW
+        }
+        with open(OUTAGE_STATE_FILE, "w") as stream:
+            json.dump(live, stream)
+    except (OSError, ValueError, TypeError):
+        pass
+
+
+if OUTAGE_STATE_FILE:
+    load_outage_state()
 
 
 def is_outage_error(exc):
@@ -1100,6 +1143,8 @@ def outage_wait(model, now):
     count, last = OUTAGE_STREAK.get(model, (0, 0.0))
     count = count + 1 if now - last <= OUTAGE_STREAK_WINDOW else 1
     OUTAGE_STREAK[model] = (count, now)
+    if OUTAGE_STATE_FILE:
+        save_outage_state(now)
     return min(OUTAGE_BASE_SECONDS * 2 ** (count - 1), OUTAGE_MAX_SECONDS)
 
 
@@ -1119,6 +1164,7 @@ def rewrite_limit(exc, request_data, now=None):
             "reset": now + wait, "monthly": False, "kind": "outage",
             "source": "estimate:outage", "drift": [], "passthrough": {},
         }
+        OUTAGE_LOG[model] = info["reset"]
         status = status_of(exc)
         reason = f"Upstream unavailable ({status or type(exc).__name__}); retrying later."
     else:
@@ -1302,7 +1348,7 @@ def fallback_target(data):
     if not FALLBACK or data.get("fallbacks") or GLM_MODEL == DEEPSEEK_MODEL:
         return None
     model = str(data.get("model") or "")
-    if model == GLM_MODEL:
+    if model == GLM_MODEL or model in ALIAS_MODELS:
         other = DEEPSEEK_MODEL
     elif model == DEEPSEEK_MODEL:
         other = GLM_MODEL
@@ -1332,11 +1378,13 @@ class HostedOnlyHooks(CustomLogger):
         except Exception:
             LOG.exception("hosted_only_hooks: image prune skipped")
         model = str(data.get("model") or "")
-        if not model.startswith(GLM_MODEL_PREFIXES):
+        # GLM aliases (claude-sonnet-5-5) are served by the GLM deployment, so
+        # they get every GLM workaround below, vision reroute included.
+        if not model.startswith(GLM_MODEL_PREFIXES) and model not in ALIAS_MODELS:
             return data
         if (
             VISION_FALLBACK
-            and model == GLM_MODEL
+            and (model == GLM_MODEL or model in ALIAS_MODELS)
             and DEEPSEEK_MODEL != GLM_MODEL
             and has_image(data.get("messages") or data.get("input"))
         ):
