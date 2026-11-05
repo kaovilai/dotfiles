@@ -67,8 +67,8 @@ retired GLM_HYBRID_* name as a fallback.
    Other statuses are never touched, except Copilot-style limit answers (402;
    503 `upstream rate limited`; any status with error.code `rate_limited`; see
    is_limit_error): 503 `metering system unavailable` is not a limit. HOSTED_ONLY_LIMIT_REWRITE=0 turns this off.
-   Upstream outages (502/504/408/524, litellm timeout/connection errors and its 500 `Connection
-   error`, see
+   Upstream outages (502/504/408/524, litellm timeout/connection errors, its 500 `Connection
+   error` and the gateway's 503 `no_db_connection`, see
    is_outage_error) take the same client shapes below with the reason `Upstream
    unavailable (<status>); retrying later.` and a wait of
    HOSTED_ONLY_OUTAGE_RETRY_SECONDS (default 60) that doubles per consecutive
@@ -1066,6 +1066,9 @@ OUTAGE_REWRITE = knob("OUTAGE_REWRITE", "1") != "0"
 OUTAGE_STATUSES = (408, 502, 504, 524)
 OUTAGE_ERROR_NAMES = ("Timeout", "APITimeoutError", "APIConnectionError")
 OUTAGE_CONNECTION_RE = re.compile(r"connection error|connection (refused|reset|aborted)|connect timeout", re.I)
+# The gateway answers 503 `no_db_connection` ("the authentication database is
+# temporarily unreachable. Please retry shortly.") when its auth DB is down.
+OUTAGE_GATEWAY_RE = re.compile(r"no_db_connection|database is temporarily unreachable|retry shortly", re.I)
 OUTAGE_BASE_SECONDS = int_knob("OUTAGE_RETRY_SECONDS", 60, 1)
 OUTAGE_MAX_SECONDS = int_knob("OUTAGE_RETRY_MAX_SECONDS", 600, 1)
 OUTAGE_STREAK_WINDOW = 900  # failures this close together count as one outage
@@ -1074,16 +1077,20 @@ OUTAGE_STREAK = {}  # model -> (consecutive failures, epoch of the last one)
 
 def is_outage_error(exc):
     """True for a transient upstream fault: gateway timeout/bad gateway (408, 502,
-    504, 524), a litellm timeout/connection error, or litellm's 500 `Connection
-    error` (how it reports a refused or dropped connection). Any other 500 is left
-    alone (vLLM uses it for real request errors) and so is 503 (`metering system
-    unavailable` is a gateway answer, `upstream rate limited` is a limit)."""
+    504, 524), a litellm timeout/connection error, litellm's 500 `Connection
+    error` (how it reports a refused or dropped connection), or the gateway's 503
+    `no_db_connection` (auth database unreachable). Any other 500 is left alone
+    (vLLM uses it for real request errors) and so is any other 503 (`metering
+    system unavailable` is a gateway answer, `upstream rate limited` is a limit)."""
     if not OUTAGE_REWRITE or is_limit_error(exc):
         return False
     status = status_of(exc)
     if status in OUTAGE_STATUSES or type(exc).__name__ in OUTAGE_ERROR_NAMES:
         return True
-    return status == 500 and bool(OUTAGE_CONNECTION_RE.search(exc_text(exc)))
+    text = exc_text(exc)
+    if status == 503:
+        return bool(OUTAGE_GATEWAY_RE.search(text))
+    return status == 500 and bool(OUTAGE_CONNECTION_RE.search(text))
 
 
 def outage_wait(model, now):

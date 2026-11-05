@@ -584,6 +584,14 @@ assert h.is_outage_error(type("Timeout", (Exception,), {})("t")) is True
 assert h.is_outage_error(St(429, "slow")) is False  # limits keep their own path
 assert h.is_outage_error(St(500, "OpenAIException - Connection error.")) is True   # litellm's refused/dropped connection
 assert h.is_outage_error(St(500, "Invalid message for role `developer`")) is False  # a real request error stays
+# gateway auth DB down (2026-11-05 tailbond thread): 503 no_db_connection is an outage; other 503s are not
+nodb = '{"error":{"message":"Service Unavailable, the authentication database is temporarily unreachable. Please retry shortly.","type":"no_db_connection","param":"None","code":"503"}}'
+assert h.is_outage_error(St(503, nodb)) is True
+assert h.is_outage_error(St(503, "metering system unavailable")) is False
+assert h.is_outage_error(St(503, "upstream rate limited")) is False                 # a limit, not an outage
+out = h.rewrite_limit(St(503, nodb), {"model": "m2", "proxy_server_request": {"url": "/v1/messages"}}, now=NOW)
+assert out.status_code == 503 and "Upstream unavailable (503)" in out.detail and "(reset after 1m)" in out.detail, out.detail
+h.OUTAGE_STREAK.clear()
 gw = "<html><body><h1>504 Gateway Time-out</h1></body></html>"
 out = h.rewrite_limit(St(504, gw), msgs, now=NOW)
 assert out.status_code == 503 and "[429]" in out.detail and "(reset after 1m)" in out.detail and "Upstream unavailable (504)" in out.detail, out.detail
