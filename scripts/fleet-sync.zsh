@@ -3,7 +3,9 @@
 # config (~/.config/claude, behind ~/.claude) and copilot-api checkouts from
 # their upstreams, then apply what changed. Never commits, merges or discards:
 # a repo with uncommitted changes, unpushed commits or a diverged branch is
-# skipped with a warning. Edit on one machine, push, and the others follow.
+# skipped with a warning. Edit on one machine, push, and the others follow:
+# a repo that is current but holds uncommitted or unpushed work says so, since
+# the other machines cannot see it yet.
 #
 #   zsh ~/git/dotfiles/scripts/fleet-sync.zsh [--dry-run] [--quiet] [--update-plugins]
 #   zsh ~/git/dotfiles/scripts/fleet-sync.zsh --install-timer   # Linux: hourly systemd user timer
@@ -95,8 +97,13 @@ _sync_repo() {
         || { warning "$label: fetch from $remote failed (offline, or no credentials for a private repo); skipped"; return 1; }
     read -r ahead behind < <(git -C "$dir" rev-list --left-right --count 'HEAD...@{u}')
     if (( ! behind )); then
-        if (( ahead )); then warning "$label: $ahead commit(s) not pushed to $up"
-        else _note "$label: up to date"; fi
+        # In step with upstream, but edits made here only reach the other
+        # machines once committed and pushed. Tracked files only: the trees
+        # hold untracked caches and state that are not config.
+        local -a dirty=(${(f)"$(git -C "$dir" status --porcelain --untracked-files=no)"})
+        (( ahead )) && warning "$label: $ahead commit(s) not pushed to $up; push so the other machines get them"
+        (( ${#dirty} )) && warning "$label: ${#dirty} file(s) with uncommitted changes; commit and push so the other machines get them"
+        (( ahead || ${#dirty} )) || _note "$label: up to date"
         return 0
     fi
     if (( ahead )); then

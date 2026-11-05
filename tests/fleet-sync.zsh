@@ -122,6 +122,14 @@ if run; then fail "diverged repo passed: $out"; fi
 
 git -C "$tmp/cfg" reset -q --hard origin/main   # clear case 8
 
+# 8b. Current with upstream but holding an uncommitted edit: told to commit and
+# push (the other machines cannot see it), exit 0, edit kept
+print -r -- local-edit > "$tmp/cfg/file"
+run || fail "dirty-only run rc=$rc: $out"
+[[ "$out" == *"claude-config: 1 file(s) with uncommitted changes; commit and push"* ]] || fail "uncommitted work not reported: $out"
+[[ "$out" != *"claude-config: up to date"* && "$(<"$tmp/cfg/file")" == local-edit ]] || fail "dirty-only run misreported or touched the edit: $out"
+git -C "$tmp/cfg" checkout -q -- file
+
 # 9. copilot-api moved while a gateway listens: busy -> left running; idle -> stopped
 python3 -m http.server "$COPILOT_API_PORT" --bind 127.0.0.1 >/dev/null 2>&1 &
 gw=$!
