@@ -734,6 +734,46 @@ func compactRate(_ v: Double) -> String { v >= 10 ? String(Int(v.rounded())) : S
 
 func compactMs(_ ms: Double) -> String { ms >= 1000 ? String(format: "%.1fs", ms / 1000) : String(format: "%.0fms", ms) }
 
+/// The animated in-flight strip: its own layer-backed view so a 20 Hz needle
+/// repaints a few dozen pixels instead of the whole panel (charts included).
+final class FlightBarsView: NSView {
+    var fractions: [(id: String, fraction: CGFloat)] = [] {
+        didSet {
+            if fractions.count != oldValue.count || fractions.contains(where: { pair in
+                !oldValue.contains { $0.id == pair.id && $0.fraction == pair.fraction }
+            }) { needsDisplay = true }
+        }
+    }
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        wantsLayer = true
+        layer?.backgroundColor = .clear
+    }
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        wantsLayer = true
+    }
+
+    /// One thin bar per in-flight request, oldest at the bottom: a new request
+    /// adds a bar on top while older ones are unfinished, each with its own
+    /// length and colour for its own age.
+    override func draw(_ dirty: NSRect) {
+        let rows = max(1, Int((bounds.height + 1) / 3))
+        let shown = Array(fractions.prefix(rows))  // fractions[0] is the oldest: keep the ones most likely to matter
+        let h: CGFloat = 2, gap: CGFloat = 1
+        var y = bounds.midY - (CGFloat(shown.count) * (h + gap) - gap) / 2
+        for bar in shown {
+            let track = NSRect(x: bounds.minX, y: y, width: bounds.width, height: h)
+            NSColor.quaternaryLabelColor.setFill()
+            NSBezierPath(roundedRect: track, xRadius: h / 2, yRadius: h / 2).fill()
+            waitColor(bar.fraction).setFill()
+            NSBezierPath(roundedRect: NSRect(x: track.minX, y: y, width: max(track.width * bar.fraction, 3), height: h), xRadius: h / 2, yRadius: h / 2).fill()
+            y += h + gap
+        }
+    }
+}
+
 /// One live in-flight request (see llm-usage read_inflight): id is stable for
 /// the request's whole life, seconds is its age at the sample.
 struct Flight { let id: String; let model: String; let seconds: Double }
@@ -764,7 +804,8 @@ final class MonitorView: NSView {
     // and bars stack upward as new requests arrive while older ones are still
     // unfinished. The aggregate needle (oldest request) stays for the compact
     // overlay pill.
-    var flights: [Flight] = [] { didSet { flightsAt = Date(); needsDisplay = true } }
+    let barsView = FlightBarsView(frame: .zero)
+    var flights: [Flight] = [] { didSet { flightsAt = Date(); barsView.needsDisplay = true } }
     private var flightsAt: Date?
     private var barShown: [String: CGFloat] = [:]
     private var waitNeedle: CGFloat = 0
@@ -772,6 +813,15 @@ final class MonitorView: NSView {
     private var waitDataAt: Date?
     private var waitFirstData = true
     private var waitTimer: Timer?
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        addSubview(barsView)
+    }
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        addSubview(barsView)
+    }
 
     func startWaitAnimation() {
         guard waitTimer == nil else { return }
@@ -790,32 +840,30 @@ final class MonitorView: NSView {
     private func tickWait(_ t: Date = Date()) {
         let dt = min(max(t.timeIntervalSince(waitTick ?? t), 0), 0.5)
         waitTick = t
-        var moved = false
+        var moved = false, barsMoved = false
         // per-request bars: present -> rise toward its age; gone -> drain out
         let live = Set(flights.map { $0.id })
         for f in flights {
             let target = waitTarget(at: t, for: f)
             let shown = barShown[f.id] ?? 0
             let next = shown + (target - shown) * CGFloat(1 - exp(-dt / 0.25))
-            if next > 0.0015 { barShown[f.id] = next; moved = moved || abs(next - shown) > 0.0015 }
+            if next > 0.0015 { barShown[f.id] = next; barsMoved = barsMoved || abs(next - shown) > 0.0015 }
             else { barShown[f.id] = target > 0 ? target : 0 }
         }
         for (id, shown) in barShown where !live.contains(id) {
             let next = shown * CGFloat(exp(-dt / 0.4))
             if next > 0.01 { barShown[id] = next } else { barShown.removeValue(forKey: id) }
-            moved = true
+            barsMoved = true
         }
-        // aggregate needle for the overlay pill
+        // aggregate needle for the overlay pill (drawn with the rest of the
+        // panel on data changes; the strip below carries the live motion)
         let target = waitTarget(at: t)
         let tau: Double = target >= waitNeedle ? 0.25 : 0.4
         let next = waitNeedle + (target - waitNeedle) * CGFloat(1 - exp(-dt / tau))
-        if abs(next - waitNeedle) > 0.0015 || abs(target - waitNeedle) > 0.0015 {
-            waitNeedle = next
-            moved = true
-        } else {
-            waitNeedle = target
+        waitNeedle = abs(next - waitNeedle) > 0.0015 ? next : target
+        if moved || barsMoved {
+            barsView.fractions = flightBars
         }
-        if moved { needsDisplay = true }
     }
 
     /// Bars stay visible while they drain, not just while requests are live.
@@ -1138,24 +1186,12 @@ final class MonitorView: NSView {
     }
 
     /// History layout: no text rows, so a small pill carries the state (and in-flight count) over the graph.
-    /// One thin bar per in-flight request in the stats row, oldest at the
-    /// bottom: a new request adds a bar on top while older ones are unfinished,
-    /// each with its own length and colour for its own age.
-    func drawFlightStack(_ r: NSRect) {
-        let bars = flightBars
-        guard !bars.isEmpty, r.width >= 8 else { return }
-        let h: CGFloat = 2, gap: CGFloat = 1
-        let rows = max(1, Int((r.height + gap) / (h + gap)))
-        let shown = Array(bars.prefix(rows))  // bars[0] is the oldest: keep the ones most likely to matter
-        var y = r.midY - (CGFloat(shown.count) * (h + gap) - gap) / 2
-        for bar in shown {
-            let track = NSRect(x: r.minX, y: y, width: r.width, height: h)
-            NSColor.quaternaryLabelColor.setFill()
-            NSBezierPath(roundedRect: track, xRadius: h / 2, yRadius: h / 2).fill()
-            waitColor(bar.fraction).setFill()
-            NSBezierPath(roundedRect: NSRect(x: track.minX, y: y, width: max(track.width * bar.fraction, 3), height: h), xRadius: h / 2, yRadius: h / 2).fill()
-            y += h + gap
-        }
+    /// Position (and feed) the animated strip; the strip repaints itself on
+    /// the needle timer, the panel redraws only on data changes.
+    func placeFlightBars(_ r: NSRect) {
+        if barsView.frame != r { barsView.frame = r }
+        barsView.isHidden = r.isEmpty || flightBars.isEmpty
+        barsView.fractions = flightBars
     }
 
     func drawOverlay(summary: Summary, live: [SpanItem], d: J, in r: NSRect) {
@@ -1572,7 +1608,9 @@ final class MonitorView: NSView {
             drawStr(value, in: r, font: valueFont, color: strong ? .labelColor : .secondaryLabelColor, align: .right)
             if fl["available"].bool, waitBarVisible {
                 let x0 = r.minX + textWidth("In flight", bodyFont) + 8, x1 = r.maxX - textWidth(value, valueFont) - 8
-                drawFlightStack(NSRect(x: x0, y: r.minY, width: x1 - x0, height: r.height))
+                placeFlightBars(NSRect(x: x0, y: r.minY, width: x1 - x0, height: r.height))
+            } else {
+                placeFlightBars(.zero)
             }
         }
 
@@ -1652,6 +1690,12 @@ func writeWindowPNG(_ d: J, layout: MonitorLayout, size: NSSize, dark: Bool, mod
         guard let gc = NSGraphicsContext(bitmapImageRep: rep) else { return }
         NSGraphicsContext.current = gc
         view.draw(view.bounds)
+        for sub in view.subviews where !sub.isHidden {  // the animated strip is a subview
+            NSGraphicsContext.saveGraphicsState()
+            NSGraphicsContext.current?.cgContext.translateBy(x: sub.frame.minX, y: sub.frame.minY)
+            sub.draw(sub.bounds)
+            NSGraphicsContext.restoreGraphicsState()
+        }
     }
     if let png = rep.representation(using: .png, properties: [:]) { try? png.write(to: URL(fileURLWithPath: path)) }
     print("window-png: \(Int(size.width))x\(Int(size.height))pt (\(rep.pixelsWide)x\(rep.pixelsHigh)px) \(dark ? "dark" : "light") layout=\(layout.rawValue) graph=\(mode.rawValue) metric=\(metric.rawValue) -> \(path)")
