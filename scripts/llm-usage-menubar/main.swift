@@ -176,17 +176,13 @@ func requestsChart(_ d: J, metric: ChartMetric = .requests) -> (NSImage, String)
         let slot = area.width / CGFloat(n)
         let scale = (area.height - 1) / CGFloat(peak)
         if metric.isDuration {
-            let path = NSBezierPath()
-            path.lineWidth = 1.5
-            path.lineJoinStyle = .round
-            var started = false
-            for (i, v) in durVals.enumerated() where i < n {
-                guard v > 0 else { started = false; continue }
+            // one dot per sampled minute: gaps stay gaps, density reads directly
+            let r = min(max(slot * 0.32, 1.3), 2.6)
+            for (i, v) in durVals.enumerated() where i < n && v > 0 {
                 let pt = NSPoint(x: area.minX + (CGFloat(i) + 0.5) * slot, y: area.minY + 0.5 + CGFloat(v) * scale)
-                if started { path.line(to: pt) } else { path.move(to: pt); started = true }
+                NSColor.systemBlue.setFill()
+                NSBezierPath(roundedRect: NSRect(x: pt.x - r, y: pt.y - r, width: 2 * r, height: 2 * r), xRadius: r, yRadius: r).fill()
             }
-            NSColor.systemBlue.setStroke()
-            path.stroke()
             return
         }
         for i in 0..<n {
@@ -1213,25 +1209,24 @@ final class MonitorView: NSView {
                   model: model, spans: [], metric: m)
     }
 
-    /// One median line for a duration metric; zero means "no sample", so the path breaks there.
-    func drawDurationLine(_ ctx: CGContext, rect: NSRect, values: [Double], n: Int, slot: CGFloat, scale: CGFloat,
+    /// One dot per sampled minute for a duration metric (TTFT / latency p50):
+    /// each request-carrying minute is a dot at its median, empty minutes stay
+    /// empty, so request density and gaps read directly instead of a line that
+    /// visually bridges (or breaks arbitrarily across) quiet stretches.
+    func drawDurationDots(_ ctx: CGContext, rect: NSRect, values: [Double], n: Int, slot: CGFloat, scale: CGFloat,
                           color: NSColor, alpha: CGFloat, width: CGFloat, halo: Bool) {
-        let path = NSBezierPath()
-        var started = false
-        for (i, v) in values.enumerated() where i < n {
-            guard v > 0 else { started = false; continue }
+        let r = min(max(width * 1.35, 1.4), 3)
+        for (i, v) in values.enumerated() where i < n && v > 0 {
             let pt = NSPoint(x: rect.minX + (CGFloat(i) + 0.5) * slot, y: rect.minY + 0.5 + CGFloat(v) * scale)
-            if started { path.line(to: pt) } else { path.move(to: pt); started = true }
+            let dot = NSBezierPath(roundedRect: NSRect(x: pt.x - r, y: pt.y - r, width: 2 * r, height: 2 * r), xRadius: r, yRadius: r)
+            if halo {
+                dot.lineWidth = 1.7
+                NSColor.windowBackgroundColor.withAlphaComponent(0.55 * alpha).setStroke()
+                dot.stroke()  // ring so dots stay visible over bars and washes
+            }
+            color.withAlphaComponent(alpha).setFill()
+            dot.fill()
         }
-        path.lineJoinStyle = .round
-        if halo {
-            path.lineWidth = width + 1.7
-            NSColor.windowBackgroundColor.withAlphaComponent(0.55 * alpha).setStroke()
-            path.stroke()
-        }
-        path.lineWidth = width
-        color.withAlphaComponent(alpha).setStroke()
-        path.stroke()
     }
 
     func drawGraph(_ ctx: CGContext, rect: NSRect, model: GraphModel, spans: [SpanItem], metric m: ChartMetric) {
@@ -1335,20 +1330,20 @@ final class MonitorView: NSView {
             }
         }
 
-        // Latency / TTFT are distributions: median lines, split by provider (Lines mode) and/or model vendor (Bars mode).
+        // Latency / TTFT are distributions: median dots, split by provider (Lines mode) and/or model vendor (Bars mode).
         if m.isDuration {
             if graphMode != .bars {
                 for p in model.providers {
                     let values = m == .ttft ? p.ttft : p.latency
                     guard (values.max() ?? 0) > 0 else { continue }
-                    drawDurationLine(ctx, rect: rect, values: values, n: n, slot: slot, scale: scale,
+                    drawDurationDots(ctx, rect: rect, values: values, n: n, slot: slot, scale: scale,
                                      color: providerColor(p.key), alpha: hoverAlpha(.provider(p.key)),
                                      width: hover == .provider(p.key) ? 2 : 1.6, halo: true)
                 }
             }
             if graphMode != .lines {
                 for (key, values) in model.durationSeries(m) where (values.max() ?? 0) > 0 {
-                    drawDurationLine(ctx, rect: rect, values: values, n: n, slot: slot, scale: scale,
+                    drawDurationDots(ctx, rect: rect, values: values, n: n, slot: slot, scale: scale,
                                      color: vendorColor(key), alpha: hoverAlpha(.vendor(key)), width: 1, halo: false)
                 }
             }
