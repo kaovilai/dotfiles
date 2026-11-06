@@ -200,6 +200,25 @@ func TestUnsupportedModelIsUntouched(t *testing.T) {
 	}
 }
 
+func TestSearchNoteMCPRoute(t *testing.T) {
+	// the launchers register the Parallel MCP for search-less upstreams; the
+	// note must point the model at those tools, not at a delegate model
+	cfg := testConfig()
+	cfg.SearchMCP = "parallel"
+	note := searchNoteText(cfg)
+	if !strings.Contains(note, "mcp__parallel__web_search") || !strings.Contains(note, "web_fetch") {
+		t.Fatalf("note does not route to the MCP tools: %s", note)
+	}
+	if strings.Contains(note, "delegate_task") {
+		t.Fatalf("delegate route shown although the MCP is registered: %s", note)
+	}
+	cfg.SearchMCP = ""
+	cfg.SearchDelegate = "codex_rh_codex_api:gpt-5.6-luna"
+	if note = searchNoteText(cfg); !strings.Contains(note, "providerInstanceId=codex_rh_codex_api") {
+		t.Fatalf("delegate fallback lost: %s", note)
+	}
+}
+
 func TestSearchNoteNotDuplicated(t *testing.T) {
 	data := decode(t, `{"model":"rits/zai-org/glm-5-3","max_tokens":10,"messages":[{"role":"user","content":"hi"}],"system":[{"type":"text","text":"`+searchNoteMarker+` already here"}],"tools":[{"type":"web_search"}]}`)
 	if _, err, _ := rewriteRequest(testConfig(), "/v1/messages", data); err != nil {
