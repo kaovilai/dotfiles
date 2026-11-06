@@ -4,6 +4,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -13,6 +15,7 @@ import (
 // upstream call with the given status and body, counting calls per model.
 type proxyHarness struct {
 	app   *app
+	url   string
 	mu    sync.Mutex
 	calls map[string]int
 }
@@ -34,6 +37,7 @@ func newProxyHarness(t *testing.T, status int, body string, tweak func(*config))
 		_, _ = w.Write([]byte(body))
 	}))
 	t.Cleanup(stub.Close)
+	h.url = stub.URL
 	t.Setenv("ENMAAS_API_KEY", "test-key")
 	t.Setenv("HOSTED_ONLY_ENMAAS_BASE_URL", stub.URL)
 	t.Setenv("LLM_USAGE_DIR", t.TempDir())
@@ -123,5 +127,40 @@ func TestRateLimitedModelStillFallsBack(t *testing.T) {
 	h.messages(glm)
 	if h.count(ds) != 2 {
 		t.Fatalf("a rate limit must keep falling back: ds=%d", h.count(ds))
+	}
+}
+
+// An explicit dialect override can give the two hosted models different
+// dialects. A Messages request that fails over to a chat-dialect fallback would
+// forward a Messages body to a chat endpoint; the fallback is skipped instead and
+// the original failure is returned. The control run (both Anthropic) still falls back.
+func TestFallbackIsSkippedWhenItsDialectCannotBeServed(t *testing.T) {
+	run := func(t *testing.T, fallbackDialect string) *proxyHarness {
+		h := newProxyHarness(t, 502, `{"error":{"message":"bad gateway"}}`, nil)
+		glm, ds := h.app.cfg.GLM, h.app.cfg.DeepSeek
+		route := func(name, dialect, base string) map[string]any {
+			return map[string]any{"model_name": name, "litellm_params": map[string]any{"model": dialect + "/" + name, "api_base": base}}
+		}
+		doc := map[string]any{"model_list": []any{route(glm, "anthropic", h.url), route(ds, fallbackDialect, h.url)},
+			"general_settings": map[string]any{"master_key": "x"}}
+		path := filepath.Join(t.TempDir(), "routes.json")
+		if err := os.WriteFile(path, marshal(doc), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		routes, err := loadRouteTable(path, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		h.app.cfg.Routes = routes
+		h.messages(glm)
+		return h
+	}
+	h := run(t, "openai")
+	if h.count(h.app.cfg.GLM) != 1 || h.count(h.app.cfg.DeepSeek) != 0 {
+		t.Fatalf("a chat-dialect fallback must not receive a Messages body: glm=%d ds=%d", h.count(h.app.cfg.GLM), h.count(h.app.cfg.DeepSeek))
+	}
+	h = run(t, "anthropic")
+	if h.count(h.app.cfg.DeepSeek) != 1 {
+		t.Fatalf("control: an Anthropic-dialect fallback must still be tried: ds=%d", h.count(h.app.cfg.DeepSeek))
 	}
 }

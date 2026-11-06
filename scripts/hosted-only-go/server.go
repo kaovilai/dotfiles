@@ -173,8 +173,7 @@ func (a *app) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	stream := asBool(data["stream"]) || strings.Contains(r.Header.Get("Accept"), "text/event-stream")
 	resp, transportErr := a.upstream(r, outBody, upstreamBase, upstreamPath, stream)
 	usedFallback := false
-	if fallback != "" && a.shouldFailover(resp, transportErr) &&
-		(a.cfg.Routes == nil || a.cfg.Routes.known(fallback, r.URL.Path)) {
+	if fallback != "" && a.shouldFailover(resp, transportErr) && a.fallbackServable(fallback, r.URL.Path) {
 		if resp != nil {
 			_, _ = io.Copy(io.Discard, resp.Body)
 			resp.Body.Close()
@@ -400,6 +399,24 @@ func (a *app) shouldFailover(resp *http.Response, err error) bool {
 
 func (a *app) outageWait(model string, now time.Time) int {
 	return a.outages.wait(model, now)
+}
+
+// fallbackServable reports whether the fallback model can answer THIS client
+// on THIS endpoint: it must be a known route and speak a dialect the proxy can
+// forward without translating. The generated hosted-only routes always do (both
+// models are Anthropic-dialect natively), but an explicit dialect override
+// (CLAUDE_ENMAAS_MODEL_DIALECTS) can give the two models different dialects;
+// forwarding then would send a Messages body to a chat endpoint on a failure
+// path. Not servable means no fallback: the original failure is returned.
+func (a *app) fallbackServable(fallback, path string) bool {
+	if a.cfg.Routes == nil {
+		return true
+	}
+	if !a.cfg.Routes.known(fallback, path) {
+		return false
+	}
+	entry, _, _ := a.cfg.Routes.resolve(fallback, path)
+	return dialectMismatch(path, entry.Dialect, fallback) == ""
 }
 
 // dialectMismatch is non-empty when the client speaks a different protocol
