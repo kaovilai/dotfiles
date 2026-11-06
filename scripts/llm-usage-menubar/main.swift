@@ -1715,6 +1715,10 @@ func writeWindowPNG(_ d: J, layout: MonitorLayout, size: NSSize, dark: Bool, mod
     print("window-png: \(Int(size.width))x\(Int(size.height))pt (\(rep.pixelsWide)x\(rep.pixelsHigh)px) \(dark ? "dark" : "light") layout=\(layout.rawValue) graph=\(mode.rawValue) metric=\(metric.rawValue) -> \(path)")
 }
 
+// Takes effect: see docs/notes/change-take-effect.md. main.swift: run `llm-usage menubar build`, then
+// `launchctl kickstart -k gui/$UID/com.kaovilai.llm-usage-menubar`; building
+// alone does not replace the running process.
+
 // MARK: - CLI discovery and polling
 
 func findUsageBinary() -> String? {

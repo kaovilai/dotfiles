@@ -1,5 +1,10 @@
 """LiteLLM proxy hooks for the hosted-only proxies (scripts/hosted-only-proxy.zsh).
 
+Takes effect: See docs/notes/change-take-effect.md. Hook code is AST-hashed into the proxy
+fingerprint, so an edit restarts the IDLE proxy on the next launch or
+fleet-sync run; a busy proxy waits for the watcher. Comment/docstring edits
+never change the hash.
+
 Applies to EnMaaS-hosted vLLM models (rits/...: GLM and DeepSeek) only; other
 models pass through untouched. Env knobs are HOSTED_ONLY_*; each also reads its
 retired GLM_HYBRID_* name as a fallback.

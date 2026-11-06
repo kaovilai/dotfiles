@@ -1,4 +1,9 @@
-"""Prepare existing ZSH providers, then supervise only the invocation's Claude."""
+"""Prepare existing ZSH providers, then supervise only the invocation's Claude.
+
+Takes effect: See docs/notes/change-take-effect.md. This file runs per launch: edits apply on the NEXT turn.
+The settings env is exported into the child process here so knobs read at
+claude startup (CLAUDE_CODE_MAX_OUTPUT_TOKENS and friends) always win.
+"""
 import contextlib
 import fcntl
 import json

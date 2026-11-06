@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """llm-usage: visibility into which providers/models your LLM traffic really uses.
 
+Takes effect: See docs/notes/change-take-effect.md. This CLI is a fresh process per invocation
+(immediate); the `serve` dashboard keeps its code and caches until restarted.
+
 Data sources (all local, nothing leaves the machine):
   proxy   JSONL written by scripts/litellm_usage_log.py inside each LiteLLM
           proxy (requested model, served model, upstream, tokens, latency,

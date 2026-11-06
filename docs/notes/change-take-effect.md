@@ -1,0 +1,30 @@
+# When a change takes effect
+
+Canonical answer for "do I need to restart X?". Every seam in the dotfiles
+should name its class from this table in a short comment; extend the table when
+a new kind of state shows up.
+
+Terms: **fleet-sync** = `zsh ~/git/dotfiles/scripts/fleet-sync.zsh` (Linux: hourly
+systemd user timer). **Turn** = one T3 run, which spawns a fresh client process.
+
+| What you changed | Takes effect |
+|---|---|
+| `scripts/llm-usage` (CLI) | immediately — every invocation is a fresh process |
+| `scripts/llm-usage` dashboard (`serve`) code | next `serve` restart (the running server keeps its code and caches) |
+| `scripts/llm-usage-menubar/main.swift` | `llm-usage menubar build` (or `menubar install`) then `launchctl kickstart -k gui/$UID/com.kaovilai.llm-usage-menubar` — rebuild alone leaves the old process running |
+| Claude/Codex launcher logic: `zsh/functions/claude/providers/*`, `scripts/claude-provider.py`, `scripts/claude-provider-prepare.zsh`, `scripts/codex-provider.zsh` | next client launch = **next turn**; a new terminal `claude`/`codex` session; T3 version probes pick it up on their next probe |
+| Claude settings knobs written via `--settings` (models, `CLAUDE_CODE_*`) | next turn. The bridge also exports them into the client's environment, so knobs that are read at startup win too |
+| Proxy hooks or config: `scripts/hosted_only_hooks.py`, `scripts/hosted-only-proxy.zsh`, `scripts/enmaas_proxy_hooks.py`, `zsh/functions/claude/providers/enmaas-proxy.zsh`, `zsh/functions/claude/providers/enmaas.zsh` config parts | fingerprint/AST-digest change → the **idle** proxy restarts on the next client launch, or during the next fleet-sync run (`llm-proxy-sync`). A busy proxy is never cut: `llm-proxy-watch` waits for the first idle moment (~50 ms detection) |
+| `zsh/functions/claude/proxies.zsh`, `scripts/llm-proxy-watch.zsh`, `scripts/fleet-sync.zsh` | next shell for direct use; fleet-sync/the timer uses the new code on its next run |
+| T3 provider instances (`t3/provider-instances.json` → `import-t3-providers`) | next T3 server/app start; the running server does not hot-reload instance settings |
+| Skills (`~/.claude/skills`, synced links into Codex/Gemini) | next agent session/turn that loads the skill |
+| Hooks (`~/.claude/hooks`, `~/.codex/hooks.json` + trust) | per hook invocation; Codex needs `sync-harnesses.sh` trust refresh after a hooks.json edit |
+| Shell functions/aliases/completions (zsh) | new shell (`exec zsh` or a new terminal) |
+| launchd/systemd units | `launchctl kickstart`/`bootout`+`bootstrap`; systemd `daemon-reload` + restart |
+| Anything on disk (configs, credentials) | processes that read it at start need their restart class above; fleet-sync reports what it restarted |
+| Machine restart | nothing special: everything reloads from disk. Only stale *state* (pid files, runtime dirs) matters, and fleet-sync reconciles that |
+
+Rule of thumb: **sync alone never touches a running process.** It updates files
+and (for proxies) restarts only what is idle; everything else waits for its own
+class above. When in doubt, `llm-proxy-restart required` lists stale proxies and
+restarts them on demand.

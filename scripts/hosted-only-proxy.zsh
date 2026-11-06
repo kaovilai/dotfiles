@@ -1,5 +1,9 @@
 # Sourced library (not executable): the hosted-only LiteLLM proxies.
 #
+# Takes effect: see docs/notes/change-take-effect.md. Hook/config edits change the fingerprint, so an IDLE proxy
+# restarts on the next launch or fleet-sync run; a busy one waits for the
+# watcher. Sourced functions are live in NEW shells only.
+#
 # Hosted-only = EnMaaS-hosted free models only: GLM 5.3 (text) and DeepSeek
 # V4.1 Flash (1M context, vision). Codex's auto-review and Claude Code's
 # auto-mode classifier send their review request to the same endpoint as the

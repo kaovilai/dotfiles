@@ -1,3 +1,6 @@
+# Takes effect: see docs/notes/change-take-effect.md. Launcher/settings logic applies on the NEXT claude launch
+# (next T3 turn); the bridge exports the settings env into the client, so
+# startup-read knobs (CLAUDE_CODE_MAX_OUTPUT_TOKENS) win there too.
 # ---------------------------------------------------------------------------
 # claude-hosted-only: EnMaaS-hosted free models only (GLM 5.3 main; DeepSeek
 # V4.1 Flash selectable with --model rits/deepseek-ai/DeepSeek-V4.1-Flash-1017[1m]).

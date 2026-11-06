@@ -1,4 +1,7 @@
 #!/bin/zsh -f
+#
+# Takes effect: see docs/notes/change-take-effect.md. Launcher logic applies on the NEXT codex launch (next T3
+# turn); the generated model catalog regenerates when its shape hash changes.
 # Symlink as codex-t3-enmaas or codex-t3-hosted-only (codex-t3-glm-hybrid and
 # codex-t3-glm-only = retired names, compat aliases of hosted-only). Never load
 # .zshrc.

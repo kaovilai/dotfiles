@@ -1,3 +1,6 @@
+# Takes effect: see docs/notes/change-take-effect.md. Launcher/settings logic applies on the NEXT claude launch
+# (next T3 turn); the proxy config/hook parts change the controller digest and
+# restart the IDLE proxy on the next launch or fleet-sync run.
 # ---------------------------------------------------------------------------
 # claude-enmaas: raw claude binary routed through the EnMaaS gateway via one
 # shared loopback LiteLLM proxy (default :4146, CLAUDE_ENMAAS_PROXY_PORT).

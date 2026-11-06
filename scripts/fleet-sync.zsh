@@ -31,6 +31,8 @@
 # Exit status: 0 when everything is in sync or was updated, 1 when a repo was
 # skipped or a step failed (the timer's journal shows which).
 # Repo paths: FLEET_DOTFILES_DIR, FLEET_CLAUDE_DIR, COPILOT_API_DIR.
+# What restarts when: docs/notes/change-take-effect.md. Sync never touches a
+# running process except the idle proxies above (busy ones get a watcher).
 emulate -L zsh
 setopt pipe_fail
 
@@ -42,7 +44,7 @@ for arg in "$@"; do
         --update-plugins) update_plugins=1 ;;
         --install-timer) timer=install ;;
         --remove-timer) timer=remove ;;
-        -h|--help) sed -n '2,33p' "${0:A}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        -h|--help) sed -n '2,35p' "${0:A}" | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) print -ru2 -- "fleet-sync: unknown option $arg (see --help)"; exit 2 ;;
     esac
 done
