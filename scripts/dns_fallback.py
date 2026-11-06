@@ -121,3 +121,31 @@ try:
     socket.getaddrinfo = getaddrinfo
 except Exception:
     pass
+
+
+# Zero-refuse proxy restarts (2026-11-06): a restart used to stop the old
+# listener before booting the new one, so a request arriving during the
+# multi-second import+boot window was refused (ECONNREFUSED, "a firewall or
+# proxy may be blocking it"). With SO_REUSEPORT the restart starts the new
+# proxy ALONGSIDE the old one and kills the old only once the new listener is
+# up, so the port never stops accepting. litellm 1.97's CLI does not expose
+# uvicorn's reuse_port, so force it here (this file is the proxy's
+# sitecustomize; the DNS part above stays env-gated, this patch is always on).
+# Requires every listener on the port to set it: the first restart after this
+# rolls out still pays the old stop-then-start window once (the running proxy
+# predates the patch), every later one is zero-gap.
+try:
+    import uvicorn as _uvicorn
+
+    _real_uvicorn_run = _uvicorn.run
+
+    def _run_with_reuse_port(*args, **kwargs):
+        try:
+            kwargs.setdefault('reuse_port', True)
+        except Exception:
+            pass
+        return _real_uvicorn_run(*args, **kwargs)
+
+    _uvicorn.run = _run_with_reuse_port
+except Exception:
+    pass

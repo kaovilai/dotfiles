@@ -286,10 +286,108 @@ _hosted_only_go_routes() {
     print -r -- "{\"model_list\":[${(j:,:)rows}],\"general_settings\":{\"master_key\":\"os.environ/HOSTED_ONLY_PROXY_TOKEN\"}}"
 }
 
-# _hosted_only_busy <port>: 0 when the proxy is serving a client right now
-# (an ESTABLISHED socket whose local end is the port).
+# _hosted_only_busy <port>: 0 when a request is in flight on the port. Same
+# in-flight-file idle test llm-proxy-sync uses (2026-11-06 audit): a keep-alive
+# pool holds ESTABLISHED sockets between requests, so the old socket-only test
+# read "busy" forever and blocked fingerprint restarts. Falls back to the
+# socket test when the listener reports nothing (common.zsh not loaded).
 _hosted_only_busy() {
-    lsof -nP -iTCP:"$1" -sTCP:ESTABLISHED -Fn 2>/dev/null | grep -q -- "^n.*:$1->"
+    if (( $+functions[_claude_port_serving] )); then
+        _claude_port_serving "$1"
+    else
+        lsof -nP -iTCP:"$1" -sTCP:ESTABLISHED -Fn 2>/dev/null | grep -q -- "^n.*:$1->"
+    fi
+}
+
+# _hosted_only_proxy_launch: start the proxy for the current flavor/impl
+# (globals from _hosted_only_proxy_vars + ensure's $config already written).
+_hosted_only_proxy_launch() {
+    if [[ "$_hop_impl" == go ]]; then
+        # The binary reads a JSON route table derived from the same knobs
+        # (bare = anthropic, suffix = openai/Responses).
+        _hosted_only_go_routes >| "$_hop_runtime/routes.json" || return 1
+        ENMAAS_API_KEY="$ENMAAS_API_KEY" HOSTED_ONLY_PROXY_TOKEN="$_hop_token" \
+            HOSTED_ONLY_GLM_MODEL="$_hop_glm" HOSTED_ONLY_DEEPSEEK_MODEL="$_hop_deepseek" HOSTED_ONLY_VISION_FALLBACK="$_hop_vision_fallback" \
+            HOSTED_ONLY_ALIAS_MODELS="$_hop_aliases" HOSTED_ONLY_FALLBACK="$(_hosted_only_knob FALLBACK 1)" \
+            HOSTED_ONLY_OUTAGE_REWRITE="$(_hosted_only_knob OUTAGE_REWRITE 1)" \
+            HOSTED_ONLY_LIMIT_REWRITE="$_hop_limit_rewrite" HOSTED_ONLY_RATE_LIMIT_DEFAULT_RETRY_SECONDS="$_hop_limit_retry" HOSTED_ONLY_CLIENT_RETRY_MAX_SECONDS="$_hop_client_retry" \
+            HOSTED_ONLY_MAX_MODEL_LEN="$(_hosted_only_knob MAX_MODEL_LEN 1048576)" HOSTED_ONLY_OUTPUT_RESERVE="$(_hosted_only_knob OUTPUT_RESERVE 512)" HOSTED_ONLY_BYTES_PER_TOKEN="$(_hosted_only_knob BYTES_PER_TOKEN 3)" HOSTED_ONLY_MIN_OUTPUT="$(_hosted_only_knob MIN_OUTPUT 16000)" \
+            HOSTED_ONLY_REQUEST_TIMEOUT="$_hop_request_timeout" HOSTED_ONLY_SEARCH_NUDGE="$(_hosted_only_knob SEARCH_NUDGE 1)" HOSTED_ONLY_DIALECT_SUFFIX="$_hop_dialect" \
+            python3 "$_HOSTED_ONLY_SCRIPTS/claude-provider.py" --background "$_hop_runtime/proxy.log" \
+            "$_hop_gobin" --flavor "$_hop_flavor" --config "$_hop_runtime/routes.json" --port "$_hop_port" --runtime-dir "$_hop_runtime" || return 1
+    else
+        cp -f "$_hop_hooks" "$_hop_runtime/hosted_only_hooks.py" || return 1
+        cp -f "$_hop_usage_log" "$_hop_runtime/litellm_usage_log.py" || return 1
+        # The runtime shim is ALWAYS installed: besides the env-gated DoH
+        # fallback it forces uvicorn's SO_REUSEPORT, which the zero-refuse
+        # restart below depends on. ENMAAS_DNS_FALLBACK_HOSTS stays empty to
+        # disable just the DoH part.
+        cp -f "$_HOSTED_ONLY_SCRIPTS/dns_fallback.py" "$_hop_runtime/sitecustomize.py" || return 1
+        local -a dns_env=(PYTHONPATH="$_hop_runtime")
+        [[ -n "$_hop_dns_host" ]] && dns_env+=(ENMAAS_DNS_FALLBACK_HOSTS="$_hop_dns_host")
+        ENMAAS_API_KEY="$ENMAAS_API_KEY" HOSTED_ONLY_PROXY_TOKEN="$_hop_token" \
+            HOSTED_ONLY_GLM_MODEL="$_hop_glm" HOSTED_ONLY_DEEPSEEK_MODEL="$_hop_deepseek" HOSTED_ONLY_VISION_FALLBACK="$_hop_vision_fallback" \
+            HOSTED_ONLY_ALIAS_MODELS="$_hop_aliases" HOSTED_ONLY_OUTAGE_STATE="$_hop_runtime/outage-streak.json" \
+            HOSTED_ONLY_LIMIT_REWRITE="$_hop_limit_rewrite" HOSTED_ONLY_RATE_LIMIT_DEFAULT_RETRY_SECONDS="$_hop_limit_retry" HOSTED_ONLY_CLIENT_RETRY_MAX_SECONDS="$_hop_client_retry" LITELLM_LOG="$(_hosted_only_knob LITELLM_LOG ERROR)" \
+            HOSTED_ONLY_IMAGE_BUDGET_BYTES="$_hop_image_budget" HOSTED_ONLY_IMAGE_CACHE_DAYS="$_hop_image_cache_days" HOSTED_ONLY_DIALECT_SUFFIX="$_hop_dialect" \
+            HOSTED_ONLY_MAX_MODEL_LEN="$(_hosted_only_knob MAX_MODEL_LEN 1048576)" HOSTED_ONLY_OUTPUT_RESERVE="$(_hosted_only_knob OUTPUT_RESERVE 512)" HOSTED_ONLY_BYTES_PER_TOKEN="$(_hosted_only_knob BYTES_PER_TOKEN 3)" HOSTED_ONLY_MIN_OUTPUT="$(_hosted_only_knob MIN_OUTPUT 16000)" \
+            env "${dns_env[@]}" \
+            python3 "$_HOSTED_ONLY_SCRIPTS/claude-provider.py" --background "$_hop_runtime/proxy.log" \
+            uv tool run --with "fastapi==$_hop_fastapi_version" --from "litellm[proxy]==$_hop_litellm_version" litellm \
+            --config "$_hop_runtime/config.yaml" --host 127.0.0.1 --port "$_hop_port" --telemetry False || return 1
+    fi
+}
+
+# _hosted_only_boot_wait <port> [<old-pids>]: 0 once a listener that is not one
+# of <old-pids> is up and health answers. During a zero-refuse swap the OLD
+# proxy also answers health, so the listener set — not health — is the
+# readiness signal for the new one.
+_hosted_only_boot_wait() {
+    local port="$1" old="${2-}" health="$_hop_base/health/liveliness"
+    local boot_max="${LLM_PROXY_SYNC_UP_TIMEOUT:-180}"
+    [[ "$boot_max" == <-> ]] || boot_max=180
+    local -i i seen
+    local pid
+    local -a listeners oldlist=(${(f)old})
+    print -nu2 -- "hosted-only: starting $_hop_flavor proxy on :$port "
+    for (( i = 0; i < boot_max; i++ )); do
+        listeners=(${(f)"$(lsof -ti "tcp:$port" -sTCP:LISTEN 2>/dev/null)"})
+        seen=0
+        for pid in $listeners; do
+            (( ${oldlist[(Ie)$pid]} )) && continue
+            seen=1
+            break
+        done
+        (( seen )) && break
+        print -nu2 -- .
+        sleep 1
+    done
+    print -u2
+    # 90 s was not enough on a small host (the same LiteLLM took 96 s on
+    # WSL, see proxies.zsh); a miss left no fingerprint so every later sync
+    # re-labeled the proxy stale (2026-11-06 audit)
+    (( seen )) || return 1
+    curl -sf --max-time 5 "$health" -o /dev/null
+}
+
+# _hosted_only_retire <pids>: kill the old swap listener(s) by pid and wait.
+# Never via _hosted_only_proxy_stop during a swap: both processes run the same
+# config path, so the stop helper's identity check would match the new one too.
+_hosted_only_retire() {
+    local pid alive
+    local -i i
+    for pid in ${(f)${1-}}; do
+        kill "$pid" 2>/dev/null
+    done
+    for (( i = 0; i < 30; i++ )); do
+        alive=""
+        for pid in ${(f)${1-}}; do
+            kill -0 "$pid" 2>/dev/null && alive="$alive $pid"
+        done
+        [[ -z "$alive" ]] && return 0
+        sleep 0.5
+    done
+    return 1
 }
 
 # _hosted_only_proxy_ensure <flavor>: proxy healthy with the current config, or
@@ -303,6 +401,9 @@ _hosted_only_proxy_ensure() {
     _hosted_only_proxy_vars "$1" || return 1
     local health="$_hop_base/health/liveliness"
     local impl="$_hop_impl"
+    # _hosted_only_proxy_launch (a separate function) needs these: function
+    # locals do not cross the call, so they are globals like the _hop_* set
+    typeset -g _hop_litellm_version= _hop_fastapi_version= _hop_hooks= _hop_usage_log= _hop_gobin= _hop_gohash=
     local litellm_version= fastapi_version= hooks= usage_log= gobin= gohash=
     if [[ "$impl" == go ]]; then
         gobin=$(_hosted_only_go_bin) || return 1
@@ -328,13 +429,19 @@ _hosted_only_proxy_ensure() {
     else
         hooks_hash=$(_hosted_only_code_hash "$hooks" "$usage_log") || return 1
     fi
-    # DoH fallback for the gateway name only, same shim as the EnMaaS proxy;
-    # HOSTED_ONLY_DNS_FALLBACK=0 drops it and changes the fingerprint.
-    if [[ "$impl" == litellm && "$(_hosted_only_knob DNS_FALLBACK 1)" != 0 ]]; then
+    # The runtime shim (dns_fallback.py, installed as sitecustomize.py) is
+    # hashed into the fingerprint for the LiteLLM impl: it carries the
+    # SO_REUSEPORT patch the zero-refuse restart depends on plus the env-gated
+    # DoH fallback for the gateway name. HOSTED_ONLY_DNS_FALLBACK=0 disables
+    # just the DoH part (empty ENMAAS_DNS_FALLBACK_HOSTS) and changes the
+    # fingerprint; the uvicorn patch is always on.
+    if [[ "$impl" == litellm ]]; then
         dns_hash=$(_hosted_only_code_hash "$_HOSTED_ONLY_SCRIPTS/dns_fallback.py") || return 1
-        dns_host=$(_hosted_only_knob ENMAAS_BASE_URL "${ENMAAS_API_BASE_URL:-https://api.enmaas.devshift.net}")
-        dns_host="${dns_host#*://}"
-        dns_host="${dns_host%%/*}"
+        if [[ "$(_hosted_only_knob DNS_FALLBACK 1)" != 0 ]]; then
+            dns_host=$(_hosted_only_knob ENMAAS_BASE_URL "${ENMAAS_API_BASE_URL:-https://api.enmaas.devshift.net}")
+            dns_host="${dns_host#*://}"
+            dns_host="${dns_host%%/*}"
+        fi
     fi
     fp=$(print -rn -- "$config"$'\x1f'"$hooks_hash"$'\x1f'"$dns_hash"$'\x1f'"$ENMAAS_API_KEY"$'\x1f'"$litellm_version $fastapi_version $_hop_vision_fallback $_hop_limit_rewrite $_hop_limit_retry $_hop_client_retry $_hop_upstream_retries $_hop_fallback $_hop_aliases $_hop_request_timeout $_hop_image_budget $_hop_image_cache_days $_hop_dialect" \
         | shasum -a 256 | cut -d' ' -f1)
@@ -357,6 +464,8 @@ _hosted_only_proxy_ensure() {
         return 1
     fi
 
+    typeset -g _hop_dns_host="$dns_host"
+    _hop_litellm_version="$litellm_version" _hop_fastapi_version="$fastapi_version" _hop_hooks="$hooks" _hop_usage_log="$usage_log" _hop_gobin="$gobin" _hop_gohash="$gohash"
     local old_umask=$(umask) lockfd result=0
     umask 077
     {
@@ -366,23 +475,25 @@ _hosted_only_proxy_ensure() {
             print -ru2 -- "hosted-only: timed out waiting for another $_hop_flavor proxy start."
             return 1
         }
-        local start=1 rec_fp= rec_token=
+        local start=1 rec_fp= rec_token= swap_pids='' 
         if curl -sf --max-time 2 "$health" -o /dev/null; then
             start=0
             # "<fingerprint> <token hash>"; files from before the split hold one
             # field, and an unknown token hash is taken as unchanged.
             read -r rec_fp rec_token < "$_hop_runtime/fingerprint" 2>/dev/null
-            if [[ "$rec_fp" != "$fp" || ( -n "$rec_token" && "$rec_token" != "$token_fp" ) ]]; then
-                if ! _hosted_only_busy "$_hop_port"; then
-                    print -ru2 -- "hosted-only: $_hop_flavor proxy config, hooks or key changed; restarting the idle proxy on :$_hop_port."
-                    local flavor="$_hop_flavor" i
-                    _hosted_only_proxy_stop "$flavor" >/dev/null || result=1
-                    _hosted_only_proxy_vars "$flavor"
-                    for i in {1..30}; do
-                        [[ -z "$(lsof -ti "tcp:$_hop_port" -sTCP:LISTEN 2>/dev/null)" ]] && break
-                        sleep 0.5
-                    done
-                    (( result )) || start=1
+            if [[ "$rec_fp" != "$fp" || ( -n "$rec_token" && "$rec_token" != "$token_fp" ) || -n "${HOSTED_ONLY_FORCE_RESTART-}" ]]; then
+                if ! _hosted_only_busy "$_hop_port" || [[ -n "${HOSTED_ONLY_FORCE_RESTART-}" ]]; then
+                    # Zero-refuse restart (2026-11-06, RH Career ECONNREFUSED):
+                    # start the new proxy ALONGSIDE the old one — both
+                    # listeners set SO_REUSEPORT via the runtime shim — and
+                    # retire the old pids only once the new listener is up, so
+                    # a request arriving mid-restart is never refused. The
+                    # first restart after rollout still stops first (the old
+                    # listener predates the patch and cannot share the port);
+                    # the boot-wait fallback below handles that case.
+                    swap_pids=$(lsof -ti "tcp:$_hop_port" -sTCP:LISTEN 2>/dev/null)
+                    print -ru2 -- "hosted-only: $_hop_flavor proxy config, hooks or key changed; restarting the proxy on :$_hop_port${swap_pids:+ (zero-gap swap)}."
+                    start=1
                 elif [[ -n "$rec_token" && "$rec_token" != "$token_fp" ]]; then
                     print -ru2 -- "hosted-only: the running $_hop_flavor proxy on :$_hop_port uses a different proxy token and is serving requests; run ${_hop_flavor}-hosted-only-restart once they finish."
                     result=1
@@ -394,55 +505,31 @@ _hosted_only_proxy_ensure() {
         if (( start && ! result )); then
             print -r -- "$config" >| "$_hop_runtime/config.yaml" || return 1
             rm -f "$_hop_runtime/fingerprint"
-            if [[ "$impl" == go ]]; then
-                # The binary reads a JSON route table derived from the same
-                # knobs (bare = anthropic, suffix = openai/Responses).
-                _hosted_only_go_routes >| "$_hop_runtime/routes.json" || return 1
-                ENMAAS_API_KEY="$ENMAAS_API_KEY" HOSTED_ONLY_PROXY_TOKEN="$_hop_token" \
-                    HOSTED_ONLY_GLM_MODEL="$_hop_glm" HOSTED_ONLY_DEEPSEEK_MODEL="$_hop_deepseek" HOSTED_ONLY_VISION_FALLBACK="$_hop_vision_fallback" \
-                    HOSTED_ONLY_ALIAS_MODELS="$_hop_aliases" HOSTED_ONLY_FALLBACK="$(_hosted_only_knob FALLBACK 1)" \
-                    HOSTED_ONLY_OUTAGE_REWRITE="$(_hosted_only_knob OUTAGE_REWRITE 1)" \
-                    HOSTED_ONLY_LIMIT_REWRITE="$_hop_limit_rewrite" HOSTED_ONLY_RATE_LIMIT_DEFAULT_RETRY_SECONDS="$_hop_limit_retry" HOSTED_ONLY_CLIENT_RETRY_MAX_SECONDS="$_hop_client_retry" \
-                    HOSTED_ONLY_MAX_MODEL_LEN="$(_hosted_only_knob MAX_MODEL_LEN 1048576)" HOSTED_ONLY_OUTPUT_RESERVE="$(_hosted_only_knob OUTPUT_RESERVE 512)" HOSTED_ONLY_BYTES_PER_TOKEN="$(_hosted_only_knob BYTES_PER_TOKEN 3)" HOSTED_ONLY_MIN_OUTPUT="$(_hosted_only_knob MIN_OUTPUT 16000)" \
-                    HOSTED_ONLY_REQUEST_TIMEOUT="$_hop_request_timeout" HOSTED_ONLY_SEARCH_NUDGE="$(_hosted_only_knob SEARCH_NUDGE 1)" HOSTED_ONLY_DIALECT_SUFFIX="$_hop_dialect" \
-                    python3 "$_HOSTED_ONLY_SCRIPTS/claude-provider.py" --background "$_hop_runtime/proxy.log" \
-                    "$gobin" --flavor "$_hop_flavor" --config "$_hop_runtime/routes.json" --port "$_hop_port" --runtime-dir "$_hop_runtime" || return 1
-            else
-                cp -f "$hooks" "$_hop_runtime/hosted_only_hooks.py" || return 1
-                cp -f "$usage_log" "$_hop_runtime/litellm_usage_log.py" || return 1
-                local -a dns_env=()
-                if [[ -n "$dns_hash" ]]; then
-                    cp -f "$_HOSTED_ONLY_SCRIPTS/dns_fallback.py" "$_hop_runtime/sitecustomize.py" || return 1
-                    dns_env=(PYTHONPATH="$_hop_runtime" ENMAAS_DNS_FALLBACK_HOSTS="$dns_host")
-                fi
-                ENMAAS_API_KEY="$ENMAAS_API_KEY" HOSTED_ONLY_PROXY_TOKEN="$_hop_token" \
-                    HOSTED_ONLY_GLM_MODEL="$_hop_glm" HOSTED_ONLY_DEEPSEEK_MODEL="$_hop_deepseek" HOSTED_ONLY_VISION_FALLBACK="$_hop_vision_fallback" \
-                    HOSTED_ONLY_ALIAS_MODELS="$_hop_aliases" HOSTED_ONLY_OUTAGE_STATE="$_hop_runtime/outage-streak.json" \
-                    HOSTED_ONLY_LIMIT_REWRITE="$_hop_limit_rewrite" HOSTED_ONLY_RATE_LIMIT_DEFAULT_RETRY_SECONDS="$_hop_limit_retry" HOSTED_ONLY_CLIENT_RETRY_MAX_SECONDS="$_hop_client_retry" LITELLM_LOG="$(_hosted_only_knob LITELLM_LOG ERROR)" \
-                    HOSTED_ONLY_IMAGE_BUDGET_BYTES="$_hop_image_budget" HOSTED_ONLY_IMAGE_CACHE_DAYS="$_hop_image_cache_days" HOSTED_ONLY_DIALECT_SUFFIX="$_hop_dialect" \
-                    HOSTED_ONLY_MAX_MODEL_LEN="$(_hosted_only_knob MAX_MODEL_LEN 1048576)" HOSTED_ONLY_OUTPUT_RESERVE="$(_hosted_only_knob OUTPUT_RESERVE 512)" HOSTED_ONLY_BYTES_PER_TOKEN="$(_hosted_only_knob BYTES_PER_TOKEN 3)" HOSTED_ONLY_MIN_OUTPUT="$(_hosted_only_knob MIN_OUTPUT 16000)" \
-                    env "${dns_env[@]}" \
-                    python3 "$_HOSTED_ONLY_SCRIPTS/claude-provider.py" --background "$_hop_runtime/proxy.log" \
-                    uv tool run --with "fastapi==$fastapi_version" --from "litellm[proxy]==$litellm_version" litellm \
-                    --config "$_hop_runtime/config.yaml" --host 127.0.0.1 --port "$_hop_port" --telemetry False || return 1
-            fi
-            # Boot wait: one dot per second so the (potentially minutes-long)
-            # uv/litellm startup is visible progress, not a blank terminal.
-            local i boot_max="${LLM_PROXY_SYNC_UP_TIMEOUT:-180}"
-            [[ "$boot_max" == <-> ]] || boot_max=180
-            # 90 s was not enough on a small host (the same LiteLLM took 96 s
-            # on WSL, see proxies.zsh); a miss left no fingerprint so every
-            # later sync re-labeled the proxy stale (2026-11-06 audit)
-            local -i boot_i
-            print -nu2 -- "hosted-only: starting $_hop_flavor proxy on :$_hop_port "
-            for (( boot_i = 0; boot_i < boot_max; boot_i++ )); do
-                curl -sf --max-time 2 "$health" -o /dev/null && break
-                print -nu2 -- .
-                sleep 1
-            done
-            print -u2
-            if curl -sf --max-time 2 "$health" -o /dev/null; then
+            _hosted_only_proxy_launch || return 1
+            if _hosted_only_boot_wait "$_hop_port" "$swap_pids"; then
+                # new listener is up: retire the old one(s); requests were
+                # never refused because both listeners held the port
+                [[ -n "$swap_pids" ]] && _hosted_only_retire "$swap_pids"
                 print -r -- "$fp $token_fp" >| "$_hop_runtime/fingerprint"
+            elif [[ -n "$swap_pids" ]] && { local alive=""; local p; for p in ${(f)swap_pids}; do kill -0 "$p" 2>/dev/null && alive="$alive $p"; done; [[ -n "$alive" ]] }; then
+                # overlap start did not take: the old listener predates the
+                # SO_REUSEPORT patch and cannot share the port — fall back to
+                # the stop-then-start order (one refuse window, legacy path)
+                print -ru2 -- "hosted-only: overlap start did not take (old listener cannot share the port); stopping it first."
+                local flavor="$_hop_flavor" p
+                _hosted_only_proxy_stop "$flavor" >/dev/null || result=1
+                _hosted_only_proxy_vars "$flavor"
+                for (( i = 0; i < 30; i++ )); do
+                    [[ -z "$(lsof -ti "tcp:$_hop_port" -sTCP:LISTEN 2>/dev/null)" ]] && break
+                    sleep 0.5
+                done
+                (( result )) || _hosted_only_proxy_launch || return 1
+                if _hosted_only_boot_wait "$_hop_port" ""; then
+                    print -r -- "$fp $token_fp" >| "$_hop_runtime/fingerprint"
+                else
+                    print -ru2 -- "hosted-only: $_hop_flavor proxy not ready on port $_hop_port; see $_hop_runtime/proxy.log"
+                    result=1
+                fi
             else
                 print -ru2 -- "hosted-only: $_hop_flavor proxy not ready on port $_hop_port; see $_hop_runtime/proxy.log"
                 result=1

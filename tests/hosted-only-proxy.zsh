@@ -15,6 +15,7 @@ export XDG_STATE_HOME="$tmp/state"
 unset HOSTED_ONLY_CLAUDE_PROXY_PORT HOSTED_ONLY_CODEX_PROXY_PORT HOSTED_ONLY_GLM_MODEL HOSTED_ONLY_PROXY_TOKEN \
     GLM_HYBRID_CLAUDE_PROXY_PORT GLM_HYBRID_CODEX_PROXY_PORT GLM_HYBRID_MODEL GLM_HYBRID_PROXY_TOKEN
 source "$repo/scripts/hosted-only-proxy.zsh"
+source "$repo/zsh/functions/claude/common.zsh"   # the real _claude_port_serving for the busy check
 
 # Defaults
 _hosted_only_proxy_vars codex
@@ -120,6 +121,108 @@ HTTPServer(("127.0.0.1", int(sys.argv[1])), H).serve_forever()' "$chk_port" &
     [[ "$(print -r -- "$fp $tokfp" >| "$_hop_runtime/fingerprint"; ls "$_hop_runtime")" == fingerprint ]] || fail "dry run left files: $(ls "$_hop_runtime")"
     exit 0
 ) || exit 1
+
+
+# Zero-refuse restart (2026-11-06, RH Career ECONNREFUSED): a stale proxy is
+# swapped, not stopped first. The new proxy starts ALONGSIDE the old one
+# (SO_REUSEPORT, forced by the runtime shim), the old pid retires only once
+# the new listener is up, and a health probe running through the whole swap
+# must never be refused. An old listener that cannot share the port (it
+# predates the patch) falls back to stop-then-start.
+(
+    swap_port=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1])')
+    export HOSTED_ONLY_CLAUDE_PROXY_PORT=$swap_port ENMAAS_API_KEY=swap-key
+    mkdir -p "$tmp/bin"
+    # fake `uv tool run ... litellm`: serve the health endpoint. REUSE=1 binds
+    # with SO_REUSEPORT (a post-patch proxy), REUSE=0 exits on bind failure
+    # like a real uvicorn without the patch.
+    cat > "$tmp/bin/fake-proxy-server.py" <<'SRV'
+import os, sys
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+port = int(sys.argv[-1])
+reuse = os.environ.get("FAKE_REUSE", "1") == "1"
+class S(ThreadingHTTPServer):
+    # SO_REUSEPORT must be set BEFORE bind(): a socket that binds after
+    # another reuse listener exists cannot join the port without it
+    def server_bind(self):
+        if reuse:
+            self.socket.setsockopt(__import__("socket").SOL_SOCKET,
+                                    __import__("socket").SO_REUSEPORT, 1)
+        ThreadingHTTPServer.server_bind(self)
+    daemon_threads = True
+class H(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200); self.send_header("content-length", "0"); self.end_headers()
+    def log_message(self, *a):
+        pass
+S(("127.0.0.1", port), H).serve_forever()
+SRV
+    cat > "$tmp/bin/uv" <<'UVSH'
+#!/bin/sh
+# stand-in for `uv tool run ... litellm --config ... --port N`; track the
+# previous token so --host 127.0.0.1 is not mistaken for the port
+port=""
+prev=""
+for a in "$@"; do
+    [ "$prev" = "--port" ] && port="$a"
+    prev="$a"
+done
+exec python3 "$FAKE_SRV" "$port"
+UVSH
+    chmod +x "$tmp/bin/uv"
+    export FAKE_SRV="$tmp/bin/fake-proxy-server.py" PATH="$tmp/bin:$PATH" LLM_PROXY_SYNC_UP_TIMEOUT=15
+    _hosted_only_proxy_vars claude
+    # always clean the fake listeners, even when an assert fails
+    trap 'for pid in $(lsof -ti "tcp:$swap_port" -sTCP:LISTEN 2>/dev/null) $(lsof -ti "tcp:$swap2_port" -sTCP:LISTEN 2>/dev/null); do kill "$pid" 2>/dev/null; done; kill $old_pid $old2_pid 2>/dev/null' EXIT
+    # an "old" proxy that can share the port + a stale fingerprint
+    FAKE_REUSE=1 python3 "$FAKE_SRV" "$swap_port" >/dev/null 2>&1 &
+    local old_pid=$!
+    for i in {1..50}; do curl -sf --max-time 1 "http://127.0.0.1:$swap_port/health/liveliness" -o /dev/null && break; sleep 0.1; done
+    # the old proxy reports an (empty) in-flight table like a real one, so the
+    # busy check reads idle between the prober's connections
+    mkdir -p "$XDG_STATE_HOME/llm-usage"
+    print -r -- "{\"pid\": $old_pid, \"port\": \"$swap_port\", \"requests\": {}}" > "$XDG_STATE_HOME/llm-usage/inflight-$swap_port-$old_pid.json"
+    mkdir -p "$_hop_runtime"; print -r -- "wrong-fp wrong-token" > "$_hop_runtime/fingerprint"
+    # probe health every 50 ms through the swap; count refusals
+    : > "$tmp/probe.log"
+    ( for (( i = 0; i < 400; i++ )); do
+        curl -sf --max-time 1 "http://127.0.0.1:$swap_port/health/liveliness" -o /dev/null || echo refused >> "$tmp/probe.log"
+        sleep 0.05
+      done ) &
+    local prober=$!
+    _hosted_only_proxy_ensure claude >"$tmp/ensure.err" 2>&1
+    local swap_rc=$?
+    kill $prober 2>/dev/null; wait $prober 2>/dev/null
+    (( swap_rc == 0 )) || fail "swap restart failed: rc=$swap_rc out=$(<$tmp/ensure.err)"
+    kill -0 $old_pid 2>/dev/null && fail "old listener survived the swap"
+    curl -sf --max-time 2 "http://127.0.0.1:$swap_port/health/liveliness" -o /dev/null || fail "no listener after the swap"
+    [[ -s "$_hop_runtime/fingerprint" ]] || fail "swap wrote no fingerprint"
+    local refusals; refusals=$(grep -c refused "$tmp/probe.log" 2>/dev/null) || true
+    [[ "${refusals:-0}" == 0 ]] || fail "health refused during the swap: ${refusals} refusals"
+    # an old listener WITHOUT reuse-port: overlap cannot bind, the fallback
+    # stops it first and the restart still succeeds
+    swap2_port=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1])')
+    export HOSTED_ONLY_CLAUDE_PROXY_PORT=$swap2_port
+    _hosted_only_proxy_vars claude
+    # the legacy listener's command line names the runtime config path, like a
+    # real pre-patch LiteLLM process, so the stop helper's identity check
+    # matches it
+    FAKE_REUSE=0 python3 "$FAKE_SRV" "$_hop_runtime/config.yaml" "$swap2_port" >/dev/null 2>&1 &
+    local old2_pid=$!
+    for i in {1..50}; do curl -sf --max-time 1 "http://127.0.0.1:$swap2_port/health/liveliness" -o /dev/null && break; sleep 0.1; done
+    print -r -- "wrong-fp wrong-token" >| "$_hop_runtime/fingerprint"
+    _hosted_only_proxy_ensure claude >"$tmp/ensure2.err" 2>&1
+    local fb_rc=$?
+    kill -0 $old2_pid 2>/dev/null && fail "legacy old listener survived the fallback restart"
+    curl -sf --max-time 2 "http://127.0.0.1:$swap2_port/health/liveliness" -o /dev/null || fail "no listener after the fallback restart"
+    (( fb_rc == 0 )) || fail "fallback restart failed: rc=$fb_rc"
+    # clean up any fake listeners ensure started
+    for pid in $(lsof -ti "tcp:$swap_port" -sTCP:LISTEN 2>/dev/null) $(lsof -ti "tcp:$swap2_port" -sTCP:LISTEN 2>/dev/null); do
+        kill "$pid" 2>/dev/null
+    done
+    exit 0
+) || exit 1
+unset HOSTED_ONLY_CLAUDE_PROXY_PORT ENMAAS_API_KEY
 
 # New knob names win; retired GLM_HYBRID_* names still work
 HOSTED_ONLY_CODEX_PROXY_PORT=4157 _hosted_only_proxy_vars codex

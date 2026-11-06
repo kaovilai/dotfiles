@@ -216,10 +216,11 @@ claude-enmaas-restart() {
 
 claude-hosted-only-restart() {
     _llm_proxy_dns_probe "$(_llm_proxy_gateway_host "${HOSTED_ONLY_ENMAAS_BASE_URL:-}")" 'hosted-only claude' || return 1
-    _hosted_only_proxy_stop claude || return 1
-    _llm_proxy_wait_down "$(_hosted_only_knob CLAUDE_PROXY_PORT 4148)" || return 1
-    print -ru2 -- 'restart: hosted-only claude starting'
-    ( _hosted_only_proxy_ensure claude ) || return 1
+    # Force + ensure = the zero-refuse restart path: the new proxy starts
+    # alongside the old one (SO_REUSEPORT) and the old retires once the new
+    # listener answers, instead of stop-then-start refusing connections during
+    # the boot window (2026-11-06, RH Career ECONNREFUSED).
+    ( HOSTED_ONLY_FORCE_RESTART=1 _hosted_only_proxy_ensure claude ) || return 1
     _llm_proxy_wait_up "$(_hosted_only_knob CLAUDE_PROXY_PORT 4148)" 'hosted-only claude'
 }
 claude-glm-hybrid-restart() { claude-hosted-only-restart; }
@@ -230,10 +231,8 @@ codex-hosted-only-restart() {
     # port, so wait on the resolved port, not the old 4147 literal
     local port="$(_hosted_only_knob CODEX_PROXY_PORT "$(_hosted_only_knob CLAUDE_PROXY_PORT 4148)")"
     _llm_proxy_dns_probe "$(_llm_proxy_gateway_host "${HOSTED_ONLY_ENMAAS_BASE_URL:-}")" 'hosted-only codex' || return 1
-    _hosted_only_proxy_stop codex || return 1
-    _llm_proxy_wait_down "$port" || return 1
-    print -ru2 -- 'restart: hosted-only codex starting'
-    ( _hosted_only_proxy_ensure codex ) || return 1
+    # zero-refuse restart, see claude-hosted-only-restart
+    ( HOSTED_ONLY_FORCE_RESTART=1 _hosted_only_proxy_ensure codex ) || return 1
     _llm_proxy_wait_up "$port" 'hosted-only codex'
 }
 codex-glm-hybrid-restart() { codex-hosted-only-restart; }
