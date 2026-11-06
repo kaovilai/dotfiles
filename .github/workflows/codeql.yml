@@ -1,0 +1,81 @@
+name: CodeQL
+
+# Static analysis / code scanning for the analyzed languages in this repo:
+# Go (the optional proxy module), Python (the proxy hooks and launch helpers)
+# and the TypeScript/JavaScript under claude-mods and tests. Swift (menubar) is
+# not covered: CodeQL's Swift support is beta and needs a macOS build; revisit
+# if that helper grows.
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - "scripts/hosted-only-go/**"
+      - "scripts/*.py"
+      - "claude-mods/**"
+      - "tests/*.mjs"
+      - ".github/workflows/codeql.yml"
+  pull_request:
+    paths:
+      - "scripts/hosted-only-go/**"
+      - "scripts/*.py"
+      - "claude-mods/**"
+      - "tests/*.mjs"
+      - ".github/workflows/codeql.yml"
+  schedule:
+    - cron: "23 5 * * 1"
+
+permissions:
+  actions: read
+  contents: read
+  security-events: write
+
+concurrency:
+  group: codeql-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  analyze:
+    name: Analyze (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - language: go
+            build-mode: manual
+          - language: python
+            build-mode: none
+          - language: javascript
+            build-mode: none
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        if: matrix.language == 'go'
+        uses: actions/setup-go@v7
+        with:
+          go-version: stable
+          cache: false
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: ${{ matrix.build-mode }}
+
+      # The Go module lives in a subdirectory, so the default autobuild (which
+      # runs at the repository root, where there is no go.mod) cannot extract
+      # it; manual mode with our own build in the module directory.
+      - name: Build Go module
+        if: matrix.language == 'go'
+        working-directory: scripts/hosted-only-go
+        run: go build ./...
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:${{ matrix.language }}"
