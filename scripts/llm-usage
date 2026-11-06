@@ -159,6 +159,18 @@ def parse_proxy_file(handle, path):
     return events
 
 
+# LiteLLM logs metadata endpoints as calls with an empty model. They are
+# probes (T3's version check hits GET /v1/models), not model traffic; left in,
+# they show up as a "?" model at a 100% error rate in the dashboard.
+META_PATH_RE = re.compile(r"^/(?:v\d+/)?(?:models|model/info|model_group/info|providers)(?:$|[/?])|^/health(?:$|[/?])", re.I)
+
+
+def is_endpoint_probe(e):
+    if e.get("served") or e.get("requested") or e.get("model"):
+        return False
+    return bool(META_PATH_RE.search(str(e.get("call_type") or "")))
+
+
 def load_proxy(since):
     """The events log is append-only and a poll reads it whole; parse each file
     through the same (mtime, size) cache as the transcripts, so only the live
@@ -172,7 +184,8 @@ def load_proxy(since):
                 continue
         except OSError:
             continue
-        events.extend(e for e in parse_cached("proxy", path, parse_proxy_file) if e["t"] >= since)
+        events.extend(e for e in parse_cached("proxy", path, parse_proxy_file)
+                      if e["t"] >= since and not is_endpoint_probe(e))
     save_transcript_cache("proxy")
     return events
 

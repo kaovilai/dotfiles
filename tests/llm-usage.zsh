@@ -289,6 +289,12 @@ assert len(d["series"]["requests"]) == 60 and sum(d["series"]["requests"]) == 4 
 assert d["reroutes"] == [] and d["reroutes_15m"] == 0 and d["by_model"][0]["reroutes"] == 0
 
 # throttled: 429 with retry_after still in the future (estimate = event time + retry_after)
+# LiteLLM logs metadata endpoints with an empty model; they must not surface as
+# a "?" model at 100% error rate in the dashboard/menubar
+d = run("endpoint-probe", [ev(60), err(30, code=400, call_type="/v1/models", requested="", served="",
+                                error="No connected db.", error_type="ProxyException")])
+assert "?" not in [m["model"] for m in d["by_model"]], d["by_model"]
+assert d["totals"]["h1"]["errors"]["other"] == 0, d["totals"]["h1"]
 d = run("throttled", [ev(100), err(30, 429, retry_after=300, rewritten=True)])
 t = d["throttled"]
 assert t and t["kind"] == "rate-limit" and t["basis"] == "retry_after" and t["estimate"] and t["model"] == "glm-5.3", t
