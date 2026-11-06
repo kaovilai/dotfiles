@@ -2051,6 +2051,7 @@ def dashboard_data(since_text, source, hide):
 
     series = {}
     lat = defaultdict(list)
+    ttft_s = defaultdict(list)
     for ev in events:
         m = label(ev)
         i = min(max(int((ev["t"] - start) // size), 0), count - 1)
@@ -2061,9 +2062,12 @@ def dashboard_data(since_text, source, hide):
         s["err"][i] += 0 if ev.get("ok", True) else 1
         if ev.get("ms") is not None:
             lat[(m, i)].append(ev["ms"])
+        if ev.get("ttft_ms") is not None:
+            ttft_s[(m, i)].append(ev["ttft_ms"])
     for m, s in series.items():
         s["p50"] = [pct(lat.get((m, i), []), 50) for i in range(count)]
         s["p95"] = [pct(lat.get((m, i), []), 95) for i in range(count)]
+        s["ttft"] = [pct(ttft_s.get((m, i), []), 50) for i in range(count)]
     order = sorted(series, key=lambda m: (m == "Other", -sum(series[m]["req"])))
 
     ctx_hist = {m: [0] * len(CTX_BINS) for m in order}

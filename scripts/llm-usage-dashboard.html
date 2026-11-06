@@ -153,6 +153,11 @@ tbody tr:hover td { background: var(--wash); }
       <div class="chart" id="ch-lat"></div><div class="scroll" id="tb-lat" hidden></div>
     </section>
 
+    <section class="card">
+      <div class="card-h"><h2>TTFT p50 over time <span class="sub">time to first token, median per bucket; dots = sampled buckets</span></h2></div>
+      <div class="chart" id="ch-ttft"></div>
+    </section>
+
     <section class="card" id="c-errtime">
       <div class="card-h"><h2>Errors over time <span class="sub">429 rate-limit/quota · 5xx server · other; flagged spikes below</span></h2></div>
       <div class="chart" id="ch-errtime"></div>
@@ -535,6 +540,10 @@ function renderCharts() {
   if (!D.kpi) ctxHost.replaceChildren(html("div", { class: "empty" }, "No events in this range."));
   else columns(ctxHost, { n: D.ctx_bins.length, models, val: (m, i) => D.ctx_hist[m][i], fmt: (v) => String(Math.round(v)), yfmt: (v) => String(Math.round(v)),
     integer: true, height: 220, xlabel: (i) => D.ctx_bins[i], xtitle: (i) => `Context ${D.ctx_bins[i]}` });
+
+  dots(document.getElementById("ch-ttft"), { n, models: models.filter((m) => D.series[m].ttft.some((v) => v != null)), val: (m) => D.series[m].ttft,
+    fmt: ms, yfmt: ms, height: 220, xlabel: (i) => xFormat(D.buckets[i]), xtitle: (i) => fullTime(D.buckets[i]),
+    empty: "No TTFT data. It comes from the LiteLLM proxy log (first token timing)." });
 
   dots(document.getElementById("ch-lat"), { n, models: models.filter((m) => D.series[m].p50.some((v) => v != null)), val: (m) => D.series[m].p50,
     fmt: ms, yfmt: ms, height: 220, xlabel: (i) => xFormat(D.buckets[i]), xtitle: (i) => fullTime(D.buckets[i]),
