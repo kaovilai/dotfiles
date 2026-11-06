@@ -1989,18 +1989,30 @@ CTX_BINS = [(0, "<8k"), (8_000, "8-32k"), (32_000, "32-128k"), (128_000, "128-20
 BUCKETS = [60, 300, 900, 1800, 3600, 10800, 21600, 86400]
 
 
-def model_colors(by_volume):
-    """Stable model -> palette slot (1..8), persisted so filters never repaint a model."""
+def model_colors(by_volume, volume=None):
+    """Stable model -> palette slot (1..8), persisted so filters never repaint a
+    model. Slots are finite, so when they are full a higher-volume newcomer
+    reclaims the slot of a colored model with no traffic in the current window:
+    otherwise dead ids (a retired model, "?") occupy slots forever and today's
+    models fold into "Other"."""
     path = os.path.join(STATE, "colors.json")
     try:
         with open(path) as handle:
             colors = json.load(handle)
     except (OSError, ValueError):
         colors = {}
+    volume = volume or {}
     changed = False
     for model in by_volume:
-        if model not in colors and len(colors) < SLOTS:
+        if model in colors:
+            continue
+        if len(colors) < SLOTS:
             colors[model] = len(colors) + 1
+            changed = True
+            continue
+        victim = min(colors, key=lambda m: volume.get(m, 0))
+        if volume.get(victim, 0) < volume.get(model, 0):
+            colors[model] = colors.pop(victim)  # recycle the slot
             changed = True
     if changed:
         os.makedirs(STATE, mode=0o700, exist_ok=True)
@@ -2020,7 +2032,7 @@ def dashboard_data(since_text, source, hide):
     volume = defaultdict(int)
     for ev in events:
         volume[strip_model(ev.get("served"))] += 1
-    colors = model_colors(sorted(volume, key=lambda m: -volume[m]))
+    colors = model_colors(sorted(volume, key=lambda m: -volume[m]), volume)
     if hide:
         events = [e for e in events if strip_model(e.get("served")) not in hide]
     if since <= 0:

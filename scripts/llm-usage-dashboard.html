@@ -412,12 +412,12 @@ function table(host, headers, rows, aligns) {
     html("tbody", {}, rows.map((r) => html("tr", {}, r.map((c, i) => html("td", { class: aligns && aligns[i] === "r" ? "r" : "" }, c))))));
   host.replaceChildren(rows.length ? t : html("div", { class: "empty" }, "Nothing here."));
 }
-const sw = (m) => html("span", {}, html("span", { class: "sw", style: { background: colorOf(m) } }), m);
+const sw = (m, tint) => html("span", {}, html("span", { class: "sw", style: { background: tint || colorOf(m) } }), m);
 
 function renderTables() {
   table(document.getElementById("tb-models"),
     ["Model", "Reqs", "Err", "429", "5xx", "Err%", "In", "Out", "Cache", "Hit", "Ctx max", ">200k", "p50", "p95", "tok/s", "Cost"],
-    D.model_table.map((r) => [sw(D.colors[r.model] != null ? r.model : "Other"), r.n, r.err || "-", r.e429 || "-", r.e5xx || "-", r.err ? pctf(r.err_rate) : "-", human(r.in), human(r.out), human(r.cread), pctf(r.hit), human(r.ctxmax), r.long || "-", ms(r.p50), ms(r.p95), r.tps ? Math.round(r.tps) : "-", r.cost ? "$" + r.cost.toFixed(2) : "-"]),
+    D.model_table.map((r) => [sw(r.model, D.colors[r.model] != null ? colorOf(r.model) : "var(--other)"), r.n, r.err || "-", r.e429 || "-", r.e5xx || "-", r.err ? pctf(r.err_rate) : "-", human(r.in), human(r.out), human(r.cread), pctf(r.hit), human(r.ctxmax), r.long || "-", ms(r.p50), ms(r.p95), r.tps ? Math.round(r.tps) : "-", r.cost ? "$" + r.cost.toFixed(2) : "-"]),
     ["l", "r", "r", "r", "r", "r", "r", "r", "r", "r", "r", "r", "r", "r", "r", "r"]);
 
   // alias = Claude name served by GLM/DeepSeek, vision = glm→deepseek image fallback, fallback = router retry.
