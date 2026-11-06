@@ -219,7 +219,11 @@ with tempfile.TemporaryDirectory(prefix='enmaas-go-swap-', dir=os.environ.get('T
         assert fallback.returncode == 0, fallback.stderr
         assert 'overlap start did not take' in fallback.stderr, fallback.stderr
         info4 = json.loads((root / 'proxy.json').read_text())
-        assert info4['pid'] != old.pid and info4['token'] != old_token or info4['pid'] != old.pid
+        assert info4['pid'] != old.pid, 'the fallback did not replace the old listener'
+        # the fallback keeps the token the swap attempt chose (the old one): a
+        # client holding it stays valid across the stop-then-start too
+        assert info4['token'] == old_token, 'the fallback must keep the swap token'
+        assert json.loads(fallback.stdout)['token'] == old_token
         wait_for(lambda: old.poll() is not None, 'the legacy listener was not stopped')
         assert helper['ready'](info4, root)
         print('PASS: a listener that cannot share the port falls back to stop-then-start')
