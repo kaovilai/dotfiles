@@ -77,6 +77,12 @@ _claude_hosted_launch() (
     # near the window edge the hook trims max_tokens, then refuses with a
     # compaction-hint 400. Changing this default means re-reading that block.
     local max_output="${HOSTED_ONLY_MAX_OUTPUT_TOKENS:-${GLM_HYBRID_MAX_OUTPUT_TOKENS:-128000}}"
+    # Compaction window derived from the output cap: the client does not reserve
+    # it, so without this the proxy trims max_tokens at the edge (see
+    # _claude_auto_compact_window in common.zsh for the arithmetic and the
+    # coupled settings). HOSTED_ONLY_AUTO_COMPACT_WINDOW=<n|off> overrides.
+    local compact_window
+    compact_window="$(_claude_auto_compact_window "$max_output" "${HOSTED_ONLY_AUTO_COMPACT_WINDOW-}")"
     # The hosted upstream (vLLM) has no server-side web search, so the session
     # gets one from the Parallel MCP instead (free, no auth; verified 2026-11-06:
     # web_search/web_fetch answer live queries). The proxy's strip-note and the
@@ -94,6 +100,8 @@ _claude_hosted_launch() (
           CLAUDE_CODE_SUBAGENT_MODEL_FORCE: "1", CLAUDE_CODE_WORKFLOW_SUBAGENT_MODEL: $sub},
         modelSettings: {($glm): {effortLevel: "medium"}, ($ds): {effortLevel: "medium"}}
       }' <<< "$settings") || return 1
+    # window derived above; absent when the knob says off
+    [[ -n "$compact_window" ]] && settings=$(jq -c --arg cw "$compact_window" '.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW = $cw' <<< "$settings")
     _claude_copilot_unset_env
     unset ENMAAS_API_KEY OPENAI_API_KEY ANTHROPIC_FOUNDRY_API_KEY \
         ANTHROPIC_FOUNDRY_RESOURCE ANTHROPIC_FOUNDRY_BASE_URL CLAUDE_CODE_API_KEY_HELPER

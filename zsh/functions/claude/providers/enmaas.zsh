@@ -442,6 +442,12 @@ claude-enmaas() (
     # COUPLED to scripts/hosted_only_hooks.py (clamp_output, MIN_OUTPUT, MAX_MODEL_LEN):
     # changing this default means re-reading the comment above MIN_OUTPUT there.
     local maxout="${ENMAAS_MAX_OUTPUT_TOKENS:-128000}"
+    # Same compaction-window derivation as hosted-only (see
+    # _claude_auto_compact_window in common.zsh). A gateway model with a smaller
+    # window than this is unaffected: the client clamps to the model window.
+    # ENMAAS_AUTO_COMPACT_WINDOW=<n|off> overrides.
+    local compact_window
+    compact_window="$(_claude_auto_compact_window "$maxout" "${ENMAAS_AUTO_COMPACT_WINDOW-}")"
     # The EnMaaS gateway models have no server-side web search (the proxy hooks
     # strip the tool), so the session gets one from the Parallel MCP (free, no
     # auth; verified 2026-11-06). The strip-note and nudge hook route lookups
@@ -455,6 +461,8 @@ claude-enmaas() (
         modelSettings: {($glm): {effortLevel: "medium"}, ($ds): {effortLevel: "medium"}}
       }' <<< "$settings") || return 1
 
+    # window derived above; absent when the knob says off
+    [[ -n "$compact_window" ]] && settings=$(jq -c --arg cw "$compact_window" '.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW = $cw' <<< "$settings")
     local token base="http://127.0.0.1:${port}" config service
     local litellm_version="${CLAUDE_OPENAI_PROXY_LITELLM_VERSION:-1.97.0}"
     local fastapi_version="${CLAUDE_OPENAI_PROXY_FASTAPI_VERSION:-0.136.3}"

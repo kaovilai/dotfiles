@@ -229,6 +229,13 @@ OUTPUT_RESERVE = int_knob("OUTPUT_RESERVE", 512, 0)
 #     zsh/functions/claude/providers/hosted-only.zsh and ENMAAS_MAX_OUTPUT_TOKENS
 #     in enmaas.zsh (default 128000; sent as CLAUDE_CODE_MAX_OUTPUT_TOKENS, so
 #     it is the max_tokens every main-turn request carries).
+#   * Claude Code compaction window: CLAUDE_CODE_AUTO_COMPACT_WINDOW, derived
+#     from the output cap by _claude_auto_compact_window in
+#     zsh/functions/claude/common.zsh (908000 for a 128000 cap): the client
+#     compacts 33000 below it and reserves none of our output cap, so this is
+#     what makes it compact BEFORE the edge instead of leaning on the trim and
+#     the hint below. Knobs HOSTED_ONLY_AUTO_COMPACT_WINDOW /
+#     HOSTED_ONLY_COMPACT_DRIFT_MARGIN (hosted-only), ENMAAS_AUTO_COMPACT_WINDOW.
 #   * Codex window: HOSTED_ONLY_GLM_CONTEXT / HOSTED_ONLY_DEEPSEEK_CONTEXT in
 #     scripts/codex-provider.zsh (1,000,000, ~48k under MAX_MODEL_LEN).
 #   * This file: MAX_MODEL_LEN, OUTPUT_RESERVE, BYTES_PER_TOKEN, MIN_OUTPUT and

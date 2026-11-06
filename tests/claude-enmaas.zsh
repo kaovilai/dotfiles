@@ -13,7 +13,7 @@ trap '[[ -n "$run_pid" ]] && kill -TERM "$run_pid" 2>/dev/null; rm -rf -- "$tmp"
 source <(python3 - "$repo/zsh/functions/claude/common.zsh" <<'PY'
 import re, sys
 s = open(sys.argv[1]).read()
-for name in ('_claude_copilot_latest_model', '_claude_picker_args', '_claude_copilot_unset_env', '_claude_invoke'):
+for name in ('_claude_copilot_latest_model', '_claude_picker_args', '_claude_copilot_unset_env', '_claude_invoke', '_claude_auto_compact_window'):
     print(re.search(r'^' + name + r'\(\) \{\n.*?^\}', s, re.M | re.S).group())
 print(re.search(r'^typeset -ga _claude_copilot_env_names=\(\n.*?^\)', s, re.M | re.S).group())
 PY
@@ -177,6 +177,7 @@ assert (c/'program-mode').read_text()=='0o600'; assert (c/'directory-mode').read
 assert launch['argv'][2:]==['--model=gemini-3-pro','--print','argument with spaces']
 settings=json.loads(launch['argv'][1]); assert settings['apiKeyHelper']==''
 assert settings['mcpServers']=={'parallel':{'type':'http','url':'https://mcp.parallel.ai/mcp'}}, settings.get('mcpServers')
+assert settings['env']['CLAUDE_CODE_AUTO_COMPACT_WINDOW']=='908000', settings['env']
 assert settings['modelSettings']=={glm:{'effortLevel':'medium'}, ds:{'effortLevel':'medium'}}
 opts=settings['modelPicker']['options']; ids=[r['model'] for r in opts]; assert ids.count('ambiguous')==1
 assert any('GLM 5.3' in row['label'] for row in opts)

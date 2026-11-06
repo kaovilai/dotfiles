@@ -345,6 +345,23 @@ launched_out=$(_claude_hosted_launch) || fail "launcher stub run (max output)"
 [[ "$(jq -r .env.CLAUDE_CODE_MAX_OUTPUT_TOKENS <<< "$launched_out")" == 128000 ]] || fail "CLAUDE_CODE_MAX_OUTPUT_TOKENS default: $launched_out"
 launched_out=$(HOSTED_ONLY_MAX_OUTPUT_TOKENS=96000 _claude_hosted_launch) || fail "launcher stub run (max output knob)"
 [[ "$(jq -r .env.CLAUDE_CODE_MAX_OUTPUT_TOKENS <<< "$launched_out")" == 96000 ]] || fail "HOSTED_ONLY_MAX_OUTPUT_TOKENS ignored: $launched_out"
+# Claude Code compacts 33000 under CLAUDE_CODE_AUTO_COMPACT_WINDOW and reserves
+# none of our 128000 output cap, so the launcher derives the window from it:
+# 1048576 - 512 - 128000 - 45000 drift + 33000 = 908000 (see
+# _claude_auto_compact_window in common.zsh for the arithmetic and coupling)
+launched_out=$(_claude_hosted_launch) || fail "launcher stub run (compact window)"
+[[ "$(jq -r .env.CLAUDE_CODE_AUTO_COMPACT_WINDOW <<< "$launched_out")" == 908000 ]] || fail "CLAUDE_CODE_AUTO_COMPACT_WINDOW default: $launched_out"
+launched_out=$(HOSTED_ONLY_MAX_OUTPUT_TOKENS=96000 _claude_hosted_launch) || fail "launcher stub run (compact window follows the output cap)"
+[[ "$(jq -r .env.CLAUDE_CODE_AUTO_COMPACT_WINDOW <<< "$launched_out")" == 940000 ]] || fail "window must follow HOSTED_ONLY_MAX_OUTPUT_TOKENS: $launched_out"
+launched_out=$(HOSTED_ONLY_AUTO_COMPACT_WINDOW=650000 _claude_hosted_launch) || fail "launcher stub run (compact window override)"
+[[ "$(jq -r .env.CLAUDE_CODE_AUTO_COMPACT_WINDOW <<< "$launched_out")" == 650000 ]] || fail "HOSTED_ONLY_AUTO_COMPACT_WINDOW ignored: $launched_out"
+launched_out=$(HOSTED_ONLY_AUTO_COMPACT_WINDOW=off _claude_hosted_launch) || fail "launcher stub run (compact window off)"
+[[ "$(jq -r '.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW // "absent"' <<< "$launched_out")" == absent ]] || fail "off must leave the window unset: $launched_out"
+launched_out=$(HOSTED_ONLY_COMPACT_DRIFT_MARGIN=90000 _claude_hosted_launch) || fail "launcher stub run (drift margin)"
+[[ "$(jq -r .env.CLAUDE_CODE_AUTO_COMPACT_WINDOW <<< "$launched_out")" == 863000 ]] || fail "HOSTED_ONLY_COMPACT_DRIFT_MARGIN ignored: $launched_out"
+# the helper's guard rails: floor on a mistyped knob, nothing on a non-number
+[[ "$(_claude_auto_compact_window 9999999)" == 200000 && -z "$(_claude_auto_compact_window abc)" ]] || fail "compact window floor / bad input"
+
 # the search-less upstream gets web search from the Parallel MCP (issue 602)
 launched_out=$(_claude_hosted_launch) || fail "launcher stub run (search mcp)"
 [[ "$(jq -r '.mcpServers.parallel.type' <<< "$launched_out")" == http && "$(jq -r '.mcpServers.parallel.url' <<< "$launched_out")" == https://mcp.parallel.ai/mcp ]] || fail "parallel MCP not registered by default: $launched_out"

@@ -52,13 +52,39 @@ Codex flavor already does 1,000,000 vs real 1,048,576 in
 advertised number, so real headroom appears. Cheap and robust, but costs ~90k
 usable context and more frequent compaction (more detail lost per session).
 
+## Update 2026-11-06 (later): lever 2 done the supported way
+
+Lever 2 does not need a catalog lie. Claude Code 2.1.319 (read from the bundle:
+`resolveAutoCompactWindow`, `L4`, `AZr`) compacts at
+
+    threshold = min(model window, CLAUDE_CODE_AUTO_COMPACT_WINDOW) - min(model max output, 20000) - 13000
+
+so a fixed 33000 under the window, with **no reservation for our 128000 output
+cap** (`CLAUDE_CODE_MAX_OUTPUT_TOKENS` does not enter the threshold). At the
+default `[1m]` window that is 967000; the request then carries
+input + 128000 > 1,048,576 and the proxy has to trim `max_tokens` (down to ~81000)
+or, once token-count drift eats the room, answer the compaction-hint 400.
+
+The launchers now set the window from the cap:
+`window = MAX_MODEL_LEN - OUTPUT_RESERVE - max_output - drift + 33000`
+= 1048576 - 512 - 128000 - 45000 + 33000 = **908000** (threshold 875000), via
+`_claude_auto_compact_window` in `zsh/functions/claude/common.zsh`. The
+45000 drift margin (~5% of 900k) is the token-count disagreement between the
+client's estimate and vLLM's tokenizer it can absorb before the hint 400 would
+fire. Cost: compaction at 875k instead of 967k (~9% less context before a
+compaction). Benefit: a full 128000 output always fits, no trimmed
+max_tokens, and the 400 round trip only when drift exceeds the margin. The
+clamp and hint stay as the backstop. The 33000 is client-version specific —
+recheck after a Claude Code upgrade.
+
 ## Verdict recorded 2026-11-06
 
 - Lever 1: pure win if missing, verify first. Not yet verified.
-- Lever 2: only if hint-400s recur often — each mid-task 400 costs a round
-  trip plus possible lost work. One occurrence in weeks means the clamp
-  backstop is enough and 90k of real context is worth more than the avoided
-  retry.
+- Lever 2: superseded by the update above — done via
+  CLAUDE_CODE_AUTO_COMPACT_WINDOW, derived from the output cap (908000 for
+  128000), costing ~9% context before compaction. Originally "only if
+  hint-400s recur often"; chosen anyway because the client does not reserve
+  the output cap, so the unset default always trims max_tokens at the edge.
 - Full native fidelity is unreachable: Claude Code's internal pre-send
   heuristic is not ours to change — only what we advertise (lever 2) and what
   usage we report (lever 1) are. Levers + clamp ≈ 90% of native safety;

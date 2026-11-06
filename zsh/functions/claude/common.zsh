@@ -249,6 +249,49 @@ _claude_port_serving() {
     fi
 }
 
+# _claude_auto_compact_window <max-output-tokens> [<explicit-override>]
+# Prints the CLAUDE_CODE_AUTO_COMPACT_WINDOW to set for a hosted (vLLM) session,
+# or nothing when it should stay unset.
+#
+# WHY: Claude Code (2.1.319, read from the bundle) compacts at
+#   threshold = min(model window, AUTO_COMPACT_WINDOW) - min(model max output, 20000) - 13000
+# i.e. a fixed 33000 below the window, and it does NOT reserve the output cap we
+# raise (CLAUDE_CODE_MAX_OUTPUT_TOKENS, default 128000). The proxy serves
+# 1,048,576 and vLLM rejects input + max_tokens above it, so at the client's own
+# threshold (~967k for a 1M window) a 128000 request overflows and the proxy
+# has to trim max_tokens (hosted_only_hooks.clamp_output) or, when drift eats
+# the room, answer a compaction-hint 400. Setting the window so the threshold
+# leaves room for the FULL output budget plus a token-count drift margin makes
+# the client compact proactively instead:
+#   window = MAX_MODEL_LEN - OUTPUT_RESERVE - max_output - DRIFT_MARGIN + 33000
+# (128000 output, 45000 drift -> 908000; threshold 875000.) The clamp and hint
+# stay as the backstop for what the margin does not cover.
+#
+# COUPLED (read hosted_only_hooks.py above MIN_OUTPUT before changing any):
+# MAX_MODEL_LEN / OUTPUT_RESERVE (hook knobs, same defaults), the output cap
+# the caller passes, HOSTED_ONLY_COMPACT_DRIFT_MARGIN, and the 33000 client
+# constant, which is Claude Code version specific - recheck after a client
+# upgrade (tengu: resolveAutoCompactWindow / L4 / AZr in the bundle).
+# <explicit-override>: a number sets the window verbatim; off/none/0 prints
+# nothing. The client clamps it to the model window, so a gateway model with a
+# smaller window than this value is unaffected.
+_claude_auto_compact_window() {
+    local out="$1" explicit="${2-}" len res margin window
+    case "$explicit" in
+        off|none|0) return 0 ;;
+        <->) print -r -- "$explicit"; return 0 ;;
+    esac
+    [[ "$out" == <-> ]] || return 0
+    len="${HOSTED_ONLY_MAX_MODEL_LEN:-1048576}"; [[ "$len" == <-> ]] || len=1048576
+    res="${HOSTED_ONLY_OUTPUT_RESERVE:-512}"; [[ "$res" == <-> ]] || res=512
+    margin="${HOSTED_ONLY_COMPACT_DRIFT_MARGIN:-45000}"; [[ "$margin" == <-> ]] || margin=45000
+    window=$(( len - res - out - margin + 33000 ))
+    window=$(( window / 1000 * 1000 ))
+    (( window > 1000000 )) && window=1000000   # the [1m] model window; the client clamps anyway
+    (( window < 200000 )) && window=200000     # never compact absurdly early on a mistyped knob
+    print -r -- "$window"
+}
+
 # _claude_proxy_sync <label> <name> <health-url> <fingerprint> <kill-fn> <adopt>
 # Running + fingerprint differs -> when idle, kill via <kill-fn> and wait for
 # the port to free so the caller's normal start path relaunches it; while it is
