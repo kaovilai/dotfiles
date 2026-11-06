@@ -30,39 +30,31 @@ export XDG_STATE_HOME="$tmp/state"
 source "$repo/scripts/hosted-only-proxy.zsh"
 
 # --- launcher contract -------------------------------------------------------
-# Default impl: go (LiteLLM is the escape hatch). `auto` — the default — is go
-# when a go toolchain is installed and litellm otherwise; HOSTED_ONLY_PROXY_IMPL
-# beats LLM_PROXY_IMPL, which flips every proxy at once.
+# The Go proxy is the only impl: the default is go and the retired
+# HOSTED_ONLY_PROXY_IMPL / LLM_PROXY_IMPL=litellm knobs fail loudly (covered in
+# tests/hosted-only-proxy.zsh); GO / " go " / auto normalize to go.
 unset HOSTED_ONLY_PROXY_IMPL GLM_HYBRID_PROXY_IMPL LLM_PROXY_IMPL
 _hosted_only_proxy_vars claude
 [[ "$_hop_impl" == go ]] || fail "default impl should be go: $_hop_impl"
-LLM_PROXY_IMPL=litellm _hosted_only_proxy_vars claude
-[[ "$_hop_impl" == litellm ]] || fail "LLM_PROXY_IMPL=litellm is the escape hatch: $_hop_impl"
-LLM_PROXY_IMPL=litellm HOSTED_ONLY_PROXY_IMPL=go _hosted_only_proxy_vars claude
-[[ "$_hop_impl" == go ]] || fail "HOSTED_ONLY_PROXY_IMPL must beat LLM_PROXY_IMPL: $_hop_impl"
-[[ "$( ( path=(/nonexistent); rehash; _hosted_only_resolve_impl auto ) )" == litellm ]] || fail "auto without a go toolchain must be litellm"
-[[ "$(_hosted_only_resolve_impl bogus)" == bogus ]] || fail "an explicit value is passed through for the caller to reject"
-[[ "$(_hosted_only_resolve_impl GO)" == go && "$(_hosted_only_resolve_impl ' litellm ')" == litellm ]] || fail "impl values are lowercased and trimmed (the EnMaaS controller does the same)"
-[[ "$(_hosted_only_resolve_impl '')" == "$(_hosted_only_resolve_impl auto)" ]] || fail "an empty value means auto"
-HOSTED_ONLY_PROXY_IMPL=go _hosted_only_proxy_vars claude
-[[ "$_hop_impl" == go ]] || fail "HOSTED_ONLY_PROXY_IMPL=go not read"
+HOSTED_ONLY_PROXY_IMPL=GO _hosted_only_proxy_vars claude
+[[ "$_hop_impl" == go ]] || fail "HOSTED_ONLY_PROXY_IMPL=GO not normalized to go: $_hop_impl"
+HOSTED_ONLY_PROXY_IMPL=' go ' _hosted_only_proxy_vars claude
+[[ "$_hop_impl" == go ]] || fail "a padded ' go ' must mean go: $_hop_impl"
+HOSTED_ONLY_PROXY_IMPL=auto _hosted_only_proxy_vars claude
+[[ "$_hop_impl" == go ]] || fail "auto must mean go: $_hop_impl"
 GLM_HYBRID_PROXY_IMPL=go _hosted_only_proxy_vars claude
 [[ "$_hop_impl" == go ]] || fail "retired GLM_HYBRID_PROXY_IMPL ignored"
 _hosted_only_proxy_vars claude
 
 # The fp helper runs inside a command substitution, so every field the spawn
-# paths need travels on its stdout line; the globals cannot cross back
-# (2026-11-06 review: empty litellm/fastapi versions broke the LiteLLM spawn).
+# path needs travels on its stdout line; the globals cannot cross back.
 (
-    export HOSTED_ONLY_PROXY_IMPL=litellm ENMAAS_API_KEY=test-key
+    export ENMAAS_API_KEY=test-key
     _hosted_only_proxy_vars claude
     fp_line=$(_hosted_only_proxy_fp) || exit 1
     _hosted_only_proxy_fp_load "$fp_line"
     [[ -n "$_hop_fp" && -n "$_hop_token_fp" ]] || exit 2
-    [[ "$_hop_litellm_version" == 1.97.0 ]] || exit 3
-    [[ "$_hop_fastapi_version" == 0.136.3 ]] || exit 4
-    [[ -n "$_hop_dns_hash" ]] || exit 5
-    [[ "$_hop_dns_host" == api.enmaas.devshift.net ]] || exit 6
+    [[ "$_hop_dns_host" == api.enmaas.devshift.net ]] || exit 3
 ) || fail "fp helper contract broken: fields do not reach the caller"
 
 local bin

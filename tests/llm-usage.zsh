@@ -819,14 +819,9 @@ out=$($usage menubar install --dry-run)
 [[ "$($usage menubar uninstall --dry-run)" == *"would run: launchctl bootout"* ]] || fail "uninstall --dry-run"
 [[ "$(LLM_USAGE_MENUBAR_DIR=$tmp/none $usage menubar status)" == *"built:     no"* ]] || fail "menubar status"
 
-# Wiring: hosted-only proxy config and vertex/openai generators load the usage callback.
-source "$repo/scripts/hosted-only-proxy.zsh"
-local flavor
-for flavor in codex claude; do
-    _hosted_only_proxy_vars $flavor
-    typeset -gi _hop_with_review=1
-    [[ "$(_hosted_only_proxy_config)" == *litellm_usage_log.proxy_handler_instance* ]] || fail "$flavor hosted-only config lacks usage callback"
-done
+# Wiring: the vertex/openai generators still load the usage callback (their
+# proxies keep LiteLLM); hosted-only/EnMaaS run the Go proxy, which writes the
+# JSONL itself.
 [[ -r "$repo/scripts/litellm_usage_log.py" ]] || fail "usage log module missing"
 grep -q litellm_usage_log "$repo/zsh/functions/claude/providers/vertex.zsh" || fail "vertex lacks callback"
 grep -q litellm_usage_log "$repo/zsh/functions/claude/providers/openai.zsh" || fail "openai lacks callback"
@@ -878,18 +873,15 @@ SH
     (
         path=("$dnsbin" $path)
         rehash
-        export CLAUDE_ENMAAS_PROXY_IMPL=litellm   # this block covers the kill-then-start restart; the Go swap is tests/claude-enmaas-go-swap.zsh
         _claude_enmaas_port() { print -r -- 4146; }
-        claude-enmaas-kill() { print -r -- killed >> "$dnslog"; }
         claude-enmaas() { print -r -- started >> "$dnslog"; return 0; }
-        _llm_proxy_wait_down() { return 0; }
         _llm_proxy_wait_up() { return 0; }
         : > "$dnslog"
         local out rc=0
         out=$(claude-enmaas-restart 2>&1) || rc=$?
         [[ $rc == 0 ]] || fail "enmaas restart with working DNS (rc=$rc): $out"
         [[ "$out" == *"dns api.enmaas.devshift.net -> 203.0.113.9"* ]] || fail "dns resolve line missing: $out"
-        [[ "$(<"$dnslog")" == $'killed\nstarted' ]] || fail "restart did not stop then start: $(<"$dnslog")"
+        [[ "$(<"$dnslog")" == started ]] || fail "restart did not relaunch: $(<"$dnslog")"
         : > "$dnslog"
         export DNS_STUB_DOWN=1
         rc=0 out=$(claude-enmaas-restart 2>&1) || rc=$?
@@ -904,7 +896,7 @@ SH
         : > "$dnslog"
         rc=0 out=$(claude-enmaas-restart 2>&1) || rc=$?
         [[ $rc == 0 && "$out" == *"198.51.100.7"*"DoH"* ]] || fail "DoH fallback should allow the restart (rc=$rc): $out"
-        [[ "$(<"$dnslog")" == $'killed\nstarted' ]] || fail "DoH fallback path skipped the restart: $(<"$dnslog")"
+        [[ "$(<"$dnslog")" == started ]] || fail "DoH fallback path skipped the restart: $(<"$dnslog")"
         unset DOH_OK
         # A resolver that cannot be queried at all must not block a restart.
         unset DNS_STUB_DOWN
@@ -912,7 +904,7 @@ SH
         : > "$dnslog"
         rc=0 out=$(claude-enmaas-restart 2>&1) || rc=$?
         [[ $rc == 0 && "$out" == *"could not check dns"* ]] || fail "uncheckable DNS must not block (rc=$rc): $out"
-        [[ "$(<"$dnslog")" == $'killed\nstarted' ]] || fail "uncheckable DNS skipped the restart: $(<"$dnslog")"
+        [[ "$(<"$dnslog")" == started ]] || fail "uncheckable DNS skipped the restart: $(<"$dnslog")"
         exit 0
     ) || exit 1
 

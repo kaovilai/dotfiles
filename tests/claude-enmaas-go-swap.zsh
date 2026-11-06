@@ -92,7 +92,7 @@ with tempfile.TemporaryDirectory(prefix='enmaas-go-swap-', dir=os.environ.get('T
         'general_settings': {'master_key': ''}, 'litellm_settings': {'drop_params': True}}
 
     def controller(op, port, key=None, extra=None):
-        args = [str(port), 'unused', 'unused', '90', 'offline-model'] if op == 'ensure' else [str(port)]
+        args = [str(port), '90', 'offline-model'] if op == 'ensure' else [str(port)]
         run_env = dict(env, ENMAAS_API_KEY=key or env['ENMAAS_API_KEY'], **(extra or {}))
         return subprocess.run(['python3', str(program), op, *args], env=run_env, input=json.dumps(config),
                               text=True, capture_output=True, timeout=120)

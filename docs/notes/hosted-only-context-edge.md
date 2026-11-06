@@ -1,9 +1,10 @@
 # Hosted-only context edge: why we clamp, and how close to native we can get
 
-Date 2026-11-06, after `ab9c535` (clamp + compaction hint in
-`scripts/hosted_only_hooks.py`). Companion to the COUPLED SETTINGS comment block
-above `MIN_OUTPUT` there; that block says *what* is coupled, this note says
-*why the seam exists* and what closing it further would cost.
+Date 2026-11-06, after `ab9c535` (clamp + compaction hint, then in
+`scripts/hosted_only_hooks.py`; the clamp lives in the Go proxy now —
+`scripts/hosted-only-go`). Companion to the COUPLED SETTINGS comment on
+`MIN_OUTPUT`; that says *what* is coupled, this note says *why the seam exists*
+and what closing it further would cost.
 
 ## The rule is upstream, not a vLLM bug
 

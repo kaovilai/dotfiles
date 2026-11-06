@@ -1,5 +1,6 @@
-# One-shot lifecycle controller for the standard shared LiteLLM CLI proxy.
-# No request server, tenant registry or session leases live here.
+# One-shot lifecycle controller for the standard shared EnMaaS proxy (the Go
+# binary; the LiteLLM impl is retired). No request server, tenant registry or
+# session leases live here.
 _claude_enmaas_proxy_program() {
     command cat <<'PY'
 import ast
@@ -168,94 +169,33 @@ def signature(key, token):
     return hmac.new(token.encode(), key.encode(), hashlib.sha256).hexdigest()
 
 
-# Hook modules (CLAUDE_ENMAAS_HOOK_FILES, newline separated absolute paths, in
-# callback order) are copied next to the config and loaded as dotted modules:
-# LiteLLM splits a callback on '.', so a file path or `file.py:name` cannot work.
-HOOK_ENV_PREFIXES = ('HOSTED_ONLY_', 'GLM_HYBRID_', 'ENMAAS_RESPONSES_', 'ENMAAS_DNS_')
-CHILD_ENV_PREFIXES = HOOK_ENV_PREFIXES + ('LLM_USAGE_', 'T3_WEB_SEARCH_')
-
-
-def hook_files():
-    return [Path(p) for p in os.environ.get('CLAUDE_ENMAAS_HOOK_FILES', '').split('\n') if p]
-
-
-def code_text(path):
-    # What the proxy actually runs: the AST without comments, docstrings or
-    # formatting, so editing a comment does not count as a hook change.
-    data = path.read_bytes()
-    if path.suffix != '.py':
-        return data
-    try:
-        tree = ast.parse(data)
-    except SyntaxError:
-        return data
-    for node in ast.walk(tree):
-        body = getattr(node, 'body', None)
-        if (isinstance(body, list) and body and isinstance(body[0], ast.Expr)
-                and isinstance(body[0].value, ast.Constant) and isinstance(body[0].value.value, str)):
-            node.body = body[1:] or [ast.Pass()]
-    return ast.dump(tree).encode()
-
-
-def hook_digest(files):
-    # Hook code and the knobs the hooks read; a change needs a proxy restart.
-    if not files:
-        return ''
-    digest = hashlib.sha256()
-    for path in files:
-        digest.update(path.name.encode() + b'\0' + code_text(path) + b'\0')
-    for name in sorted(os.environ):
-        if name.startswith(HOOK_ENV_PREFIXES):
-            digest.update(('%s=%s\0' % (name, os.environ[name])).encode())
-    return digest.hexdigest()
-
-
-def install_hooks(root, files):
-    for path in files:
-        fd = os.open(root / path.name, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
-        with os.fdopen(fd, 'wb') as stream:
-            stream.write(path.read_bytes())
-    return [path.stem + '.proxy_handler_instance' for path in files]
-
-
-def dns_shim():
-    # scripts/dns_fallback.py, installed as sitecustomize.py so the LiteLLM
-    # child falls back to DoH when the system resolver cannot answer for the
-    # gateway name. Off with CLAUDE_ENMAAS_DNS_FALLBACK=0.
-    if os.environ.get('CLAUDE_ENMAAS_DNS_FALLBACK', '1') == '0':
-        return None
-    path = Path(os.environ.get('CLAUDE_ENMAAS_DNS_SHIM') or '')
-    return path if path.name and path.is_file() else None
-
-
-def proxy_digest(files):
-    shim = dns_shim()
-    return hook_digest(files + ([shim] if shim else []))
+# The child is the Go proxy; these env prefixes reach it (knobs, usage log
+# dir, search-MCP hint for the strip note).
+CHILD_ENV_PREFIXES = ('HOSTED_ONLY_', 'GLM_HYBRID_', 'ENMAAS_RESPONSES_',
+                      'ENMAAS_DNS_', 'LLM_USAGE_', 'T3_WEB_SEARCH_')
 
 
 def go_impl():
-    # Go is the default for EnMaaS too (kaovilai/dotfiles issue 602): this flavor
-    # serves Claude Code over /v1/messages for every catalog model, GPT/Gemini
-    # included, and the Go proxy now converts Messages <-> chat/Responses itself
-    # (translate*.go: tools, streaming, Gemini thought signatures), verified live
-    # against the gateway. `auto` (the default) is go when a go toolchain is
-    # installed, else litellm; CLAUDE_ENMAAS_PROXY_IMPL / LLM_PROXY_IMPL=litellm
-    # is the escape hatch. Mirrored by _claude_enmaas_impl in proxies.zsh.
+    # The Go proxy is the only impl (the LiteLLM impl is retired; the openai
+    # and vertex launchers still run LiteLLM for their own flavors). It serves
+    # Claude Code over /v1/messages for every catalog model, GPT/Gemini
+    # included, converting Messages <-> chat/Responses itself (translate*.go).
+    # Mirrored by _claude_enmaas_impl in proxies.zsh.
     impl = (os.environ.get('CLAUDE_ENMAAS_PROXY_IMPL')
-            or os.environ.get('LLM_PROXY_IMPL') or 'auto').strip().lower()
-    if impl in ('', 'auto'):
-        return 'go' if shutil.which('go') else 'litellm'
-    return impl
+            or os.environ.get('LLM_PROXY_IMPL') or 'go').strip().lower()
+    if impl not in ('', 'auto', 'go'):
+        raise RuntimeError('the LiteLLM impl is retired; the Go proxy is the only impl '
+                           '(install a go toolchain). CLAUDE_ENMAAS_PROXY_IMPL must be go, got %r' % impl)
+    if not shutil.which('go'):
+        raise RuntimeError('go not found (the Go proxy is the only impl; install a go toolchain)')
+    return 'go'
 
 
 def go_source():
     explicit = os.environ.get('CLAUDE_ENMAAS_GO_SRC')
-    if explicit:
-        return Path(explicit)
-    files = hook_files()
-    if not files:
-        raise RuntimeError('CLAUDE_ENMAAS_GO_SRC is not set and no hook files were provided')
-    return files[0].parent.parent / 'scripts' / 'hosted-only-go'
+    if not explicit:
+        raise RuntimeError('CLAUDE_ENMAAS_GO_SRC is not set')
+    return Path(explicit)
 
 
 def go_source_hash(src):
@@ -283,12 +223,6 @@ def go_binary():
         stamp.write_text(want)
         binary.chmod(0o700)
     return str(binary), want
-
-
-def install_shim(root, shim):
-    fd = os.open(root / 'sitecustomize.py', os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
-    with os.fdopen(fd, 'wb') as stream:
-        stream.write(shim.read_bytes())
 
 
 def stop(root, info, port=None):
@@ -334,14 +268,12 @@ def changes(info_root, info, root, config, versions, key, hooks, required):
     return changed, previous, proposed, rerouted
 
 
-def check(root, port, config, versions, required):
+def check(root, port, config, required):
     """Dry run for `llm-proxy-restart required`: {'state': down|fresh|stale,
     'changed': [...], 'busy': bool}; nothing is started, stopped or written."""
-    impl = go_impl()
-    gohash = None
-    if impl == 'go':
-        _, gohash = go_binary()
-        versions = (gohash, 'go')
+    go_impl()
+    _, gohash = go_binary()
+    versions = [gohash, 'go']   # a list: the recorded identity holds one (argv slices were lists)
     info_root, info = locate(root, port)
     if not owned(info):
         if listeners(port):
@@ -350,35 +282,29 @@ def check(root, port, config, versions, required):
     if not ready(info, info_root):
         return {'state': 'stale', 'changed': ['recorded proxy is not ready'], 'busy': busy(port)}
     changed, _, _, _ = changes(info_root, info, root, config, versions, os.environ['ENMAAS_API_KEY'],
-                               gohash if impl == 'go' else proxy_digest(hook_files()), required)
+                               gohash, required)
     return {'state': 'stale' if changed else 'fresh', 'changed': changed, 'busy': busy(port)}
 
 
-def ensure(root, port, config, versions, timeout, required):
-    impl = go_impl()
-    if impl not in ('litellm', 'go'):
-        raise RuntimeError('CLAUDE_ENMAAS_PROXY_IMPL must be litellm or go (got %r)' % impl)
-    gobin = gohash = None
-    if impl == 'go':
-        gobin, gohash = go_binary()
-        versions = (gohash, 'go')
+def ensure(root, port, config, timeout, required):
+    go_impl()
+    gobin, gohash = go_binary()
+    versions = [gohash, 'go']   # a list: the recorded identity holds one (argv slices were lists)
     info_root, info = locate(root, port)
     key = os.environ['ENMAAS_API_KEY']
-    files = hook_files()
-    shim = dns_shim() if impl == 'litellm' else None
-    hooks = gohash if impl == 'go' else proxy_digest(files)
+    hooks = gohash
     swap = None
     if owned(info):
         if not ready(info, info_root):
             raise RuntimeError('recorded proxy is not ready; run claude-enmaas-kill before relaunching')
         changed, previous, proposed, rerouted = changes(info_root, info, root, config, versions, key, hooks, required)
         forced = bool(os.environ.get('CLAUDE_ENMAAS_FORCE_RESTART'))
-        if forced and impl == 'go' and not changed:
+        if forced and not changed:
             changed = ['restart requested']
-        if changed and (not busy(port) or (forced and impl == 'go')):
-            # Nobody is mid-request (or a Go swap is forced, which loses
-            # nothing): apply the change now instead of refusing.
-            if impl == 'go' and (info.get('versions') or ['', ''])[-1] == 'go':
+        if changed and (not busy(port) or forced):
+            # Nobody is mid-request (or a swap is forced, which loses nothing):
+            # apply the change now instead of refusing.
+            if (info.get('versions') or ['', ''])[-1] == 'go':
                 # Zero-refuse restart: the replacement starts ALONGSIDE the old
                 # Go listener (both bind SO_REUSEPORT) and the old group is
                 # retired only once the new one is up, so a request arriving
@@ -422,34 +348,16 @@ def ensure(root, port, config, versions, timeout, required):
                 raise RuntimeError('proxy port is occupied; refusing to adopt or stop its listener')
     token = swap[1]['token'] if swap else 'sk-enmaas-' + secrets.token_hex(32)
     config['general_settings']['master_key'] = token
-    if impl == 'litellm':
-        if files:
-            config.setdefault('litellm_settings', {})['callbacks'] = install_hooks(root, files)
-        if shim:
-            install_shim(root, shim)
     write_private(root / 'config.json', config)
-    if impl == 'go':
-        # The Go proxy reads the same generated config.json: model_list is its
-        # route table (dialect, api_base, #responses siblings), master_key its
-        # local token. Python hooks are not installed on this path.
-        args = [gobin, '--flavor', 'enmaas', '--config', str(root / 'config.json'), '--port', str(port)]
-    else:
-        args = ['uv', 'tool', 'run', '--with', 'fastapi==' + versions[1],
-                '--from', 'litellm[proxy]==' + versions[0], 'litellm',
-                '--config', str(root / 'config.json'), '--host', '127.0.0.1', '--port', str(port),
-                '--telemetry', 'False']
+    # The Go proxy reads the generated config.json: model_list is its route
+    # table (dialect, api_base, #responses siblings), master_key its local token.
+    args = [gobin, '--flavor', 'enmaas', '--config', str(root / 'config.json'), '--port', str(port)]
     env = {k: v for k, v in os.environ.items() if k in
-           ('PATH', 'HOME', 'TMPDIR', 'UV_CACHE_DIR', 'UV_OFFLINE', 'XDG_CACHE_HOME', 'XDG_STATE_HOME', 'LANG', 'LC_ALL')
+           ('PATH', 'HOME', 'TMPDIR', 'XDG_CACHE_HOME', 'XDG_STATE_HOME', 'LANG', 'LC_ALL')
            or k.startswith(CHILD_ENV_PREFIXES)}
-    env.update(ENMAAS_API_KEY=key, LITELLM_LOG=os.environ.get('CLAUDE_ENMAAS_LITELLM_LOG') or 'ERROR',
-               # hosted_only_hooks outage backoff survives restarts via this file
+    env.update(ENMAAS_API_KEY=key,
+               # the Go proxy's outage backoff survives restarts via this file
                HOSTED_ONLY_OUTAGE_STATE=str(root / 'outage-streak.json'))
-    if shim:
-        # PYTHONPATH is this launch's runtime dir only, so sitecustomize.py
-        # reaches the LiteLLM child and nothing else on the machine.
-        env.update(PYTHONPATH=str(root),
-                   ENMAAS_DNS_FALLBACK_HOSTS=os.environ.get('ENMAAS_DNS_FALLBACK_HOSTS', ''),
-                   ENMAAS_DNS_DOH_URLS=os.environ.get('ENMAAS_DNS_DOH_URLS', ''))
     # A boot failure (bad config, hook import error) must leave a trace.
     log = root / 'proxy.log'
 
@@ -564,11 +472,11 @@ if __name__ == '__main__':
                         raise RuntimeError('shared proxy startup lock timed out')
                     time.sleep(.1)
             if op == 'ensure':
-                info = ensure(root, port, json.load(sys.stdin), sys.argv[3:5], int(sys.argv[5]), sys.argv[6:])
+                info = ensure(root, port, json.load(sys.stdin), int(sys.argv[3]), sys.argv[4:])
                 print(json.dumps({'token': info['token'], 'runtime': info['runtime'], 'models': info['models']}))
             elif op == 'check':
-                # Same argument layout as ensure (argv[5], the timeout, is unused).
-                print(json.dumps(check(root, port, json.load(sys.stdin), sys.argv[3:5], sys.argv[6:])))
+                # Same argument layout as ensure (argv[3], the timeout, is unused).
+                print(json.dumps(check(root, port, json.load(sys.stdin), sys.argv[4:])))
             elif op == 'stop':
                 info_root, info = locate(root, port)
                 stop(info_root, info, port)
