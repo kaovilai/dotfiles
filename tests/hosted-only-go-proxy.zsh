@@ -57,6 +57,25 @@ _hosted_only_proxy_vars claude
     [[ "$_hop_dns_host" == api.enmaas.devshift.net ]] || exit 3
 ) || fail "fp helper contract broken: fields do not reach the caller"
 
+# Every image knob reaches the Go child's environment, so each must also change
+# the fingerprint: otherwise an idle proxy keeps the old token price / cache
+# directory after the setting changes (2026-11-06 review: IMAGE_TOKENS and
+# IMAGE_CACHE_DIR were forwarded but not fingerprinted).
+fp_with() {   # fp_with VAR=VALUE... -> the fingerprint line under the Go impl
+    (
+        export HOSTED_ONLY_PROXY_IMPL=go ENMAAS_API_KEY=test-key "$@"
+        _hosted_only_proxy_vars claude
+        _hosted_only_proxy_fp
+    )
+}
+local base_fp="$(fp_with HOSTED_ONLY_IMAGE_TOKENS=2500)" changed_fp
+[[ -n "$base_fp" ]] || fail "fp_with produced no fingerprint"
+[[ "$(fp_with HOSTED_ONLY_IMAGE_CACHE_DIR=.)" != "$base_fp" ]] || fail "an explicit IMAGE_CACHE_DIR=. hashes like an unset dir"
+for knob in IMAGE_BUDGET_BYTES=123456 IMAGE_CACHE_DAYS=7 IMAGE_TOKENS=3100 IMAGE_CACHE_DIR=/tmp/other-image-cache; do
+    changed_fp="$(fp_with HOSTED_ONLY_$knob)"
+    [[ "$changed_fp" != "$base_fp" ]] || fail "changing HOSTED_ONLY_$knob does not change the proxy fingerprint"
+done
+
 local bin
 bin=$(_hosted_only_go_bin) || fail "go build failed"
 [[ -x "$bin" ]] || fail "no binary at $bin"

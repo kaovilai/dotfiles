@@ -519,6 +519,10 @@ func dialectMismatch(clientPath, deployment, model string) string {
 	messages := strings.Contains(clientPath, "/v1/messages")
 	chat := strings.Contains(clientPath, "/v1/chat/completions")
 	switch {
+	case !messages && !strings.Contains(clientPath, "/v1/responses") && strings.HasSuffix(model, "#responses"):
+		// An explicitly requested "<id>#responses" sibling is the openai-dialect
+		// deployment of a Responses-only model; it only answers /v1/responses.
+		return fmt.Sprintf("model %s is the Responses-only deployment and only answers /v1/responses; send the request there", model)
 	case chat && deployment == "responses":
 		return fmt.Sprintf("model %s is served over the Responses dialect and this proxy does not translate chat requests to it; "+
 			"set CLAUDE_ENMAAS_PROXY_IMPL=litellm (or LLM_PROXY_IMPL=litellm) to use the LiteLLM proxy, which does", model)
