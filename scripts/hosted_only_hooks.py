@@ -190,6 +190,20 @@ def int_knob(name, default, minimum):
 GLM_MODEL_PREFIXES = ("rits/",)
 GLM_MODEL = knob("GLM_MODEL", os.environ.get("GLM_HYBRID_MODEL", "rits/zai-org/glm-5-3"))
 DEEPSEEK_MODEL = knob("DEEPSEEK_MODEL", "rits/deepseek-ai/DeepSeek-V4.1-Flash-1017")
+# Merged proxy (#599): one LiteLLM serves both dialects. The openai/ deployments
+# live under model groups suffixed with this; async_pre_call_hook adds it for
+# OpenAI-wire call types (Codex Responses, OpenCode chat) so the router cannot
+# load-balance a bare-name request across dialects. Clients never send it.
+DIALECT_SUFFIX = "#openai"
+OPENAI_CALL_TYPES = frozenset({"acompletion", "aresponses", "aembedding"})
+
+
+def split_dialect(model):
+    """(bare model id, dialect suffix) of a possibly #openai-suffixed id."""
+    model = str(model or "")
+    if model.endswith(DIALECT_SUFFIX):
+        return model[: -len(DIALECT_SUFFIX)], DIALECT_SUFFIX
+    return model, ""
 VISION_FALLBACK = knob("VISION_FALLBACK", "1") != "0"
 FALLBACK = knob("FALLBACK", "1") != "0"
 # Model ids the proxy serves from the GLM deployment (hosted-only Claude flavor
@@ -1179,7 +1193,10 @@ OUTAGE_GATEWAY_RE = re.compile(
 OUTAGE_BASE_SECONDS = int_knob("OUTAGE_RETRY_SECONDS", 60, 1)
 OUTAGE_MAX_SECONDS = int_knob("OUTAGE_RETRY_MAX_SECONDS", 600, 1)
 OUTAGE_STREAK_WINDOW = 900  # failures this close together count as one outage
-OUTAGE_COALESCE = float(knob("OUTAGE_COALESCE_SECONDS", "5"))  # same-episode window
+try:
+    OUTAGE_COALESCE = float(knob("OUTAGE_COALESCE_SECONDS", "5"))  # same-episode window
+except ValueError:
+    OUTAGE_COALESCE = 5.0
 OUTAGE_STREAK = {}  # model -> (consecutive failures, epoch of the last one)
 OUTAGE_LOG = {}  # model -> reset epoch of the last outage rewrite (litellm_usage_log reads it)
 # Backoff survives a proxy restart when the launcher points
@@ -1465,7 +1482,7 @@ def clamp_output(data):
 
     COUPLED with the clients' output cap and MIN_OUTPUT; see the comment block
     above MIN_OUTPUT before changing max output tokens or this hook."""
-    model = str(data.get("model") or "")
+    model, _ = split_dialect(data.get("model"))
     if model != GLM_MODEL and model != DEEPSEEK_MODEL and model not in ALIAS_MODELS:
         return None
     key = "max_output_tokens" if "max_output_tokens" in data else "max_tokens"
@@ -1547,11 +1564,11 @@ def fallback_target(data):
     turns it off."""
     if not FALLBACK or data.get("fallbacks") or GLM_MODEL == DEEPSEEK_MODEL:
         return None
-    model = str(data.get("model") or "")
+    model, suffix = split_dialect(data.get("model"))
     if model == GLM_MODEL or model in ALIAS_MODELS:
-        other = DEEPSEEK_MODEL
+        other = DEEPSEEK_MODEL + suffix  # keep the caller's dialect (#openai or bare)
     elif model == DEEPSEEK_MODEL:
-        other = GLM_MODEL
+        other = GLM_MODEL + suffix
     else:
         return None
     if has_image(data.get("messages") or data.get("input")):
@@ -1559,8 +1576,10 @@ def fallback_target(data):
     # Monthly quota is account-wide (token quota AND USD budget gate the same
     # EnMaaS account, see docs/notes/enmaas-reset-forward-compat.md): falling
     # back would only buy the same 429 plus latency, once per router cooldown.
-    if LAST_LIMIT_KIND.get(model) == "quota" and LAST_LIMIT_RESET.get(model, 0) > time.time():
-        return None
+    # The state is keyed by the id as requested (suffixed or bare), so check both.
+    for key in (model + suffix, model):
+        if LAST_LIMIT_KIND.get(key) == "quota" and LAST_LIMIT_RESET.get(key, 0) > time.time():
+            return None
     return other
 
 
@@ -1585,7 +1604,7 @@ class HostedOnlyHooks(CustomLogger):
             if not model:
                 return
             def bare(k):
-                return k.rsplit("/", 1)[-1]
+                return k.rsplit("/", 1)[-1].removesuffix(DIALECT_SUFFIX)
             hit = [k for k in OUTAGE_STREAK if k == model or bare(k) == bare(model)]
             for k in hit:
                 OUTAGE_STREAK.pop(k, None)
@@ -1604,6 +1623,15 @@ class HostedOnlyHooks(CustomLogger):
         except Exception:
             LOG.exception("hosted_only_hooks: image prune skipped")
         model = str(data.get("model") or "")
+        # Merged proxy (#599): route OpenAI-wire calls to the openai/ deployments
+        # by suffixing the model group; /v1/messages keeps the bare anthropic
+        # group. Clients keep their bare ids — the suffix is proxy-internal.
+        suffix = ""
+        if model.endswith(DIALECT_SUFFIX):
+            model, suffix = model[: -len(DIALECT_SUFFIX)], DIALECT_SUFFIX
+        elif call_type in OPENAI_CALL_TYPES:
+            suffix = DIALECT_SUFFIX
+            data["model"] = model + suffix
         # GLM aliases (claude-sonnet-5-5) are served by the GLM deployment, so
         # they get every GLM workaround below, vision reroute included.
         if not model.startswith(GLM_MODEL_PREFIXES) and model not in ALIAS_MODELS:
@@ -1614,7 +1642,7 @@ class HostedOnlyHooks(CustomLogger):
             and DEEPSEEK_MODEL != GLM_MODEL
             and has_image(data.get("messages") or data.get("input"))
         ):
-            data["model"] = DEEPSEEK_MODEL
+            data["model"] = DEEPSEEK_MODEL + suffix
         for tool in data.get("tools") or []:
             if isinstance(tool, dict) and tool.get("type") == "custom":
                 fmt = tool.get("format")

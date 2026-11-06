@@ -9,15 +9,17 @@
 # auto-mode classifier send their review request to the same endpoint as the
 # main model, so one local endpoint routes by model id and every tier, reviewer
 # and helper call stays on the two hosted models (no paid side-channel calls,
-# no OpenAI key). One proxy per client flavor, because each needs the models
-# under the same ids on a different dialect:
+# no OpenAI key). One shared proxy serves BOTH client flavors (#599): each
+# model gets an anthropic/ deployment (Messages, bare group name) and an
+# openai/ deployment (Responses/chat, group name suffixed #openai), and the
+# pre-call hook picks the dialect from the call type, so the clients keep
+# their bare model ids:
 #
-#   codex   127.0.0.1:${HOSTED_ONLY_CODEX_PROXY_PORT:-4147}   models -> openai/
-#           Responses passthrough on EnMaaS /v1. Used by
-#           scripts/codex-provider.zsh hosted-only.
-#   claude  127.0.0.1:${HOSTED_ONLY_CLAUDE_PROXY_PORT:-4148}  models -> anthropic/
-#           Messages on the EnMaaS root, same as claude-enmaas. Used by
-#           claude-hosted-only (zsh/functions/claude/providers/hosted-only.zsh).
+#   shared  127.0.0.1:${HOSTED_ONLY_CLAUDE_PROXY_PORT:-4148}  used by
+#           claude-hosted-only (zsh/functions/claude/providers/hosted-only.zsh)
+#           and scripts/codex-provider.zsh hosted-only alike.
+#           HOSTED_ONLY_CODEX_PROXY_PORT splits a second proxy off (same merged
+#           config) for testing.
 # Both load hosted_only_hooks.py (rits/ models only): strips the grammar vLLM
 # rejects from Codex's apply_patch, cuts default reasoning on Messages requests
 # that send no thinking field (Claude Code's auto-mode classifier), sends GLM
@@ -75,14 +77,24 @@ _hosted_only_knob() {
 # _hosted_only_proxy_vars <flavor>: sets _hop_* globals for the flavor.
 _hosted_only_proxy_vars() {
     case "$1" in
-        codex)  typeset -g _hop_port="$(_hosted_only_knob CODEX_PROXY_PORT 4147)" ;;
-        claude) typeset -g _hop_port="$(_hosted_only_knob CLAUDE_PROXY_PORT 4148)" ;;
+        codex|claude) : ;;
         *) print -ru2 -- 'hosted-only: flavor must be codex or claude.'; return 1 ;;
     esac
     typeset -g _hop_flavor="$1"
+    # One shared proxy serves both flavors (#599): the pre-call hook routes
+    # OpenAI-wire requests to the openai/ deployments with a #openai model-group
+    # suffix, so both clients keep their bare model ids on one port. Saves a
+    # whole LiteLLM process (~58 MB idle, up to ~350 MB loaded, 3.7 s import)
+    # per machine. HOSTED_ONLY_CODEX_PROXY_PORT still splits it off (defaults to
+    # the shared claude port); a split-off proxy serves the same merged config.
+    typeset -g _hop_port="$(_hosted_only_knob CLAUDE_PROXY_PORT 4148)"
+    [[ "$1" == codex ]] && typeset -g _hop_port="$(_hosted_only_knob CODEX_PROXY_PORT "$_hop_port")"
     local state="${XDG_STATE_HOME:-$HOME/.local/state}"
-    typeset -g _hop_runtime="$state/hosted-only-$1-$_hop_port"
-    typeset -g _hop_legacy_runtime="$state/glm-hybrid-$1-$_hop_port"   # pre-rename dir
+    typeset -g _hop_runtime="$state/hosted-only-$_hop_port"
+    # legacy runtime dirs (flavor-named before the merge, glm-hybrid before the
+    # rename) whose listeners the stop helper still recognizes
+    typeset -g -a _hop_legacy_runtimes
+    _hop_legacy_runtimes=("$state/glm-hybrid-$1-$_hop_port" "$state/hosted-only-$1-$_hop_port")
     typeset -g _hop_base="http://127.0.0.1:$_hop_port"
     typeset -g _hop_token="$(_hosted_only_knob PROXY_TOKEN hosted-only-local)"
     typeset -g _hop_glm="$(_hosted_only_knob GLM_MODEL "${GLM_HYBRID_MODEL:-rits/zai-org/glm-5-3}")"
@@ -97,20 +109,21 @@ _hosted_only_proxy_vars() {
     # deployment (claude flavor's claude-sonnet-5-5 alias) that get GLM's vision
     # reroute and fallback target.
     typeset -g _hop_fallback="$(_hosted_only_knob FALLBACK 1) $(_hosted_only_knob OUTAGE_REWRITE 1) $(_hosted_only_knob OUTAGE_RETRY_SECONDS 60) $(_hosted_only_knob OUTAGE_RETRY_MAX_SECONDS 600) $(_hosted_only_knob MAX_MODEL_LEN 1048576) $(_hosted_only_knob OUTPUT_RESERVE 512) $(_hosted_only_knob BYTES_PER_TOKEN 3) $(_hosted_only_knob MIN_OUTPUT 16000)"
-    if [[ "$_hop_flavor" == claude ]]; then
-        typeset -g _hop_aliases="$(_hosted_only_knob ALIAS_MODELS claude-sonnet-5-5)"
-    else
-        typeset -g _hop_aliases="$(_hosted_only_knob ALIAS_MODELS '')"
-    fi
+    # The merged config always serves the claude-sonnet-5-5 alias from the GLM
+    # (anthropic) deployment, so both flavors record the same value and the
+    # shared fingerprint stays flavor-independent.
+    typeset -g _hop_aliases="$(_hosted_only_knob ALIAS_MODELS claude-sonnet-5-5)"
     # LiteLLM request_timeout per deployment: a hung upstream (connection up,
     # no answer, no gateway 504) is cut at this many seconds so the outage
     # rewrite and the model fallback can fire instead of stalling the turn for
     # LiteLLM's 600 s default. Generous enough for 1M-token prompts (a 900k
-    # prefill took 98 s on the congested gateway).
-    typeset -g _hop_request_timeout="$(_hosted_only_knob REQUEST_TIMEOUT 300)"
+    # prefill took 98 s on the congested gateway). 300 made the first attempt
+    # plus the same-timeout fallback ~10 min before the reset-bearing answer
+    # (2026-11-06 audit); 180 keeps attempt + fallback inside client patience.
+    typeset -g _hop_request_timeout="$(_hosted_only_knob REQUEST_TIMEOUT 180)"
     # Image budget prune (hosted_only_hooks.py item 6): content bytes before
     # old inline images become path notes; days a pruned copy is kept.
-    typeset -g _hop_image_budget="$(_hosted_only_knob IMAGE_BUDGET_BYTES $((8 * 1024 * 1024)))"
+    typeset -g _hop_image_budget="$(_hosted_only_knob IMAGE_BUDGET_BYTES 2500000)"
     typeset -g _hop_image_cache_days="$(_hosted_only_knob IMAGE_CACHE_DAYS 1)"
 }
 
@@ -118,33 +131,46 @@ _hosted_only_proxy_config() {
     local enmaas="$(_hosted_only_knob ENMAAS_BASE_URL "${ENMAAS_API_BASE_URL:-https://api.enmaas.devshift.net}")"
     enmaas="${enmaas%/}"
     enmaas="${enmaas%/v1}"
-    local glm_params
-    if [[ "$_hop_flavor" == codex ]]; then
-        glm_params="      model: \"openai/$_hop_glm\"
-      api_base: \"$enmaas/v1\""
-    else
-        glm_params="      model: \"anthropic/$_hop_glm\"
+    # Both dialects of both models in one model_list (#599). The bare group
+    # names carry the anthropic/ deployments (/v1/messages); the #openai-suffixed
+    # groups carry the openai/ deployments (/v1, /v1/responses) and are chosen
+    # by the pre-call hook for OpenAI-wire call types, so a bare model_name
+    # shared by both dialects cannot make the router load-balance a Messages
+    # request onto an openai deployment.
+    local glm_anthropic="      model: \"anthropic/$_hop_glm\"
       api_base: \"$enmaas\""
-    fi
-    local ds_params="${glm_params//$_hop_glm/$_hop_deepseek}"
+    local glm_openai="      model: \"openai/$_hop_glm\"
+      api_base: \"$enmaas/v1\""
+    local ds_anthropic="${glm_anthropic//$_hop_glm/$_hop_deepseek}"
+    local ds_openai="${glm_openai//$_hop_glm/$_hop_deepseek}"
     local timeout_line="      request_timeout: $_hop_request_timeout"
     print -r -- "model_list:
   - model_name: \"$_hop_glm\"
     litellm_params:
-$glm_params
+$glm_anthropic
+      api_key: os.environ/ENMAAS_API_KEY
+$timeout_line
+  - model_name: \"$_hop_glm#openai\"
+    litellm_params:
+$glm_openai
       api_key: os.environ/ENMAAS_API_KEY
 $timeout_line
   - model_name: \"$_hop_deepseek\"
     litellm_params:
-$ds_params
+$ds_anthropic
+      api_key: os.environ/ENMAAS_API_KEY
+$timeout_line
+  - model_name: \"$_hop_deepseek#openai\"
+    litellm_params:
+$ds_openai
       api_key: os.environ/ENMAAS_API_KEY
 $timeout_line"
     # Claude Code only remaps aliases via ANTHROPIC_DEFAULT_*_MODEL; clients that
     # pass an explicit id (T3's picker sends claude-sonnet-5-5) would hit "Invalid
     # model name". Serve that id from GLM so the client keeps Sonnet 5.5 behavior.
-    [[ "$_hop_flavor" == claude ]] && print -r -- "  - model_name: \"claude-sonnet-5-5\"
+    print -r -- "  - model_name: \"claude-sonnet-5-5\"
     litellm_params:
-$glm_params
+$glm_anthropic
       api_key: os.environ/ENMAAS_API_KEY
 $timeout_line"
     print -r -- "litellm_settings:
@@ -171,7 +197,7 @@ $timeout_line"
     # are honored on every route; the request-level list still wins where it
     # does apply (responses/chat), and skips images.
     if [[ "$_hop_glm" != "$_hop_deepseek" ]]; then
-        print -r -- "  fallbacks: [{\"$_hop_glm\": [\"$_hop_deepseek\"]}, {\"$_hop_deepseek\": [\"$_hop_glm\"]}]"
+        print -r -- "  fallbacks: [{\"$_hop_glm\": [\"$_hop_deepseek\"]}, {\"$_hop_deepseek\": [\"$_hop_glm\"]}, {\"$_hop_glm#openai\": [\"$_hop_deepseek#openai\"]}, {\"$_hop_deepseek#openai\": [\"$_hop_glm#openai\"]}]"
     fi
     print -r -- "general_settings:
   master_key: os.environ/HOSTED_ONLY_PROXY_TOKEN"
@@ -313,9 +339,14 @@ _hosted_only_proxy_ensure() {
                 --config "$_hop_runtime/config.yaml" --host 127.0.0.1 --port "$_hop_port" --telemetry False || return 1
             # Boot wait: one dot per second so the (potentially minutes-long)
             # uv/litellm startup is visible progress, not a blank terminal.
-            local i
+            local i boot_max="${LLM_PROXY_SYNC_UP_TIMEOUT:-180}"
+            [[ "$boot_max" == <-> ]] || boot_max=180
+            # 90 s was not enough on a small host (the same LiteLLM took 96 s
+            # on WSL, see proxies.zsh); a miss left no fingerprint so every
+            # later sync re-labeled the proxy stale (2026-11-06 audit)
+            local -i boot_i
             print -nu2 -- "hosted-only: starting $_hop_flavor proxy on :$_hop_port "
-            for i in {1..90}; do
+            for (( boot_i = 0; boot_i < boot_max; boot_i++ )); do
                 curl -sf --max-time 2 "$health" -o /dev/null && break
                 print -nu2 -- .
                 sleep 1
@@ -336,27 +367,42 @@ _hosted_only_proxy_ensure() {
 }
 
 # _hosted_only_proxy_has_state: 0 when a proxy of the current flavor (set up
-# by _hosted_only_proxy_vars) left a fingerprint in either runtime dir, i.e. a
-# start failed because a live proxy differs, not because of a missing key.
+# by _hosted_only_proxy_vars) left a fingerprint in the current or a legacy
+# runtime dir, i.e. a start failed because a live proxy differs, not because of
+# a missing key.
 _hosted_only_proxy_has_state() {
-    [[ -f "$_hop_runtime/fingerprint" || -f "$_hop_legacy_runtime/fingerprint" ]]
+    local d
+    [[ -f "$_hop_runtime/fingerprint" ]] && return 0
+    for d in "${_hop_legacy_runtimes[@]}"; do
+        [[ -f "$d/fingerprint" ]] && return 0
+    done
+    return 1
 }
 
 # _hosted_only_proxy_stop <flavor>: stops only a listener whose command line
-# names this flavor's config, under the current or the legacy runtime dir.
+# names this proxy's config, under the current or a legacy runtime dir (the
+# flavor-named dirs before the merge, glm-hybrid before the rename).
 _hosted_only_proxy_stop() {
     _hosted_only_proxy_vars "$1" || return 1
-    local pid stopped=0 cmd
+    local pid stopped=0 cmd d
+    local -a fingerprints=("$_hop_runtime/fingerprint")
+    for d in "${_hop_legacy_runtimes[@]}"; do
+        fingerprints+=("$d/fingerprint")
+    done
     for pid in ${(f)"$(lsof -ti "tcp:$_hop_port" -sTCP:LISTEN 2>/dev/null)"}; do
         cmd="$(ps -o command= -p "$pid" 2>/dev/null)"
-        if [[ "$cmd" == *"$_hop_runtime/config.yaml"* || "$cmd" == *"$_hop_legacy_runtime/config.yaml"* ]]; then
+        if [[ "$cmd" == *"$_hop_runtime/config.yaml"* ]] \
+            || [[ "$cmd" == *"hosted-only-claude-$_hop_port/config.yaml"* ]] \
+            || [[ "$cmd" == *"hosted-only-codex-$_hop_port/config.yaml"* ]] \
+            || [[ "$cmd" == *"glm-hybrid-claude-$_hop_port/config.yaml"* ]] \
+            || [[ "$cmd" == *"glm-hybrid-codex-$_hop_port/config.yaml"* ]]; then
             kill "$pid" 2>/dev/null && stopped=1
         else
             print -ru2 -- "hosted-only: port $_hop_port is held by another process (pid $pid); leaving it alone."
             return 1
         fi
     done
-    rm -f "$_hop_runtime/fingerprint" "$_hop_legacy_runtime/fingerprint"
+    rm -f "${fingerprints[@]}" 2>/dev/null
     (( stopped )) && print -ru2 -- "hosted-only: stopped $_hop_flavor proxy on port $_hop_port."
     return 0
 }

@@ -18,23 +18,33 @@ source "$repo/scripts/hosted-only-proxy.zsh"
 
 # Defaults
 _hosted_only_proxy_vars codex
-[[ "$_hop_port" == 4147 && "$_hop_runtime" == "$tmp/state/hosted-only-codex-4147" ]] || fail "codex defaults: $_hop_port $_hop_runtime"
-[[ "$_hop_legacy_runtime" == "$tmp/state/glm-hybrid-codex-4147" ]] || fail "legacy dir: $_hop_legacy_runtime"
+[[ "$_hop_port" == 4148 && "$_hop_runtime" == "$tmp/state/hosted-only-4148" ]] || fail "codex defaults (shared port, #599): $_hop_port $_hop_runtime"
+[[ "${_hop_legacy_runtimes[2]}" == "$tmp/state/hosted-only-codex-4148" ]] || fail "legacy flavor dir: ${_hop_legacy_runtimes[*]}"
 [[ "$_hop_token" == hosted-only-local ]] || fail "token default: $_hop_token"
 _hosted_only_proxy_vars claude
 [[ "$_hop_port" == 4148 ]] || fail "claude port: $_hop_port"
+HOSTED_ONLY_CODEX_PROXY_PORT=4147 _hosted_only_proxy_vars codex
+[[ "$_hop_port" == 4147 && "$_hop_runtime" == "$tmp/state/hosted-only-4147" ]] || fail "split-mode codex port: $_hop_port $_hop_runtime"
+unset HOSTED_ONLY_CODEX_PROXY_PORT
 _hosted_only_proxy_vars bogus 2>/dev/null && fail "bogus flavor accepted"
 
-# Config: both models, hooks callback, no OpenAI/luna route, claude sonnet alias
+# Config: both models in BOTH dialects (#599 merge), hooks callback, no OpenAI/
+# luna route, claude sonnet alias served regardless of flavor
 local cfg
+_hosted_only_proxy_vars claude
 cfg=$(_hosted_only_proxy_config)
 [[ "$cfg" == *'"anthropic/rits/zai-org/glm-5-3"'* && "$cfg" == *'DeepSeek-V4.1-Flash-1017'* ]] || fail "claude config lacks hosted models: $cfg"
 [[ "$cfg" == *'hosted_only_hooks.proxy_handler_instance'* && "$cfg" == *'litellm_usage_log.proxy_handler_instance'* ]] || fail "callbacks missing"
 [[ "$cfg" == *'os.environ/HOSTED_ONLY_PROXY_TOKEN'* && "$cfg" == *'claude-sonnet-5-5'* ]] || fail "claude config shape"
-[[ "$cfg" != *luna* && "$cfg" != *OPENAI* && "$cfg" != *api.openai.com* ]] || fail "OpenAI route leaked into config"
+[[ "$cfg" != *luna* && "$cfg" != *api.openai.com* ]] || fail "OpenAI route leaked into config"
 _hosted_only_proxy_vars codex
 cfg=$(_hosted_only_proxy_config)
-[[ "$cfg" == *'"openai/rits/zai-org/glm-5-3"'* && "$cfg" == *'/v1"'* && "$cfg" != *claude-sonnet-5-5* ]] || fail "codex config shape: $cfg"
+[[ "$cfg" == *'"openai/rits/zai-org/glm-5-3"'* && "$cfg" == *'/v1"'* ]] || fail "codex dialect missing from merged config: $cfg"
+[[ "$cfg" == *'glm-5-3#openai'* && "$cfg" == *'DeepSeek-V4.1-Flash-1017#openai'* ]] || fail "suffixed groups missing: $cfg"
+[[ "$cfg" == *'claude-sonnet-5-5'* ]] || fail "merged config must serve the claude alias for both flavors: $cfg"
+[[ "${cfg##*model_name: \"rits/zai-org/glm-5-3\"}" == *'#openai'* ]] || fail "bare glm group and suffixed group must be distinct entries: $cfg"
+# the anthropic and openai deployments of the same model must not share a group
+[[ "$(grep -c 'model_name:' <<< "$cfg")" == 5 ]] || fail "merged config must have 5 deployments (glm, glm#openai, ds, ds#openai, alias): $cfg"
 
 # LiteLLM upstream retries: router_settings.num_retries (default 0), knob changes config
 [[ "$cfg" == *$'router_settings:\n  num_retries: 0'* ]] || fail "router retry setting missing: $cfg"
@@ -56,9 +66,10 @@ _hosted_only_proxy_vars codex
 HOSTED_ONLY_FALLBACK=0 HOSTED_ONLY_MAX_MODEL_LEN=999999 _hosted_only_proxy_vars codex
 [[ "$_hop_fallback" == "0 1 60 600 999999 512 3 16000" ]] || fail "HOSTED_ONLY_FALLBACK / MAX_MODEL_LEN not read: $_hop_fallback"
 _hosted_only_proxy_vars codex
-# GLM alias ids and the per-deployment request timeout are flavor-dependent knobs
-[[ "$_hop_aliases" == "" ]] || fail "codex flavor has no GLM alias by default: $_hop_aliases"
-[[ "$_hop_request_timeout" == 300 ]] || fail "request timeout default: $_hop_request_timeout"
+# The merged config serves the claude alias for both flavors, so the alias knob
+# (and the fingerprint it feeds) is flavor-independent
+[[ "$_hop_aliases" == "claude-sonnet-5-5" ]] || fail "codex flavor alias default (merged): $_hop_aliases"
+[[ "$_hop_request_timeout" == 180 ]] || fail "request timeout default: $_hop_request_timeout"
 _hosted_only_proxy_vars claude
 [[ "$_hop_aliases" == "claude-sonnet-5-5" ]] || fail "claude flavor alias default: $_hop_aliases"
 HOSTED_ONLY_ALIAS_MODELS=x,y _hosted_only_proxy_vars claude
@@ -72,7 +83,7 @@ _hosted_only_proxy_vars codex
 HOSTED_ONLY_IMAGE_BUDGET_BYTES=123 HOSTED_ONLY_IMAGE_CACHE_DAYS=2 _hosted_only_proxy_vars codex
 [[ "$_hop_image_budget" == 123 && "$_hop_image_cache_days" == 2 ]] || fail "image knobs: $_hop_image_budget $_hop_image_cache_days"
 _hosted_only_proxy_vars codex
-[[ "$_hop_image_budget" == 8388608 && "$_hop_image_cache_days" == 1 ]] || fail "image knob defaults: $_hop_image_budget $_hop_image_cache_days"
+[[ "$_hop_image_budget" == 2500000 && "$_hop_image_cache_days" == 1 ]] || fail "image knob defaults: $_hop_image_budget $_hop_image_cache_days"
 
 # Dry run (HOSTED_ONLY_CHECK_OUT): "down|fresh|stale <fp> <token hash>", return 1, nothing started or written.
 (
@@ -112,7 +123,7 @@ HTTPServer(("127.0.0.1", int(sys.argv[1])), H).serve_forever()' "$chk_port" &
 
 # New knob names win; retired GLM_HYBRID_* names still work
 HOSTED_ONLY_CODEX_PROXY_PORT=4157 _hosted_only_proxy_vars codex
-[[ "$_hop_port" == 4157 && "$_hop_runtime" == *hosted-only-codex-4157 ]] || fail "HOSTED_ONLY port: $_hop_port"
+[[ "$_hop_port" == 4157 && "$_hop_runtime" == *hosted-only-4157 ]] || fail "HOSTED_ONLY port: $_hop_port $_hop_runtime"
 GLM_HYBRID_CODEX_PROXY_PORT=4167 GLM_HYBRID_MODEL=rits/x/old GLM_HYBRID_PROXY_TOKEN=oldtok _hosted_only_proxy_vars codex
 [[ "$_hop_port" == 4167 && "$_hop_glm" == rits/x/old && "$_hop_token" == oldtok ]] || fail "legacy knobs ignored: $_hop_port $_hop_glm $_hop_token"
 GLM_HYBRID_CODEX_PROXY_PORT=4167 HOSTED_ONLY_CODEX_PROXY_PORT=4177 HOSTED_ONLY_GLM_MODEL=rits/x/new GLM_HYBRID_MODEL=rits/x/old _hosted_only_proxy_vars codex
@@ -124,7 +135,7 @@ local port=4197 base="$tmp/state"
 export HOSTED_ONLY_CODEX_PROXY_PORT=$port
 _hosted_only_proxy_vars codex
 local dir pid i
-for dir in "$_hop_runtime" "$_hop_legacy_runtime"; do
+for dir in "$_hop_runtime" "${_hop_legacy_runtimes[@]}"; do
     mkdir -p "$dir"; : > "$dir/config.yaml"; print x > "$dir/fingerprint"
     python3 - "$port" "$dir/config.yaml" <<'EOF' &
 import socket, sys, time
@@ -833,6 +844,31 @@ h.LAST_LIMIT_KIND[GLM] = "quota"; h.LAST_LIMIT_RESET[GLM] = time.time() + 3600
 assert h.fallback_target(fb) is None, "no fallback while the shared monthly quota is out"
 h.LAST_LIMIT_RESET[GLM] = time.time() - 1
 assert h.fallback_target(fb) == DS, "quota window over: fallback resumes"
+
+# merged-proxy dialect routing (#599): openai call types get the #openai group,
+# /v1/messages keeps the bare anthropic group; every rewrite keeps the dialect
+hook0 = h.HostedOnlyHooks()
+req = {"model": GLM, "messages": [{"role": "user", "content": "hi"}], "max_tokens": 100}
+out = asyncio.run(hook0.async_pre_call_hook(None, None, req, "aresponses"))
+assert out["model"] == GLM + "#openai", out["model"]
+assert out.get("fallbacks") == [DS + "#openai"], out.get("fallbacks")
+req = {"model": GLM, "messages": [{"role": "user", "content": "hi"}], "max_tokens": 100}
+out = asyncio.run(hook0.async_pre_call_hook(None, None, req, "anthropic_messages"))
+assert out["model"] == GLM, out["model"]
+assert out.get("fallbacks") == [DS], out.get("fallbacks")
+# vision reroute keeps the dialect (import-time env disabled it; enable here)
+h.VISION_FALLBACK = True
+pic = {"model": GLM, "messages": [{"role": "user", "content": [{"type": "image", "source": {"type": "base64", "data": "A" * 64}}]}], "max_tokens": 100}
+out = asyncio.run(hook0.async_pre_call_hook(None, None, pic, "aresponses"))
+assert out["model"] == DS + "#openai", out["model"]
+h.VISION_FALLBACK = False
+# clamp gates on the bare id behind a suffixed one
+suffixed = {"model": GLM + "#openai", "messages": est(1048600), "max_tokens": 8192}
+try:
+    h.clamp_output(suffixed)
+    raise SystemExit("suffixed over-limit must refuse")
+except h.HTTPException as e:
+    assert e.status_code == 400, e.detail
 EOF
 
 print -r -- "ok hosted-only-proxy"
