@@ -128,24 +128,30 @@ except Exception:
 # multi-second import+boot window was refused (ECONNREFUSED, "a firewall or
 # proxy may be blocking it"). With SO_REUSEPORT the restart starts the new
 # proxy ALONGSIDE the old one and kills the old only once the new listener is
-# up, so the port never stops accepting. litellm 1.97's CLI does not expose
-# uvicorn's reuse_port, so force it here (this file is the proxy's
-# sitecustomize; the DNS part above stays env-gated, this patch is always on).
-# Requires every listener on the port to set it: the first restart after this
+# up, so the port never stops accepting.
+#
+# uvicorn.run() has no reuse_port option (an earlier revision passed one and
+# every start died with "unexpected keyword argument"); Config.bind_socket()
+# builds its own socket and sets only SO_REUSEADDR right before bind. So set
+# SO_REUSEPORT at that same moment: whenever the process enables SO_REUSEADDR
+# on a socket, enable SO_REUSEPORT too. This file is the proxy's own
+# sitecustomize, so the patch stays inside that process; the DoH part above
+# stays env-gated, this one is always on.
+# Needs every listener on the port to set it: the first restart after this
 # rolls out still pays the old stop-then-start window once (the running proxy
 # predates the patch), every later one is zero-gap.
 try:
-    import uvicorn as _uvicorn
+    if hasattr(socket, 'SO_REUSEPORT'):
+        _real_setsockopt = socket.socket.setsockopt
 
-    _real_uvicorn_run = _uvicorn.run
+        def _setsockopt(self, level, optname, *rest):
+            _real_setsockopt(self, level, optname, *rest)
+            if level == socket.SOL_SOCKET and optname == socket.SO_REUSEADDR and rest and rest[0]:
+                try:
+                    _real_setsockopt(self, socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+                except OSError:
+                    pass
 
-    def _run_with_reuse_port(*args, **kwargs):
-        try:
-            kwargs.setdefault('reuse_port', True)
-        except Exception:
-            pass
-        return _real_uvicorn_run(*args, **kwargs)
-
-    _uvicorn.run = _run_with_reuse_port
+        socket.socket.setsockopt = _setsockopt
 except Exception:
     pass

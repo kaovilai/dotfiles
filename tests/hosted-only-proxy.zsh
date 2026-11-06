@@ -225,6 +225,40 @@ UVSH
 ) || exit 1
 unset HOSTED_ONLY_CLAUDE_PROXY_PORT ENMAAS_API_KEY
 
+# The runtime shim itself (dns_fallback.py, installed as sitecustomize.py) must
+# let a second listener share the port: uvicorn sets SO_REUSEADDR right before
+# bind, and the shim adds SO_REUSEPORT at that moment. A first revision passed
+# reuse_port to uvicorn.run (no such option) and every start died with
+# "unexpected keyword argument" — the stubbed-uv swap test above never ran the
+# shim, so this exercises it directly. Without the shim the second bind fails.
+python3 -I - "$repo/scripts/dns_fallback.py" <<'EOF' || fail "shim SO_REUSEPORT"
+import importlib.machinery, importlib.util, socket, sys
+def listener(port=0):
+    s = socket.socket()
+    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)   # what uvicorn does
+    s.bind(("127.0.0.1", port)); s.listen(1)
+    return s
+a = listener()
+port = a.getsockname()[1]
+try:
+    listener(port).close()
+    plain = True        # platform lets REUSEADDR alone share (not expected)
+except OSError:
+    plain = False
+assert not plain, "precondition: REUSEADDR alone must NOT share the port, else the test proves nothing"
+a.close()
+path = sys.argv[1]
+spec = importlib.util.spec_from_file_location("shim", path, loader=importlib.machinery.SourceFileLoader("shim", path))
+mod = importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)   # installs the setsockopt hook
+a = listener(); port = a.getsockname()[1]
+b = listener(port)      # must succeed now
+assert b.getsockname()[1] == port
+b.close(); a.close()
+# a connecting socket that never sets REUSEADDR is untouched
+c = socket.socket(); c.close()
+print("ok")
+EOF
+
 # New knob names win; retired GLM_HYBRID_* names still work
 HOSTED_ONLY_CODEX_PROXY_PORT=4157 _hosted_only_proxy_vars codex
 [[ "$_hop_port" == 4157 && "$_hop_runtime" == *hosted-only-4157 ]] || fail "HOSTED_ONLY port: $_hop_port $_hop_runtime"
