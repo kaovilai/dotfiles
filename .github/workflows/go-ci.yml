@@ -4,6 +4,10 @@ name: Go CI
 # launchers, so it gets the same treatment as the shell code: syntax/quality
 # gates plus a vulnerability scan. govulncheck covers the module and the Go
 # standard library (Dependabot's Go alerts only see module requirements).
+#
+# The build matrix covers `stable` and the version declared in go.mod: the
+# launcher builds with whatever `go` is installed, so code that needs a newer
+# toolchain must fail here, not in the shell.
 on:
   workflow_dispatch:
   pull_request:
@@ -27,18 +31,25 @@ concurrency:
 jobs:
   test:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        go: [stable, "1.21"]
     defaults:
       run:
         working-directory: scripts/hosted-only-go
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+        with:
+          # No later step needs authenticated Git access.
+          persist-credentials: false
 
       - name: Set up Go
         uses: actions/setup-go@v7
         with:
-          go-version: stable
-          cache-dependency-path: scripts/hosted-only-go/go.mod
+          go-version: ${{ matrix.go }}
+          cache: false
 
       - name: gofmt
         run: |
@@ -56,6 +67,7 @@ jobs:
         run: go test ./...
 
       - name: govulncheck
+        if: matrix.go == 'stable'
         run: |
           go install golang.org/x/vuln/cmd/govulncheck@latest
           "$(go env GOPATH)/bin/govulncheck" ./...

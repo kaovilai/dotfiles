@@ -53,6 +53,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+        with:
+          # Analysis needs no authenticated Git access.
+          persist-credentials: false
 
       - name: Set up Go
         if: matrix.language == 'go'
