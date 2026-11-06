@@ -408,11 +408,12 @@ _llm_proxy_sync_tables() {
         copilot _llm_proxy_check_copilot
         vertex _llm_proxy_check_vertex openai _llm_proxy_check_openai enmaas _llm_proxy_check_enmaas
         glm-claude _llm_proxy_check_glm_claude glm-codex _llm_proxy_check_glm_codex)
+    local _ho_shared_port="$(_hosted_only_knob CLAUDE_PROXY_PORT 4148)"
     port=(
         copilot "${COPILOT_API_PORT:-4141}"
         vertex "${CLAUDE_VERTEX_PROXY_PORT:-4142}" openai "${CLAUDE_OPENAI_PROXY_PORT:-4145}"
         enmaas "$(_claude_enmaas_port 2>/dev/null || print 4146)"
-        glm-claude "$(_hosted_only_knob CLAUDE_PROXY_PORT 4148)" glm-codex "$(_hosted_only_knob CODEX_PROXY_PORT 4147)")
+        glm-claude "$_ho_shared_port" glm-codex "$(_hosted_only_knob CODEX_PROXY_PORT "$_ho_shared_port")")
 }
 
 # llm-proxy-sync [--dry-run] [--quiet]
@@ -441,9 +442,37 @@ llm-proxy-sync() {
     local -A fn chk port
     _llm_proxy_sync_tables
     local -a order=(copilot vertex openai enmaas glm-codex glm-claude)
+    # the always-on set: a sync records who was listening, and the next sync
+    # restarts a recorded proxy whose listener is gone (crash, OOM kill, a
+    # failed boot). vertex/openai are on demand, so they only get the marker,
+    # never a restart from it (2026-11-06 audit: a dead proxy was invisible to
+    # fleet-sync; nothing supervises the detached processes)
+    local -a always_on=(copilot enmaas glm-codex glm-claude)
+    local dir; dir=$(_llm_proxy_watch_dir)
+    mkdir -p "$dir" || return 1
     local t verdict why rc=0
     for t in $order; do
-        [[ -n "$(_claude_listen_pids "${port[$t]}")" ]] || continue
+        if [[ -n "$(_claude_listen_pids "${port[$t]}")" ]]; then
+            print -r -- "${port[$t]}" >| "$dir/up-$t"   # non-empty: the port it was listening on
+        elif [[ -s "$dir/up-$t" ]] && (( $(_llm_proxy_now) - $(_llm_marker_mtime "$dir/up-$t") <= 90000 )); then
+            # marker fresh (<= 25 h: the hourly sync rewrites it while up, so a
+            # crash leaves one at most an hour old). Older = a deliberate stop
+            # that has aged out; leave it down.
+            if (( ${always_on[(Ie)$t]} )); then
+                if (( dry )); then
+                    print -ru2 -- "== $t (:${port[$t]}) was up last sync, listener gone; would restart it"
+                elif ${fn[$t]} || _llm_proxy_sync_confirm "${port[$t]}"; then
+                    print -ru2 -- "== $t (:${port[$t]}) was up last sync, listener gone; restarted"
+                    print -r -- "${port[$t]}" >| "$dir/up-$t"
+                else
+                    print -ru2 -- "== $t (:${port[$t]}) was up last sync, listener gone; restart did not bring it back; run: ${fn[$t]}"
+                    rc=1
+                fi
+            fi
+            continue
+        else
+            continue
+        fi
         verdict=$(${chk[$t]})
         case "$verdict" in
             fresh) (( quiet )) || print -ru2 -- "== $t (:${port[$t]}) up to date"; continue ;;
@@ -482,8 +511,13 @@ llm-proxy-sync() {
 # --- idle watcher -----------------------------------------------------------
 # State (one pid file and log per proxy) lives in the llm-proxy-sync state dir.
 _llm_proxy_watch_dir() { print -r -- "${XDG_STATE_HOME:-$HOME/.local/state}/llm-proxy-sync"; }
+# _llm_marker_mtime <file>: epoch mtime, portable across BSD/Linux stat
+_llm_marker_mtime() { stat -f %m "$1" 2>/dev/null || stat -c %Y "$1" 2>/dev/null || print 0 }
 _llm_proxy_now() { zmodload zsh/datetime 2>/dev/null; print -r -- "$EPOCHSECONDS"; }
-_llm_proxy_watch_pause() { sleep 0.5; }
+# 2 s, not 0.5: each poll spawns lsof (~0.08 s CPU each), and the loop needs
+# two consecutive idle polls anyway, so detection moves 2 s -> 4 s next to a
+# 15-90 s restart. ~0.04 core per watcher instead of ~0.16 (2026-11-06 audit).
+_llm_proxy_watch_pause() { sleep 2; }
 
 # _llm_proxy_watch_alive <name>: true while a watcher for <name> runs. The pid
 # must also still be an llm-proxy-watch process, so a recycled pid does not count.
@@ -553,8 +587,12 @@ llm-proxy-watch() {
     local rc=0
     {
         _llm_proxy_watch_log "$t" "serving a request; waiting for an idle moment (gives up after ${timeout}s)"
+        local -i iter=0
         while true; do
-            if [[ -z "$(_claude_listen_pids "${port[$t]}")" ]]; then
+            # the listener check spawns lsof like the serving check does, so it
+            # runs every 10th iteration only (the health check below already
+            # reports a dead proxy); iter is the poll counter
+            if (( iter % 10 == 0 )) && [[ -z "$(_claude_listen_pids "${port[$t]}")" ]]; then
                 _llm_proxy_watch_log "$t" "proxy is not running any more; nothing to do"
                 break
             fi
@@ -563,6 +601,7 @@ llm-proxy-watch() {
                 rc=1
                 break
             fi
+            (( ++iter ))
             if _claude_port_serving "${port[$t]}"; then idle=0; else (( ++idle )); fi
             if (( idle >= 2 )); then
                 verdict=$(${chk[$t]})

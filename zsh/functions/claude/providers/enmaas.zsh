@@ -452,9 +452,11 @@ claude-enmaas() (
     local token base="http://127.0.0.1:${port}" config service
     local litellm_version="${CLAUDE_OPENAI_PROXY_LITELLM_VERSION:-1.97.0}"
     local fastapi_version="${CLAUDE_OPENAI_PROXY_FASTAPI_VERSION:-0.136.3}"
-    local timeout="${CLAUDE_ENMAAS_PROXY_START_TIMEOUT:-60}"
-    [[ "$timeout" == <-> && "$timeout" -gt 0 && "$timeout" -le 600 ]] || {
-        print -ru2 -- 'claude-enmaas: CLAUDE_ENMAAS_PROXY_START_TIMEOUT must be 1 through 600 seconds.'
+    # 60 s killed a booting proxy on small hosts: the same LiteLLM needed 96 s
+    # on WSL (proxies.zsh documents it), so every launch there failed (audit)
+    local timeout="${CLAUDE_ENMAAS_PROXY_START_TIMEOUT:-180}"
+    [[ "$timeout" == <-> && "$timeout" -gt 0 && "$timeout" -le 900 ]] || {
+        print -ru2 -- 'claude-enmaas: CLAUDE_ENMAAS_PROXY_START_TIMEOUT must be 1 through 900 seconds.'
         return 1
     }
     _claude_enmaas_hook_env || return 1
@@ -537,7 +539,7 @@ _claude_enmaas_codex_proxy() (
     _claude_enmaas_proxy_program > "$tmp/proxy.py" || return 1
     service=$(print -rn -- "$config" | python3 "$tmp/proxy.py" ensure "$port" \
         "${CLAUDE_OPENAI_PROXY_LITELLM_VERSION:-1.97.0}" "${CLAUDE_OPENAI_PROXY_FASTAPI_VERSION:-0.136.3}" \
-        "${CLAUDE_ENMAAS_PROXY_START_TIMEOUT:-60}" "$glm" "$ds" "${glm}#responses" "${ds}#responses") || return 1
+        "${CLAUDE_ENMAAS_PROXY_START_TIMEOUT:-180}" "$glm" "$ds" "${glm}#responses" "${ds}#responses") || return 1
     jq -nc --argjson s "$service" --arg port "$port" --arg glm "$glm" --arg ds "$ds" \
         '{token: $s.token, port: ($port | tonumber), glm: $glm, deepseek: $ds}'
 )
