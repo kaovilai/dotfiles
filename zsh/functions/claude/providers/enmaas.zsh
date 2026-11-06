@@ -287,8 +287,11 @@ claude-enmaas() (
             return 1
         }
     done
-    [[ -n "${ENMAAS_API_BASE_URL-}" && -n "${ENMAAS_API_KEY-}" ]] || {
-        print -ru2 -- 'claude-enmaas: set ENMAAS_API_BASE_URL and ENMAAS_API_KEY in your environment.'
+    # The gateway has a documented default (same one every other path uses);
+    # requiring ENMAAS_API_BASE_URL here made a key-only credentials file
+    # (headless machines) unusable.
+    [[ -n "${ENMAAS_API_KEY-}" ]] || {
+        print -ru2 -- 'claude-enmaas: set ENMAAS_API_KEY in your environment.'
         return 1
     }
     # Reject control characters before handing the key to curl config parsing.
@@ -297,7 +300,7 @@ claude-enmaas() (
         return 1
     }
     local root port
-    root=$(_claude_enmaas_root "$ENMAAS_API_BASE_URL") || return 1
+    root=$(_claude_enmaas_root "${ENMAAS_API_BASE_URL:-https://api.enmaas.devshift.net}") || return 1
     port=$(_claude_enmaas_port) || return 1
 
     local _claude_enmaas_tmp="" _claude_enmaas_claude_pid=""
