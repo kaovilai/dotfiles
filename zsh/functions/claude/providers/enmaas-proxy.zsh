@@ -10,6 +10,7 @@ import json
 import os
 from pathlib import Path
 import secrets
+import shutil
 import signal
 import socket
 import stat
@@ -233,17 +234,18 @@ def proxy_digest(files):
 
 
 def go_impl():
-    # LiteLLM is the default for EnMaaS: this flavor serves Claude Code over
-    # /v1/messages for every catalog model, GPT/Gemini included, and only
-    # LiteLLM converts Messages <-> Chat/Responses (tools and streaming). The Go
-    # proxy forwards bodies without translating, so it is opt-in here
-    # (CLAUDE_ENMAAS_PROXY_IMPL=go or LLM_PROXY_IMPL=go) and answers a
-    # cross-dialect request with an actionable 400. Hosted-only, whose models
-    # all speak the Anthropic dialect natively, defaults to Go. `auto` is
-    # litellm for EnMaaS until the Go proxy can translate.
+    # Go is the default for EnMaaS too (kaovilai/dotfiles issue 602): this flavor
+    # serves Claude Code over /v1/messages for every catalog model, GPT/Gemini
+    # included, and the Go proxy now converts Messages <-> chat/Responses itself
+    # (translate*.go: tools, streaming, Gemini thought signatures), verified live
+    # against the gateway. `auto` (the default) is go when a go toolchain is
+    # installed, else litellm; CLAUDE_ENMAAS_PROXY_IMPL / LLM_PROXY_IMPL=litellm
+    # is the escape hatch. Mirrored by _claude_enmaas_impl in proxies.zsh.
     impl = (os.environ.get('CLAUDE_ENMAAS_PROXY_IMPL')
-            or os.environ.get('LLM_PROXY_IMPL') or 'litellm').strip().lower()
-    return 'litellm' if impl == 'auto' else impl
+            or os.environ.get('LLM_PROXY_IMPL') or 'auto').strip().lower()
+    if impl in ('', 'auto'):
+        return 'go' if shutil.which('go') else 'litellm'
+    return impl
 
 
 def go_source():

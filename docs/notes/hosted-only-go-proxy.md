@@ -1,10 +1,12 @@
 # Go proxy for the hosted-only and EnMaaS launchers
 
 The stdlib-only Go binary in `scripts/hosted-only-go` is the **default** proxy
-for the hosted-only launchers (`claude-hosted-only`, `codex-hosted-only` and
-their T3 launchers); `litellm[proxy]` stays as the escape hatch. EnMaaS
-(`claude-enmaas`, :4146) keeps LiteLLM by default and runs Go on request — see
-"Why EnMaaS stays on LiteLLM" below.
+for every launcher: the hosted-only ones (`claude-hosted-only`,
+`codex-hosted-only` and their T3 launchers) and EnMaaS (`claude-enmaas`,
+:4146). `litellm[proxy]` stays as the escape hatch (`=litellm`) for a machine
+without a go toolchain and for anything the Go proxy gets wrong. EnMaaS needed
+the Messages <-> chat/Responses translators first — see "EnMaaS: dialect
+translation" below.
 
 It serves both current proxies from one binary:
 
@@ -27,9 +29,9 @@ starts in milliseconds.
 
 | knob | effect |
 |---|---|
-| (unset) | hosted-only: `auto` = go when a go toolchain is installed, else litellm. EnMaaS: litellm |
+| (unset) | both: `auto` = go when a go toolchain is installed, else litellm |
 | `HOSTED_ONLY_PROXY_IMPL=litellm\|go\|auto` | the hosted-only launchers (also the retired `GLM_HYBRID_PROXY_IMPL`) |
-| `CLAUDE_ENMAAS_PROXY_IMPL=litellm\|go` | the EnMaaS controller |
+| `CLAUDE_ENMAAS_PROXY_IMPL=litellm\|go\|auto` | the EnMaaS controller |
 | `LLM_PROXY_IMPL=litellm\|go` | every proxy at once; a per-launcher knob beats it |
 
 ```zsh
@@ -174,7 +176,9 @@ the route table. Python hooks and the DoH shim are not installed on this path.
 
 ## Known differences from the LiteLLM path
 
-- **No dialect translation** (the reason EnMaaS stays on LiteLLM, below).
+- Dialect translation exists for **Messages clients only** (the EnMaaS case,
+  below); chat/Responses clients keep forwarding to deployments of their own
+  dialect and are refused with a 400 for an Anthropic-dialect one.
 - **Drift diagnostics** and the LiteLLM router `reuse:last-reset` path.
 - `cost` is not computed (LiteLLM's `model_cost`); `llm-usage` tolerates it.
 
@@ -201,22 +205,53 @@ stop waits 15 s before escalating to SIGKILL. A response that takes longer than
 the 10 s budget is still cut — the drain is a bound, not a guarantee for long
 streams.
 
-## Why EnMaaS stays on LiteLLM
+## EnMaaS: dialect translation
 
 The EnMaaS flavor serves Claude Code over `/v1/messages` for every catalog
-model, GPT and Gemini included. Those are chat/Responses deployments, so
-something must convert Messages <-> Chat/Responses — tools and streaming
-included. LiteLLM does; this proxy forwards bodies, it does not translate. Hosted-only is
-unaffected: GLM and DeepSeek speak the Anthropic dialect natively, and the Codex
-clients speak the OpenAI wire to the `#openai` deployments.
+model, GPT and Gemini included. Those are chat (24 routes today) or, when pinned
+with `CLAUDE_ENMAAS_MODEL_DIALECTS`, Responses deployments, so something must
+convert Messages <-> chat/Responses — tools and streaming included. LiteLLM did;
+since the translators the Go proxy does it itself, which is what let EnMaaS
+default to Go and LiteLLM retire.
 
-With the Go impl on EnMaaS, a request whose client dialect does not match the
-deployment's is refused with an actionable 400 naming
-`CLAUDE_ENMAAS_PROXY_IMPL=litellm`, instead of forwarding a body the upstream
-cannot use and handing the client an answer it cannot parse.
-`tests/claude-enmaas-proxy.zsh` runs the real-launcher scenarios against both
-impls and asserts exactly this boundary. The EnMaaS default flips to Go when the
-proxy can translate.
+- `translate.go` — the `translator` contract (`Request`, `Response`, `Stream`,
+  `Error`), the shared SSE reader and the status -> Anthropic error-type map.
+- `translate_chat.go` / `translate_responses.go` — one translator instance per
+  request. Server wiring is in `server.go` and `translate_server.go`: a Messages
+  client on a chat/Responses deployment is bridged instead of refused, errors
+  come back Anthropic-shaped, a translatable fallback is translated before the
+  primary answer is given up (a failed translation means no fallback, never an
+  untranslated Messages body), and `anthropic-beta` only reaches Anthropic
+  deployments.
+
+Behaviors found by running it against the real gateway (2026-11-07), not by
+unit tests:
+
+- **`max_completion_tokens`** is the default for chat deployments: `gpt-6-sol`
+  rejects `max_tokens`; gemini-3.x, gpt-4o-mini and gpt-5.x all accept the new
+  name. Self-hosted `rits/` ids keep `max_tokens`.
+- **Gemini 3 thought signatures.** Every tool call carries
+  `extra_content.google.thought_signature` and the next turn is a 400 unless it
+  is echoed back. A Messages `tool_use` block has no slot for it, so it rides in
+  the tool_use id (`<id>__thought__<base64url>`), is split again on the request
+  side, and the matching tool message carries the original id.
+- **gpt-6-\* want function tools on `/v1/responses`.** On that exact 400 the
+  proxy retries once through the Responses translator and remembers the model,
+  so only the first request pays the failed chat call.
+
+Verified live over gpt-4o-mini, gpt-5-mini, gpt-5.5, gpt-6-sol, gpt-6-luna,
+codex-auto-review, gemini-3.7-flash, gemini-3.8-flash and gemini-3.1-pro-preview
+(plain, stream, tool call, tool_result follow-up, parallel tools: 48/49, the
+miss being a preview model that emitted no tool call and passed on rerun), and
+with the real Claude Code client (`-p`, Read tool) on gpt-5.5 and
+gemini-3.7-flash. `tests/claude-enmaas-proxy.zsh` runs the offline-gateway
+scenarios against both impls and asserts each model reaches the gateway on its
+own dialect's endpoint.
+
+Known limits: reasoning/thinking blocks are dropped in both directions; a tool
+call whose name arrives in a later stream chunk than its id starts with an empty
+name; a signature that arrives in a later chunk than the tool call's id cannot
+be added to an already-emitted `tool_use` block.
 
 ## Tests
 

@@ -13,10 +13,12 @@ source "$repo/scripts/hosted-only-proxy.zsh" || fail "hosted-only-proxy.zsh does
 
 # The EnMaaS restart path must pick the same impl the controller does: GO and a
 # padded " go " are go (the controller lowercases and trims), the default and
-# `auto` are litellm. A mismatch sent a Go proxy down the kill-then-start path.
+# `auto` are go when a go toolchain is installed (else litellm). A mismatch sent a Go proxy down the kill-then-start path.
 ( unset CLAUDE_ENMAAS_PROXY_IMPL LLM_PROXY_IMPL
-  [[ "$(_claude_enmaas_impl)" == litellm ]] || exit 1
-  [[ "$(CLAUDE_ENMAAS_PROXY_IMPL=auto _claude_enmaas_impl)" == litellm ]] || exit 2
+  local auto=litellm; (( $+commands[go] )) && auto=go   # the default and `auto` follow the toolchain
+  [[ "$(_claude_enmaas_impl)" == $auto ]] || exit 1
+  [[ "$(CLAUDE_ENMAAS_PROXY_IMPL=auto _claude_enmaas_impl)" == $auto ]] || exit 2
+  [[ "$(CLAUDE_ENMAAS_PROXY_IMPL=LiteLLM _claude_enmaas_impl)" == litellm ]] || exit 6
   [[ "$(CLAUDE_ENMAAS_PROXY_IMPL=GO _claude_enmaas_impl)" == go ]] || exit 3
   [[ "$(CLAUDE_ENMAAS_PROXY_IMPL=' go ' _claude_enmaas_impl)" == go ]] || exit 4
   [[ "$(LLM_PROXY_IMPL=Go _claude_enmaas_impl)" == go ]] || exit 5
