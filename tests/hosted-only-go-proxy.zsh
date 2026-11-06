@@ -329,7 +329,8 @@ local pid3
 pid3=$(lp $pport)
 [[ -n "$pid3" && "$pid3" != "$pid1" ]] || fail "a stale idle proxy must be restarted"
 [[ ! -s "$refused" ]] || fail "zero-refuse swap refused $(wc -l < "$refused") probe(s) mid-restart"
-[[ "$(lsof -ti "tcp:$pport" -sTCP:LISTEN 2>/dev/null | wc -l)" == 1 ]] || fail "old listener not retired after the swap"
+# tr: BSD wc -l pads the count with spaces ("       1" != 1)
+[[ "$(lsof -ti "tcp:$pport" -sTCP:LISTEN 2>/dev/null | wc -l | tr -d " ")" == 1 ]] || fail "old listener not retired after the swap"
 curl -sf --max-time 2 "http://127.0.0.1:$pport/health/liveliness" -o /dev/null || fail "restarted proxy not healthy"
 [[ "$(<"$rtdir2/fingerprint")" != bogus* ]] || fail "ensure must repair the fingerprint file"
 # The restarted proxy still serves: routes came from the knobs, not the file
