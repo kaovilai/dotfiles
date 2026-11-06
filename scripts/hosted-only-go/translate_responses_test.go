@@ -795,8 +795,22 @@ func TestResponsesNoPanic(t *testing.T) {
 
 // Request output must survive JSON encoding (what the proxy does next).
 func TestResponsesRequestEncodes(t *testing.T) {
-	out := respDo(t, `{"model":"m","max_tokens":10,"temperature":1,"messages":[{"role":"user","content":"hi"}]}`)
-	if b, err := json.Marshal(out); err != nil || !strings.Contains(string(b), `"max_output_tokens":10`) {
+	out := respDo(t, `{"model":"m","max_tokens":100,"temperature":1,"messages":[{"role":"user","content":"hi"}]}`)
+	if b, err := json.Marshal(out); err != nil || !strings.Contains(string(b), `"max_output_tokens":100`) {
 		t.Errorf("encode: %s %v", b, err)
+	}
+}
+
+// The Responses API rejects max_output_tokens below 16; Claude Code's probes
+// send max_tokens:1.
+func TestResponsesMaxOutputTokensMinimum(t *testing.T) {
+	for in, want := range map[int]int{1: 16, 15: 16, 16: 16, 4096: 4096} {
+		_, out, err := newResponsesTranslator().Request(map[string]any{"model": "m", "max_tokens": in, "messages": []any{}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got, _ := asInt(out["max_output_tokens"]); got != want {
+			t.Fatalf("max_tokens %d -> max_output_tokens %d, want %d", in, got, want)
+		}
 	}
 }

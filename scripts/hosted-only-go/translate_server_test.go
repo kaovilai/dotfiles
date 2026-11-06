@@ -163,3 +163,30 @@ func TestChatDeploymentThatWantsResponsesIsRetriedAndLearned(t *testing.T) {
 		t.Fatalf("upstream paths %v, want %v (one failed chat call, then learned)", paths, want)
 	}
 }
+
+// A failed Responses retry must not poison the model or replace the client's
+// answer: the original chat 400 is returned and the next request tries chat again.
+func TestResponsesRetryThatFailsIsNotLearned(t *testing.T) {
+	var paths []string
+	a, _ := chatRoutedApp(t, func(w http.ResponseWriter, r *http.Request) {
+		paths = append(paths, r.URL.Path)
+		w.Header().Set("content-type", "application/json")
+		w.WriteHeader(map[bool]int{true: 400, false: 404}[r.URL.Path == "/v1/chat/completions"])
+		if r.URL.Path == "/v1/chat/completions" {
+			_, _ = w.Write([]byte(`{"error":{"message":"use /v1/responses for function tools"}}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"error":{"message":"no such route"}}`))
+	})
+	body := `{"model":"gpt-5-mini","max_tokens":64,"messages":[{"role":"user","content":"hi"}]}`
+	for i := 0; i < 2; i++ {
+		rec := messagesRequest(a, body)
+		if rec.Code != 400 || !strings.Contains(rec.Body.String(), "use /v1/responses") {
+			t.Fatalf("request %d must surface the ORIGINAL chat 400: %d %s", i, rec.Code, rec.Body.String())
+		}
+	}
+	want := "/v1/chat/completions,/v1/responses,/v1/chat/completions,/v1/responses"
+	if strings.Join(paths, ",") != want {
+		t.Fatalf("paths %v: the model must not be learned after a failed retry", paths)
+	}
+}

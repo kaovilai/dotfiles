@@ -48,6 +48,12 @@ func (t *responsesTranslator) Request(req map[string]any) (string, map[string]an
 		}
 	}
 	if v, ok := req["max_tokens"]; ok && v != nil {
+		// The Responses API rejects max_output_tokens below 16 (Claude Code sends
+		// max_tokens:1 for its quota and title probes); LiteLLM's bridge raised it
+		// the same way.
+		if n, isInt := asInt(v); isInt && n < 16 {
+			v = 16
+		}
 		out["max_output_tokens"] = v
 	}
 	for _, k := range []string{"temperature", "top_p"} {

@@ -254,8 +254,15 @@ func (a *app) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			rtr := newResponsesTranslator()
 			if p2, b2, terr := rtr.Request(data); terr == nil {
 				if r2, e2 := a.upstream(r, marshal(b2), upstreamBase, p2, stream); e2 == nil {
-					a.responsesOnly.Store(upstreamModel, true)
-					resp, tr = r2, rtr
+					if r2.StatusCode < http.StatusBadRequest {
+						a.responsesOnly.Store(upstreamModel, true)
+						resp, tr = r2, rtr
+					} else {
+						// the Responses route failed too: keep the ORIGINAL chat
+						// answer for the client and do not learn the model
+						_, _ = io.Copy(io.Discard, r2.Body)
+						r2.Body.Close()
+					}
 				}
 			}
 		}

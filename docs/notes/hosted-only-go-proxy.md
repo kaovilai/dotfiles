@@ -212,7 +212,7 @@ model, GPT and Gemini included. Those are chat (24 routes today) or, when pinned
 with `CLAUDE_ENMAAS_MODEL_DIALECTS`, Responses deployments, so something must
 convert Messages <-> chat/Responses — tools and streaming included. LiteLLM did;
 since the translators the Go proxy does it itself, which is what let EnMaaS
-default to Go and LiteLLM retire.
+default to Go (LiteLLM stays as the `=litellm` escape hatch).
 
 - `translate.go` — the `translator` contract (`Request`, `Response`, `Stream`,
   `Error`), the shared SSE reader and the status -> Anthropic error-type map.
