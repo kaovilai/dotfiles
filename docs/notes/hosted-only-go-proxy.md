@@ -29,12 +29,12 @@ starts in milliseconds.
 ## Impl knobs (retired)
 
 `HOSTED_ONLY_PROXY_IMPL`, `CLAUDE_ENMAAS_PROXY_IMPL` and `LLM_PROXY_IMPL` used
-to pick the impl. They no longer pick anything — the Go proxy is the only impl
-— but they are still part of the proxy fingerprint: setting one to `litellm`
-fails the launch with the retirement message, and any other stale value an old
-shell still exports restarts an idle proxy on the next launch. One serving a
-request is reused with a notice until `claude-hosted-only-restart` /
-`claude-enmaas-restart` / `codex-hosted-only --stop-proxy`.
+to pick the impl. They no longer pick anything: the accepted values (unset,
+`auto`, `go`) all mean the Go proxy and do not change the fingerprint, so
+flipping an old shell from `auto` to `go` reuses the running proxy as fresh.
+`litellm` fails the launch with the retirement message; any other value fails
+it with the same error naming the knob. A missing go toolchain fails the launch
+the same way (install one — `dnf install golang` / `apt install golang-go`).
 
 The first start builds the binary into
 `${XDG_STATE_HOME:-~/.local/state}/hosted-only-go/`, rebuilding when a module

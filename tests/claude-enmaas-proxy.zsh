@@ -80,8 +80,19 @@ class Gateway(BaseHTTPRequestHandler):
             return self.json(data)
         if self.path == '/v1/chat/completions':
             if body.get('stream'):
-                choices = [{'index': 0, 'delta': {'role': 'assistant', 'content': 'hello'}, 'finish_reason': None},
-                           {'index': 0, 'delta': {}, 'finish_reason': 'stop'}]
+                if body.get('tools'):
+                    choices = [
+                        {'index': 0, 'delta': {'role': 'assistant', 'content': None, 'tool_calls': [
+                            {'index': 0, 'id': 'call_fixture', 'type': 'function',
+                             'function': {'name': 'fixture_tool', 'arguments': ''}}]}, 'finish_reason': None},
+                        {'index': 0, 'delta': {'tool_calls': [
+                            {'index': 0, 'function': {'arguments': '{"ok":'}}]}, 'finish_reason': None},
+                        {'index': 0, 'delta': {'tool_calls': [
+                            {'index': 0, 'function': {'arguments': 'true}'}}]}, 'finish_reason': None},
+                        {'index': 0, 'delta': {}, 'finish_reason': 'tool_calls'}]
+                else:
+                    choices = [{'index': 0, 'delta': {'role': 'assistant', 'content': 'hello'}, 'finish_reason': None},
+                               {'index': 0, 'delta': {}, 'finish_reason': 'stop'}]
                 return self.sse(''.join('data: ' + json.dumps({'id': 'chat_fixture', 'object': 'chat.completion.chunk',
                     'created': 1, 'model': body['model'], 'choices': [c]}) + '\n\n' for c in choices) + 'data: [DONE]\n\n')
             message = {'role': 'assistant', 'content': 'hello'}
@@ -131,9 +142,23 @@ for model in ['claude-sonnet-5-5', 'offline-chat']:
     with request(model, stream=True) as r: text = r.read().decode()
     assert 'hello' in text and 'message_stop' in text, (model, text)
 if True:  # tools/streaming through the translator
-    with request('offline-chat', tools=[{'name': 'fixture_tool', 'description': 'offline',
-         'input_schema': {'type': 'object', 'properties': {'ok': {'type': 'boolean'}}}}]) as r: data = json.load(r)
+    tools = [{'name': 'fixture_tool', 'description': 'offline',
+         'input_schema': {'type': 'object', 'properties': {'ok': {'type': 'boolean'}}}}]
+    with request('offline-chat', tools=tools) as r: data = json.load(r)
     assert data['content'][0]['type'] == 'tool_use' and data['content'][0]['input'] == {'ok': True}, data
+    # streamed tool call: the block must open with the tool name and the
+    # argument fragments must assemble into the same input
+    events = []
+    with request('offline-chat', tools=tools, stream=True) as r:
+        for line in r.read().decode().splitlines():
+            if line.startswith('data: '):
+                events.append(json.loads(line[6:]))
+    starts = [e for e in events if e.get('type') == 'content_block_start'
+              and e.get('content_block', {}).get('type') == 'tool_use']
+    deltas = ''.join(e.get('delta', {}).get('partial_json', '')
+                     for e in events if e.get('type') == 'content_block_delta')
+    assert starts and starts[0]['content_block']['name'] == 'fixture_tool', events
+    assert json.loads(deltas) == {'ok': True}, deltas
 try:
     request('offline-error')
     raise AssertionError('upstream error lost')

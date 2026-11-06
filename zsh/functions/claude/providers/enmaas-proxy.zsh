@@ -130,6 +130,31 @@ def stop_stray(groups, port, root):
         os.killpg(group, signal.SIGKILL)
 
 
+def child_serving(log):
+    """True when the proxy.log (truncated at spawn, so it holds only the
+    replacement's output) shows the startup line printed right before
+    Serve() — binding the port is not serving."""
+    try:
+        with open(log, 'rb') as stream:
+            return b'upstream retries off, limit rewrite=' in stream.read()
+    except OSError:
+        return False
+
+
+def _port_conflict(log):
+    """True when the child's log tail shows the port could not be bound (the
+    pre-SO_REUSEPORT listener case), as opposed to any other boot failure."""
+    try:
+        with open(log, 'rb') as stream:
+            stream.seek(0, os.SEEK_END)
+            size = stream.tell()
+            stream.seek(max(0, size - 4096))
+            tail = stream.read().decode('utf-8', 'replace').lower()
+    except OSError:
+        return False
+    return 'address already in use' in tail or 'cannot share the port' in tail
+
+
 def wait_port_free(port):
     deadline = time.monotonic() + 10
     while time.monotonic() < deadline and listeners(port):
@@ -219,9 +244,18 @@ def go_binary():
     binary = out / 'hosted-only-proxy'
     stamp = out / 'source.sha'
     if not binary.is_file() or not stamp.is_file() or stamp.read_text().strip() != want:
-        subprocess.run(['go', 'build', '-trimpath', '-o', str(binary), '.'], cwd=str(src), check=True)
+        # Build to a private name and rename into place (the zsh launcher does
+        # the same): go build -o removes and rewrites its target, so a hosted-
+        # only launch execing the shared binary while this controller rebuilds
+        # could otherwise run a half-written file.
+        tmp = out / ('hosted-only-proxy.%d' % os.getpid())
+        try:
+            subprocess.run(['go', 'build', '-trimpath', '-o', str(tmp), '.'], cwd=str(src), check=True)
+            tmp.chmod(0o700)
+            os.replace(tmp, binary)
+        finally:
+            tmp.unlink(missing_ok=True)
         stamp.write_text(want)
-        binary.chmod(0o700)
     return str(binary), want
 
 
@@ -402,7 +436,18 @@ def ensure(root, port, config, timeout, required):
         until = time.monotonic() + min(timeout, 30)
         while time.monotonic() < until and child.poll() is None and not accepting():
             time.sleep(.05)
+        verified = False
         if child.poll() is None and accepting():
+            # Binding the port is not serving: the replacement must reach its
+            # serve loop before the healthy old proxy is retired (the log is
+            # spawn-truncated, so the line can only be the new child's).
+            until_ready = time.monotonic() + min(timeout, 30)
+            while time.monotonic() < until_ready and child.poll() is None:
+                if child_serving(log):
+                    verified = True
+                    break
+                time.sleep(.1)
+        if verified:
             write_private(root / 'proxy.json', info)
             # Retire the old group only now; the recorded identity is already
             # the new one, so never through stop() (it would unlink it). Signal
@@ -423,14 +468,20 @@ def ensure(root, port, config, timeout, required):
             if swap_root != root and read_private(swap_root / 'proxy.json') == swap_info:
                 (swap_root / 'proxy.json').unlink(missing_ok=True)
         else:
-            # The overlap start did not take: the old listener cannot share the
-            # port (a Go build from before SO_REUSEPORT). Legacy order, once.
-            notice('overlap start did not take (the old listener cannot share the port); stopping it first')
+            # The overlap start did not take. Only a confirmed port-sharing
+            # failure (a Go build from before SO_REUSEPORT) justifies stopping
+            # the WORKING old proxy for the legacy stop-then-start order; any
+            # other failure keeps the old proxy serving and raises instead of
+            # trading it for a start that already failed once.
+            conflict = _port_conflict(log)
             if child.poll() is None:
                 try:
                     os.killpg(child.pid, signal.SIGKILL)
                 except ProcessLookupError:
                     pass
+            if not conflict:
+                raise RuntimeError('the replacement proxy failed to start; the old one keeps serving (see %s)' % log)
+            notice('overlap start did not take (the old listener cannot share the port); stopping it first')
             stop(swap_root, swap_info, port)
             wait_port_free(port)
             swap = None

@@ -456,7 +456,8 @@ killed=set()
 def fake_killpg(pid, sig=None):
     killed.add(pid)
 spawned.clear()
-swap=dict(patched, **{'busy':lambda port:False, 'go_binary':lambda: ('fake-go-bin','hash-2'), 'birth':lambda pid:'t0'},
+swap=dict(patched, **{'busy':lambda port:False, 'go_binary':lambda: ('fake-go-bin','hash-2'), 'birth':lambda pid:'t0',
+          'child_serving':lambda log: True, '_port_conflict':lambda log: False},
           listeners=lambda port:{999999}, owned=lambda i: i['pid'] not in killed)
 with patch.dict(os.environ, env), patch.dict(ns, swap), patch.object(ns['subprocess'],'Popen',spawn),      patch.object(ns['socket'],'socket',OpenSocket), patch.object(ns['os'],'killpg',fake_killpg),      patch.object(ns['os'],'getpgid',lambda pid: 999999):
     result=g['ensure'](froot, 4166, fresh(), 3, [])

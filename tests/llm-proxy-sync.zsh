@@ -15,11 +15,20 @@ source "$repo/scripts/hosted-only-proxy.zsh" || fail "hosted-only-proxy.zsh does
 # " go " normalize to go; the retired =litellm knobs fail loudly instead of
 # sending the proxy down a path that no longer exists.
 ( unset CLAUDE_ENMAAS_PROXY_IMPL LLM_PROXY_IMPL
-  [[ "$(_claude_enmaas_impl)" == go ]] || exit 1
-  [[ "$(CLAUDE_ENMAAS_PROXY_IMPL=auto _claude_enmaas_impl)" == go ]] || exit 2
-  [[ "$(CLAUDE_ENMAAS_PROXY_IMPL=GO _claude_enmaas_impl)" == go ]] || exit 3
-  [[ "$(CLAUDE_ENMAAS_PROXY_IMPL=' go ' _claude_enmaas_impl)" == go ]] || exit 4
-  [[ "$(LLM_PROXY_IMPL=Go _claude_enmaas_impl)" == go ]] || exit 5
+  if (( $+commands[go] )); then
+    [[ "$(_claude_enmaas_impl)" == go ]] || exit 1
+    [[ "$(CLAUDE_ENMAAS_PROXY_IMPL=auto _claude_enmaas_impl)" == go ]] || exit 2
+    [[ "$(CLAUDE_ENMAAS_PROXY_IMPL=GO _claude_enmaas_impl)" == go ]] || exit 3
+    [[ "$(CLAUDE_ENMAAS_PROXY_IMPL=' go ' _claude_enmaas_impl)" == go ]] || exit 4
+    [[ "$(LLM_PROXY_IMPL=Go _claude_enmaas_impl)" == go ]] || exit 5
+  else
+    # no toolchain: the helper must refuse with the guidance, not pick an impl,
+    # and the rest of the suite still runs
+    local err
+    err=$(_claude_enmaas_impl 2>&1); [[ $? -ne 0 && "$err" == *"go not found"* ]] || exit 1
+    err=$(CLAUDE_ENMAAS_PROXY_IMPL=auto _claude_enmaas_impl 2>&1); [[ $? -ne 0 && "$err" == *"go not found"* ]] || exit 2
+    err=$(CLAUDE_ENMAAS_PROXY_IMPL=go _claude_enmaas_impl 2>&1); [[ $? -ne 0 && "$err" == *"go not found"* ]] || exit 3
+  fi
   CLAUDE_ENMAAS_PROXY_IMPL=LiteLLM _claude_enmaas_impl 2>/dev/null && exit 6
   LLM_PROXY_IMPL=litellm _claude_enmaas_impl 2>/dev/null && exit 7
   exit 0

@@ -126,11 +126,18 @@ _hosted_only_proxy_vars() {
     typeset -g _hop_base="http://127.0.0.1:$_hop_port"
     typeset -g _hop_token="$(_hosted_only_knob PROXY_TOKEN hosted-only-local)"
     # The Go proxy (scripts/hosted-only-go, stdlib only) is the only impl; a
-    # missing go toolchain or a retired =litellm knob fails in _hosted_only_impl.
-    # Same knobs, ports, token, fingerprint protocol and stop command as always.
+    # missing go toolchain or a retired =litellm knob fails in _hosted_only_impl
+    # — unless _HOP_STOP_MODE is set: the stop helper must reach the listener
+    # even when launch-time validation would fail (an old shell still exporting
+    # a retired knob, a broken toolchain). Same knobs, ports, token, fingerprint
+    # protocol and stop command as always.
     # (A plain assignment: `typeset -g x=$(false)` swallows the failure.)
     typeset -g _hop_impl
-    _hop_impl="$(_hosted_only_impl)" || return 1
+    _hop_impl="$(_hosted_only_impl)" || {
+        [[ -n "${_HOP_STOP_MODE:-}" ]] || return 1
+        print -ru2 -- 'hosted-only: impl validation failed; continuing in stop mode.'
+        _hop_impl=go
+    }
     typeset -g _hop_glm="$(_hosted_only_knob GLM_MODEL "${GLM_HYBRID_MODEL:-rits/zai-org/glm-5-3}")"
     typeset -g _hop_deepseek="$(_hosted_only_knob DEEPSEEK_MODEL rits/deepseek-ai/DeepSeek-V4.1-Flash-1017)"
     typeset -g _hop_vision_fallback="$(_hosted_only_knob VISION_FALLBACK 1)"
@@ -273,7 +280,10 @@ _hosted_only_proxy_fp() {
         dns_host="${dns_host%%/*}"
     fi
     local config="${1:-$(_hosted_only_proxy_config)}"
-    local knobs="$(_hosted_only_knob OUTAGE_COALESCE_SECONDS 5) $_hop_vision_fallback $_hop_limit_rewrite $_hop_limit_retry $_hop_client_retry $_hop_fallback $_hop_aliases $_hop_request_timeout $_hop_image_budget $_hop_image_cache_days $_hop_dialect $dns_host ${ENMAAS_DNS_DOH_URLS:-}"
+    # Every knob _hosted_only_go_env forwards is a fingerprint input: one left
+    # out (IMAGE_TOKENS, IMAGE_CACHE_DIR, SEARCH_NUDGE) would let a running
+    # proxy serve the old value as "fresh".
+    local knobs="$(_hosted_only_knob OUTAGE_COALESCE_SECONDS 5) $_hop_vision_fallback $_hop_limit_rewrite $_hop_limit_retry $_hop_client_retry $_hop_fallback $_hop_aliases $_hop_request_timeout $_hop_image_budget $_hop_image_cache_days $_hop_dialect $dns_host ${ENMAAS_DNS_DOH_URLS:-} $(_hosted_only_knob IMAGE_TOKENS 2500) $(_hosted_only_knob IMAGE_CACHE_DIR '') $(_hosted_only_knob SEARCH_NUDGE 1)"
     local fp token_fp
     fp=$(print -rn -- "$config"$'\x1f'"$hooks_hash"$'\x1f'"$ENMAAS_API_KEY"$'\x1f'"$knobs" \
         | shasum -a 256 | cut -d' ' -f1) || return 1
@@ -410,11 +420,41 @@ _hosted_only_proxy_has_state() {
 # which stops only a listener whose command line names this proxy's runtime
 # (current or legacy dir: the flavor-named dirs before the merge, glm-hybrid
 # before the rename; also retires a leftover LiteLLM listener from before the
-# retirement).
+# retirement). Stopping must not depend on launch prerequisites: _HOP_STOP_MODE
+# skips impl validation, and when the binary cannot be built at all (no go
+# toolchain, broken build) an identity-checked command-line match retires the
+# listener instead, so a stale knob or a missing toolchain can never trap a
+# running proxy.
 _hosted_only_proxy_stop() {
-    _hosted_only_proxy_vars "$1" || return 1
+    _HOP_STOP_MODE=1 _hosted_only_proxy_vars "$1" || return 1
     local gobin
-    gobin=$(_hosted_only_go_bin) || return 1
+    if ! gobin=$(_hosted_only_go_bin 2>/dev/null); then
+        print -ru2 -- "hosted-only: Go binary unavailable; stopping $_hop_flavor proxy on :$_hop_port by config-path match."
+        local pid stopped=0 cmd d
+        local -a matches=("$_hop_runtime/config.yaml" "$_hop_runtime/routes.json")
+        for d in "${_hop_legacy_runtimes[@]}"; do
+            matches+=("$d/config.yaml" "$d/routes.json")
+        done
+        for pid in ${(f)"$(lsof -ti "tcp:$_hop_port" -sTCP:LISTEN 2>/dev/null)"}; do
+            cmd="$(ps -o command= -p "$pid" 2>/dev/null)"
+            local hit=0 m
+            for m in $matches; do
+                [[ "$cmd" == *"$m"* ]] && hit=1
+            done
+            if (( hit )); then
+                kill "$pid" 2>/dev/null && stopped=1
+            else
+                print -ru2 -- "hosted-only: port $_hop_port is held by another process (pid $pid); leaving it alone."
+                return 1
+            fi
+        done
+        rm -f "$_hop_runtime/fingerprint" 2>/dev/null
+        for d in "${_hop_legacy_runtimes[@]}"; do
+            rm -f "$d/fingerprint" 2>/dev/null
+        done
+        (( stopped )) && print -ru2 -- "hosted-only: stopped $_hop_flavor proxy on port $_hop_port."
+        return 0
+    fi
     local -a legacy=()
     local d
     for d in $_hop_legacy_runtimes; legacy+=(--legacy-runtime "$d")
