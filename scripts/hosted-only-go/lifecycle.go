@@ -14,11 +14,13 @@ package main
 // retire a stale LiteLLM listener after an impl switch and vice versa.
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -254,18 +256,18 @@ func writeFingerprint(runtimeDir, fp, tokenFP string) {
 // spawnDetached starts argv in its own session with output appended to logPath,
 // rotating the log past 8 MB (one generation kept) — the same contract as
 // claude-provider.py --background.
-func spawnDetached(logPath string, argv []string) error {
+func spawnDetached(logPath string, argv []string) (*exec.Cmd, error) {
 	if st, err := os.Stat(logPath); err == nil && st.Size() > logRotateBytes {
 		_ = os.Rename(logPath, logPath+".1")
 	}
 	log, err := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer log.Close()
 	devnull, err := os.OpenFile(os.DevNull, os.O_RDONLY, 0)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer devnull.Close()
 	cmd := exec.Command(argv[0], argv[1:]...)
@@ -273,7 +275,27 @@ func spawnDetached(logPath string, argv []string) error {
 	cmd.Stdout = log
 	cmd.Stderr = log
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
-	return cmd.Start()
+	if err := cmd.Start(); err != nil {
+		return nil, err
+	}
+	return cmd, nil
+}
+
+// reusePortListener binds with SO_REUSEPORT so a zero-refuse restart can
+// start the replacement alongside the old listener and retire the old pids
+// only once the new one answers — the same property the LiteLLM path gets
+// from the runtime sitecustomize (#612).
+func reusePortListener(addr string) (net.Listener, error) {
+	listenConfig := net.ListenConfig{Control: func(network, address string, raw syscall.RawConn) error {
+		var sockErr error
+		if err := raw.Control(func(fd uintptr) {
+			sockErr = syscall.SetsockoptInt(int(fd), syscall.SOL_SOCKET, soReusePort, 1)
+		}); err != nil {
+			return err
+		}
+		return sockErr
+	}}
+	return listenConfig.Listen(context.Background(), "tcp", addr)
 }
 
 // lockRuntime takes the runtime dir's startup.lock with an fcntl record
@@ -378,12 +400,13 @@ func ensureOnce(o ensureOpts) (string, error) {
 	}
 	defer unlock()
 
+	forced := os.Getenv("HOSTED_ONLY_FORCE_RESTART") != ""
 	if healthOK(o.port, 2*time.Second) {
 		recFP, recToken := readFingerprint(o.runtimeDir)
-		if recFP == o.fingerprint && (recToken == "" || recToken == o.tokenFP) {
+		if recFP == o.fingerprint && (recToken == "" || recToken == o.tokenFP) && !forced {
 			return "fresh", nil
 		}
-		if portServing(o.port) {
+		if portServing(o.port) && !forced {
 			if recToken != "" && recToken != o.tokenFP {
 				fmt.Fprintf(os.Stderr, "hosted-only: the running %s proxy on :%s uses a different proxy token and is serving requests; run %s-hosted-only-restart once they finish.\n",
 					o.flavor, o.port, o.flavor)
@@ -393,14 +416,37 @@ func ensureOnce(o ensureOpts) (string, error) {
 				o.flavor, o.flavor)
 			return "reused-busy", nil
 		}
-		fmt.Fprintf(os.Stderr, "hosted-only: %s proxy config, hooks or key changed; restarting the idle proxy on :%s.\n",
-			o.flavor, o.port)
-		if code := stopOnce(o.flavor, o.port, o.runtimeDir, o.legacyDirs); code != 0 {
-			return "", errors.New("stop of the stale proxy failed")
+		// Zero-refuse restart (#612): start the new proxy ALONGSIDE the old
+		// one — both listeners bind SO_REUSEPORT — and retire the old pids
+		// only once the new listener answers, so a request arriving
+		// mid-restart is never refused. An old listener that cannot share
+		// the port (it predates SO_REUSEPORT) makes the new process exit at
+		// bind; that falls back to stop-then-start once, below.
+		oldPids := listenPIDs(o.port)
+		swapNote := ""
+		if len(oldPids) > 0 {
+			swapNote = " (zero-gap swap)"
 		}
-		if !waitPortFree(o.port, stopWaitFree) {
-			return "", fmt.Errorf("port %s is still held after 15s", o.port)
+		fmt.Fprintf(os.Stderr, "hosted-only: %s proxy config, hooks or key changed; restarting the proxy on :%s%s.\n",
+			o.flavor, o.port, swapNote)
+		status, err := startProxy(o, oldPids)
+		if err == nil {
+			if len(oldPids) > 0 {
+				retirePids(oldPids)
+			}
+			return status, nil
 		}
+		if len(oldPids) > 0 && anyPidAlive(oldPids) {
+			fmt.Fprintf(os.Stderr, "hosted-only: overlap start did not take (old listener cannot share the port); stopping it first.\n")
+			if code := stopOnce(o.flavor, o.port, o.runtimeDir, o.legacyDirs); code != 0 {
+				return "", errors.New("stop of the stale proxy failed")
+			}
+			if !waitPortFree(o.port, stopWaitFree) {
+				return "", fmt.Errorf("port %s is still held after 15s", o.port)
+			}
+			return startProxy(o, nil)
+		}
+		return "", err
 	}
 	// A listener that no longer answers its health check (hung, wedged) would
 	// make the replacement's bind fail. Confirm with a few probes and retire
@@ -434,14 +480,18 @@ func ensureOnce(o ensureOpts) (string, error) {
 			}
 		}
 	}
-	return startProxy(o)
+	return startProxy(o, nil)
 }
 
-// startProxy spawns the serve mode detached, waits for health and records the
-// fingerprint. Routes come from the knobs for the hosted-only flavors (written
-// here, so a watcher restart never pairs a new fingerprint with an old table)
-// and from --config for enmaas.
-func startProxy(o ensureOpts) (string, error) {
+// startProxy spawns the serve mode detached, waits for it to answer and
+// records the fingerprint. During a zero-refuse swap the OLD proxy also
+// answers health, so a listener pid outside oldPids is the readiness signal;
+// with no old pids any listener counts. The child exiting early (its bind
+// refused by an old listener that cannot share the port) fails the wait
+// immediately so the caller can fall back. Routes come from the knobs for the
+// hosted-only flavors (written here, so a watcher restart never pairs a new
+// fingerprint with an old table) and from --config for enmaas.
+func startProxy(o ensureOpts, oldPids []int) (string, error) {
 	cfg := loadConfig(o.flavor, o.port, o.runtimeDir)
 	if cfg.APIKey == "" {
 		return "", errors.New("hosted-only-go: ENMAAS_API_KEY is not set")
@@ -463,16 +513,80 @@ func startProxy(o ensureOpts) (string, error) {
 		return "", err
 	}
 	argv := []string{self, "--flavor", o.flavor, "--config", routesPath, "--port", o.port, "--runtime-dir", o.runtimeDir}
-	if err := spawnDetached(filepath.Join(o.runtimeDir, "proxy.log"), argv); err != nil {
+	child, err := spawnDetached(filepath.Join(o.runtimeDir, "proxy.log"), argv)
+	if err != nil {
 		return "", err
 	}
-	if !waitHealthy(o.port, o.bootWait) {
-		fmt.Fprintf(os.Stderr, "hosted-only: %s proxy not ready on port %s; see %s\n",
-			o.flavor, o.port, filepath.Join(o.runtimeDir, "proxy.log"))
-		return "", fmt.Errorf("proxy did not become healthy")
+	deadline := time.Now().Add(o.bootWait)
+	for {
+		if hasListenerOutside(o.port, oldPids) && healthOK(o.port, time.Second) {
+			writeFingerprint(o.runtimeDir, o.fingerprint, o.tokenFP)
+			return "restarted", nil
+		}
+		if !pidAlive(child.Process.Pid) {
+			fmt.Fprintf(os.Stderr, "hosted-only: %s proxy exited before answering on port %s; see %s\n",
+				o.flavor, o.port, filepath.Join(o.runtimeDir, "proxy.log"))
+			return "", fmt.Errorf("new proxy exited before listening")
+		}
+		if time.Now().After(deadline) {
+			fmt.Fprintf(os.Stderr, "hosted-only: %s proxy not ready on port %s; see %s\n",
+				o.flavor, o.port, filepath.Join(o.runtimeDir, "proxy.log"))
+			return "", fmt.Errorf("proxy did not become healthy")
+		}
+		time.Sleep(100 * time.Millisecond)
 	}
-	writeFingerprint(o.runtimeDir, o.fingerprint, o.tokenFP)
-	return "restarted", nil
+}
+
+// hasListenerOutside reports whether the port has a listener pid that is not
+// one of oldPids (any listener when oldPids is empty).
+func hasListenerOutside(port string, oldPids []int) bool {
+	old := map[int]bool{}
+	for _, pid := range oldPids {
+		old[pid] = true
+	}
+	for _, pid := range listenPIDs(port) {
+		if !old[pid] {
+			return true
+		}
+	}
+	return false
+}
+
+// retirePids TERMs the old swap listeners by pid and waits for them to go
+// away (KILL past the budget). Never via stopOnce during a swap: both
+// processes run the same config path, so the identity check would match the
+// new one too.
+func retirePids(pids []int) bool {
+	for _, pid := range pids {
+		_ = syscall.Kill(pid, syscall.SIGTERM)
+	}
+	deadline := time.Now().Add(stopWaitFree)
+	for time.Now().Before(deadline) {
+		alive := false
+		for _, pid := range pids {
+			if pidAlive(pid) {
+				alive = true
+				break
+			}
+		}
+		if !alive {
+			return true
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	for _, pid := range pids {
+		_ = syscall.Kill(pid, syscall.SIGKILL)
+	}
+	return false
+}
+
+func anyPidAlive(pids []int) bool {
+	for _, pid := range pids {
+		if pidAlive(pid) {
+			return true
+		}
+	}
+	return false
 }
 
 func runEnsure(args []string) int {

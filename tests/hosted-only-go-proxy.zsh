@@ -300,12 +300,36 @@ pid1=$(lp $pport)
 ensure_go claude >/dev/null 2>&1 || fail "second ensure failed"
 [[ "$(lp $pport)" == "$pid1" ]] || fail "a fresh ensure must not restart the proxy"
 
-# A stale fingerprint on an idle proxy: ensure restarts it and repairs the file.
+# A stale fingerprint on an idle proxy: ensure swaps it. Zero-refuse (#612): the
+# replacement starts ALONGSIDE the old listener (SO_REUSEPORT) and the old pid
+# retires only once the new one answers, so a health probe running every 50 ms
+# through the whole restart must never be refused. One request first, so the
+# proxy has an (empty) in-flight table and the idle check reads idle between the
+# prober's connections.
+curl -s -o /dev/null -X POST "http://127.0.0.1:$pport/v1/messages" -H 'content-type: application/json' -H 'x-api-key: test-token' \
+    -d '{"model":"claude-sonnet-5-5","max_tokens":16,"messages":[{"role":"user","content":"warm"}]}'
 print -r -- "bogus bogus" >| "$rtdir2/fingerprint"
-ensure_go claude >/dev/null 2>&1 || fail "stale ensure failed"
+local refused="$tmp/refused" probing="$tmp/probing"
+: >| "$refused"; : >| "$probing"
+(
+    while [[ -e "$probing" ]]; do
+        curl -s -o /dev/null --max-time 1 "http://127.0.0.1:$pport/health/liveliness" || print -r -- x >> "$refused"
+        sleep 0.05
+    done
+) &
+local prober=$!
+ensure_go claude >/dev/null 2>"$tmp/swap.log" || { rm -f "$probing"; wait $prober 2>/dev/null; fail "stale ensure failed: $(<$tmp/swap.log)"; }
+rm -f "$probing"; wait $prober 2>/dev/null
+# The prober alone cannot prove this (a Go proxy boots in ms, shorter than the
+# probe interval), so pin the mechanism: the overlap swap ran and the
+# stop-then-start fallback did not.
+grep -q 'zero-gap swap' "$tmp/swap.log" || fail "stale restart did not use the zero-gap swap: $(<$tmp/swap.log)"
+if grep -q 'overlap start did not take' "$tmp/swap.log"; then fail "swap fell back to stop-then-start (SO_REUSEPORT not shared): $(<$tmp/swap.log)"; fi
 local pid3
 pid3=$(lp $pport)
 [[ -n "$pid3" && "$pid3" != "$pid1" ]] || fail "a stale idle proxy must be restarted"
+[[ ! -s "$refused" ]] || fail "zero-refuse swap refused $(wc -l < "$refused") probe(s) mid-restart"
+[[ "$(lsof -ti "tcp:$pport" -sTCP:LISTEN 2>/dev/null | wc -l)" == 1 ]] || fail "old listener not retired after the swap"
 curl -sf --max-time 2 "http://127.0.0.1:$pport/health/liveliness" -o /dev/null || fail "restarted proxy not healthy"
 [[ "$(<"$rtdir2/fingerprint")" != bogus* ]] || fail "ensure must repair the fingerprint file"
 # The restarted proxy still serves: routes came from the knobs, not the file

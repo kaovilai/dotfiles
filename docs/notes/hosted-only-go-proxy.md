@@ -54,6 +54,15 @@ zsh loop that spawns lsof/jq twice a second):
   records the fingerprint. For the hosted-only flavors it writes `routes.json`
   itself from the knobs, so a watcher-driven restart never pairs a new
   fingerprint with an old route table.
+- **Zero-refuse restarts (#612).** The serve listener binds with `SO_REUSEPORT`
+  (`reuseport_linux.go` carries the Linux constant the stdlib does not export),
+  so a stale restart starts the replacement ALONGSIDE the old listener, waits
+  until a listener outside the old pid set answers health, then retires the old
+  pids — a request arriving mid-restart is never refused. An old listener that
+  predates the patch cannot share the port; the new process then exits at bind
+  and `ensure` falls back to stop-then-start once. `HOSTED_ONLY_FORCE_RESTART`
+  forces the swap even when the fingerprint is current or the proxy is busy, the
+  same knob the `*-hosted-only-restart` commands use on the LiteLLM path.
 - `stop --flavor F --port P --runtime-dir D [--legacy-runtime D…]` is the
   identity-checked stop: only listeners whose command line names this proxy's
   config under the current or a legacy runtime dir.

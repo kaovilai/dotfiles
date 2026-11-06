@@ -83,9 +83,12 @@ func runServe() {
 	}
 
 	server := &http.Server{
-		Addr:              "127.0.0.1:" + cfg.Port,
 		Handler:           newApp(cfg),
 		ReadHeaderTimeout: 10 * time.Second,
+	}
+	listener, err := reusePortListener("127.0.0.1:" + cfg.Port)
+	if err != nil {
+		log.Fatalf("hosted-only-go: %v", err)
 	}
 
 	go func() {
@@ -97,7 +100,7 @@ func runServe() {
 
 	log.Printf("hosted-only-go: %s flavor, 127.0.0.1:%s -> %s, upstream retries off, limit rewrite=%t, fallback=%t",
 		cfg.Flavor, cfg.Port, cfg.BaseURL, cfg.LimitRewrite, cfg.FallbackOn)
-	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+	if err := server.Serve(listener); err != nil && err != http.ErrServerClosed {
 		log.Fatalf("hosted-only-go: %v", err)
 	}
 }

@@ -158,7 +158,7 @@ func TestSpawnDetachedRotatesLog(t *testing.T) {
 	if err := os.WriteFile(log, big, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := spawnDetached(log, []string{"/bin/sh", "-c", "exit 0"}); err != nil {
+	if _, err := spawnDetached(log, []string{"/bin/sh", "-c", "exit 0"}); err != nil {
 		t.Fatalf("spawnDetached: %v", err)
 	}
 	if _, err := os.Stat(log + ".1"); err != nil {
