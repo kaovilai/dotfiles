@@ -77,6 +77,23 @@ _hosted_only_knob() {
     print -r -- "${${(P)new}:-${${(P)old}:-$2}}"
 }
 
+# _hosted_only_resolve_impl <value>: `auto` (or empty) -> go when a go toolchain
+# is installed, else litellm; anything else is returned as given (the caller
+# validates it).
+_hosted_only_resolve_impl() {
+    case "${1:-auto}" in
+        auto) (( $+commands[go] )) && print -r -- go || print -r -- litellm ;;
+        *) print -r -- "$1" ;;
+    esac
+}
+
+# _hosted_only_impl: the resolved proxy impl for the hosted-only launchers.
+# Precedence: HOSTED_ONLY_PROXY_IMPL (or its retired GLM_HYBRID_ name), then
+# LLM_PROXY_IMPL (flips every proxy), then auto.
+_hosted_only_impl() {
+    _hosted_only_resolve_impl "$(_hosted_only_knob PROXY_IMPL "${LLM_PROXY_IMPL:-auto}")"
+}
+
 # _hosted_only_proxy_vars <flavor>: sets _hop_* globals for the flavor.
 _hosted_only_proxy_vars() {
     case "$1" in
@@ -104,10 +121,12 @@ _hosted_only_proxy_vars() {
         "$state/glm-hybrid-$other-$_hop_port" "$state/hosted-only-$other-$_hop_port")
     typeset -g _hop_base="http://127.0.0.1:$_hop_port"
     typeset -g _hop_token="$(_hosted_only_knob PROXY_TOKEN hosted-only-local)"
-    # PROXY_IMPL=go runs scripts/hosted-only-go (stdlib Go proxy) instead of
-    # litellm[proxy]. Same knobs, ports, token, fingerprint protocol and stop
-    # command; it reads the same merged config.yaml as its route table.
-    typeset -g _hop_impl="$(_hosted_only_knob PROXY_IMPL litellm)"
+    # The Go proxy (scripts/hosted-only-go, stdlib only) is the default; LiteLLM
+    # stays the escape hatch (HOSTED_ONLY_PROXY_IMPL=litellm, or LLM_PROXY_IMPL=
+    # litellm for every proxy at once). `auto` — the default — is go when a go
+    # toolchain is installed, else litellm. Same knobs, ports, token, fingerprint
+    # protocol and stop command on both; the knob is part of the fingerprint.
+    typeset -g _hop_impl="$(_hosted_only_impl)"
     typeset -g _hop_glm="$(_hosted_only_knob GLM_MODEL "${GLM_HYBRID_MODEL:-rits/zai-org/glm-5-3}")"
     typeset -g _hop_deepseek="$(_hosted_only_knob DEEPSEEK_MODEL rits/deepseek-ai/DeepSeek-V4.1-Flash-1017)"
     typeset -g _hop_vision_fallback="$(_hosted_only_knob VISION_FALLBACK 1)"

@@ -1,8 +1,11 @@
 #!/bin/zsh
-# Real LiteLLM regression test with a loopback gateway and stub Claude client.
-# Cache the pinned uv dependencies first; UV_OFFLINE=1 prevents network installs.
+# Real-proxy regression test with a loopback gateway and stub Claude client,
+# run once per impl: LiteLLM (the escape hatch; cache the pinned uv dependencies
+# first, UV_OFFLINE=1 prevents network installs) and the Go proxy (the default).
 emulate -LR zsh
 export ENMAAS_TEST_REPO="${0:A:h:h}"
+run_suite() {
+export ENMAAS_TEST_IMPL="$1"
 python3 - <<'PY'
 import concurrent.futures
 import json
@@ -107,22 +110,38 @@ try:
 except urllib.error.HTTPError as e:
     # Database-free LiteLLM rejects non-master keys with its no-db error.
     error = json.load(e)
-    assert e.code == 400 and error['error']['message'] == 'No connected db.', error
+    # LiteLLM answers a wrong token 400 'No connected db.'; the Go proxy 401.
+    rejected = (e.code, error['error']['message'])
+    assert rejected in ((400, 'No connected db.'), (401, 'invalid proxy token')), error
 def request(model, **extra):
     body = {'model': model, 'max_tokens': 32, 'messages': [{'role': 'user', 'content': 'offline fixture'}], **extra}
     req = urllib.request.Request(base + '/v1/messages', data=json.dumps(body).encode(),
           headers={'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json', 'anthropic-version': '2023-06-01'})
     return urllib.request.urlopen(req, timeout=25)
-for model in ['claude-sonnet-5-5', 'offline-chat', 'offline-responses', 'gpt-6-luna', 'rits/zai-org/glm-5-3',
-              'rits/deepseek-ai/DeepSeek-V4.1-Flash-1017']:
+impl = os.environ['ENMAAS_TEST_IMPL']
+native = ['claude-sonnet-5-5', 'rits/zai-org/glm-5-3', 'rits/deepseek-ai/DeepSeek-V4.1-Flash-1017']
+translated = ['offline-chat', 'offline-responses', 'gpt-6-luna']
+for model in native + (translated if impl == 'litellm' else []):
     with request(model) as r: data = json.load(r)
     assert data['content'][0]['text'] == 'hello', (model, data)
-for model in ['claude-sonnet-5-5', 'offline-chat']:
+if impl == 'go':
+    # The Go proxy forwards bodies; it does not translate Messages <-> Chat/Responses.
+    # A Claude Code request for a chat/Responses model must fail loudly, not hand
+    # back an answer the client cannot parse.
+    for model in translated:
+        try:
+            request(model)
+            raise AssertionError('cross-dialect request was not refused: ' + model)
+        except urllib.error.HTTPError as e:
+            body = json.load(e)
+            assert e.code == 400 and 'litellm' in body['error']['message'], (model, e.code, body)
+for model in ['claude-sonnet-5-5'] + (['offline-chat'] if impl == 'litellm' else []):
     with request(model, stream=True) as r: text = r.read().decode()
     assert 'hello' in text and 'message_stop' in text, (model, text)
-with request('offline-chat', tools=[{'name': 'fixture_tool', 'description': 'offline',
-     'input_schema': {'type': 'object', 'properties': {'ok': {'type': 'boolean'}}}}]) as r: data = json.load(r)
-assert data['content'][0]['type'] == 'tool_use' and data['content'][0]['input'] == {'ok': True}, data
+if impl == 'litellm':
+    with request('offline-chat', tools=[{'name': 'fixture_tool', 'description': 'offline',
+         'input_schema': {'type': 'object', 'properties': {'ok': {'type': 'boolean'}}}}]) as r: data = json.load(r)
+    assert data['content'][0]['type'] == 'tool_use' and data['content'][0]['input'] == {'ok': True}, data
 try:
     request('offline-error')
     raise AssertionError('upstream error lost')
@@ -134,7 +153,7 @@ if os.environ['ENMAAS_TEST_CLIENT_INDEX'] == '1':
     while not Path(os.environ['ENMAAS_TEST_FIRST_EXIT']).exists():
         assert time.monotonic() < deadline, 'first client did not exit'
         time.sleep(.1)
-    with request('offline-chat') as response:
+    with request('offline-chat' if impl == 'litellm' else 'claude-sonnet-5-5') as response:
         assert json.load(response)['content'][0]['text'] == 'hello'
     print('PASS: remaining Claude client works after its peer exits', flush=True)
 '''
@@ -159,6 +178,8 @@ try:
                     'CLAUDE_ENMAAS_RUNTIME_DIR': str(Path(tmp) / 'state'),
                     'CLAUDE_ENMAAS_PROXY_PORT': str(proxy_port),
                     'ENMAAS_API_BASE_URL': f'http://127.0.0.1:{gateway.server_port}/v1', 'ENMAAS_API_KEY': 'offline-key-a',
+                    'ENMAAS_TEST_IMPL': os.environ['ENMAAS_TEST_IMPL'],
+                    'CLAUDE_ENMAAS_PROXY_IMPL': os.environ['ENMAAS_TEST_IMPL'],
                     'CLAUDE_ENMAAS_MODEL_DIALECTS': 'offline-responses=responses offline-error=chat', 'UV_OFFLINE': '1',
                     'ANTHROPIC_AUTH_TOKEN': 'parent-token', 'ANTHROPIC_API_KEY': 'parent-key',
                     'CLAUDE_CODE_USE_VERTEX': '1', 'CLAUDE_CODE_USE_BEDROCK': '1'})
@@ -203,10 +224,16 @@ exit $result
             assert r['auth'] in (('offline-key-a',) if r['path'] == '/v1/messages' else ('Bearer offline-key-a',)), r
             if r['path'] == '/v1/messages':
                 assert r['version'], r
-        expected = {'claude-sonnet-5-5': '/v1/messages', 'offline-chat': '/v1/chat/completions',
-                    'offline-responses': '/v1/responses', 'gpt-6-luna': '/v1/responses',
+        expected = {'claude-sonnet-5-5': '/v1/messages',
                     'rits/zai-org/glm-5-3': '/v1/messages',
                     'rits/deepseek-ai/DeepSeek-V4.1-Flash-1017': '/v1/messages'}
+        if os.environ['ENMAAS_TEST_IMPL'] == 'litellm':
+            # only LiteLLM converts Messages <-> Chat/Responses; the Go pass
+            # refuses these before they reach the gateway (asserted by the client)
+            expected.update({'offline-chat': '/v1/chat/completions', 'offline-responses': '/v1/responses',
+                             'gpt-6-luna': '/v1/responses'})
+        else:
+            assert not any(r['model'] in ('offline-chat', 'offline-responses', 'gpt-6-luna') for r in records), records
         for model, endpoint in expected.items():
             assert any(r['model'] == model and r['path'] == endpoint for r in records), (model, endpoint)
         print('PASS: exact model IDs, per-model dialect authentication, shared standard proxy and parent environment isolation')
@@ -219,3 +246,8 @@ finally:
                        env=env, text=True, capture_output=True, timeout=30)
     gateway.shutdown()
 PY
+}
+for impl in litellm go; do
+    print -r -- "== impl: $impl"
+    run_suite $impl || exit 1
+done

@@ -1,8 +1,10 @@
-# Go proxy for the LiteLLM launchers (opt-in)
+# Go proxy for the hosted-only and EnMaaS launchers
 
-`LLM_PROXY_IMPL=go` (or per launcher: `HOSTED_ONLY_PROXY_IMPL=go`,
-`CLAUDE_ENMAAS_PROXY_IMPL=go`) swaps each `litellm[proxy]` process for the
-stdlib-only Go binary in `scripts/hosted-only-go`. LiteLLM stays the default.
+The stdlib-only Go binary in `scripts/hosted-only-go` is the **default** proxy
+for the hosted-only launchers (`claude-hosted-only`, `codex-hosted-only` and
+their T3 launchers); `litellm[proxy]` stays as the escape hatch. EnMaaS
+(`claude-enmaas`, :4146) keeps LiteLLM by default and runs Go on request — see
+"Why EnMaaS stays on LiteLLM" below.
 
 It serves both current proxies from one binary:
 
@@ -21,18 +23,28 @@ processes (enmaas + Claude + Codex), ~900 MB and three slow cold starts; today
 it is two (enmaas :4146, merged hosted-only :4148). The Go binary is ~10 MB and
 starts in milliseconds.
 
-## Enabling
+## Choosing the impl
+
+| knob | effect |
+|---|---|
+| (unset) | hosted-only: `auto` = go when a go toolchain is installed, else litellm. EnMaaS: litellm |
+| `HOSTED_ONLY_PROXY_IMPL=litellm\|go\|auto` | the hosted-only launchers (also the retired `GLM_HYBRID_PROXY_IMPL`) |
+| `CLAUDE_ENMAAS_PROXY_IMPL=litellm\|go` | the EnMaaS controller |
+| `LLM_PROXY_IMPL=litellm\|go` | every proxy at once; a per-launcher knob beats it |
 
 ```zsh
-LLM_PROXY_IMPL=go claude-hosted-only          # one launcher
-LLM_PROXY_IMPL=go claude-enmaas               # shared proxy on :4146
-export LLM_PROXY_IMPL=go                      # every launcher in this shell
+LLM_PROXY_IMPL=litellm claude-hosted-only     # the escape hatch, this launch
+export LLM_PROXY_IMPL=litellm                 # every launcher in this shell
+CLAUDE_ENMAAS_PROXY_IMPL=go claude-enmaas     # opt the EnMaaS proxy into Go
 ```
 
-The knob is part of the proxy fingerprint, like a hook edit: an idle proxy is
-restarted by the next launch; one serving a request is reused with a notice
-until `claude-hosted-only-restart` / `claude-enmaas-restart` /
-`codex-hosted-only --stop-proxy`. Unset it to return to LiteLLM.
+The knob is part of the proxy fingerprint, like a hook edit, so flipping it
+restarts an idle proxy on the next launch; one serving a request is reused with
+a notice until `claude-hosted-only-restart` / `claude-enmaas-restart` /
+`codex-hosted-only --stop-proxy`. The first restart after the default flipped is
+a LiteLLM→Go swap on the shared port: the running LiteLLM listener shares it
+through the runtime shim's `SO_REUSEPORT` (#613), the old pid is retired only
+once the Go listener answers, and the probe in the soak saw zero refusals.
 
 The first start builds the binary into
 `${XDG_STATE_HOME:-~/.local/state}/hosted-only-go/`, rebuilding when a module
@@ -162,22 +174,44 @@ the route table. Python hooks and the DoH shim are not installed on this path.
 
 ## Known differences from the LiteLLM path
 
-- Inline image **pruning/caching** (`IMAGE_BUDGET_BYTES`,
-  `IMAGE_CACHE_DAYS`) is not ported.
+- **No dialect translation** (the reason EnMaaS stays on LiteLLM, below).
 - **Drift diagnostics** and the LiteLLM router `reuse:last-reset` path.
 - `cost` is not computed (LiteLLM's `model_cost`); `llm-usage` tolerates it.
-- LiteLLM's chat↔Responses bridge: a chat request for a Responses-only id is
-  answered by the deployment's native endpoint, not translated.
 
-Ported since the first cut: the outage-streak **persistence** across restarts
-(`HOSTED_ONLY_OUTAGE_STATE`, written atomically only when the episode count
-moves, pruned past two streak windows) together with the full
-`hosted_only_hooks.py` backoff semantics — the coalesce window
-(`HOSTED_ONLY_OUTAGE_COALESCE_SECONDS`, parallel requests hitting the same
-blip no longer each double the wait) and the success clear — and the **DoH
-fallback** for the allow-listed gateway name (`ENMAAS_DNS_FALLBACK_HOSTS`,
-`ENMAAS_DNS_DOH_URLS`; the system resolver answers first and always wins),
-both knobs part of the fingerprint like the LiteLLM path's.
+Ported since the first cut, each pinned by a test mirroring the Python hook's:
+outage-streak **persistence** across restarts (`HOSTED_ONLY_OUTAGE_STATE`,
+atomic, only when the episode count moves, pruned past two windows) with the
+coalesce window and the success clear; the **DoH fallback** for the allow-listed
+gateway name; the **inline image budget prune**
+(`HOSTED_ONLY_IMAGE_BUDGET_BYTES`, default 2.5 MB — the gateway caps a body and
+answers 413 — oldest image first, replaced by a note naming the tool call's
+path, a matching T3 attachment and a one-day content-addressed proxy copy, same
+text every turn for prompt caching) and the **per-image pricing** in the window
+clamp (`HOSTED_ONLY_IMAGE_TOKENS`); the **outage shapes** — 529, the gateway's
+503 `metering system unavailable` / `service unavailable`, connect/DNS 500s —
+and the `LIMIT_REWRITE` / `OUTAGE_REWRITE` gate split; the **quota-aware
+fallback skip** (an account-wide monthly quota gains nothing from trying the
+other model); nested `tool_reference` stripping; and the forced `tool_choice`
+cleanup after a `web_search` tool is dropped. Graceful drain: SIGTERM stops
+accepting and lets in-flight requests finish (10 s budget) so a forced swap
+never cuts a stream.
+
+## Why EnMaaS stays on LiteLLM
+
+The EnMaaS flavor serves Claude Code over `/v1/messages` for every catalog
+model, GPT and Gemini included. Those are chat/Responses deployments, so
+something must convert Messages <-> Chat/Responses — tools and streaming
+included. LiteLLM does; this proxy forwards bodies, it does not translate. Hosted-only is
+unaffected: GLM and DeepSeek speak the Anthropic dialect natively, and the Codex
+clients speak the OpenAI wire to the `#openai` deployments.
+
+With the Go impl on EnMaaS, a request whose client dialect does not match the
+deployment's is refused with an actionable 400 naming
+`CLAUDE_ENMAAS_PROXY_IMPL=litellm`, instead of forwarding a body the upstream
+cannot use and handing the client an answer it cannot parse.
+`tests/claude-enmaas-proxy.zsh` runs the real-launcher scenarios against both
+impls and asserts exactly this boundary. The EnMaaS default flips to Go when the
+proxy can translate.
 
 ## Tests
 

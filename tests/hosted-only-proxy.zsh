@@ -14,6 +14,8 @@ fail() { print -ru2 -- "FAIL: $*"; exit 1; }
 export XDG_STATE_HOME="$tmp/state"
 unset HOSTED_ONLY_CLAUDE_PROXY_PORT HOSTED_ONLY_CODEX_PROXY_PORT HOSTED_ONLY_GLM_MODEL HOSTED_ONLY_PROXY_TOKEN \
     GLM_HYBRID_CLAUDE_PROXY_PORT GLM_HYBRID_CODEX_PROXY_PORT GLM_HYBRID_MODEL GLM_HYBRID_PROXY_TOKEN
+# This suite covers the LiteLLM impl (the escape hatch): pin it, the default is go.
+export HOSTED_ONLY_PROXY_IMPL=litellm
 source "$repo/scripts/hosted-only-proxy.zsh"
 source "$repo/zsh/functions/claude/common.zsh"   # the real _claude_port_serving for the busy check
 

@@ -30,8 +30,18 @@ export XDG_STATE_HOME="$tmp/state"
 source "$repo/scripts/hosted-only-proxy.zsh"
 
 # --- launcher contract -------------------------------------------------------
+# Default impl: go (LiteLLM is the escape hatch). `auto` — the default — is go
+# when a go toolchain is installed and litellm otherwise; HOSTED_ONLY_PROXY_IMPL
+# beats LLM_PROXY_IMPL, which flips every proxy at once.
+unset HOSTED_ONLY_PROXY_IMPL GLM_HYBRID_PROXY_IMPL LLM_PROXY_IMPL
 _hosted_only_proxy_vars claude
-[[ "$_hop_impl" == litellm ]] || fail "default impl should be litellm: $_hop_impl"
+[[ "$_hop_impl" == go ]] || fail "default impl should be go: $_hop_impl"
+LLM_PROXY_IMPL=litellm _hosted_only_proxy_vars claude
+[[ "$_hop_impl" == litellm ]] || fail "LLM_PROXY_IMPL=litellm is the escape hatch: $_hop_impl"
+LLM_PROXY_IMPL=litellm HOSTED_ONLY_PROXY_IMPL=go _hosted_only_proxy_vars claude
+[[ "$_hop_impl" == go ]] || fail "HOSTED_ONLY_PROXY_IMPL must beat LLM_PROXY_IMPL: $_hop_impl"
+[[ "$( ( path=(/nonexistent); rehash; _hosted_only_resolve_impl auto ) )" == litellm ]] || fail "auto without a go toolchain must be litellm"
+[[ "$(_hosted_only_resolve_impl bogus)" == bogus ]] || fail "an explicit value is passed through for the caller to reject"
 HOSTED_ONLY_PROXY_IMPL=go _hosted_only_proxy_vars claude
 [[ "$_hop_impl" == go ]] || fail "HOSTED_ONLY_PROXY_IMPL=go not read"
 GLM_HYBRID_PROXY_IMPL=go _hosted_only_proxy_vars claude
@@ -80,6 +90,9 @@ class H(BaseHTTPRequestHandler):
         n = int(self.headers.get('content-length') or 0)
         body = json.loads(self.rfile.read(n) or b'{}')
         text = json.dumps(body)
+        if 'SLOW' in text:
+            import time
+            time.sleep(1.5)
         if 'MONTHLY' in text:
             payload = b'{"error":{"message":"monthly token budget exhausted","type":"insufficient_quota"}}'
             self.send_response(429)
@@ -264,6 +277,22 @@ out=$(curl -s -X POST "$eurl/v1/chat/completions" -H 'content-type: application/
 out=$(curl -s -X POST "$eurl/v1/chat/completions" -H 'content-type: application/json' -H 'authorization: Bearer sk-enmaas-test' \
     -d '{"model":"rits/zai-org/glm-5-3","max_tokens":8,"messages":[{"role":"user","content":"hi"}],"input":[{"type":"additional_tools","tools":[{"type":"function","name":"f"}]}]}')
 [[ "$out" == *'"additional_tools": false'* && "$out" == *'"tools": 1'* ]] || fail "additional_tools not flattened: $out"
+
+# Graceful drain: SIGTERM stops accepting but lets an in-flight request finish
+# (Close alone cut active streams mid-answer — a forced swap can retire a
+# listener that is mid-request). The stub holds this one for 1.5 s.
+local drain_code="$tmp/drain.code"
+( curl -s -o /dev/null -w '%{http_code}' --max-time 10 -X POST "$eurl/v1/chat/completions" -H 'content-type: application/json' \
+    -H 'authorization: Bearer sk-enmaas-test' \
+    -d '{"model":"something-new","max_tokens":8,"messages":[{"role":"user","content":"SLOW"}]}' >| "$drain_code" ) &
+local drainer=$!
+sleep 0.4
+kill -TERM "$eproxy"
+wait $drainer
+[[ "$(<"$drain_code")" == 200 ]] || fail "an in-flight request was cut by SIGTERM instead of drained: $(<"$drain_code")"
+for i in {1..60}; do kill -0 "$eproxy" 2>/dev/null || break; sleep 0.1; done
+if kill -0 "$eproxy" 2>/dev/null; then fail "the proxy did not exit after draining"; fi
+eproxy=
 
 # Stop helper finds the Go process by its runtime dir.
 HOSTED_ONLY_CLAUDE_PROXY_PORT=$pport _hosted_only_proxy_stop claude >/dev/null 2>&1 || fail "stop helper failed"

@@ -169,3 +169,19 @@ func TestSpawnDetachedRotatesLog(t *testing.T) {
 		t.Fatalf("log not truncated for the new generation: %v %v", info, err)
 	}
 }
+
+// The swap retires the old listeners by pid, so a listener that is not this
+// proxy's (here: this very test process, answering the health path) must be
+// refused before anything is started or killed.
+func TestEnsureRefusesToSwapAForeignListener(t *testing.T) {
+	port := startHealthStub(t)
+	dir := t.TempDir()
+	usage := t.TempDir()
+	t.Setenv("LLM_USAGE_DIR", usage)
+	writeFingerprint(dir, "old", "tf1")
+	o := ensureOpts{flavor: "claude", port: port, runtimeDir: dir, fingerprint: "new", tokenFP: "tf1", bootWait: time.Second}
+	_, err := ensureOnce(o)
+	if err == nil || !strings.Contains(err.Error(), "not this proxy") {
+		t.Fatalf("a foreign listener must be refused, got %v", err)
+	}
+}

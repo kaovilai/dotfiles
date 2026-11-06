@@ -2,6 +2,8 @@
 # One standard LiteLLM service, tested on fixture-owned ports with cached deps.
 emulate -LR zsh
 export ENMAAS_TEST_REPO="${0:A:h:h}"
+# Real LiteLLM regression: pin the impl under test (the default is go).
+export CLAUDE_ENMAAS_PROXY_IMPL=litellm
 python3 - <<'PY'
 import concurrent.futures
 import json
