@@ -34,6 +34,16 @@ func (a *app) streamTranslated(w http.ResponseWriter, resp *http.Response, tr tr
 	}
 	info, readErr := tr.Stream(resp.Body, emit, requested)
 
+	// A failure after the 200 was sent must still reach the client: emit the
+	// Anthropic mid-stream error event (the stream then ends without
+	// message_stop, per the protocol) instead of a bare EOF.
+	if readErr != nil && writeErr == nil {
+		_ = emit("error", marshal(map[string]any{
+			"type":  "error",
+			"error": map[string]any{"type": "api_error", "message": readErr.Error()},
+		}))
+	}
+
 	ok := readErr == nil && writeErr == nil
 	status := http.StatusOK
 	errText := ""

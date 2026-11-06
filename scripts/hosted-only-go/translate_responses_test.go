@@ -238,8 +238,8 @@ func TestResponsesRequestGolden(t *testing.T) {
 				{"type":"function_call","call_id":"toolu_1","name":"Bash","arguments":"{\"cmd\":\"ls\"}"},
 				{"type":"function_call","call_id":"toolu_2","name":"Noop","arguments":"{}"},
 				{"type":"function_call_output","call_id":"toolu_1","output":"a\nb"},
-				{"type":"function_call_output","call_id":"toolu_2","output":"Error: x\n[image omitted]\ny"},
-				{"type":"message","role":"user","content":[{"type":"input_text","text":"and then"}]}]}`,
+				{"type":"function_call_output","call_id":"toolu_2","output":"Error: x\ny"},
+				{"type":"message","role":"user","content":[{"type":"input_text","text":"and then"},{"type":"input_image","image_url":"data:image/png;base64,AA=="}]}]}`,
 		},
 		{
 			name: "assistant tool_use without input and string content",
@@ -812,5 +812,145 @@ func TestResponsesMaxOutputTokensMinimum(t *testing.T) {
 		if got, _ := asInt(out["max_output_tokens"]); got != want {
 			t.Fatalf("max_tokens %d -> max_output_tokens %d, want %d", in, got, want)
 		}
+	}
+}
+
+// Interleaved argument deltas (A:{"x": B:{} A:1}) must not truncate call A:
+// the second call's block waits until the first closes, and both arrive
+// complete.
+func TestResponsesStreamInterleavedCallDeltas(t *testing.T) {
+	created := `{"type":"response.created","response":{"id":"r","status":"in_progress"}}`
+	sse := respSSE(
+		"response.created", created,
+		"response.output_item.added", `{"type":"response.output_item.added","output_index":0,"item":{"type":"function_call","id":"fa","call_id":"ca","name":"A"}}`,
+		"response.function_call_arguments.delta", `{"type":"response.function_call_arguments.delta","item_id":"fa","output_index":0,"delta":"{\"x\":"}`,
+		"response.output_item.added", `{"type":"response.output_item.added","output_index":1,"item":{"type":"function_call","id":"fb","call_id":"cb","name":"B"}}`,
+		"response.function_call_arguments.delta", `{"type":"response.function_call_arguments.delta","item_id":"fb","output_index":1,"delta":"{}"}`,
+		"response.function_call_arguments.delta", `{"type":"response.function_call_arguments.delta","item_id":"fa","output_index":0,"delta":"1}"}`,
+		"response.function_call_arguments.done", `{"type":"response.function_call_arguments.done","item_id":"fa","output_index":0,"arguments":"{\"x\":1}"}`,
+		"response.function_call_arguments.done", `{"type":"response.function_call_arguments.done","item_id":"fb","output_index":1,"arguments":"{}"}`,
+		"response.completed", `{"type":"response.completed","response":{"status":"completed","usage":{"input_tokens":2,"output_tokens":2}}}`)
+	evs, _, err := respRunStream(t, sse)
+	if err != nil {
+		t.Fatal(err)
+	}
+	respCheckInvariants(t, evs, true)
+	var tools []string
+	for _, e := range evs {
+		if e.typ() == "content_block_start" {
+			if cb := asMap(e.data["content_block"]); asString(cb["type"]) == "tool_use" {
+				tools = append(tools, asString(cb["id"]))
+			}
+		}
+	}
+	var args string
+	for _, e := range evs {
+		if e.typ() == "content_block_delta" {
+			if d := asMap(e.data["delta"]); asString(d["type"]) == "input_json_delta" {
+				args += asString(d["partial_json"])
+			}
+		}
+	}
+	if len(tools) != 2 || tools[0] != "ca" || tools[1] != "cb" {
+		t.Fatalf("tool blocks: %v", tools)
+	}
+	if args != `{"x":1}{}` {
+		t.Fatalf("interleaved arguments truncated or reordered: %q", args)
+	}
+}
+
+// A done event for a call whose block never started (deltas for another call
+// were mid-stream) must still produce its block, with complete arguments.
+func TestResponsesStreamDoneWhileAnotherCallOpen(t *testing.T) {
+	created := `{"type":"response.created","response":{"id":"r","status":"in_progress"}}`
+	sse := respSSE(
+		"response.created", created,
+		"response.output_item.added", `{"type":"response.output_item.added","output_index":0,"item":{"type":"function_call","id":"fa","call_id":"ca","name":"A"}}`,
+		"response.function_call_arguments.delta", `{"type":"response.function_call_arguments.delta","item_id":"fa","output_index":0,"delta":"{\"a\":"}`,
+		"response.output_item.added", `{"type":"response.output_item.added","output_index":1,"item":{"type":"function_call","id":"fb","call_id":"cb","name":"B"}}`,
+		"response.function_call_arguments.done", `{"type":"response.function_call_arguments.done","item_id":"fb","output_index":1,"arguments":"{\"b\":2}"}`,
+		"response.function_call_arguments.delta", `{"type":"response.function_call_arguments.delta","item_id":"fa","output_index":0,"delta":"1}"}`,
+		"response.function_call_arguments.done", `{"type":"response.function_call_arguments.done","item_id":"fa","output_index":0,"arguments":"{\"a\":1}"}`,
+		"response.completed", `{"type":"response.completed","response":{"status":"completed","usage":{"input_tokens":1,"output_tokens":1}}}`)
+	evs, _, err := respRunStream(t, sse)
+	if err != nil {
+		t.Fatal(err)
+	}
+	respCheckInvariants(t, evs, true)
+	var args string
+	for _, e := range evs {
+		if e.typ() == "content_block_delta" {
+			if d := asMap(e.data["delta"]); asString(d["type"]) == "input_json_delta" {
+				args += asString(d["partial_json"])
+			}
+		}
+	}
+	if args != `{"a":1}{"b":2}` {
+		t.Fatalf("B's done must not close A mid-arguments; both must complete: %q", args)
+	}
+}
+
+// A refusal-only answer must not become a successful empty message.
+func TestResponsesRefusalPreservedAsText(t *testing.T) {
+	out, err := newResponsesTranslator().Response([]byte(
+		`{"id":"resp_1","status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"refusal","refusal":"cannot help"}]}]}`), "m")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var m map[string]any
+	if err := json.Unmarshal(out, &m); err != nil {
+		t.Fatal(err)
+	}
+	content := asList(m["content"])
+	if len(content) != 1 || asString(asMap(content[0])["text"]) != "cannot help" {
+		t.Fatalf("refusal must survive as text: %s", out)
+	}
+}
+
+func TestResponsesStreamRefusalDelta(t *testing.T) {
+	created := `{"type":"response.created","response":{"id":"r","status":"in_progress"}}`
+	sse := respSSE(
+		"response.created", created,
+		"response.refusal.delta", `{"type":"response.refusal.delta","item_id":"m","output_index":0,"delta":"no "}`,
+		"response.refusal.delta", `{"type":"response.refusal.delta","item_id":"m","output_index":0,"delta":"can do"}`,
+		"response.completed", `{"type":"response.completed","response":{"status":"completed","usage":{"input_tokens":1,"output_tokens":1}}}`)
+	evs, _, err := respRunStream(t, sse)
+	if err != nil {
+		t.Fatal(err)
+	}
+	respCheckInvariants(t, evs, true)
+	var text string
+	for _, e := range evs {
+		if e.typ() == "content_block_delta" {
+			if d := asMap(e.data["delta"]); asString(d["type"]) == "text_delta" {
+				text += asString(d["text"])
+			}
+		}
+	}
+	if text != "no can do" {
+		t.Fatalf("refusal deltas lost: %q", text)
+	}
+}
+
+// A token-budget cutoff wins over tool_use even when a call was emitted.
+func TestResponsesIncompleteToolCallKeepsMaxTokens(t *testing.T) {
+	created := `{"type":"response.created","response":{"id":"r","status":"in_progress"}}`
+	sse := respSSE(
+		"response.created", created,
+		"response.output_item.added", `{"type":"response.output_item.added","output_index":0,"item":{"type":"function_call","id":"fa","call_id":"ca","name":"A"}}`,
+		"response.function_call_arguments.delta", `{"type":"response.function_call_arguments.delta","item_id":"fa","output_index":0,"delta":"{\"x\":"}`,
+		"response.incomplete", `{"type":"response.incomplete","response":{"status":"incomplete","incomplete_details":{"reason":"max_output_tokens"},"usage":{"input_tokens":1,"output_tokens":9}}}`)
+	evs, _, err := respRunStream(t, sse)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stop string
+	for _, e := range evs {
+		if e.typ() == "message_delta" {
+			stop = asString(asMap(e.data["delta"])["stop_reason"])
+		}
+	}
+	if stop != "max_tokens" {
+		t.Fatalf("a truncated call must keep stop_reason max_tokens, got %q", stop)
 	}
 }

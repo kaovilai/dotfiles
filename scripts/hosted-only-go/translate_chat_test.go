@@ -110,7 +110,7 @@ func TestChatRequestGolden(t *testing.T) {
 		{
 			"tool_result with image block",
 			`{"model":"m","messages":[{"role":"user","content":[{"type":"tool_result","tool_use_id":"t","content":[{"type":"text","text":"shot"},{"type":"image","source":{"type":"base64","media_type":"image/png","data":"QQ=="}}]}]}]}`,
-			`{"model":"m","messages":[{"role":"tool","tool_call_id":"t","content":"shot\n[image omitted]"}]}`,
+			`{"model":"m","messages":[{"role":"tool","tool_call_id":"t","content":"shot"},{"role":"user","content":[{"type":"image_url","image_url":{"url":"data:image/png;base64,QQ=="}}]}]}`,
 		},
 		{
 			"images",
@@ -735,5 +735,72 @@ func TestChatStreamThoughtSignature(t *testing.T) {
 	}, "gemini-3.7-flash")
 	if err != nil || len(ids) != 1 || !strings.HasPrefix(ids[0], "call_z__thought__") {
 		t.Fatalf("stream tool_use id must carry the signature: err=%v ids=%v", err, ids)
+	}
+}
+
+// A refusal-only answer must not become a successful empty message.
+func TestChatRefusalPreservedAsText(t *testing.T) {
+	out, err := newChatTranslator().Response([]byte(
+		`{"id":"chatcmpl-1","choices":[{"message":{"role":"assistant","content":null,"refusal":"cannot help with that"},"finish_reason":"stop"}]}`), "m")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var m map[string]any
+	if err := json.Unmarshal(out, &m); err != nil {
+		t.Fatal(err)
+	}
+	content := asList(m["content"])
+	if len(content) != 1 || asString(asMap(content[0])["text"]) != "cannot help with that" {
+		t.Fatalf("refusal must survive as text: %s", out)
+	}
+}
+
+// finish_reason length wins over tool_use: the truncated call is not
+// executable and the client retries only on max_tokens.
+func TestChatTruncatedToolCallKeepsMaxTokens(t *testing.T) {
+	out, err := newChatTranslator().Response([]byte(
+		`{"id":"chatcmpl-1","choices":[{"message":{"content":null,"tool_calls":[{"id":"c","type":"function","function":{"name":"a","arguments":"{\"x\":"}}]},"finish_reason":"length"}]}`), "m")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var m map[string]any
+	if err := json.Unmarshal(out, &m); err != nil {
+		t.Fatal(err)
+	}
+	if m["stop_reason"] != "max_tokens" {
+		t.Fatalf("a token-budget cutoff must keep max_tokens even with a (truncated) tool call: %s", out)
+	}
+}
+
+func TestChatStreamRefusalDelta(t *testing.T) {
+	sse := "data: {\"id\":\"c1\",\"choices\":[{\"delta\":{\"refusal\":\"no can do\"}}]}\n\ndata: [DONE]\n\n"
+	evs, _ := chatRunStream(t, sse)
+	var text string
+	for _, ev := range evs {
+		if ev.name == "content_block_delta" {
+			text += asString(asMap(ev.data["delta"])["text"])
+		}
+	}
+	if text != "no can do" {
+		t.Fatalf("refusal delta lost: %q", text)
+	}
+}
+
+// An upstream SSE error line ({"error":{...}} with no choices) must fail the
+// stream instead of finishing as a normal completion.
+func TestChatStreamUpstreamErrorObjectFails(t *testing.T) {
+	sse := "data: {\"error\":{\"message\":\"backend failed\"}}\n\ndata: [DONE]\n\n"
+	var sawStop bool
+	_, err := newChatTranslator().Stream(strings.NewReader(sse), func(ev string, _ []byte) error {
+		if ev == "message_stop" {
+			sawStop = true
+		}
+		return nil
+	}, "m")
+	if err == nil || !strings.Contains(err.Error(), "backend failed") {
+		t.Fatalf("the error line must fail the stream: %v", err)
+	}
+	if sawStop {
+		t.Fatal("a failed stream must not emit message_stop")
 	}
 }

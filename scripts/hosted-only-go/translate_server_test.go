@@ -190,3 +190,45 @@ func TestResponsesRetryThatFailsIsNotLearned(t *testing.T) {
 		t.Fatalf("paths %v: the model must not be learned after a failed retry", paths)
 	}
 }
+
+// An upstream SSE error line must reach the Messages client as an Anthropic
+// error event, not as a 200 with a silent EOF.
+func TestChatStreamUpstreamErrorReachesClient(t *testing.T) {
+	a, _ := chatRoutedApp(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("content-type", "text/event-stream")
+		_, _ = io.WriteString(w, "data: {\"error\":{\"message\":\"backend failed\"}}\n\n")
+		_, _ = io.WriteString(w, "data: [DONE]\n\n")
+	})
+	rec := messagesRequest(a, `{"model":"gpt-5-mini","max_tokens":64,"stream":true,"messages":[{"role":"user","content":"hi"}]}`)
+	body := rec.Body.String()
+	if !strings.Contains(body, "event: error") || !strings.Contains(body, "backend failed") {
+		t.Fatalf("the client must see the upstream failure:\n%s", body)
+	}
+	if strings.Contains(body, "message_stop") {
+		t.Fatalf("a failed stream must not end as a normal completion:\n%s", body)
+	}
+}
+
+// Same for a Responses stream that fails mid-flight.
+func TestResponsesStreamFailureReachesClient(t *testing.T) {
+	a, _ := chatRoutedApp(t, func(w http.ResponseWriter, r *http.Request) {
+		paths := r.URL.Path
+		w.Header().Set("content-type", "text/event-stream")
+		if strings.Contains(paths, "/v1/responses") {
+			_, _ = io.WriteString(w, "event: response.created\ndata: {\"type\":\"response.created\",\"response\":{\"id\":\"r\",\"status\":\"in_progress\"}}\n\n")
+			_, _ = io.WriteString(w, "event: response.failed\ndata: {\"type\":\"response.failed\",\"response\":{\"status\":\"failed\",\"error\":{\"message\":\"kaboom\"}}}\n\n")
+			return
+		}
+		w.Header().Set("content-type", "application/json")
+		w.WriteHeader(400)
+		_, _ = w.Write([]byte(`{"error":{"message":"Function tools ... use /v1/responses."}}`))
+	})
+	rec := messagesRequest(a, `{"model":"gpt-5-mini","max_tokens":64,"stream":true,"messages":[{"role":"user","content":"hi"}]}`)
+	body := rec.Body.String()
+	if !strings.Contains(body, "event: error") || !strings.Contains(body, "kaboom") {
+		t.Fatalf("the client must see the upstream failure:\n%s", body)
+	}
+	if strings.Contains(body, "message_stop") {
+		t.Fatalf("a failed stream must not end as a normal completion:\n%s", body)
+	}
+}

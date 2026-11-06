@@ -17,9 +17,8 @@ type responsesTranslator struct{}
 func newResponsesTranslator() translator { return &responsesTranslator{} }
 
 const (
-	responsesPath         = "/v1/responses"
-	responsesImageOmitted = "[image omitted]"
-	responsesErrMaxBytes  = 2000
+	responsesPath        = "/v1/responses"
+	responsesErrMaxBytes = 2000
 )
 
 // ---------------------------------------------------------------- request
@@ -137,6 +136,15 @@ func respAppendUser(items []any, content any) []any {
 				"call_id": asString(b["tool_use_id"]),
 				"output":  respToolResultOutput(b),
 			})
+			// function_call_output takes a string, so images ride the user
+			// message that follows (vision models keep seeing them).
+			for _, raw := range asList(b["content"]) {
+				if im := asMap(raw); im != nil && asString(im["type"]) == "image" {
+					if url := respImageURL(asMap(im["source"])); url != "" {
+						parts = append(parts, map[string]any{"type": "input_image", "image_url": url})
+					}
+				}
+			}
 		}
 	}
 	if len(parts) > 0 {
@@ -177,8 +185,6 @@ func respToolResultOutput(b map[string]any) string {
 			cm := asMap(raw)
 			if cm != nil && asString(cm["type"]) == "text" {
 				parts = append(parts, asString(cm["text"]))
-			} else {
-				parts = append(parts, responsesImageOmitted)
 			}
 		}
 		out = strings.Join(parts, "\n")
@@ -306,12 +312,14 @@ func respMessageID(upstreamID string) string {
 }
 
 // respStopReason maps Responses termination info to a Messages stop_reason.
+// A token-budget cutoff wins over tool_use: the call is truncated and not
+// executable, and the client retries only on max_tokens.
 func respStopReason(hadTool bool, status, reason string) string {
-	if hadTool {
-		return "tool_use"
-	}
 	if status == "incomplete" && reason == "max_output_tokens" {
 		return "max_tokens"
+	}
+	if hadTool {
+		return "tool_use"
 	}
 	return "end_turn"
 }
@@ -381,8 +389,15 @@ func (t *responsesTranslator) Response(upstream []byte, model string) ([]byte, e
 		case "message":
 			var sb strings.Builder
 			for _, p := range asList(item["content"]) {
-				if pm := asMap(p); pm != nil && asString(pm["type"]) == "output_text" {
+				pm := asMap(p)
+				if pm == nil {
+					continue
+				}
+				switch asString(pm["type"]) {
+				case "output_text":
 					sb.WriteString(asString(pm["text"]))
+				case "refusal":
+					sb.WriteString(asString(pm["refusal"]))
 				}
 			}
 			if sb.Len() > 0 {
@@ -435,6 +450,10 @@ type respCall struct {
 	blk                  *respBlock
 	sawDelta             bool
 	done                 bool
+	// buffered argument fragments while another call's block is mid-stream
+	buf     []string
+	pending bool
+	gotDone bool // the upstream's done event arrived
 }
 
 type respStream struct {
@@ -445,8 +464,10 @@ type respStream struct {
 	finished bool
 	next     int
 	cur      *respBlock
+	blocks   []*respBlock
 	texts    map[string]*respBlock
 	calls    map[string]*respCall
+	pending  []*respCall
 	hadTool  bool
 	usage    usageInfo
 }
@@ -473,19 +494,35 @@ func (s *respStream) start() error {
 	}})
 }
 
-func (s *respStream) closeCur() error {
-	b := s.cur
-	if b == nil {
-		return nil
-	}
-	s.cur = nil
-	if !b.open {
+func (s *respStream) closeBlock(b *respBlock) error {
+	if b == nil || !b.open {
 		return nil
 	}
 	b.open = false
+	if s.cur == b {
+		s.cur = nil
+	}
 	return s.send("content_block_stop", map[string]any{"index": b.idx})
 }
 
+func (s *respStream) closeCur() error {
+	return s.closeBlock(s.cur)
+}
+
+// closeOpen closes every open block, oldest first. Several blocks stay open
+// at once when the upstream interleaves the deltas of parallel calls.
+func (s *respStream) closeOpen() error {
+	for _, b := range s.blocks {
+		if err := s.closeBlock(b); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// begin opens a block, closing the one before it (Anthropic streams blocks
+// sequentially). A call whose deltas arrive while another block is open is
+// buffered instead (callDelta), never interleaved and never truncated.
 func (s *respStream) begin(b *respBlock, block map[string]any) error {
 	if err := s.start(); err != nil {
 		return err
@@ -496,6 +533,7 @@ func (s *respStream) begin(b *respBlock, block map[string]any) error {
 	b.idx = s.next
 	s.next++
 	b.started, b.open = true, true
+	s.blocks = append(s.blocks, b)
 	s.cur = b
 	return s.send("content_block_start", map[string]any{"index": b.idx, "content_block": block})
 }
@@ -587,6 +625,7 @@ func (s *respStream) lookupCall(itemID, outIdx any, name string) *respCall {
 }
 
 func (s *respStream) startCall(c *respCall) error {
+	s.dropPending(c)
 	if c.blk == nil {
 		c.blk = &respBlock{}
 	}
@@ -599,41 +638,139 @@ func (s *respStream) startCall(c *respCall) error {
 	})
 }
 
-func (s *respStream) callDelta(c *respCall, frag string) error {
-	if c.done {
+// dropPending removes c from the buffered-call queue.
+func (s *respStream) dropPending(c *respCall) {
+	for i, p := range s.pending {
+		if p == c {
+			s.pending = append(s.pending[:i], s.pending[i+1:]...)
+			return
+		}
+	}
+}
+
+// openCount reports how many blocks are currently open (sequential streams
+// keep it at 1; 0 means a buffered call may start).
+func (s *respStream) openCount() int {
+	n := 0
+	for _, b := range s.blocks {
+		if b.open {
+			n++
+		}
+	}
+	return n
+}
+
+// flushPending starts the oldest buffered call once nothing is open, emits
+// what was buffered for it as one fragment, and closes it too when its done
+// event already arrived.
+func (s *respStream) flushPending() error {
+	if s.openCount() > 0 || len(s.pending) == 0 {
 		return nil
 	}
+	c := s.pending[0]
+	s.pending = s.pending[1:]
+	c.pending = false
 	if err := s.startCall(c); err != nil {
 		return err
 	}
-	if !c.blk.open || frag == "" {
+	if frag := strings.Join(c.buf, ""); frag != "" {
+		c.buf = nil
+		c.sawDelta = true
+		if err := s.delta(c.blk, map[string]any{"type": "input_json_delta", "partial_json": frag}); err != nil {
+			return err
+		}
+	}
+	if c.gotDone {
+		return s.finishCall(c)
+	}
+	return nil
+}
+
+func (s *respStream) callDelta(c *respCall, frag string) error {
+	if c.done || c.gotDone {
 		return nil
 	}
-	c.sawDelta = true
-	return s.delta(c.blk, map[string]any{"type": "input_json_delta", "partial_json": frag})
+	if c.blk == nil || !c.blk.started {
+		if s.openCount() > 0 {
+			// Another call's block is mid-stream and the upstream interleaves
+			// its deltas: buffer instead of closing that block mid-arguments
+			// (a closed block cannot be reopened; its JSON would truncate).
+			if !c.pending {
+				c.pending = true
+				s.pending = append(s.pending, c)
+			}
+		} else if err := s.startCall(c); err != nil {
+			return err
+		}
+	}
+	if c.blk != nil && c.blk.started && c.blk.open {
+		if frag == "" {
+			return nil
+		}
+		c.sawDelta = true
+		return s.delta(c.blk, map[string]any{"type": "input_json_delta", "partial_json": frag})
+	}
+	if frag != "" {
+		c.buf = append(c.buf, frag)
+	}
+	return nil
 }
 
 func (s *respStream) callDone(c *respCall, args string) error {
+	if c.done || c.gotDone {
+		return nil
+	}
+	c.gotDone = true
+	if !c.sawDelta {
+		// nothing streamed live: the done payload is the authoritative
+		// arguments (it supersedes any buffered fragments, which are a
+		// prefix of it). With sawDelta the fragments already reached the
+		// client and args would duplicate them.
+		if args != "" {
+			c.buf = []string{args}
+		}
+	}
+	if c.blk == nil || !c.blk.started {
+		if s.openCount() > 0 {
+			if !c.pending {
+				c.pending = true
+				s.pending = append(s.pending, c)
+			}
+			return nil
+		}
+	}
+	return s.finishCall(c)
+}
+
+// finishCall emits whatever was never streamed (buffered fragments, the done
+// payload, or "{}") and closes the call's block.
+func (s *respStream) finishCall(c *respCall) error {
 	if c.done {
 		return nil
 	}
 	if err := s.startCall(c); err != nil {
 		return err
 	}
-	if c.blk.open && !c.sawDelta {
-		if args == "" {
-			args = "{}"
+	frag := strings.Join(c.buf, "")
+	c.buf = nil
+	if frag != "" {
+		if !c.sawDelta {
+			c.sawDelta = true
 		}
+		if err := s.delta(c.blk, map[string]any{"type": "input_json_delta", "partial_json": frag}); err != nil {
+			return err
+		}
+	} else if !c.sawDelta {
 		c.sawDelta = true
-		if err := s.delta(c.blk, map[string]any{"type": "input_json_delta", "partial_json": args}); err != nil {
+		if err := s.delta(c.blk, map[string]any{"type": "input_json_delta", "partial_json": "{}"}); err != nil {
 			return err
 		}
 	}
 	c.done = true
-	if s.cur == c.blk {
-		return s.closeCur()
+	if err := s.closeBlock(c.blk); err != nil {
+		return err
 	}
-	return nil
+	return s.flushPending()
 }
 
 func (s *respStream) finish(stop string) error {
@@ -644,7 +781,7 @@ func (s *respStream) finish(stop string) error {
 	if err := s.start(); err != nil {
 		return err
 	}
-	if err := s.closeCur(); err != nil {
+	if err := s.closeOpen(); err != nil {
 		return err
 	}
 	u := map[string]any{"output_tokens": s.usage.Out}
@@ -663,6 +800,23 @@ func (s *respStream) finish(stop string) error {
 	return s.send("message_stop", map[string]any{})
 }
 
+// drainPending closes the open block and gives still-buffered calls their
+// blocks in order (end of stream, or EOF mid-stream).
+func (s *respStream) drainPending() error {
+	if err := s.closeOpen(); err != nil {
+		return err
+	}
+	for len(s.pending) > 0 {
+		if err := s.flushPending(); err != nil {
+			return err
+		}
+		if err := s.closeOpen(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (s *respStream) takeUsage(resp map[string]any) {
 	if resp == nil {
 		return
@@ -675,7 +829,7 @@ func (s *respStream) takeUsage(resp map[string]any) {
 // abort closes the open block and ends the stream with an error (no
 // message_delta / message_stop follow, per the contract).
 func (s *respStream) abort(msg, fallback string) error {
-	if err := s.closeCur(); err != nil {
+	if err := s.closeOpen(); err != nil {
 		return err
 	}
 	s.finished = true
@@ -726,6 +880,14 @@ func (s *respStream) handle(event string, data []byte) error {
 		c := s.lookupCall(ev["item_id"], ev["output_index"], asString(ev["name"]))
 		return s.callDone(c, asString(ev["arguments"]))
 
+	case "response.refusal.delta":
+		return s.emitText(s.textBlock(ev["item_id"], ev["output_index"]), asString(ev["delta"]))
+
+	case "response.refusal.done":
+		if b := s.textBlock(ev["item_id"], ev["output_index"]); !b.started {
+			return s.emitText(b, asString(ev["refusal"]))
+		}
+
 	case "response.output_item.done":
 		item := asMap(ev["item"])
 		switch asString(item["type"]) {
@@ -754,13 +916,19 @@ func (s *respStream) handle(event string, data []byte) error {
 				}
 			}
 			if s.cur == b {
-				return s.closeCur()
+				if err := s.closeCur(); err != nil {
+					return err
+				}
 			}
+			return s.flushPending()
 		}
 
 	case "response.completed", "response.incomplete":
 		resp := asMap(ev["response"])
 		s.takeUsage(resp)
+		if err := s.drainPending(); err != nil {
+			return err
+		}
 		status := asString(resp["status"])
 		if typ == "response.incomplete" {
 			status = "incomplete"
@@ -792,13 +960,16 @@ func (t *responsesTranslator) Stream(r io.Reader, emit func(string, []byte) erro
 	if err := sseEvents(r, s.handle); err != nil {
 		if !s.finished {
 			// Flush what was translated; surface the failure to the caller.
-			if cerr := s.closeCur(); cerr != nil {
+			if cerr := s.closeOpen(); cerr != nil {
 				return s.usage, cerr
 			}
 		}
 		return s.usage, err
 	}
 	if !s.finished {
+		if err := s.drainPending(); err != nil {
+			return s.usage, err
+		}
 		if err := s.finish(respStopReason(s.hadTool, "", "")); err != nil {
 			return s.usage, err
 		}

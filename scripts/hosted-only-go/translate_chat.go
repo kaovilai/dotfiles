@@ -232,6 +232,12 @@ func chatAppendUser(msgs []any, blocks []any) []any {
 				"tool_call_id": chatOrigToolID(asString(bm["tool_use_id"])),
 				"content":      chatToolResultText(bm),
 			})
+			// A tool message takes string content only, so images ride the
+			// user message that follows (vision models keep seeing them).
+			if imgs := chatToolResultImages(bm); len(imgs) > 0 {
+				hasImage = true
+				parts = append(parts, imgs...)
+			}
 		case "text":
 			tx := asString(bm["text"])
 			texts = append(texts, tx)
@@ -281,11 +287,8 @@ func chatToolResultText(b map[string]any) string {
 	case []any:
 		parts := make([]string, 0, len(c))
 		for _, e := range c {
-			em := asMap(e)
-			if asString(em["type"]) == "text" {
+			if em := asMap(e); em != nil && asString(em["type"]) == "text" {
 				parts = append(parts, asString(em["text"]))
-			} else {
-				parts = append(parts, "[image omitted]")
 			}
 		}
 		s = strings.Join(parts, "\n")
@@ -294,6 +297,23 @@ func chatToolResultText(b map[string]any) string {
 		s = "Error: " + s
 	}
 	return s
+}
+
+// chatToolResultImages extracts a tool_result's image blocks as chat
+// image_url parts; they cannot stay in the tool message (string content
+// only) and are appended to the turn's user message instead.
+func chatToolResultImages(b map[string]any) []any {
+	var out []any
+	for _, e := range asList(b["content"]) {
+		em := asMap(e)
+		if em == nil || asString(em["type"]) != "image" {
+			continue
+		}
+		if url := chatImageURL(asMap(em["source"])); url != "" {
+			out = append(out, map[string]any{"type": "image_url", "image_url": map[string]any{"url": url}})
+		}
+	}
+	return out
 }
 
 func chatAppendAssistant(msgs []any, blocks []any) []any {
@@ -412,6 +432,9 @@ func (t *chatTranslator) Response(upstream []byte, model string) ([]byte, error)
 	if text := chatContentText(msg["content"]); text != "" {
 		content = append(content, map[string]any{"type": "text", "text": text})
 	}
+	if ref := asString(msg["refusal"]); ref != "" {
+		content = append(content, map[string]any{"type": "text", "text": ref})
+	}
 	hasTool := false
 	for _, c := range asList(msg["tool_calls"]) {
 		cm := asMap(c)
@@ -438,7 +461,9 @@ func (t *chatTranslator) Response(upstream []byte, model string) ([]byte, error)
 		content = append(content, map[string]any{"type": "text", "text": ""})
 	}
 	stop := chatStopReason(asString(choice["finish_reason"]))
-	if hasTool {
+	// A token-budget cutoff must win over tool_use: the call is truncated and
+	// not executable, and the client retries only on max_tokens.
+	if hasTool && stop != "max_tokens" {
 		stop = "tool_use"
 	}
 	u := chatUsage(asMap(root["usage"]))
@@ -606,6 +631,11 @@ func (s *chatStream) onChunk(data []byte) error {
 	}
 	choices := asList(root["choices"])
 	if len(choices) == 0 {
+		// usage-only chunks are normal; an error object is not (upstreams send
+		// {"error":{...}} as an SSE line instead of an HTTP status).
+		if e := asMap(root["error"]); e != nil && e["message"] != nil {
+			return fmt.Errorf("upstream stream error: %s", asString(e["message"]))
+		}
 		return nil
 	}
 	choice := asMap(choices[0])
@@ -617,6 +647,9 @@ func (s *chatStream) onChunk(data []byte) error {
 		return nil
 	}
 	if err := s.onText(chatContentText(delta["content"])); err != nil {
+		return err
+	}
+	if err := s.onText(asString(delta["refusal"])); err != nil {
 		return err
 	}
 	for _, tc := range asList(delta["tool_calls"]) {
@@ -652,7 +685,7 @@ func (s *chatStream) finishUp() error {
 		return err
 	}
 	stop := chatStopReason(s.finish)
-	if hasTool {
+	if hasTool && stop != "max_tokens" {
 		stop = "tool_use"
 	}
 	if err := s.send("message_delta", map[string]any{

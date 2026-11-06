@@ -238,6 +238,15 @@ unit tests:
 - **gpt-6-\* want function tools on `/v1/responses`.** On that exact 400 the
   proxy retries once through the Responses translator and remembers the model,
   so only the first request pays the failed chat call.
+- Fidelity rules the translators keep: `tool_result` images ride the following
+  user message (chat/Responses tool outputs take strings only, so vision
+  content survives); `message.refusal` / `delta.refusal` /
+  `response.refusal.*` become text instead of a successful empty answer; a
+  token-budget cutoff keeps `stop_reason: max_tokens` even when a (truncated)
+  tool call was emitted; an upstream SSE error line or `response.failed` ends
+  the client stream with an Anthropic `error` event instead of a silent EOF;
+  interleaved argument deltas of parallel Responses calls are buffered so no
+  call's JSON truncates.
 
 Verified live over gpt-4o-mini, gpt-5-mini, gpt-5.5, gpt-6-sol, gpt-6-luna,
 codex-auto-review, gemini-3.7-flash, gemini-3.8-flash and gemini-3.1-pro-preview
