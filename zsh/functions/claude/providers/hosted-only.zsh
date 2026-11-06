@@ -77,8 +77,15 @@ _claude_hosted_launch() (
     # near the window edge the hook trims max_tokens, then refuses with a
     # compaction-hint 400. Changing this default means re-reading that block.
     local max_output="${HOSTED_ONLY_MAX_OUTPUT_TOKENS:-${GLM_HYBRID_MAX_OUTPUT_TOKENS:-128000}}"
-    settings=$(jq -c --arg glm "$glm" --arg ds "$ds" --arg small "$small" --arg sub "$subagent" --arg retries "$max_retries" --arg maxout "$max_output" '. + {
+    # The hosted upstream (vLLM) has no server-side web search, so the session
+    # gets one from the Parallel MCP instead (free, no auth; verified 2026-11-06:
+    # web_search/web_fetch answer live queries). The proxy's strip-note and the
+    # nudge hook route lookups there via T3_WEB_SEARCH_MCP; the paid delegate
+    # stays as the fallback. Empty URL disables.
+    local search_mcp_url="${HOSTED_ONLY_SEARCH_MCP_URL-https://mcp.parallel.ai/mcp}"
+    settings=$(jq -c --arg glm "$glm" --arg ds "$ds" --arg small "$small" --arg sub "$subagent" --arg retries "$max_retries" --arg maxout "$max_output" --arg mcpurl "$search_mcp_url" '. + {
         apiKeyHelper: "",
+        mcpServers: (if $mcpurl == "" then {} else {parallel: {type: "http", url: $mcpurl}} end),
         env: {ANTHROPIC_CUSTOM_HEADERS: "", CLAUDE_CODE_USE_VERTEX: "0", CLAUDE_CODE_USE_BEDROCK: "0",
           CLAUDE_CODE_USE_FOUNDRY: "0", CLAUDE_CODE_AUTO_MODE_SERVER: "0",
           CLAUDE_CODE_MAX_RETRIES: $retries,
@@ -98,6 +105,9 @@ _claude_hosted_launch() (
     # Hosted rits/* models have no server-side web search (vLLM ignores it).
     # Hook ~/.claude/hooks/nudge-web-search-via-luna.sh reads this route.
     export T3_WEB_SEARCH_DELEGATE="codex_rh_codex_api:gpt-5.6-luna"
+    # Preferred search route: the Parallel MCP registered above. The hook and
+    # the proxy's in-band note read this.
+    [[ -n "$search_mcp_url" ]] && export T3_WEB_SEARCH_MCP="parallel"
     # Hook ~/.claude/hooks/shrink-view-image.sh shrinks images to this many px
     # (EnMaaS 413s on large request bodies).
     export T3_IMAGE_MAX_PX=1000

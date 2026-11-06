@@ -207,6 +207,13 @@ launched_out=$(_claude_hosted_launch) || fail "launcher stub run (max output)"
 [[ "$(jq -r .env.CLAUDE_CODE_MAX_OUTPUT_TOKENS <<< "$launched_out")" == 128000 ]] || fail "CLAUDE_CODE_MAX_OUTPUT_TOKENS default: $launched_out"
 launched_out=$(HOSTED_ONLY_MAX_OUTPUT_TOKENS=96000 _claude_hosted_launch) || fail "launcher stub run (max output knob)"
 [[ "$(jq -r .env.CLAUDE_CODE_MAX_OUTPUT_TOKENS <<< "$launched_out")" == 96000 ]] || fail "HOSTED_ONLY_MAX_OUTPUT_TOKENS ignored: $launched_out"
+# the search-less upstream gets web search from the Parallel MCP (issue 602)
+launched_out=$(_claude_hosted_launch) || fail "launcher stub run (search mcp)"
+[[ "$(jq -r '.mcpServers.parallel.type' <<< "$launched_out")" == http && "$(jq -r '.mcpServers.parallel.url' <<< "$launched_out")" == https://mcp.parallel.ai/mcp ]] || fail "parallel MCP not registered by default: $launched_out"
+launched_out=$(HOSTED_ONLY_SEARCH_MCP_URL=https://example.invalid/mcp _claude_hosted_launch) || fail "launcher stub run (search mcp knob)"
+[[ "$(jq -r '.mcpServers.parallel.url' <<< "$launched_out")" == https://example.invalid/mcp ]] || fail "HOSTED_ONLY_SEARCH_MCP_URL ignored: $launched_out"
+launched_out=$(HOSTED_ONLY_SEARCH_MCP_URL= _claude_hosted_launch) || fail "launcher stub run (search mcp off)"
+[[ "$(jq -r '.mcpServers.parallel // "absent"' <<< "$launched_out")" == absent ]] || fail "empty HOSTED_ONLY_SEARCH_MCP_URL must disable the MCP: $launched_out"
 
 # Hook helpers (python), including the retired env-name fallback
 GLM_HYBRID_VISION_FALLBACK=0 GLM_HYBRID_MODEL=rits/x/old HOSTED_ONLY_DIALECT_SUFFIX=#openai python3 -I - "$repo/scripts" <<'EOF' || fail "hook module"
@@ -845,6 +852,11 @@ assert h.fallback_target(fb) is None, "no fallback while the shared monthly quot
 h.LAST_LIMIT_RESET[GLM] = time.time() - 1
 assert h.fallback_target(fb) == DS, "quota window over: fallback resumes"
 
+# the strip-note routes to the session's search MCP when the launcher set one
+os.environ["T3_WEB_SEARCH_MCP"] = "parallel"
+note = h.search_note_text()
+assert "mcp__parallel__web_search" in note and "web_fetch" in note, note[:200]
+del os.environ["T3_WEB_SEARCH_MCP"]
 # dialect suffixing is opt-in (the EnMaaS proxy loads this hook with it unset):
 # without it, an aresponses request keeps its bare model id
 h.DIALECT_SUFFIX = ""

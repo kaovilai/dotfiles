@@ -143,6 +143,10 @@ if [[ "$backend" == enmaas ]]; then
     # Hosted rits/* models have no server-side web search (vLLM ignores it).
     # Hook ~/.claude/hooks/nudge-web-search-via-luna.sh reads this route.
     export T3_WEB_SEARCH_DELEGATE="codex_rh_codex_api:gpt-5.6-luna"
+    # Web search for the search-less gateway upstream: the Parallel MCP (same
+    # registration the Claude flavors get; empty URL disables).
+    typeset search_mcp_url="${ENMAAS_SEARCH_MCP_URL-https://mcp.parallel.ai/mcp}"
+    [[ -n "$search_mcp_url" ]] && export T3_WEB_SEARCH_MCP="parallel"
     typeset -a wiring=(
         -c model_provider=enmaas
         -c 'model_providers.enmaas.name="EnMaaS"'
@@ -152,6 +156,7 @@ if [[ "$backend" == enmaas ]]; then
         -c model_providers.enmaas.requires_openai_auth=false
         -c "model_catalog_json=\"$catalog\""
     )
+    [[ -n "$search_mcp_url" ]] && wiring+=(-c "mcp_servers.parallel.url=\"$search_mcp_url\"")
     # Drop the caller's -c/--config overrides of the keys wired above (T3's
     # launchArgs point the provider straight at the gateway), then put ours in.
     typeset -a rest=() kept=()
@@ -240,6 +245,11 @@ export T3_WEB_SEARCH_DELEGATE="codex_rh_codex_api:gpt-5.6-luna"
 # Hook ~/.claude/hooks/shrink-view-image.sh shrinks images to this many px
 # (EnMaaS 413s on large request bodies).
 export T3_IMAGE_MAX_PX=1000
+# Web search for the search-less hosted upstream: the Parallel MCP (free, no
+# auth; codex lists it as an HTTP server). Codex exposes its tools in-session;
+# the proxy note and the nudge hook point at them via T3_WEB_SEARCH_MCP.
+typeset search_mcp_url="${HOSTED_ONLY_SEARCH_MCP_URL-https://mcp.parallel.ai/mcp}"
+[[ -n "$search_mcp_url" ]] && export T3_WEB_SEARCH_MCP="parallel"
 typeset -a wiring=(
     -c model_provider=glmonly
     -c 'model_providers.glmonly.name="RH Hosted Only"'
@@ -249,8 +259,9 @@ typeset -a wiring=(
     -c model_providers.glmonly.requires_openai_auth=false
     -c "model_catalog_json=\"$catalog\""
     -c 'web_search="disabled"'
-    -c "model=\"$main\""
 )
+[[ -n "$search_mcp_url" ]] && wiring+=(-c "mcp_servers.parallel.url=\"$search_mcp_url\"")
+wiring+=(-c "model=\"$main\"")
 # Overrides placed before a session subcommand are not applied to it (seen with
 # `exec`, Codex 0.162.1), so put them right after it, where T3 puts its own
 # launch args (`app-server <args>`, `exec <args>`). Bare/TUI use: in front.

@@ -325,7 +325,12 @@ const searchNoteMarker = "[web-search-unavailable]"
 
 func searchNoteText(cfg *config) string {
 	where := "a search-capable model or provider (for example T3 delegate_task)"
-	if cfg.SearchDelegate != "" {
+	if cfg.SearchMCP != "" {
+		// the launchers register the Parallel MCP (free, no auth) for sessions
+		// on this search-less upstream, so the session itself can search
+		where = fmt.Sprintf("this session's `%s` MCP web search tools: web_search for queries (objective + search_queries), web_fetch for a known URL (Claude Code exposes them as mcp__%s__web_search / mcp__%s__web_fetch)",
+			cfg.SearchMCP, cfg.SearchMCP, cfg.SearchMCP)
+	} else if cfg.SearchDelegate != "" {
 		provider, model := cfg.SearchDelegate, ""
 		if i := strings.IndexByte(cfg.SearchDelegate, ':'); i >= 0 {
 			provider, model = cfg.SearchDelegate[:i], cfg.SearchDelegate[i+1:]

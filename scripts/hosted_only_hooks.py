@@ -614,9 +614,19 @@ def strip_web_search_tools(data):
 
 def search_note_text():
     """In-band note replacing the dropped tool: no search, route it instead."""
+    mcp = os.environ.get("T3_WEB_SEARCH_MCP", "").strip()
     route = os.environ.get("T3_WEB_SEARCH_DELEGATE", "").strip()
     provider, _, model = route.partition(":")
-    if provider and model:
+    if mcp:
+        # the launchers register the Parallel MCP (free, no auth) for sessions
+        # on this search-less upstream, so the session itself can search
+        where = (
+            f"this session's `{mcp}` MCP web search tools: web_search for "
+            f"queries (objective + search_queries), web_fetch for a known URL "
+            f"(Claude Code exposes them as mcp__{mcp}__web_search / "
+            f"mcp__{mcp}__web_fetch)"
+        )
+    elif provider and model:
         where = f"T3 delegate_task with providerInstanceId={provider} model={model}"
     elif provider:
         where = f"T3 delegate_task with providerInstanceId={provider}"

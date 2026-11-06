@@ -41,6 +41,9 @@ type config struct {
 	QuotaTZ        *time.Location
 	UsageDir       string
 	SearchDelegate string
+	// SearchMCP names the web-search MCP server the launchers register for
+	// sessions on this search-less upstream (T3_WEB_SEARCH_MCP, e.g. "parallel").
+	SearchMCP string
 
 	// Routes is set for the enmaas flavor: the launcher's generated LiteLLM
 	// config.json, read as a model -> deployment table.
@@ -152,6 +155,7 @@ func loadConfig(flavor, port, runtimeDir string) *config {
 		QuotaTZ:        tz,
 		UsageDir:       usageDir,
 		SearchDelegate: strings.TrimSpace(os.Getenv("T3_WEB_SEARCH_DELEGATE")),
+		SearchMCP:      strings.TrimSpace(os.Getenv("T3_WEB_SEARCH_MCP")),
 	}
 }
 

@@ -176,6 +176,7 @@ assert reg['upstream_key']=='upstream-test-secret'
 assert (c/'program-mode').read_text()=='0o600'; assert (c/'directory-mode').read_text()=='0o700'
 assert launch['argv'][2:]==['--model=gemini-3-pro','--print','argument with spaces']
 settings=json.loads(launch['argv'][1]); assert settings['apiKeyHelper']==''
+assert settings['mcpServers']=={'parallel':{'type':'http','url':'https://mcp.parallel.ai/mcp'}}, settings.get('mcpServers')
 assert settings['modelSettings']=={glm:{'effortLevel':'medium'}, ds:{'effortLevel':'medium'}}
 opts=settings['modelPicker']['options']; ids=[r['model'] for r in opts]; assert ids.count('ambiguous')==1
 assert any('GLM 5.3' in row['label'] for row in opts)

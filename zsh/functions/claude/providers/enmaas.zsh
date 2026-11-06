@@ -442,8 +442,14 @@ claude-enmaas() (
     # COUPLED to scripts/hosted_only_hooks.py (clamp_output, MIN_OUTPUT, MAX_MODEL_LEN):
     # changing this default means re-reading the comment above MIN_OUTPUT there.
     local maxout="${ENMAAS_MAX_OUTPUT_TOKENS:-128000}"
-    settings=$(jq -c --arg glm "$glm" --arg ds "$ds" --arg maxout "$maxout" '. + {
+    # The EnMaaS gateway models have no server-side web search (the proxy hooks
+    # strip the tool), so the session gets one from the Parallel MCP (free, no
+    # auth; verified 2026-11-06). The strip-note and nudge hook route lookups
+    # there via T3_WEB_SEARCH_MCP. Empty URL disables.
+    local search_mcp_url="${ENMAAS_SEARCH_MCP_URL-https://mcp.parallel.ai/mcp}"
+    settings=$(jq -c --arg glm "$glm" --arg ds "$ds" --arg maxout "$maxout" --arg mcpurl "$search_mcp_url" '. + {
         apiKeyHelper: "",
+        mcpServers: (if $mcpurl == "" then {} else {parallel: {type: "http", url: $mcpurl}} end),
         env: {ANTHROPIC_CUSTOM_HEADERS: "", CLAUDE_CODE_USE_VERTEX: "0", CLAUDE_CODE_USE_BEDROCK: "0", CLAUDE_CODE_USE_FOUNDRY: "0",
           CLAUDE_CODE_MAX_OUTPUT_TOKENS: $maxout},
         modelSettings: {($glm): {effortLevel: "medium"}, ($ds): {effortLevel: "medium"}}
