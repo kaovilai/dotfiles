@@ -878,6 +878,7 @@ SH
     (
         path=("$dnsbin" $path)
         rehash
+        export CLAUDE_ENMAAS_PROXY_IMPL=litellm   # this block covers the kill-then-start restart; the Go swap is tests/claude-enmaas-go-swap.zsh
         _claude_enmaas_port() { print -r -- 4146; }
         claude-enmaas-kill() { print -r -- killed >> "$dnslog"; }
         claude-enmaas() { print -r -- started >> "$dnslog"; return 0; }

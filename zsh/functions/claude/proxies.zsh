@@ -196,13 +196,16 @@ claude-openai-restart() {
 }
 
 # _claude_enmaas_impl: the EnMaaS proxy impl (the controller resolves the same
-# way): CLAUDE_ENMAAS_PROXY_IMPL, then LLM_PROXY_IMPL, default litellm — only
-# LiteLLM translates Messages <-> Chat/Responses, which Claude Code needs for the
-# non-Anthropic models in the EnMaaS catalog. `auto` means litellm here.
+# way): CLAUDE_ENMAAS_PROXY_IMPL, then LLM_PROXY_IMPL, default `auto` = go when
+# a go toolchain is installed, else litellm. The Go proxy translates Messages <->
+# Chat/Responses itself now (translate*.go), so Claude Code keeps working with
+# the non-Anthropic models in the EnMaaS catalog; =litellm is the escape hatch.
 _claude_enmaas_impl() {
-    local impl="${CLAUDE_ENMAAS_PROXY_IMPL:-${LLM_PROXY_IMPL:-litellm}}"
+    local impl="${CLAUDE_ENMAAS_PROXY_IMPL:-${LLM_PROXY_IMPL:-auto}}"
     impl="${${(L)impl}//[[:space:]]/}"   # lowercase + trim, like the controller (GO and " go " mean go)
-    [[ -z "$impl" || "$impl" == auto ]] && impl=litellm
+    if [[ -z "$impl" || "$impl" == auto ]]; then
+        (( $+commands[go] )) && impl=go || impl=litellm
+    fi
     print -r -- "$impl"
 }
 

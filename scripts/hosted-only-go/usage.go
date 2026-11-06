@@ -139,6 +139,11 @@ func (u *usageLog) write(event map[string]any) {
 	if len(ts) < 7 {
 		return
 	}
+	// ts reaches a filename (events-YYYY-MM.jsonl): map data is not trusted
+	// in a path expression, so require exactly the ISO date shape.
+	if !isoMonthPrefix(ts) {
+		return
+	}
 	body, err := json.Marshal(event)
 	if err != nil {
 		return
@@ -153,6 +158,23 @@ func (u *usageLog) write(event map[string]any) {
 	}
 	defer file.Close()
 	_, _ = file.Write(append(body, '\n'))
+}
+
+// isoMonthPrefix reports whether s starts with YYYY-MM (digits and the one
+// dash at index 4).
+func isoMonthPrefix(s string) bool {
+	for i := 0; i < 7; i++ {
+		if i == 4 {
+			if s[i] != '-' {
+				return false
+			}
+			continue
+		}
+		if s[i] < '0' || s[i] > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 func isoNow(t time.Time) string {

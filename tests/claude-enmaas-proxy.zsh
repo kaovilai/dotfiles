@@ -121,24 +121,16 @@ def request(model, **extra):
 impl = os.environ['ENMAAS_TEST_IMPL']
 native = ['claude-sonnet-5-5', 'rits/zai-org/glm-5-3', 'rits/deepseek-ai/DeepSeek-V4.1-Flash-1017']
 translated = ['offline-chat', 'offline-responses', 'gpt-6-luna']
-for model in native + (translated if impl == 'litellm' else []):
+for model in native + translated:
     with request(model) as r: data = json.load(r)
     assert data['content'][0]['text'] == 'hello', (model, data)
-if impl == 'go':
-    # The Go proxy forwards bodies; it does not translate Messages <-> Chat/Responses.
-    # A Claude Code request for a chat/Responses model must fail loudly, not hand
-    # back an answer the client cannot parse.
-    for model in translated:
-        try:
-            request(model)
-            raise AssertionError('cross-dialect request was not refused: ' + model)
-        except urllib.error.HTTPError as e:
-            body = json.load(e)
-            assert e.code == 400 and 'litellm' in body['error']['message'], (model, e.code, body)
-for model in ['claude-sonnet-5-5'] + (['offline-chat'] if impl == 'litellm' else []):
+# Both impls convert Messages <-> Chat/Responses for the non-Anthropic models: the
+# Go proxy used to refuse these with a 400 naming LiteLLM; since the translators
+# (translate*.go) it answers them itself, so an EnMaaS session on Go keeps GPT/Gemini.
+for model in ['claude-sonnet-5-5', 'offline-chat']:
     with request(model, stream=True) as r: text = r.read().decode()
     assert 'hello' in text and 'message_stop' in text, (model, text)
-if impl == 'litellm':
+if True:  # tools/streaming through the translator, both impls
     with request('offline-chat', tools=[{'name': 'fixture_tool', 'description': 'offline',
          'input_schema': {'type': 'object', 'properties': {'ok': {'type': 'boolean'}}}}]) as r: data = json.load(r)
     assert data['content'][0]['type'] == 'tool_use' and data['content'][0]['input'] == {'ok': True}, data
@@ -153,7 +145,7 @@ if os.environ['ENMAAS_TEST_CLIENT_INDEX'] == '1':
     while not Path(os.environ['ENMAAS_TEST_FIRST_EXIT']).exists():
         assert time.monotonic() < deadline, 'first client did not exit'
         time.sleep(.1)
-    with request('offline-chat' if impl == 'litellm' else 'claude-sonnet-5-5') as response:
+    with request('offline-chat') as response:
         assert json.load(response)['content'][0]['text'] == 'hello'
     print('PASS: remaining Claude client works after its peer exits', flush=True)
 '''
@@ -227,13 +219,11 @@ exit $result
         expected = {'claude-sonnet-5-5': '/v1/messages',
                     'rits/zai-org/glm-5-3': '/v1/messages',
                     'rits/deepseek-ai/DeepSeek-V4.1-Flash-1017': '/v1/messages'}
-        if os.environ['ENMAAS_TEST_IMPL'] == 'litellm':
-            # only LiteLLM converts Messages <-> Chat/Responses; the Go pass
-            # refuses these before they reach the gateway (asserted by the client)
-            expected.update({'offline-chat': '/v1/chat/completions', 'offline-responses': '/v1/responses',
-                             'gpt-6-luna': '/v1/responses'})
-        else:
-            assert not any(r['model'] in ('offline-chat', 'offline-responses', 'gpt-6-luna') for r in records), records
+        # Both impls convert Messages <-> Chat/Responses for the non-Anthropic models
+        # (LiteLLM natively, the Go proxy via translate*.go): each model must reach
+        # the gateway on ITS dialect's endpoint, never with a Messages body.
+        expected.update({'offline-chat': '/v1/chat/completions', 'offline-responses': '/v1/responses',
+                         'gpt-6-luna': '/v1/responses'})
         for model, endpoint in expected.items():
             assert any(r['model'] == model and r['path'] == endpoint for r in records), (model, endpoint)
         print('PASS: exact model IDs, per-model dialect authentication, shared standard proxy and parent environment isolation')
