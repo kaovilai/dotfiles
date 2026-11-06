@@ -12,6 +12,9 @@
   --grid: #e1e0d9; --axis: #c3c2b7; --border: rgba(11,11,11,.10); --wash: rgba(11,11,11,.05);
   --s1: #2a78d6; --s2: #eb6834; --s3: #1baf7a; --s4: #eda100; --s5: #e87ba4; --s6: #008300; --s7: #6250d6; --s8: #e34948;
   --other: #a9a79f;
+  /* brand hues for model families; sequence validated (adjacent CVD >= 8,
+     normal >= 15, contrast >= 3:1) in the order claude, glm, deepseek, gpt */
+  --b-claude: #c15f3c; --b-glm: #0e8fa3; --b-deepseek: #3b57d8; --b-gpt: #0b7a5e;
   --good: #006300; --warn: #8a5a00; --crit: #d03b3b; --reroute: #6250d6;
 }
 @media (prefers-color-scheme: dark) {
@@ -20,7 +23,9 @@
     --page: #0d0d0d; --surface: #1a1a19; --ink: #f0efec; --ink-2: #c3c2b7; --muted: #898781;
     --grid: #2c2c2a; --axis: #383835; --border: rgba(255,255,255,.10); --wash: rgba(255,255,255,.06);
     --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500; --s5: #d55181; --s6: #008300; --s7: #9085e9; --s8: #e66767;
-    --other: #6b6a65; --good: #0ca30c; --warn: #fab219; --crit: #ec835a; --reroute: #9085e9;
+    --other: #6b6a65;
+  /* brand hues, dark steps (validated against the dark surface, same order) */
+  --b-claude: #c96f4e; --b-glm: #0b8ea6; --b-deepseek: #6f85f5; --b-gpt: #10925f; --good: #0ca30c; --warn: #fab219; --crit: #ec835a; --reroute: #9085e9;
   }
 }
 :root[data-theme="dark"] {
@@ -28,7 +33,9 @@
   --page: #0d0d0d; --surface: #1a1a19; --ink: #f0efec; --ink-2: #c3c2b7; --muted: #898781;
   --grid: #2c2c2a; --axis: #383835; --border: rgba(255,255,255,.10); --wash: rgba(255,255,255,.06);
   --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500; --s5: #d55181; --s6: #008300; --s7: #9085e9; --s8: #e66767;
-  --other: #6b6a65; --good: #0ca30c; --warn: #fab219; --crit: #ec835a; --reroute: #9085e9;
+  --other: #6b6a65;
+  /* brand hues, dark steps (validated against the dark surface, same order) */
+  --b-claude: #c96f4e; --b-glm: #0b8ea6; --b-deepseek: #6f85f5; --b-gpt: #10925f; --good: #0ca30c; --warn: #fab219; --crit: #ec835a; --reroute: #9085e9;
 }
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--page); color: var(--ink); font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
@@ -237,7 +244,10 @@ const ms = (n) => (n == null ? "-" : n >= 1000 ? (n / 1000).toFixed(1) + "s" : M
 const pctf = (x) => (x == null ? "-" : Math.round(x * 100) + "%");
 const ERRC = { "429 rate-limit/quota": "var(--crit)", "5xx server": "var(--warn)", "other 4xx/unknown": "var(--other)" };
 const ERR_KEYS = [["429", "429 rate-limit/quota"], ["5xx", "5xx server"], ["oth", "other 4xx/unknown"]];
-const colorOf = (m) => (ERRC[m] ? ERRC[m] : m === "Other" || D.colors[m] == null || D.colors[m] === 0 ? "var(--other)" : `var(--s${D.colors[m]})`);
+const colorOf = (m) => (ERRC[m] ? ERRC[m]
+  : D.brands && D.brands[m] ? `var(--b-${D.brands[m]})`
+  : m === "Other" || D.colors[m] == null || D.colors[m] === 0 ? "var(--other)"
+  : `var(--s${D.colors[m]})`);
 
 function nice(max, integer) {
   if (!(max > 0)) return { max: 1, ticks: [0, 1] };
@@ -398,7 +408,7 @@ function shareBars(host) {
   if (!rows.length) { host.append(html("div", { class: "empty" }, "No data in this range.")); return; }
   const max = Math.max(...rows.map((r) => r.n));
   for (const r of rows) {
-    const bar = html("div", { class: "bar", style: { width: `${Math.max(1, (r.n / max) * 100)}%`, background: colorOf(D.colors[r.model] != null ? r.model : "Other"), maxWidth: "calc(100% - 64px)" } });
+    const bar = html("div", { class: "bar", style: { width: `${Math.max(1, (r.n / max) * 100)}%`, background: colorOf(r.model), maxWidth: "calc(100% - 64px)" } });
     const track = html("div", { class: "track", tabindex: 0 }, bar, html("span", { class: "val" }, human(r.n)));
     const tipRows = [
       { color: colorOf(r.model), value: human(r.n), name: "requests" },
@@ -424,7 +434,7 @@ const sw = (m, tint) => html("span", {}, html("span", { class: "sw", style: { ba
 function renderTables() {
   table(document.getElementById("tb-models"),
     ["Model", "Reqs", "Err", "429", "5xx", "Err%", "In", "Out", "Cache", "Hit", "Ctx max", ">200k", "p50", "p95", "tok/s", "Cost"],
-    D.model_table.map((r) => [sw(r.model, D.colors[r.model] != null ? colorOf(r.model) : "var(--other)"), r.n, r.err || "-", r.e429 || "-", r.e5xx || "-", r.err ? pctf(r.err_rate) : "-", human(r.in), human(r.out), human(r.cread), pctf(r.hit), human(r.ctxmax), r.long || "-", ms(r.p50), ms(r.p95), r.tps ? Math.round(r.tps) : "-", r.cost ? "$" + r.cost.toFixed(2) : "-"]),
+    D.model_table.map((r) => [sw(r.model, colorOf(r.model)), r.n, r.err || "-", r.e429 || "-", r.e5xx || "-", r.err ? pctf(r.err_rate) : "-", human(r.in), human(r.out), human(r.cread), pctf(r.hit), human(r.ctxmax), r.long || "-", ms(r.p50), ms(r.p95), r.tps ? Math.round(r.tps) : "-", r.cost ? "$" + r.cost.toFixed(2) : "-"]),
     ["l", "r", "r", "r", "r", "r", "r", "r", "r", "r", "r", "r", "r", "r", "r", "r"]);
 
   // alias = Claude name served by GLM/DeepSeek, vision = glm→deepseek image fallback, fallback = router retry.
@@ -519,7 +529,7 @@ function errorCharts() {
   for (const r of rows) {
     const bar = html("div", { class: "bar", style: { width: `${Math.max(1, r.err_rate * 100)}%`, background: "var(--crit)", maxWidth: "calc(100% - 96px)" } });
     const val = html("span", { class: "val" }, `${Math.round(r.err_rate * 100)}% (${r.err}/${r.n})`);
-    rates.append(html("div", { class: "row" }, html("div", { class: "name", title: r.model }, html("span", { class: "sw", style: { background: colorOf(D.colors[r.model] != null ? r.model : "Other") } }), r.model),
+    rates.append(html("div", { class: "row" }, html("div", { class: "name", title: r.model }, html("span", { class: "sw", style: { background: colorOf(r.model) } }), r.model),
       html("div", { class: "track", tabindex: 0, title: `${r.e429} × 429, ${r.e5xx} × 5xx, ${r.eoth} other` }, bar, val)));
   }
 }

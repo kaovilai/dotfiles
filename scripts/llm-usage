@@ -1987,6 +1987,19 @@ def cmd_menubar(args):
 # --------------------------------------------------------------------------- web dashboard
 
 SLOTS = 8 # categorical colors in the dataviz palette; beyond that models fold into "Other"
+
+BRANDS = {
+    "claude": ("claude", "anthropic"),
+    "deepseek": ("deepseek",),
+    "glm": ("glm", "zai", "zhipu"),
+    "gpt": ("gpt", "openai", "o1", "o3", "o4"),
+}
+def model_brand(model):
+    m = str(model or "").lower()
+    for key, stems in BRANDS.items():
+        if any(s in m for s in stems):
+            return key
+    return None
 CTX_BINS = [(0, "<8k"), (8_000, "8-32k"), (32_000, "32-128k"), (128_000, "128-200k"), (200_000, "200-500k"), (500_000, ">500k")]
 BUCKETS = [60, 300, 900, 1800, 3600, 10800, 21600, 86400]
 
@@ -2034,7 +2047,9 @@ def dashboard_data(since_text, source, hide):
     volume = defaultdict(int)
     for ev in events:
         volume[strip_model(ev.get("served"))] += 1
-    colors = model_colors(sorted(volume, key=lambda m: -volume[m]), volume)
+    # Branded models carry a fixed brand hue; slots go to the rest only.
+    unbranded = {m: n for m, n in volume.items() if not model_brand(m)}
+    colors = model_colors(sorted(unbranded, key=lambda m: -unbranded[m]), unbranded)
     if hide:
         events = [e for e in events if strip_model(e.get("served")) not in hide]
     if since <= 0:
@@ -2047,7 +2062,7 @@ def dashboard_data(since_text, source, hide):
 
     def label(ev):
         m = strip_model(ev.get("served"))
-        return m if m in colors else "Other"
+        return m if model_brand(m) or m in colors else "Other"
 
     series = {}
     lat = defaultdict(list)
@@ -2068,7 +2083,10 @@ def dashboard_data(since_text, source, hide):
         s["p50"] = [pct(lat.get((m, i), []), 50) for i in range(count)]
         s["p95"] = [pct(lat.get((m, i), []), 95) for i in range(count)]
         s["ttft"] = [pct(ttft_s.get((m, i), []), 50) for i in range(count)]
-    order = sorted(series, key=lambda m: (m == "Other", -sum(series[m]["req"])))
+    # Fixed brand order keeps the color sequence that validate_palette.js
+    # checked (adjacent CVD/normal-vision separation); volume ranks inside it.
+    brand_rank = {"claude": 0, "glm": 1, "deepseek": 2, "gpt": 3}
+    order = sorted(series, key=lambda m: (m == "Other", brand_rank.get(model_brand(m), 9), -sum(series[m]["req"])))
 
     ctx_hist = {m: [0] * len(CTX_BINS) for m in order}
     for ev in events:
@@ -2103,7 +2121,8 @@ def dashboard_data(since_text, source, hide):
 
     return {
         "now": now, "since": since, "bucket": size, "source": used, "events": len(events),
-        "buckets": buckets, "models": order, "chips": [m for m in sorted(volume, key=lambda m: -volume[m]) if m in colors], "colors": {**colors, "Other": 0}, "series": series,
+        "buckets": buckets, "models": order, "chips": [m for m in order if m != "Other"], "colors": {**colors, "Other": 0},
+        "brands": {m: model_brand(m) for m in order if model_brand(m)}, "series": series,
         "ctx_bins": [name for _, name in CTX_BINS], "ctx_hist": ctx_hist,
         "kpi": ({"n": kp["n"], "err": kp["err"], "in": kp["in"], "out": kp["out"], "cread": kp["cread"], "hit": kp["hit"],
                  "p50": kp["p50"], "p95": kp["p95"], "tps": kp["tps"], "cost": kp["cost"], "long": kp["long"],

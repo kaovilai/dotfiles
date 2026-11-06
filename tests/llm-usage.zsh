@@ -177,7 +177,7 @@ d = get("since=1h&source=proxy")
 assert d["events"] == 4 and d["source"] == "proxy", d["events"]
 assert any(r["rerouted"] and r["requested"] == "claude-sonnet-5-5" and r["served"] == "glm-5.3" for r in d["routes"]), d["routes"]
 assert d["kpi"]["long"] == 1 and d["kpi"]["classifier"] == 1 and d["kpi"]["err"] == 1
-assert "glm-5.3" in d["chips"] and d["colors"]["glm-5.3"] >= 1
+assert "glm-5.3" in d["chips"] and d["brands"].get("glm-5.3") == "glm"
 assert get("since=1h&source=proxy&hide=glm-5.3")["events"] == 1
 html = urllib.request.urlopen(f"http://127.0.0.1:{port}/").read()
 assert b"llm-usage" in html and b"ch-errtime" in html and b"ch-errmodel" in html
