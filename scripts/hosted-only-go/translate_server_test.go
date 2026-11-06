@@ -232,3 +232,25 @@ func TestResponsesStreamFailureReachesClient(t *testing.T) {
 		t.Fatalf("a failed stream must not end as a normal completion:\n%s", body)
 	}
 }
+
+// The usage log's ts reaches a filename; anything that is not YYYY-MM must
+// be rejected, not joined into the path.
+func TestUsageWriteRejectsNonDateTimestamp(t *testing.T) {
+	dir := t.TempDir()
+	u := &usageLog{dir: dir, port: "0"}
+	for _, bad := range []string{"../../etc", "2026-1x-07T00:00:00.000Z", "2026_11-07T00:00:00.000Z"} {
+		u.write(map[string]any{"ts": bad, "ok": true})
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("a non-ISO ts must not create a file: %v", entries)
+	}
+	u.write(map[string]any{"ts": "2026-11-07T00:00:00.000Z", "ok": true})
+	entries, err = os.ReadDir(dir)
+	if err != nil || len(entries) != 1 || entries[0].Name() != "events-2026-11.jsonl" {
+		t.Fatalf("a valid ts must land in events-2026-11.jsonl: %v %v", entries, err)
+	}
+}
