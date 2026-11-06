@@ -38,10 +38,12 @@
 # hosted-only: EnMaaS-hosted free models for everything, auto-review included
 # (the retired "glm-hybrid" mode gave GLM an OpenAI reviewer; DeepSeek now does
 # that job). Models: GLM 5.3 (text-only) and DeepSeek V4.1 Flash
-# (1M context, vision), both served by the same :4147 proxy (route per model
-# id). Codex's guardian reuses the main model's provider with only the model
-# swapped, so the reviewer (HOSTED_ONLY_REVIEW_MODEL, default DeepSeek) must be a
-# model the proxy routes too. Main model: HOSTED_ONLY_MODEL (default GLM). Proxy
+# (1M context, vision), both served by the shared :4148 proxy (#599 merge: one
+# LiteLLM, openai-dialect groups suffixed #openai, chosen by the pre-call hook;
+# the catalog and wiring below keep the bare ids). Codex's guardian reuses the
+# main model's provider with only the model swapped, so the reviewer
+# (HOSTED_ONLY_REVIEW_MODEL, default DeepSeek) must be a model the proxy routes
+# too. Main model: HOSTED_ONLY_MODEL (default GLM). Proxy
 # + upstream knobs: scripts/hosted-only-proxy.zsh (old GLM_HYBRID_* names still read).
 # Codex gets only the local proxy token as HOSTED_ONLY_PROXY_TOKEN, never the
 # upstream key. Session exit leaves the proxy running; a changed config or key

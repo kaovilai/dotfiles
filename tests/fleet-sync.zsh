@@ -88,6 +88,10 @@ run || fail "config run rc=$rc: $out"
 [[ "$(calls)" == *"plugin install x@m"* && "$(calls)" != *"marketplace update"* ]] || fail "config change plugin pass wrong: $(calls)"
 
 # 4. copilot-api moved with bun.lock: dependencies reinstalled; gateway not running
+# (a stray gateway from an earlier failed suite run would be adopted and break
+# the silence assert below — the case-9 pkill is too late for this case)
+pkill -f "gw.py $COPILOT_API_PORT" 2>/dev/null || true
+for i in {1..20}; do [[ -z "$(lsof -ti "tcp:$COPILOT_API_PORT" -sTCP:LISTEN 2>/dev/null)" ]] && break; sleep 0.5; done
 upstream capi bun.lock lock2
 run || fail "copilot run rc=$rc: $out"
 [[ "$(head_of capi)" == "$(up_head capi)" ]] || fail "copilot-api not fast-forwarded"
@@ -103,6 +107,7 @@ print -r -- local-edit > "$tmp/dot/file"
 local before_head; before_head=$(head_of dot)
 if run; then fail "dirty repo passed: $out"; fi
 [[ "$out" == *"dotfiles: uncommitted changes; skipped (1 upstream commit(s) waiting)"* ]] || fail "dirty not reported: $out"
+[[ -s "$XDG_STATE_HOME/fleet-sync/drift-dotfiles" ]] || fail "no drift marker for the skipped dirty repo"
 [[ "$(head_of dot)" == "$before_head" && "$(<"$tmp/dot/file")" == local-edit ]] || fail "dirty repo was touched"
 git -C "$tmp/dot" checkout -q -- file
 
@@ -131,6 +136,7 @@ git -C "$tmp/cfg" reset -q --hard origin/main   # clear case 8
 print -r -- local-edit > "$tmp/cfg/file"
 run || fail "dirty-only run rc=$rc: $out"
 [[ "$out" == *"claude-config: 1 file(s) with uncommitted changes; commit and push"* ]] || fail "uncommitted work not reported: $out"
+[[ -s "$XDG_STATE_HOME/fleet-sync/drift-claude-config" ]] || fail "no drift marker for dirty-in-step repo"
 [[ "$out" != *"claude-config: up to date"* && "$(<"$tmp/cfg/file")" == local-edit ]] || fail "dirty-only run misreported or touched the edit: $out"
 git -C "$tmp/cfg" checkout -q -- file
 
@@ -197,8 +203,21 @@ pkill -f "$GW_STUB" 2>/dev/null || true; sleep 0.5; wait $gw 2>/dev/null || true
 [[ "$(<"$repo/scripts/fleet-sync.zsh")" == *'llm-proxy-sync $args'* ]] || fail "proxy sync step not wired into fleet-sync"
 run --help || fail "--help rc=$rc"
 [[ "$out" == *"LiteLLM proxies"* && "$out" == *"restarted when idle"* ]] || fail "--help does not describe the proxy step: $out"
+# the case-9 gateway left a fresh up-marker; a recorded always-on proxy whose
+# listener is gone is restarted (audit: a dead proxy was invisible before)
+run || fail "run with a fresh up-marker rc=$rc: $out"
+[[ "$out" == *"copilot (:$COPILOT_API_PORT) was up last sync, listener gone; restarted"* ]] || fail "recorded dead proxy not restarted: $out"
+curl -sf -o /dev/null "http://127.0.0.1:$COPILOT_API_PORT/v1/models" || fail "marker restart left no gateway"
+pkill -f "$GW_STUB" 2>/dev/null || true; sleep 0.5
+rm -f "${XDG_STATE_HOME:-$HOME/.local/state}/llm-proxy-sync/up-copilot"
 run || fail "run with no proxies rc=$rc: $out"
 [[ "$out" != *"== "* ]] || fail "proxy sync spoke with nothing listening: $out"
+# a marker older than 25 h is a deliberate stop that aged out: left alone
+mkdir -p "${XDG_STATE_HOME:-$HOME/.local/state}/llm-proxy-sync"
+print -r -- "$COPILOT_API_PORT" > "${XDG_STATE_HOME:-$HOME/.local/state}/llm-proxy-sync/up-copilot"
+touch -t 202001010000 "${XDG_STATE_HOME:-$HOME/.local/state}/llm-proxy-sync/up-copilot"
+run --dry-run || fail "dry run with a stale marker rc=$rc: $out"
+[[ "$out" != *"was up last sync"* ]] || fail "stale marker restarted a deliberately stopped proxy: $out"
 run --dry-run || fail "dry run with no proxies rc=$rc: $out"
 [[ "$out" != *"== "* ]] || fail "proxy sync (dry run) spoke with nothing listening: $out"
 

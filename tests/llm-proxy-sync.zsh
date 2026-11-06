@@ -7,6 +7,7 @@
 emulate -LR zsh
 local repo="${0:A:h:h}"
 fail() { print -ru2 -- "FAIL: $*"; exit 1; }
+source "$repo/zsh/functions/claude/common.zsh" || fail "common.zsh does not source"   # the real _claude_port_serving
 source "$repo/zsh/functions/claude/proxies.zsh" || fail "proxies.zsh does not source"
 source "$repo/scripts/hosted-only-proxy.zsh" || fail "hosted-only-proxy.zsh does not source"   # _hosted_only_knob, as load.zsh provides it
 
@@ -24,6 +25,7 @@ typeset -A listening stub_verdict serving restart_rc
 typeset -a restarted confirmed watch_started
 integer WATCH_ALIVE=0 WATCH_START_RC=0 FAKE_NOW=1000 BUSY_UNTIL=0
 # The real helpers are tested at the end; the sync tests use stubs for them.
+functions[_real_port_serving]=$functions[_claude_port_serving]
 functions[_real_watch_alive]=$functions[_llm_proxy_watch_alive]
 functions[_real_watch_start]=$functions[_llm_proxy_watch_start]
 functions[_real_sync_confirm]=$functions[_llm_proxy_sync_confirm]
@@ -144,6 +146,32 @@ reset
 sync --nope
 (( rc == 2 )) && [[ "$out" == *"unknown option '--nope'"* ]] || fail "bad option accepted: rc=$rc out=$out"
 
+# 12. was-up marker: a recorded always-on proxy whose listener is gone is
+# restarted; an on-demand proxy (vertex) with the same marker is not
+reset; listening=(59005 1); sync
+[[ -s "$XDG_STATE_HOME/llm-proxy-sync/up-enmaas" ]] || fail "up-marker not recorded while listening"
+reset; listening=()
+mkdir -p "$XDG_STATE_HOME/llm-proxy-sync"
+print -r -- 59005 > "$XDG_STATE_HOME/llm-proxy-sync/up-enmaas"
+print -r -- 59001 > "$XDG_STATE_HOME/llm-proxy-sync/up-vertex"
+sync
+(( rc == 0 )) && [[ "${restarted[*]}" == enmaas && "$out" == *"enmaas (:59005) was up last sync, listener gone; restarted"* ]] || fail "crashed always-on proxy not restarted: rc=$rc restarted=$restarted out=$out"
+[[ -s "$XDG_STATE_HOME/llm-proxy-sync/up-enmaas" ]] || fail "marker dropped on a successful restart"
+
+# 12b. marker restart that fails: rc 1, reported, marker kept for the next sync
+reset; listening=()
+mkdir -p "$XDG_STATE_HOME/llm-proxy-sync"
+print -r -- 59003 > "$XDG_STATE_HOME/llm-proxy-sync/up-glm-claude"; restart_rc=(glm-claude 1); CONFIRM_RESULT=0
+sync
+(( rc == 1 )) && [[ "$out" == *"was up last sync, listener gone; restart did not bring it back; run: claude-hosted-only-restart"* ]] || fail "failed marker restart mishandled: rc=$rc out=$out"
+[[ -s "$XDG_STATE_HOME/llm-proxy-sync/up-glm-claude" ]] || fail "marker dropped on a failed restart"
+
+# 12c. dry-run reports the would-be marker restart, does not run it
+reset; listening=()
+mkdir -p "$XDG_STATE_HOME/llm-proxy-sync"; print -r -- 59005 > "$XDG_STATE_HOME/llm-proxy-sync/up-enmaas"
+sync --dry-run
+(( rc == 0 && ${#restarted} == 0 )) && [[ "$out" == *"was up last sync, listener gone; would restart it"* ]] || fail "dry-run restarted a dead proxy: rc=$rc out=$out"
+
 # --- llm-proxy-watch (the detached watcher) ---------------------------------
 
 # W1. busy for a while, then idle: restarted at the first idle moment (two quiet
@@ -252,6 +280,18 @@ for i in {1..50}; do [[ -s "$XDG_STATE_HOME/ran" ]] && break; sleep 0.1; done
 # a missing script is a failure the caller can report
 rm -f "$_CLAUDE_SCRIPTS_DIR/llm-proxy-watch.zsh"
 _llm_proxy_watch_start enmaas && fail "start helper succeeded without a watcher script"
+
+# H5. the real serving check: in-flight files decide, sockets are the fallback
+functions[_claude_port_serving]=$functions[_real_port_serving]
+mkdir -p "$XDG_STATE_HOME/llm-usage"
+print -r -- "{\"pid\": $$, \"port\": \"59005\", \"requests\": {\"r1\": {\"t\": 1}}}" > "$XDG_STATE_HOME/llm-usage/inflight-59005-$$.json"
+_claude_port_serving 59005 || fail "live in-flight file not seen as busy"
+print -r -- "{\"pid\": $$, \"port\": \"59005\", \"requests\": {}}" >| "$XDG_STATE_HOME/llm-usage/inflight-59005-$$.json"
+_claude_port_serving 59005 && fail "empty in-flight table counted as busy (the keep-alive stall)"
+print -r -- "{\"pid\": $$, \"port\": \"59005\", \"requests\": {\"r1\": {\"t\": 1}}}" >| "$XDG_STATE_HOME/llm-usage/inflight-59005-999999999.json"
+_claude_port_serving 59005 && fail "dead-pid in-flight file counted as busy"
+rm -f "$XDG_STATE_HOME/llm-usage"/inflight-59005-*.json
+_claude_port_serving 59998 && fail "socket fallback saw busy with no listener and no in-flight files"
 
 # H4. the real watcher script bootstraps (sources load.zsh) and finds the function
 env -i HOME="$tmp/home" PATH="$PATH" XDG_STATE_HOME="$tmp/state2" zsh "$repo/scripts/llm-proxy-watch.zsh" bogus >"$outfile" 2>&1

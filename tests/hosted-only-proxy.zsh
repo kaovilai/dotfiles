@@ -18,23 +18,33 @@ source "$repo/scripts/hosted-only-proxy.zsh"
 
 # Defaults
 _hosted_only_proxy_vars codex
-[[ "$_hop_port" == 4147 && "$_hop_runtime" == "$tmp/state/hosted-only-codex-4147" ]] || fail "codex defaults: $_hop_port $_hop_runtime"
-[[ "$_hop_legacy_runtime" == "$tmp/state/glm-hybrid-codex-4147" ]] || fail "legacy dir: $_hop_legacy_runtime"
+[[ "$_hop_port" == 4148 && "$_hop_runtime" == "$tmp/state/hosted-only-4148" ]] || fail "codex defaults (shared port, #599): $_hop_port $_hop_runtime"
+[[ "${_hop_legacy_runtimes[2]}" == "$tmp/state/hosted-only-codex-4148" ]] || fail "legacy flavor dir: ${_hop_legacy_runtimes[*]}"
 [[ "$_hop_token" == hosted-only-local ]] || fail "token default: $_hop_token"
 _hosted_only_proxy_vars claude
 [[ "$_hop_port" == 4148 ]] || fail "claude port: $_hop_port"
+HOSTED_ONLY_CODEX_PROXY_PORT=4147 _hosted_only_proxy_vars codex
+[[ "$_hop_port" == 4147 && "$_hop_runtime" == "$tmp/state/hosted-only-4147" ]] || fail "split-mode codex port: $_hop_port $_hop_runtime"
+unset HOSTED_ONLY_CODEX_PROXY_PORT
 _hosted_only_proxy_vars bogus 2>/dev/null && fail "bogus flavor accepted"
 
-# Config: both models, hooks callback, no OpenAI/luna route, claude sonnet alias
+# Config: both models in BOTH dialects (#599 merge), hooks callback, no OpenAI/
+# luna route, claude sonnet alias served regardless of flavor
 local cfg
+_hosted_only_proxy_vars claude
 cfg=$(_hosted_only_proxy_config)
 [[ "$cfg" == *'"anthropic/rits/zai-org/glm-5-3"'* && "$cfg" == *'DeepSeek-V4.1-Flash-1017'* ]] || fail "claude config lacks hosted models: $cfg"
 [[ "$cfg" == *'hosted_only_hooks.proxy_handler_instance'* && "$cfg" == *'litellm_usage_log.proxy_handler_instance'* ]] || fail "callbacks missing"
 [[ "$cfg" == *'os.environ/HOSTED_ONLY_PROXY_TOKEN'* && "$cfg" == *'claude-sonnet-5-5'* ]] || fail "claude config shape"
-[[ "$cfg" != *luna* && "$cfg" != *OPENAI* && "$cfg" != *api.openai.com* ]] || fail "OpenAI route leaked into config"
+[[ "$cfg" != *luna* && "$cfg" != *api.openai.com* ]] || fail "OpenAI route leaked into config"
 _hosted_only_proxy_vars codex
 cfg=$(_hosted_only_proxy_config)
-[[ "$cfg" == *'"openai/rits/zai-org/glm-5-3"'* && "$cfg" == *'/v1"'* && "$cfg" != *claude-sonnet-5-5* ]] || fail "codex config shape: $cfg"
+[[ "$cfg" == *'"openai/rits/zai-org/glm-5-3"'* && "$cfg" == *'/v1"'* ]] || fail "codex dialect missing from merged config: $cfg"
+[[ "$cfg" == *'glm-5-3#openai'* && "$cfg" == *'DeepSeek-V4.1-Flash-1017#openai'* ]] || fail "suffixed groups missing: $cfg"
+[[ "$cfg" == *'claude-sonnet-5-5'* ]] || fail "merged config must serve the claude alias for both flavors: $cfg"
+[[ "${cfg##*model_name: \"rits/zai-org/glm-5-3\"}" == *'#openai'* ]] || fail "bare glm group and suffixed group must be distinct entries: $cfg"
+# the anthropic and openai deployments of the same model must not share a group
+[[ "$(grep -c 'model_name:' <<< "$cfg")" == 5 ]] || fail "merged config must have 5 deployments (glm, glm#openai, ds, ds#openai, alias): $cfg"
 
 # LiteLLM upstream retries: router_settings.num_retries (default 0), knob changes config
 [[ "$cfg" == *$'router_settings:\n  num_retries: 0'* ]] || fail "router retry setting missing: $cfg"
@@ -50,15 +60,16 @@ HOSTED_ONLY_UPSTREAM_RETRIES=5 _hosted_only_proxy_vars codex
 [[ "$_hop_upstream_retries" == 5 ]] || fail "upstream retries var: $_hop_upstream_retries"
 _hosted_only_proxy_vars codex
 [[ "$_hop_upstream_retries" == 0 ]] || fail "upstream retries default: $_hop_upstream_retries"
-[[ "$(<"$repo/scripts/hosted-only-proxy.zsh")" == *'$_hop_client_retry $_hop_upstream_retries $_hop_fallback $_hop_aliases $_hop_request_timeout $_hop_image_budget $_hop_image_cache_days"'* ]] || fail "upstream retries / fallback / alias / timeout / image knobs not in fingerprint"
+[[ "$(<"$repo/scripts/hosted-only-proxy.zsh")" == *'$_hop_client_retry $_hop_upstream_retries $_hop_fallback $_hop_aliases $_hop_request_timeout $_hop_image_budget $_hop_image_cache_days $_hop_dialect"'* ]] || fail "upstream retries / fallback / alias / timeout / image knobs not in fingerprint"
 # fallback + outage knobs are one fingerprint component: a change restarts an idle proxy
 [[ "$_hop_fallback" == "1 1 60 600 1048576 512 3 16000" ]] || fail "fallback knob defaults: $_hop_fallback"
 HOSTED_ONLY_FALLBACK=0 HOSTED_ONLY_MAX_MODEL_LEN=999999 _hosted_only_proxy_vars codex
 [[ "$_hop_fallback" == "0 1 60 600 999999 512 3 16000" ]] || fail "HOSTED_ONLY_FALLBACK / MAX_MODEL_LEN not read: $_hop_fallback"
 _hosted_only_proxy_vars codex
-# GLM alias ids and the per-deployment request timeout are flavor-dependent knobs
-[[ "$_hop_aliases" == "" ]] || fail "codex flavor has no GLM alias by default: $_hop_aliases"
-[[ "$_hop_request_timeout" == 300 ]] || fail "request timeout default: $_hop_request_timeout"
+# The merged config serves the claude alias for both flavors, so the alias knob
+# (and the fingerprint it feeds) is flavor-independent
+[[ "$_hop_aliases" == "claude-sonnet-5-5" ]] || fail "codex flavor alias default (merged): $_hop_aliases"
+[[ "$_hop_request_timeout" == 180 ]] || fail "request timeout default: $_hop_request_timeout"
 _hosted_only_proxy_vars claude
 [[ "$_hop_aliases" == "claude-sonnet-5-5" ]] || fail "claude flavor alias default: $_hop_aliases"
 HOSTED_ONLY_ALIAS_MODELS=x,y _hosted_only_proxy_vars claude
@@ -72,7 +83,7 @@ _hosted_only_proxy_vars codex
 HOSTED_ONLY_IMAGE_BUDGET_BYTES=123 HOSTED_ONLY_IMAGE_CACHE_DAYS=2 _hosted_only_proxy_vars codex
 [[ "$_hop_image_budget" == 123 && "$_hop_image_cache_days" == 2 ]] || fail "image knobs: $_hop_image_budget $_hop_image_cache_days"
 _hosted_only_proxy_vars codex
-[[ "$_hop_image_budget" == 8388608 && "$_hop_image_cache_days" == 1 ]] || fail "image knob defaults: $_hop_image_budget $_hop_image_cache_days"
+[[ "$_hop_image_budget" == 2500000 && "$_hop_image_cache_days" == 1 ]] || fail "image knob defaults: $_hop_image_budget $_hop_image_cache_days"
 
 # Dry run (HOSTED_ONLY_CHECK_OUT): "down|fresh|stale <fp> <token hash>", return 1, nothing started or written.
 (
@@ -112,7 +123,7 @@ HTTPServer(("127.0.0.1", int(sys.argv[1])), H).serve_forever()' "$chk_port" &
 
 # New knob names win; retired GLM_HYBRID_* names still work
 HOSTED_ONLY_CODEX_PROXY_PORT=4157 _hosted_only_proxy_vars codex
-[[ "$_hop_port" == 4157 && "$_hop_runtime" == *hosted-only-codex-4157 ]] || fail "HOSTED_ONLY port: $_hop_port"
+[[ "$_hop_port" == 4157 && "$_hop_runtime" == *hosted-only-4157 ]] || fail "HOSTED_ONLY port: $_hop_port $_hop_runtime"
 GLM_HYBRID_CODEX_PROXY_PORT=4167 GLM_HYBRID_MODEL=rits/x/old GLM_HYBRID_PROXY_TOKEN=oldtok _hosted_only_proxy_vars codex
 [[ "$_hop_port" == 4167 && "$_hop_glm" == rits/x/old && "$_hop_token" == oldtok ]] || fail "legacy knobs ignored: $_hop_port $_hop_glm $_hop_token"
 GLM_HYBRID_CODEX_PROXY_PORT=4167 HOSTED_ONLY_CODEX_PROXY_PORT=4177 HOSTED_ONLY_GLM_MODEL=rits/x/new GLM_HYBRID_MODEL=rits/x/old _hosted_only_proxy_vars codex
@@ -124,7 +135,7 @@ local port=4197 base="$tmp/state"
 export HOSTED_ONLY_CODEX_PROXY_PORT=$port
 _hosted_only_proxy_vars codex
 local dir pid i
-for dir in "$_hop_runtime" "$_hop_legacy_runtime"; do
+for dir in "$_hop_runtime" "${_hop_legacy_runtimes[@]}"; do
     mkdir -p "$dir"; : > "$dir/config.yaml"; print x > "$dir/fingerprint"
     python3 - "$port" "$dir/config.yaml" <<'EOF' &
 import socket, sys, time
@@ -198,7 +209,7 @@ launched_out=$(HOSTED_ONLY_MAX_OUTPUT_TOKENS=96000 _claude_hosted_launch) || fai
 [[ "$(jq -r .env.CLAUDE_CODE_MAX_OUTPUT_TOKENS <<< "$launched_out")" == 96000 ]] || fail "HOSTED_ONLY_MAX_OUTPUT_TOKENS ignored: $launched_out"
 
 # Hook helpers (python), including the retired env-name fallback
-GLM_HYBRID_VISION_FALLBACK=0 GLM_HYBRID_MODEL=rits/x/old python3 -I - "$repo/scripts" <<'EOF' || fail "hook module"
+GLM_HYBRID_VISION_FALLBACK=0 GLM_HYBRID_MODEL=rits/x/old HOSTED_ONLY_DIALECT_SUFFIX=#openai python3 -I - "$repo/scripts" <<'EOF' || fail "hook module"
 import json, sys, time, types
 sys.path.insert(0, sys.argv[1])
 # stub the two third-party imports (litellm / fastapi are not installed here)
@@ -223,7 +234,7 @@ assert not h.is_empty_instruction({"role": "user", "content": ""})
 
 # Image budget prune (item 6): oldest inline images -> path notes until the body fits
 import base64, hashlib, os, tempfile
-assert h.IMAGE_BUDGET_BYTES == 8 * 1024 * 1024 and h.IMAGE_CACHE_DAYS == 1
+assert h.IMAGE_BUDGET_BYTES == 2500000 and h.IMAGE_CACHE_DAYS == 1 and h.IMAGE_TOKENS == 2500
 work = tempfile.mkdtemp()
 cache_dir, att_dir = os.path.join(work, "cache"), os.path.join(work, "attachments")
 os.mkdir(att_dir)
@@ -593,7 +604,8 @@ out = h.rewrite_limit(St(402, "payment required"), chat, now=NOW)
 assert out.status_code == 402 and out.type == "insufficient_quota" and iso(NEXT) in out.detail, (out.status_code, out.detail)
 out = h.rewrite_limit(St(402, "payment required"), resp, now=NOW)
 assert out.status_code == 429 and out.type == "usage_limit_reached" and out.headers["x-codex-primary-reset-at"] == str(int(NEXT)), out.headers
-assert h.rewrite_limit(St(503, "metering system unavailable"), msgs, now=NOW) is None
+out = h.rewrite_limit(St(503, "metering system unavailable"), msgs, now=NOW)
+assert out is not None and "Upstream unavailable (503)" in getattr(out, "detail", str(out))
 assert h.rewrite_limit(St(500, "boom"), msgs, now=NOW) is None
 # upstream outages (gateway 504 etc.) become reset-bearing answers T3 can auto-resume on
 h.OUTAGE_STREAK.clear()
@@ -606,8 +618,14 @@ assert h.is_outage_error(St(500, "Invalid message for role `developer`")) is Fal
 # gateway auth DB down (2026-11-05 tailbond thread): 503 no_db_connection is an outage; other 503s are not
 nodb = '{"error":{"message":"Service Unavailable, the authentication database is temporarily unreachable. Please retry shortly.","type":"no_db_connection","param":"None","code":"503"}}'
 assert h.is_outage_error(St(503, nodb)) is True
-assert h.is_outage_error(St(503, "metering system unavailable")) is False
+assert h.is_outage_error(St(503, "metering system unavailable")) is True   # gateway metering plane down (2026-10-22: 90 unrewritten)
+assert h.is_outage_error(St(503, "service unavailable")) is True           # gateway-wide 503 (2026-10-22: 33 unrewritten)
 assert h.is_outage_error(St(503, "upstream rate limited")) is False                 # a limit, not an outage
+# litellm reports connect/DNS failures as 500 "Cannot connect to host ..." (2026-11-06 audit)
+assert h.is_outage_error(St(500, "Cannot connect to host api.enmaas.devshift.net:443 ssl:default [Connect call failed]")) is True
+assert h.is_outage_error(St(500, "Cannot connect to host api.enmaas.devshift.net:443 ssl:default [nodename nor servname provided, or not known]")) is True
+# 529 overloaded_error is a transient outage (2026-10-22: 24 unrewritten)
+assert h.is_outage_error(St(529, '{"type": "error", "error": {"type": "overloaded_error", "message": "Overloaded"}}')) is True
 out = h.rewrite_limit(St(503, nodb), {"model": "m2", "proxy_server_request": {"url": "/v1/messages"}}, now=NOW)
 assert out.status_code == 503 and "Upstream unavailable (503)" in out.detail and "(reset after 1m)" in out.detail, out.detail
 h.OUTAGE_STREAK.clear()
@@ -615,13 +633,15 @@ gw = "<html><body><h1>504 Gateway Time-out</h1></body></html>"
 out = h.rewrite_limit(St(504, gw), msgs, now=NOW)
 assert out.status_code == 503 and "[429]" in out.detail and "(reset after 1m)" in out.detail and "Upstream unavailable (504)" in out.detail, out.detail
 assert h.reset_after_seconds(out.detail.encode()) == 60
-out = h.rewrite_limit(St(504, gw), resp, now=NOW + 5)  # second failure in the window doubles the wait
+# episodes, not requests: failures more than OUTAGE_COALESCE apart double the
+# wait, simultaneous ones do not (see the coalescing test below)
+out = h.rewrite_limit(St(504, gw), resp, now=NOW + 6)
 assert out.status_code == 429 and out.type == "usage_limit_reached", out.status_code
-assert out.headers["retry-after"] == "120" and out.headers["x-codex-primary-reset-at"] == str(int(NOW + 5 + 120)), out.headers
-out = h.rewrite_limit(St(504, gw), chat, now=NOW + 10)
+assert out.headers["retry-after"] == "120" and out.headers["x-codex-primary-reset-at"] == str(int(NOW + 6 + 120)), out.headers
+out = h.rewrite_limit(St(504, gw), chat, now=NOW + 16)
 assert out.status_code == 429 and out.headers["retry-after"] == "240", (out.status_code, out.headers)
 for i in range(8):
-    out = h.rewrite_limit(St(504, gw), resp, now=NOW + 20 + i)
+    out = h.rewrite_limit(St(504, gw), resp, now=NOW + 26 + i * 10)
 assert out.headers["retry-after"] == "600", out.headers  # capped
 out = h.rewrite_limit(St(504, gw), msgs, now=NOW + 5000)  # quiet for a while: starts over
 assert "(reset after 1m)" in out.detail, out.detail
@@ -760,6 +780,103 @@ assert saved == {"persist": [2, 1100]}, saved
 os.environ.pop("HOSTED_ONLY_OUTAGE_STATE")
 importlib.reload(h)
 assert h.OUTAGE_STATE_FILE == "" and h.outage_wait("persist2", 1000) == 60  # off: in-memory only
+
+# Parallel failures are one episode, not five doublings; a success clears it
+h.OUTAGE_STREAK.clear()
+assert [h.outage_wait("co", 1000) for _ in range(5)] == [60] * 5, h.OUTAGE_STREAK
+assert h.outage_wait("co", 1003) == 60, "inside OUTAGE_COALESCE: same episode"
+assert h.outage_wait("co", 1100) == 120, "past COALESCE: next episode"
+hook = h.HostedOnlyHooks()
+asyncio.run(hook.async_log_success_event({"model": "co"}, None, 0, 0))
+assert "co" not in h.OUTAGE_STREAK, h.OUTAGE_STREAK
+assert h.outage_wait("co", 1200) == 60, "streak restarted after a success"
+
+# Gate split: LIMIT_REWRITE=0 must not kill the outage rewrite
+h.LIMIT_REWRITE, h.OUTAGE_REWRITE = False, True
+out = asyncio.run(hook.async_post_call_failure_hook({"model": "m", "proxy_server_request": {"url": "/v1/messages"}}, St(504, "<html>504</html>"), None))
+assert out is not None, "outage rewrite must run with LIMIT_REWRITE=0"
+h.LIMIT_REWRITE, h.OUTAGE_REWRITE = False, False
+out = asyncio.run(hook.async_post_call_failure_hook({"model": "m"}, St(504, "x"), None))
+assert out is None, "both knobs off: no rewrite"
+
+# Images are priced per image, not as base64 text (2026-11-06 audit: 20 x 120 KiB
+# tripped the compaction hint on a small real load)
+imgs = {"model": DS, "messages": [{"role": "user", "content": [
+    {"type": "image_url", "image_url": {"url": "data:image/png;base64," + "A" * 122880}} for _ in range(20)]}],
+    "max_tokens": 128000}
+assert h.clamp_output(imgs) is None, "base64 bytes must not count as text tokens"
+many = {"model": GLM, "messages": [{"role": "user", "content": [
+    {"type": "image", "source": {"type": "base64", "data": "A" * 100}} for _ in range(500)]}],
+    "max_tokens": 8192}
+try:
+    h.clamp_output(many)
+    raise SystemExit("500 images must refuse")
+except h.HTTPException as e:
+    assert e.status_code == 400, e.detail
+
+# tool_reference nested in tool_result.content is stripped too
+nested = {"model": GLM, "messages": [{"role": "user", "content": [
+    {"type": "tool_result", "tool_use_id": "t1", "content": [{"type": "tool_reference", "tool_name": "t"}, {"type": "text", "text": "ok"}]}]}]}
+assert h.strip_tool_references(nested) == 1, nested
+assert nested["messages"][0]["content"][0]["content"][0]["type"] == "text", nested
+
+# a forced tool_choice naming the removed search tool is freed
+ws = {"tools": [{"type": "web_search_20250305"}, {"type": "custom", "name": "c"}],
+      "tool_choice": {"type": "tool", "name": "web_search"}}
+assert h.strip_web_search_tools(ws) is True and len(ws["tools"]) == 1
+assert "tool_choice" not in ws, ws
+
+# ALIAS_MODELS tolerates spaces; int_knob floors a bad value
+os.environ["HOSTED_ONLY_ALIAS_MODELS"] = "claude-sonnet-5-5, claude-opus-5-5"
+importlib.reload(h)
+assert h.ALIAS_MODELS == frozenset({"claude-sonnet-5-5", "claude-opus-5-5"}), h.ALIAS_MODELS
+os.environ.pop("HOSTED_ONLY_ALIAS_MODELS")
+importlib.reload(h)
+os.environ["HOSTED_ONLY_BOGUS_KNOB"] = "abc"
+assert h.int_knob("BOGUS_KNOB", 512, 100) == 512
+del os.environ["HOSTED_ONLY_BOGUS_KNOB"]
+
+# quota-exhausted model does not burn a fallback attempt on the same account
+h.LAST_LIMIT_KIND.clear(); h.LAST_LIMIT_RESET.clear()
+fb = {"model": GLM, "messages": [{"role": "user", "content": "hi"}]}
+assert h.fallback_target(fb) == DS
+h.LAST_LIMIT_KIND[GLM] = "quota"; h.LAST_LIMIT_RESET[GLM] = time.time() + 3600
+assert h.fallback_target(fb) is None, "no fallback while the shared monthly quota is out"
+h.LAST_LIMIT_RESET[GLM] = time.time() - 1
+assert h.fallback_target(fb) == DS, "quota window over: fallback resumes"
+
+# dialect suffixing is opt-in (the EnMaaS proxy loads this hook with it unset):
+# without it, an aresponses request keeps its bare model id
+h.DIALECT_SUFFIX = ""
+hook0 = h.HostedOnlyHooks()
+req = {"model": GLM, "messages": [{"role": "user", "content": "hi"}], "max_tokens": 100}
+out = asyncio.run(hook0.async_pre_call_hook(None, None, req, "aresponses"))
+assert out["model"] == GLM, out["model"]
+h.DIALECT_SUFFIX = "#openai"
+# merged-proxy dialect routing (#599): openai call types get the #openai group,
+# /v1/messages keeps the bare anthropic group; every rewrite keeps the dialect
+hook0 = h.HostedOnlyHooks()
+req = {"model": GLM, "messages": [{"role": "user", "content": "hi"}], "max_tokens": 100}
+out = asyncio.run(hook0.async_pre_call_hook(None, None, req, "aresponses"))
+assert out["model"] == GLM + "#openai", out["model"]
+assert out.get("fallbacks") == [DS + "#openai"], out.get("fallbacks")
+req = {"model": GLM, "messages": [{"role": "user", "content": "hi"}], "max_tokens": 100}
+out = asyncio.run(hook0.async_pre_call_hook(None, None, req, "anthropic_messages"))
+assert out["model"] == GLM, out["model"]
+assert out.get("fallbacks") == [DS], out.get("fallbacks")
+# vision reroute keeps the dialect (import-time env disabled it; enable here)
+h.VISION_FALLBACK = True
+pic = {"model": GLM, "messages": [{"role": "user", "content": [{"type": "image", "source": {"type": "base64", "data": "A" * 64}}]}], "max_tokens": 100}
+out = asyncio.run(hook0.async_pre_call_hook(None, None, pic, "aresponses"))
+assert out["model"] == DS + "#openai", out["model"]
+h.VISION_FALLBACK = False
+# clamp gates on the bare id behind a suffixed one
+suffixed = {"model": GLM + "#openai", "messages": est(1048600), "max_tokens": 8192}
+try:
+    h.clamp_output(suffixed)
+    raise SystemExit("suffixed over-limit must refuse")
+except h.HTTPException as e:
+    assert e.status_code == 400, e.detail
 EOF
 
 print -r -- "ok hosted-only-proxy"

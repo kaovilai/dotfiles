@@ -53,6 +53,47 @@ source "$root/zsh/functions/migrate-laptop.zsh"   # progress/success/warning/err
 path=(~/.local/bin ~/.bun/bin $path)
 
 # --- timer ------------------------------------------------------------------
+# macOS: LaunchAgent (nothing drove the hourly sync here before, so a deferred
+# proxy restart or a drift marker could sit for days; 2026-11-06 audit).
+typeset launch_dir="$HOME/Library/LaunchAgents"
+if [[ $timer == install && "$OSTYPE" == darwin* ]]; then
+    mkdir -p "$launch_dir" "${XDG_STATE_HOME:-$HOME/.local/state}/fleet-sync" || exit 1
+    print -r -- "<?xml version=\"1.0\" encoding=\"UTF-8\"?>
+<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">
+<plist version=\"1.0\">
+<dict>
+    <key>Label</key>
+    <string>com.kaovilai.fleet-sync</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>${commands[zsh]}</string>
+        <string>${root}/scripts/fleet-sync.zsh</string>
+        <string>--quiet</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Minute</key>
+        <integer>17</integer>
+    </dict>
+    <key>StandardErrorPath</key>
+    <string>${XDG_STATE_HOME:-$HOME/.local/state}/fleet-sync/launchd.log</string>
+    <key>StandardOutPath</key>
+    <string>${XDG_STATE_HOME:-$HOME/.local/state}/fleet-sync/launchd.log</string>
+</dict>
+</plist>" >| "$launch_dir/com.kaovilai.fleet-sync.plist"
+    launchctl bootout "gui/$UID/com.kaovilai.fleet-sync" 2>/dev/null
+    launchctl bootstrap "gui/$UID" "$launch_dir/com.kaovilai.fleet-sync.plist" || exit 1
+    success "com.kaovilai.fleet-sync LaunchAgent installed (hourly at :17; logs: ${XDG_STATE_HOME:-$HOME/.local/state}/fleet-sync/launchd.log)"
+    exit 0
+fi
+if [[ $timer == remove && "$OSTYPE" == darwin* ]]; then
+    launchctl bootout "gui/$UID/com.kaovilai.fleet-sync" 2>/dev/null
+    rm -f "$launch_dir/com.kaovilai.fleet-sync.plist"
+    success "com.kaovilai.fleet-sync LaunchAgent removed"
+    exit 0
+fi
 typeset unit_dir="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
 if [[ $timer == install ]]; then
     [[ "$OSTYPE" == linux* && -d /run/systemd/system ]] || { error "--install-timer needs Linux with systemd"; exit 1; }
@@ -88,6 +129,14 @@ fi
 # --- repos ------------------------------------------------------------------
 typeset -i problems=0
 typeset -A before=()   # label -> HEAD before a fast-forward
+# A skip is silent forever: the timer journal is the only record, so a dirty or
+# diverged machine keeps serving months-old code while everything else moves
+# (2026-11-06 audit). Each skip drops a marker under
+# ~/.local/state/fleet-sync/drift-<label>; a clean run clears it. Anything
+# (menubar, a prompt, a status command) can surface the markers later.
+typeset drift_dir="${XDG_STATE_HOME:-$HOME/.local/state}/fleet-sync"
+_drift() { mkdir -p "$drift_dir" 2>/dev/null; print -r -- "$2" >| "$drift_dir/drift-$1" 2>/dev/null; }
+_drift_clear() { rm -f "$drift_dir/drift-$1" 2>/dev/null; }
 
 _note() { (( quiet )) || success "$@"; }
 
@@ -97,13 +146,15 @@ _sync_repo() {
     local label=$1 dir=$2 up remote ahead behind old
     if [[ ! -e "$dir/.git" ]]; then
         _note "$label: no checkout at $dir"
+        _drift "$label" "no checkout at $dir"
         return 0
     fi
     up=$(git -C "$dir" rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null) \
         || { warning "$label: $(git -C "$dir" branch --show-current 2>/dev/null || print detached HEAD) has no upstream; skipped"; return 1; }
     remote=${up%%/*}
     git -C "$dir" fetch --quiet "$remote" 2>/dev/null \
-        || { warning "$label: fetch from $remote failed (offline, or no credentials for a private repo); skipped"; return 1; }
+        || { warning "$label: fetch from $remote failed (offline, or no credentials for a private repo); skipped"
+             _drift "$label" "fetch from $remote failed"; return 1; }
     read -r ahead behind < <(git -C "$dir" rev-list --left-right --count 'HEAD...@{u}')
     if (( ! behind )); then
         # In step with upstream, but edits made here only reach the other
@@ -112,15 +163,22 @@ _sync_repo() {
         local -a dirty=(${(f)"$(git -C "$dir" status --porcelain --untracked-files=no)"})
         (( ahead )) && warning "$label: $ahead commit(s) not pushed to $up; push so the other machines get them"
         (( ${#dirty} )) && warning "$label: ${#dirty} file(s) with uncommitted changes; commit and push so the other machines get them"
-        (( ahead || ${#dirty} )) || _note "$label: up to date"
+        if (( ahead || ${#dirty} )); then
+            _drift "$label" "${ahead} ahead, ${#dirty} dirty (in step with $up)"
+        else
+            _drift_clear "$label"
+            _note "$label: up to date"
+        fi
         return 0
     fi
     if (( ahead )); then
         warning "$label: diverged from $up ($ahead local, $behind upstream); skipped, merge it by hand"
+        _drift "$label" "diverged from $up"
         return 1
     fi
     if ! git -C "$dir" diff --quiet || ! git -C "$dir" diff --cached --quiet; then
         warning "$label: uncommitted changes; skipped ($behind upstream commit(s) waiting)"
+        _drift "$label" "dirty, $behind upstream commit(s) waiting"
         return 1
     fi
     old=$(git -C "$dir" rev-parse HEAD)

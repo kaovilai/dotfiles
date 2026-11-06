@@ -389,9 +389,15 @@ def ensure(root, port, config, versions, timeout, required):
     finally:
         if ticks:
             print(file=sys.stderr)
-    if owned(info):
-        stop(root, info)
-    raise RuntimeError('standard LiteLLM proxy startup timed out; see %s' % log)
+    if child.poll() is not None:
+        if owned(info):
+            stop(root, info)
+        raise RuntimeError('standard LiteLLM proxy failed to start; see %s' % log)
+    # Deadline with a live child: it is still booting (a small host can need
+    # 96 s+). Killing it just made the next launch start over; leave it, it
+    # answers once up, and the health the launcher needs is only a poll away.
+    print('still booting past the deadline; left running (see %s)' % log, file=sys.stderr)
+    return dict(info, runtime=str(root), models=[row['model_name'] for row in config['model_list']])
 
 
 if __name__ == '__main__':

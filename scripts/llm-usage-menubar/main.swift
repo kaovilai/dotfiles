@@ -60,16 +60,22 @@ func longDuration(_ seconds: Int) -> String {
     return "\(sec)s"
 }
 
+// shared formatters: allocating one per call showed up as a large share of
+// per-draw cost (2026-11-06 audit); both are main-thread only
+private let isoFormatter = ISO8601DateFormatter()
+private let clockFormatter: DateFormatter = {
+    let f = DateFormatter()
+    f.dateFormat = "HH:mm:ss"
+    return f
+}()
+
 func parseISO(_ s: String?) -> Date? {
     guard let s = s else { return nil }
-    let f = ISO8601DateFormatter()
-    return f.date(from: s)
+    return isoFormatter.date(from: s)
 }
 
 func clock(_ d: Date) -> String {
-    let f = DateFormatter()
-    f.dateFormat = "HH:mm:ss"
-    return f.string(from: d)
+    return clockFormatter.string(from: d)
 }
 
 /// "14:02" today, "Nov 1 00:00" otherwise.
@@ -826,9 +832,13 @@ final class MonitorView: NSView {
             flightsAt = Date()
             barsView.needsDisplay = true
             if !flights.isEmpty { startWaitAnimation() }  // a bar appeared: resume the needle timer
-            // the row positions the strip during a panel draw, so a changed set
-            // must repaint the panel once (the 20 Hz timer only repaints the strip)
-            if flights.map({ $0.id }) != oldValue.map({ $0.id }) { needsDisplay = true }
+            // the row positions the strip during a panel draw, so the panel must
+            // repaint when the strip row appears or disappears; an id change
+            // alone only swaps bars inside the strip, which needsDisplay above
+            // already covers (2026-11-06 audit: whole-panel redraw per request
+            // start/end was ~20% of the app's draw cost)
+            let was = !oldValue.isEmpty || !barShown.isEmpty || waitNeedle > 0.001
+            if waitBarVisible != was { needsDisplay = true }
         }
     }
     private var flightsAt: Date?
@@ -851,7 +861,7 @@ final class MonitorView: NSView {
 
     func startWaitAnimation() {
         guard waitTimer == nil else { return }
-        waitTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 20.0, repeats: true) { [weak self] _ in self?.tickWait() }
+        waitTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 10.0, repeats: true) { [weak self] _ in self?.tickWait() }
         if let t = waitTimer { RunLoop.main.add(t, forMode: .common) }  // keep moving while a menu tracks
     }
 
@@ -927,6 +937,7 @@ final class MonitorView: NSView {
     private var hoverTracking: NSTrackingArea?
     // Graph hover: the minute under the mouse gets a crosshair on every graph and a readout of that minute.
     private var graphHits: [(rect: NSRect, metric: ChartMetric)] = []
+    private var graphModelCache: (key: String, model: GraphModel)?
     private var graphCursor: (graph: Int, minute: Int, x: CGFloat)?
     private var graphMinutes = 60
     /// Headless PNG renders pin the graph cursor to a minute index (0 = oldest).
@@ -1018,7 +1029,11 @@ final class MonitorView: NSView {
         var summary = summarize(d, now: now, stale: stale)
         let spans = spanItems(d)
         let drifts = driftItems(d)
-        let model = GraphModel(d)
+        // GraphModel(d) walks the whole 60-minute series; the payload only
+        // changes on a poll (30 s), so cache it instead of rebuilding per draw
+        let modelKey = d["generated_at"].str ?? ""
+        if graphModelCache?.key != modelKey { graphModelCache = (modelKey, GraphModel(d)) }
+        let model = graphModelCache!.model
         let live = spans.filter { $0.end > now }
         if summary.state == "normal" && !live.isEmpty { summary.state = "throttled" }  // e.g. Copilot: only its span says so
         var area = layout == .history ? b.insetBy(dx: 4, dy: 4) : b.insetBy(dx: 8, dy: 6)
@@ -2190,7 +2205,6 @@ final class AppController: NSObject, NSMenuDelegate, NSWindowDelegate {
     var showText: Bool { defaults.object(forKey: "showText") as? Bool ?? true }
     var shareWindow: String { defaults.string(forKey: "shareWindow") == "1h" ? "1h" : "15m" }
     var shareMetric: String { defaults.string(forKey: "shareMetric") == "tokens" ? "tokens" : "requests" }
-    var appearanceObservation: NSKeyValueObservation?
     // floating monitor window
     var panel: NSPanel?
     let monitorView = MonitorView(frame: .zero)
@@ -2207,10 +2221,11 @@ final class AppController: NSObject, NSMenuDelegate, NSWindowDelegate {
         statusItem.menu = NSMenu()
         statusItem.menu?.delegate = self
         render(title: Summary(glyph: "…", symbol: "ellipsis.circle", text: "", state: "loading"), stale: false)
-        // light/dark menubar: the single-colour logos are drawn for one appearance, so redraw when it flips
-        appearanceObservation = statusItem.button?.observe(\.effectiveAppearance) { [weak self] _, _ in
-            DispatchQueue.main.async { self?.tick() }
-        }
+        // light/dark menubar: the render cache key already includes the
+        // effective appearance, so the 5 s tick re-renders within 5 s of a flip.
+        // No KVO here: observing effectiveAppearance self-fed (render wrote
+        // button properties -> AppKit flipped appearance -> observer -> tick ->
+        // render ...) and burned a full core (2026-11-06 audit, 94-98% CPU).
         rebuildMenu()
         poll()
         Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in self?.poll() }
@@ -2345,9 +2360,18 @@ final class AppController: NSObject, NSMenuDelegate, NSWindowDelegate {
     // the raster is cached under everything that shapes it.
     private var statusImageCache: (key: String, image: NSImage)?
     private var symbolImageCache: [String: NSImage] = [:]
+    private var lastRenderKey: String?
 
     func render(title s: Summary, stale: Bool) {
         guard let button = statusItem.button else { return }
+        // rewriting identical button properties still makes AppKit rebuild the
+        // status item snapshot; skip when nothing that shapes it moved. The
+        // share text shapes the logos/accessibility, and showImage/showText the
+        // toggles — without them a toggle or a share change left the button stale.
+        let shareKey = data?["share"].exists == true ? shareDescription(data!["share"]) : ""
+        let renderKey = "\(s.state)|\(s.text)|\(stale)|\(button.effectiveAppearance.name.rawValue)|\(button.appearsDisabled)|\(showImage)|\(showText)|\(shareKey)"
+        if renderKey == lastRenderKey { return }
+        lastRenderKey = renderKey
         if showImage, let d = data, d["share"].exists {
             let share = d["share"]
             let shareText = shareDescription(share)

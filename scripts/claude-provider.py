@@ -232,6 +232,13 @@ def main():
             capture(sys.argv[2])
             return 0
         if len(sys.argv) >= 4 and sys.argv[1] == "--background":
+            # append-only across restarts grew to 7 MB in two weeks (~3.4 MB/day,
+            # 2026-11-06 audit); keep one generation past 8 MB
+            try:
+                if os.path.getsize(sys.argv[2]) > 8 * 1024 * 1024:
+                    os.replace(sys.argv[2], sys.argv[2] + ".1")
+            except OSError:
+                pass
             with open(sys.argv[2], "ab") as log:
                 subprocess.Popen(sys.argv[3:], stdin=subprocess.DEVNULL, stdout=log,
                                  stderr=log, start_new_session=True)

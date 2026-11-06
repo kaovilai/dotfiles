@@ -284,7 +284,7 @@ assert d["version"] == 2 and d["throttled"] is None and not d["spike"]["active"]
 assert proxy(d, 4148)["m15"]["requests"] == 3 and proxy(d, 4148)["m15"]["errors"]["5xx"] == 1, proxy(d, 4148)
 assert proxy(d, 4148)["state"] == "up" and proxy(d, 4142)["state"] == "down" and not proxy(d, 4142)["expected"]
 assert d["totals"]["m15"]["requests"] == 4 and d["top_models"][0] == {"model": "glm-5.3", "requests": 4}, d["top_models"]
-assert d["last_error"]["status"] == "500" and d["last_error"]["proxy"] == "claude-hosted-only", d["last_error"]
+assert d["last_error"]["status"] == "500" and d["last_error"]["proxy"] == "hosted-only", d["last_error"]
 assert len(d["series"]["requests"]) == 60 and sum(d["series"]["requests"]) == 4 and sum(d["series"]["e5xx"]) == 1
 assert d["reroutes"] == [] and d["reroutes_15m"] == 0 and d["by_model"][0]["reroutes"] == 0
 
@@ -300,7 +300,7 @@ assert d["totals"]["h1"]["errors"]["other"] == 0, d["totals"]["h1"]
 d = run("throttled", [ev(100), err(30, 429, retry_after=300, rewritten=True)])
 t = d["throttled"]
 assert t and t["kind"] == "rate-limit" and t["basis"] == "retry_after" and t["estimate"] and t["model"] == "glm-5.3", t
-assert 265 <= t["seconds_left"] <= 271 and t["proxy"] == "claude-hosted-only", t
+assert 265 <= t["seconds_left"] <= 271 and t["proxy"] == "hosted-only", t
 # a later success on the same proxy+model proves it is not blocked; an expired reset is not throttled either
 assert run("throttled-cleared", [err(30, 429, retry_after=300), ev(10)])["throttled"] is None
 assert run("throttled-expired", [err(600, 429, retry_after=60)])["throttled"] is None
@@ -376,7 +376,7 @@ fl = {
 d = run("inflight", [ev(30)], inflight=fl)
 f = d["inflight"]
 assert f["available"] and f["count"] == 5 and 1190 <= f["oldest_s"] <= 1210, f
-assert f["oldest"]["model"] == "glm-5.3" and f["oldest"]["proxy"] == "claude-hosted-only", f
+assert f["oldest"]["model"] == "glm-5.3" and f["oldest"]["proxy"] == "hosted-only", f
 assert f["by_model"] == {"glm-5.3": 2, "deepseek-v4.1-flash": 1, "gpt-6-luna": 1, "claude-haiku-5-5": 1}, f
 assert proxy(d, 4148)["inflight"]["count"] == 3 and proxy(d, 4147)["inflight"] is None, (proxy(d, 4148)["inflight"], proxy(d, 4147)["inflight"])
 assert proxy(d, 4141)["inflight"]["count"] == 2 and d["copilot"]["inflight"]["count"] == 2, (proxy(d, 4141)["inflight"], d["copilot"]["inflight"])
@@ -531,8 +531,8 @@ d = run("drift", [ev(100, drift=[dr]), ev(50, drift=[dr, {"kind": "shape_changed
                   ev(30, drift="not a list"), ev(20, drift=[{"kind": "x"}])])
 assert d["drift"][0]["proxy"] == "codex-hosted-only", "newest first"
 assert sorted((x["kind"], x["detail"], x["count"], x["proxy"]) for x in d["drift"]) == [
-    ("shape_changed", "error.type", 1, "claude-hosted-only"), ("unhandled_header", "x-new-reset", 1, "codex-hosted-only"),
-    ("unhandled_header", "x-new-reset", 2, "claude-hosted-only")], d["drift"]
+    ("shape_changed", "error.type", 1, "hosted-only"), ("unhandled_header", "x-new-reset", 1, "codex-hosted-only"),
+    ("unhandled_header", "x-new-reset", 2, "hosted-only")], d["drift"]
 assert all(x["hint"] and x["last_seen"].endswith("Z") for x in d["drift"]), d["drift"]
 assert run("drift-none", [ev(30)])["drift"] == []
 # series_by_provider: per-minute requests per provider (named proxies + Copilot transcripts), 60 buckets
@@ -649,7 +649,7 @@ if [[ -x /usr/bin/swiftc ]] || command -v swiftc >/dev/null; then
     dump_of() { "$mb" --dump-menu --data-file "$mbjson/$1.json" "${@:2}"; }
     dump=$(dump_of normal)
     [[ "$dump" == "title: ● 4"$'\n'* ]] || fail "normal title: ${dump%%$'\n'*}"
-    [[ "$dump" == *"PROXIES (15m / 1h)"* && "$dump" == *"claude-hosted-only :4148  up"* && "$dump" == *"Copy restart command: claude-hosted-only-restart"* ]] || fail "proxy rows/submenu missing: $dump"
+    [[ "$dump" == *"PROXIES (15m / 1h)"* && "$dump" == *"hosted-only :4148  up"* && "$dump" == *"Copy restart command: claude-hosted-only-restart"* ]] || fail "proxy rows/submenu missing: $dump"
     [[ "$dump" == *"[chart] requests/min"* && "$dump" == *"[chart] by model"* && "$dump" == *"[chart] by proxy"* ]] || fail "charts missing: $dump"
     [[ "$(dump_of normal --no-charts)" != *"[chart]"* && "$(dump_of normal --no-charts)" == *"Top models (1h): glm-5.3"* ]] || fail "--no-charts"
     [[ "$dump" == *"Open dashboard"* && "$dump" == *"Open logs folder"* && "$dump" == *"Refresh now"* && "$dump" == *"Copy status"* && "$dump" == *"Copy last error"* && "$dump" == *Quit* ]] || fail "actions missing"
@@ -1012,5 +1012,42 @@ HTTPServer(("127.0.0.1", int(sys.argv[1])), H).serve_forever()' "$port" &
     kill $srv 2>/dev/null
     exit 0
 ) || exit 1
+
+# incremental parse of the append-only proxy log (audit perf: the live month
+# file was fully re-parsed on every poll; cost grew linearly to month end)
+python3 -I - "$repo/scripts" "$tmp" <<'PY' || fail "incremental proxy parse"
+import importlib.machinery, importlib.util, json, os, sys
+path_mod = os.path.join(sys.argv[1], "llm-usage")   # no .py suffix: give importlib the loader
+spec = importlib.util.spec_from_file_location("llm_usage", path_mod,
+        loader=importlib.machinery.SourceFileLoader("llm_usage", path_mod))
+u = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(u)
+path = os.path.join(sys.argv[2], "events-2026-11.jsonl")
+def line(i): return json.dumps({"ts": f"2026-11-06T10:{i:02d}:00.000Z", "model": "glm", "status": 200}) + "\n"
+open(path, "w").write("".join(line(i) for i in range(3)))
+first = u.parse_cached("proxy", path, u.parse_proxy_file)
+assert len(first) == 3, len(first)
+with open(path, "a") as h: h.write("".join(line(i) for i in range(3, 5)))
+second = u.parse_cached("proxy", path, u.parse_proxy_file)
+assert len(second) == 5 and second[:3] == first, (len(second), second[:3] == first)
+with open(path, "a") as h: h.write('{"ts": "2026-11-06T10:0')   # a half-written line
+third = u.parse_cached("proxy", path, u.parse_proxy_file)
+assert len(third) == 5, len(third)
+with open(path, "a") as h: h.write('5:00.000Z", "model": "glm", "status": 200}\n')
+fourth = u.parse_cached("proxy", path, u.parse_proxy_file)
+assert len(fourth) == 6, len(fourth)
+open(path, "w").write(line(1))   # replaced/truncated: falls back to the full parse
+fifth = u.parse_cached("proxy", path, u.parse_proxy_file)
+assert len(fifth) == 1, len(fifth)
+# replaced with the same size and a newer mtime: the inode differs, so this is
+# still a full reparse, not an "append" of nothing
+import os as _os
+tmp2 = path + ".new"
+open(tmp2, "w").write("".join(line(i) for i in (2, 3)))
+_os.replace(tmp2, path)
+sixth = u.parse_cached("proxy", path, u.parse_proxy_file)
+assert [e["t"] for e in sixth] == [e["t"] for e in u.parse_proxy_file(open(path), path)], sixth
+print("ok")
+PY
 
 print -r -- "llm-usage tests passed"

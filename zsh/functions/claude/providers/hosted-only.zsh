@@ -52,8 +52,17 @@ _claude_hosted_launch() (
     local glm1m="${glm}[1m]" ds1m="${ds}[1m]"
     local -a picks=("fable=${glm1m}|GLM 5.3" "opus=${glm1m}|GLM 5.3" "haiku=${glm1m}|GLM 5.3" "=${ds1m}|DeepSeek V4.1 Flash")   # DeepSeek: picker entry only, no tier
     local classifier small subagent
-    classifier="$(_claude_hosted_ref "${HOSTED_ONLY_CLASSIFIER_MODEL:-$ds}" "$glm" "$ds")"
-    small="$(_claude_hosted_ref "${HOSTED_ONLY_SMALL_FAST_MODEL:-$ds}" "$glm" "$ds")"
+    # Auto-mode classification and the small/fast tier default to GLM, not
+    # DeepSeek (2026-11-06): the client-side auto-mode classifier (CLAUDE_CODE_
+    # AUTO_MODE_SERVER=0 above) runs on ANTHROPIC_SMALL_FAST_MODEL, sees text
+    # only (tool name + input, never images or output), and a DeepSeek outage
+    # froze every tool call that needed classification while GLM stayed up.
+    # Fallback: the proxy's router-level glm->deepseek fallback covers a GLM
+    # outage inside one request. Image-carrying small-model calls are still
+    # safe: the proxy's vision reroute sends GLM requests with images to
+    # DeepSeek. Knobs override both defaults.
+    classifier="$(_claude_hosted_ref "${HOSTED_ONLY_CLASSIFIER_MODEL:-$glm}" "$glm" "$ds")"
+    small="$(_claude_hosted_ref "${HOSTED_ONLY_SMALL_FAST_MODEL:-$glm}" "$glm" "$ds")"
     subagent="$(_claude_hosted_ref "${HOSTED_ONLY_SUBAGENT_MODEL:-$ds}" "$glm" "$ds")"
     local -a reply
     _claude_picker_args "${picks[@]}"

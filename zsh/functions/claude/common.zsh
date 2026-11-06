@@ -215,9 +215,31 @@ _claude_listen_pids() {
     fi
 }
 
-# _claude_port_serving <port>: true while a client connection to a listener
-# on <port> is ESTABLISHED (the proxy is serving a request).
+# _claude_port_serving <port>: true while a request is in flight on <port>.
+# Preferred source: the port's inflight-<port>-<pid>.json (litellm_usage_log and
+# the copilot-api monitor plugin write one per live proxy pid, removed when the
+# pid dies). A keep-alive pool holds ESTABLISHED sockets between requests, so
+# the socket test alone read "busy" forever and deferred restarts stalled
+# (2026-11-06 audit); sockets remain the fallback for a port that reports
+# nothing. Same live-pid rule as llm-usage's read_inflight.
 _claude_port_serving() {
+    local _cps_dir="${LLM_USAGE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/llm-usage}" _cps_f _cps_pid
+    local -a _cps_files
+    _cps_files=("$_cps_dir"/inflight-"$1"-*.json(N))
+    if (( ${#_cps_files} )); then
+        local -i _cps_reporter=0
+        for _cps_f in $_cps_files; do
+            _cps_pid="${${_cps_f:t}:r}"; _cps_pid="${_cps_pid##*-}"
+            [[ "$_cps_pid" == <-> ]] && kill -0 "$_cps_pid" 2>/dev/null || continue
+            _cps_reporter=1
+            if jq -e '(.requests // {}) | length > 0' "$_cps_f" >/dev/null 2>&1; then
+                return 0
+            fi
+        done
+        # a live reporter with an empty table says idle; only dead-pid or
+        # unreadable leftovers do not say anything — use the socket test
+        (( _cps_reporter )) && return 1
+    fi
     if (( $+commands[lsof] )); then
         lsof -nP -iTCP:"$1" -sTCP:ESTABLISHED -Fn 2>/dev/null | grep -q -- "^n.*:$1->"
     elif (( $+commands[ss] )); then

@@ -296,7 +296,7 @@ for invalid in '--model=' '--model'; do
     rc=0; claude-enmaas "$invalid" >"$tmp/stdout" 2>"$tmp/stderr" || rc=$?
     _claude_enmaas_assert 'empty or missing CLI model fails' test "$rc" = 1
 done
-for timeout in 0 601 abc; do
+for timeout in 0 901 abc; do
     export CLAUDE_ENMAAS_PROXY_START_TIMEOUT="$timeout"
     rc=0; claude-enmaas >"$tmp/stdout" 2>"$tmp/stderr" || rc=$?
     _claude_enmaas_assert 'invalid startup timeout fails' test "$rc" = 1
