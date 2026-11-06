@@ -18,11 +18,12 @@ type proxyHarness struct {
 	url   string
 	mu    sync.Mutex
 	calls map[string]int
+	paths map[string][]string // upstream API path seen per model
 }
 
 func newProxyHarness(t *testing.T, status int, body string, tweak func(*config)) *proxyHarness {
 	t.Helper()
-	h := &proxyHarness{calls: map[string]int{}}
+	h := &proxyHarness{calls: map[string]int{}, paths: map[string][]string{}}
 	stub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		reqBody, _ := io.ReadAll(r.Body) // a single Read may return a partial body
 		var model string
@@ -31,6 +32,7 @@ func newProxyHarness(t *testing.T, status int, body string, tweak func(*config))
 		}
 		h.mu.Lock()
 		h.calls[model]++
+		h.paths[model] = append(h.paths[model], r.URL.Path)
 		h.mu.Unlock()
 		w.Header().Set("content-type", "application/json")
 		w.WriteHeader(status)
@@ -131,10 +133,12 @@ func TestRateLimitedModelStillFallsBack(t *testing.T) {
 }
 
 // An explicit dialect override can give the two hosted models different
-// dialects. A Messages request that fails over to a chat-dialect fallback would
-// forward a Messages body to a chat endpoint; the fallback is skipped instead and
-// the original failure is returned. The control run (both Anthropic) still falls back.
-func TestFallbackIsSkippedWhenItsDialectCannotBeServed(t *testing.T) {
+// dialects. A Messages request that fails over to a chat-dialect fallback must
+// NEVER forward a Messages body to a chat endpoint: it is translated (the
+// fallback answers on /v1/chat/completions) or, when translation is impossible,
+// skipped with the original failure returned. The control run (both Anthropic)
+// still falls back on /v1/messages.
+func TestFallbackIsTranslatedForItsDialect(t *testing.T) {
 	run := func(t *testing.T, fallbackDialect string) *proxyHarness {
 		h := newProxyHarness(t, 502, `{"error":{"message":"bad gateway"}}`, nil)
 		glm, ds := h.app.cfg.GLM, h.app.cfg.DeepSeek
@@ -156,11 +160,19 @@ func TestFallbackIsSkippedWhenItsDialectCannotBeServed(t *testing.T) {
 		return h
 	}
 	h := run(t, "openai")
-	if h.count(h.app.cfg.GLM) != 1 || h.count(h.app.cfg.DeepSeek) != 0 {
-		t.Fatalf("a chat-dialect fallback must not receive a Messages body: glm=%d ds=%d", h.count(h.app.cfg.GLM), h.count(h.app.cfg.DeepSeek))
+	ds := h.app.cfg.DeepSeek
+	if h.count(h.app.cfg.GLM) != 1 || h.count(ds) != 1 {
+		t.Fatalf("a chat-dialect fallback is translated and tried once: glm=%d ds=%d", h.count(h.app.cfg.GLM), h.count(ds))
+	}
+	if got := h.paths[ds]; len(got) != 1 || got[0] != "/v1/chat/completions" {
+		t.Fatalf("the chat-dialect fallback must be called on /v1/chat/completions, not with a Messages body: %v", got)
+	}
+	h = run(t, "responses")
+	if got := h.paths[h.app.cfg.DeepSeek]; len(got) != 1 || got[0] != "/v1/responses" {
+		t.Fatalf("a Responses-dialect fallback must be called on /v1/responses: %v", got)
 	}
 	h = run(t, "anthropic")
-	if h.count(h.app.cfg.DeepSeek) != 1 {
-		t.Fatalf("control: an Anthropic-dialect fallback must still be tried: ds=%d", h.count(h.app.cfg.DeepSeek))
+	if got := h.paths[h.app.cfg.DeepSeek]; len(got) != 1 || got[0] != "/v1/messages" {
+		t.Fatalf("control: an Anthropic-dialect fallback stays on /v1/messages: %v", got)
 	}
 }
