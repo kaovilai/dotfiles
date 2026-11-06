@@ -193,7 +193,10 @@ typeset main="${HOSTED_ONLY_MODEL:-$_hop_glm}"
 # Both hosted models serve the same window on EnMaaS (vLLM max_model_len
 # 1048576; verified 2026-11-05: GLM took 300k and 900k prompts, 1.1M answered
 # 400 "maximum context length is 1048576 tokens").
-typeset -i glm_ctx="${HOSTED_ONLY_GLM_CONTEXT:-1048576}" ds_ctx="${HOSTED_ONLY_DEEPSEEK_CONTEXT:-1048576}"
+# 1,000,000 (1M) leaves ~48k of output headroom: vLLM rejects input+max_tokens
+# over its 1,048,576 window, and Codex would otherwise fill the window to the
+# edge and fail the last turn.
+typeset -i glm_ctx="${HOSTED_ONLY_GLM_CONTEXT:-1000000}" ds_ctx="${HOSTED_ONLY_DEEPSEEK_CONTEXT:-1000000}"
 if [[ "$reviewer" != "$_hop_glm" && "$reviewer" != "$ds" ]]; then
     print -ru2 -- "codex-provider: HOSTED_ONLY_REVIEW_MODEL must be $_hop_glm or $ds (the proxy routes only those)."
     exit 1

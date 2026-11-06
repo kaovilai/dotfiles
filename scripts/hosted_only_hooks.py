@@ -190,6 +190,16 @@ FALLBACK = knob("FALLBACK", "1") != "0"
 ALIAS_MODELS = frozenset(
     a for a in knob("ALIAS_MODELS", "").split(",") if a
 )
+# Serving window and output reserve: vLLM rejects input_tokens + max_tokens >
+# max_model_len. Clients count tokens with their own heuristic and leave no
+# headroom at the edge of a 1M window, so the last turn 400s with a few hundred
+# tokens over. The byte estimate is deliberately conservative.
+MAX_MODEL_LEN = int_knob("MAX_MODEL_LEN", 1048576, 1024)
+OUTPUT_RESERVE = int_knob("OUTPUT_RESERVE", 512, 0)
+try:
+    BYTES_PER_TOKEN = max(1.0, float(knob("BYTES_PER_TOKEN", "3")))
+except ValueError:
+    BYTES_PER_TOKEN = 3.0
 IMAGE_BLOCK_TYPES = ("image", "input_image", "image_url")
 LIMIT_REWRITE = knob("LIMIT_REWRITE", "1") != "0"
 IMAGE_BUDGET_BYTES = int_knob("IMAGE_BUDGET_BYTES", 8 * 1024 * 1024, 0)
@@ -1332,6 +1342,34 @@ def install_reset_after_headers():
         app.middleware_stack = ResetAfterHeaders(stack)
 
 
+def clamp_output(data):
+    """Shrink max_tokens so input + output fits the served window.
+
+    vLLM rejects a request when input_tokens + max_tokens > max_model_len; the
+    client reserves nothing at the edge, so a near-1M turn fails with 400
+    "Input length (1048750) exceeds model's maximum context length (1048576)"
+    even though input alone fit. Returns (key, requested, capped) when it
+    changed something, else None. HOSTED_ONLY_MAX_MODEL_LEN /
+    HOSTED_ONLY_OUTPUT_RESERVE / HOSTED_ONLY_BYTES_PER_TOKEN tune it."""
+    model = str(data.get("model") or "")
+    if model != GLM_MODEL and model != DEEPSEEK_MODEL and model not in ALIAS_MODELS:
+        return None
+    key = "max_output_tokens" if "max_output_tokens" in data else "max_tokens"
+    try:
+        requested = int(data[key])
+    except (KeyError, TypeError, ValueError):
+        return None
+    estimate = int(math.ceil(content_size(data) / BYTES_PER_TOKEN))
+    room = MAX_MODEL_LEN - estimate - OUTPUT_RESERVE
+    # a sliver of room is useless output: floor there so vLLM answers with its
+    # exact "input length exceeds" message and the client compacts
+    capped = 256 if room < 256 else min(requested, room)
+    if capped >= requested:
+        return None
+    data[key] = capped
+    return key, requested, capped
+
+
 def fallback_target(data):
     """The other hosted model to fall back to for this request, or None.
 
@@ -1416,6 +1454,10 @@ class HostedOnlyHooks(CustomLogger):
             data["thinking"] = {"type": "disabled"}
         if isinstance(data.get("input"), list):
             data["input"] = [i for i in data["input"] if not is_empty_instruction(i)]
+        clamped = clamp_output(data)
+        if clamped:
+            LOG.info("hosted_only_hooks: %s %s %s -> %s (input over the window)",
+                     model, clamped[0], clamped[1], clamped[2])
         fallback = fallback_target(data)
         if fallback:
             data["fallbacks"] = [fallback]

@@ -52,9 +52,9 @@ _hosted_only_proxy_vars codex
 [[ "$_hop_upstream_retries" == 0 ]] || fail "upstream retries default: $_hop_upstream_retries"
 [[ "$(<"$repo/scripts/hosted-only-proxy.zsh")" == *'$_hop_client_retry $_hop_upstream_retries $_hop_fallback $_hop_aliases $_hop_request_timeout $_hop_image_budget $_hop_image_cache_days"'* ]] || fail "upstream retries / fallback / alias / timeout / image knobs not in fingerprint"
 # fallback + outage knobs are one fingerprint component: a change restarts an idle proxy
-[[ "$_hop_fallback" == "1 1 60 600" ]] || fail "fallback knob defaults: $_hop_fallback"
-HOSTED_ONLY_FALLBACK=0 _hosted_only_proxy_vars codex
-[[ "$_hop_fallback" == "0 1 60 600" ]] || fail "HOSTED_ONLY_FALLBACK not read: $_hop_fallback"
+[[ "$_hop_fallback" == "1 1 60 600 1048576 512 3" ]] || fail "fallback knob defaults: $_hop_fallback"
+HOSTED_ONLY_FALLBACK=0 HOSTED_ONLY_MAX_MODEL_LEN=999999 _hosted_only_proxy_vars codex
+[[ "$_hop_fallback" == "0 1 60 600 999999 512 3" ]] || fail "HOSTED_ONLY_FALLBACK / MAX_MODEL_LEN not read: $_hop_fallback"
 _hosted_only_proxy_vars codex
 # GLM alias ids and the per-deployment request timeout are flavor-dependent knobs
 [[ "$_hop_aliases" == "" ]] || fail "codex flavor has no GLM alias by default: $_hop_aliases"
@@ -66,6 +66,9 @@ HOSTED_ONLY_ALIAS_MODELS=x,y _hosted_only_proxy_vars claude
 HOSTED_ONLY_REQUEST_TIMEOUT=99 _hosted_only_proxy_vars claude
 [[ "$_hop_request_timeout" == 99 ]] || fail "HOSTED_ONLY_REQUEST_TIMEOUT not read: $_hop_request_timeout"
 _hosted_only_proxy_vars codex
+# the anthropic /v1/messages route drops request-level fallbacks, so the config
+# carries router-level ones for both hosted groups
+[[ "$(_hosted_only_proxy_config)" == *'fallbacks: [{"rits/zai-org/glm-5-3": ["rits/deepseek-ai/DeepSeek-V4.1-Flash-1017"]}'* ]] || fail "router-level fallbacks missing"
 HOSTED_ONLY_IMAGE_BUDGET_BYTES=123 HOSTED_ONLY_IMAGE_CACHE_DAYS=2 _hosted_only_proxy_vars codex
 [[ "$_hop_image_budget" == 123 && "$_hop_image_cache_days" == 2 ]] || fail "image knobs: $_hop_image_budget $_hop_image_cache_days"
 _hosted_only_proxy_vars codex
@@ -652,6 +655,27 @@ assert h.fallback_target({"model": DS, "messages": text, "fallbacks": ["mine"]})
 big = [{"role": "user", "content": "x" * 4000000}]                                        # ~1M tokens: both windows are 1048576
 assert h.fallback_target({"model": DS, "messages": big}) == GLM
 assert h.fallback_target({"model": GLM, "messages": big}) == DS
+# Output clamp: input + max_tokens must fit the served window (vLLM 400s at
+# 1,048,750 input + any output otherwise)
+assert h.MAX_MODEL_LEN == 1048576 and h.OUTPUT_RESERVE == 512 and h.BYTES_PER_TOKEN == 3.0
+near = [{"role": "user", "content": "x" * 3 * 1048000}]          # ~1,048,000 est tokens
+req = {"model": DS, "messages": near, "max_tokens": 8192}
+out = h.clamp_output(req)
+assert out and out[0] == "max_tokens" and out[2] < 8192 and req["max_tokens"] == out[2], (out, req.get("max_tokens"))
+assert req["max_tokens"] >= 256
+resp = {"model": DS, "input": [{"role": "user", "content": "x" * 3 * 1048000}], "max_output_tokens": 4096}
+out = h.clamp_output(resp)
+assert out and out[0] == "max_output_tokens" and resp["max_output_tokens"] < 4096, out
+over = {"model": GLM, "messages": [{"role": "user", "content": "x" * 3 * 1048600}], "max_tokens": 4096}
+assert h.clamp_output(over)[2] == 256, over["max_tokens"]   # clearly over: floor, vLLM reports it
+small = {"model": GLM, "messages": [{"role": "user", "content": "hi"}], "max_tokens": 4096}
+assert h.clamp_output(small) is None, small
+assert h.clamp_output({"model": "gpt-5.5", "messages": near, "max_tokens": 8192}) is None
+h.ALIAS_MODELS = frozenset({"claude-sonnet-5-5"})
+alias_req = {"model": "claude-sonnet-5-5", "messages": near, "max_tokens": 8192}
+assert h.clamp_output(alias_req) is not None, "alias must be clamped like GLM"
+h.ALIAS_MODELS = frozenset()
+
 # GLM aliases (the claude flavor's claude-sonnet-5-5 id) count as GLM: fallback
 # and vision reroute both apply
 h.ALIAS_MODELS = frozenset({"claude-sonnet-5-5"})
