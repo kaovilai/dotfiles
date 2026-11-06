@@ -421,7 +421,7 @@ assert 'ANTHROPIC_API_KEY' not in e and e['ENMAAS_API_KEY']=='unit-upstream-secr
 assert isinstance(options['stdout'], int) and options['stderr']==options['stdout'], 'boot failures must be logged'
 assert (froot/'proxy.log').stat().st_mode & 0o777==0o600
 info=json.loads((froot/'proxy.json').read_text())
-assert info['versions']==['hash-1','go'] and info['hooks']=='hash-1', info
+assert info['versions'][0]=='hash-1' and info['versions'][-1]=='go' and len(info['versions'])==3 and info['hooks']=='hash-1', info
 assert info['key_signature']==g['signature']('unit-upstream-secret', info['token'])
 
 # ensure(): owned + ready, same code -> reuse, no spawn.
@@ -441,7 +441,10 @@ with patch.dict(os.environ, env), patch.object(ns['subprocess'],'Popen',side_eff
         assert g['check'](froot, 4166, fresh(), [])['state']=='stale'
     with patch.dict(ns, dict(patched, busy=lambda port:False)):
         assert g['check'](froot, 4166, fresh(), [])=={'state':'fresh','changed':[],'busy':False}
-        assert g['check'](froot, 4166, fresh(), [])['changed']==['gateway/key or dependency settings'] or True
+    with patch.dict(os.environ, dict(env, ENMAAS_API_KEY='unit-upstream-secret-2')),      patch.dict(ns, dict(patched, busy=lambda port:False)), patch.object(ns['subprocess'],'Popen',side_effect=AssertionError('check must not spawn')):
+        assert g['check'](froot, 4166, fresh(), [])=={'state':'stale','changed':['gateway/key or dependency settings'],'busy':False}
+    with patch.dict(os.environ, dict(env, HOSTED_ONLY_VISION_FALLBACK=str(1-int(env.get('HOSTED_ONLY_VISION_FALLBACK','1') or 1)))),      patch.dict(ns, dict(patched, busy=lambda port:False)), patch.object(ns['subprocess'],'Popen',side_effect=AssertionError('check must not spawn')):
+        assert g['check'](froot, 4166, fresh(), [])=={'state':'stale','changed':['gateway/key or dependency settings'],'busy':False}, 'a knob change must count as a proxy change'
     with patch.dict(ns, dict(patched, **{'busy':lambda port:True, 'go_binary':lambda: ('fake-go-bin','hash-2')})):
         verdict=g['check'](froot, 4166, fresh(), [])
         assert verdict=={'state':'stale','changed':['gateway/key or dependency settings','hook code or knobs'],'busy':True}, verdict
@@ -460,7 +463,7 @@ with patch.dict(os.environ, env), patch.dict(ns, swap), patch.object(ns['subproc
 assert len(spawned)==1 and killed=={info['pid']}, (spawned, killed)
 assert result['token']==info['token'], 'the swap must keep the token'
 new_info=json.loads((froot/'proxy.json').read_text())
-assert new_info['versions']==['hash-2','go'] and new_info['hooks']=='hash-2', new_info   # (FakeChild.pid is constant)
+assert new_info['versions'][0]=='hash-2' and new_info['versions'][-1]=='go' and len(new_info['versions'])==3 and new_info['hooks']=='hash-2', new_info   # (FakeChild.pid is constant)
 print('ok - go spawn argv, filtered env, proxy log, identity, reuse, busy reuse, check verdicts and idle zero-gap swap (all mocked)')
 PY
 print 'All claude-enmaas unit/launcher tests passed.'

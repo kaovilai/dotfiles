@@ -23,8 +23,13 @@ import urllib.request
 
 repo = Path(os.environ['ENMAAS_TEST_REPO'])
 env = dict(os.environ, ENMAAS_API_KEY='offline-lifecycle-key',
-           CLAUDE_ENMAAS_GO_SRC=str(repo / 'scripts' / 'hosted-only-go'),
-           XDG_STATE_HOME=os.environ.get('CLAUDE_ENMAAS_RUNTIME_DIR', os.environ.get('XDG_STATE_HOME')))
+           CLAUDE_ENMAAS_GO_SRC=str(repo / 'scripts' / 'hosted-only-go'))
+# subprocess env values must be strings: an unset XDG_STATE_HOME would put
+# None into the child environment and every subprocess.run would TypeError.
+if os.environ.get('CLAUDE_ENMAAS_RUNTIME_DIR'):
+    env['XDG_STATE_HOME'] = os.environ['CLAUDE_ENMAAS_RUNTIME_DIR']
+elif os.environ.get('XDG_STATE_HOME'):
+    env['XDG_STATE_HOME'] = os.environ['XDG_STATE_HOME']
 
 
 def wait_for(check, description, timeout=15):

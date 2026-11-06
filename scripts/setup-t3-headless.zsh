@@ -75,14 +75,18 @@ progress "Host: $pm$( (( wsl )) && print -n ", WSL ($WSL_DISTRO_NAME)")$( (( lap
 # --- packages ---------------------------------------------------------------
 progress "Distro packages"
 if [[ $pm == dnf ]]; then
-    # EnMaaS: its LiteLLM proxies run under uv, and its lifecycle code calls lsof
-    # shasum (perl-Digest-SHA) and ps (procps-ng), not all in a minimal Fedora.
+    # EnMaaS: its proxies are the Go binary (golang toolchain to build it), uv
+    # still serves the openai/vertex LiteLLM flavors, and its lifecycle code
+    # calls lsof, shasum (perl-Digest-SHA) and ps (procps-ng), not all in a
+    # minimal Fedora.
     _run sudo dnf install -y zsh git gh jq curl python3 unzip iproute nodejs npm libatomic \
-        $( (( enmaas )) && print -- lsof uv perl-Digest-SHA procps-ng) || exit 1
+        $( (( enmaas )) && print -- lsof uv golang perl-Digest-SHA procps-ng) || exit 1
 else
     _run sudo apt-get update -qq || exit 1
+    # golang-go: the enmaas/hosted-only proxies build the Go binary on first
+    # launch (Ubuntu 24.04 ships go 1.22, past the module's go 1.21 floor).
     _run sudo apt-get install -y zsh git gh jq curl python3 unzip iproute2 libatomic1 ca-certificates \
-        $( (( enmaas )) && print -- lsof perl procps) || exit 1
+        $( (( enmaas )) && print -- lsof perl procps golang-go) || exit 1
     if (( enmaas )) && ! (( $+commands[uv] )) && [[ ! -x ~/.local/bin/uv ]]; then
         # Not packaged for Ubuntu 24.04; astral's installer puts it in ~/.local/bin.
         if (( dry )); then print -ru2 -- "+ curl -LsSf https://astral.sh/uv/install.sh | sh"
@@ -235,8 +239,10 @@ if (( enmaas )); then
     # timeout downloading ~110 packages and fails. EnMaaS and hosted-only run
     # the Go proxy now, which needs no download.
     typeset lv fv
-    lv=$(grep -o 'CLAUDE_OPENAI_PROXY_LITELLM_VERSION:-[0-9.]*' "$root/zsh/functions/claude/providers/openai.zsh" | head -1 | cut -d- -f2)
-    fv=$(grep -o 'CLAUDE_OPENAI_PROXY_FASTAPI_VERSION:-[0-9.]*' "$root/zsh/functions/claude/providers/openai.zsh" | head -1 | cut -d- -f2)
+    # openai.zsh pins the versions with typeset -g NAME="x.y.z" (no :-default
+    # expansion), so match the quoted form and take the quoted field.
+    lv=$(grep -o 'CLAUDE_OPENAI_PROXY_LITELLM_VERSION="[0-9.]*"' "$root/zsh/functions/claude/providers/openai.zsh" | head -1 | cut -d'"' -f2)
+    fv=$(grep -o 'CLAUDE_OPENAI_PROXY_FASTAPI_VERSION="[0-9.]*"' "$root/zsh/functions/claude/providers/openai.zsh" | head -1 | cut -d'"' -f2)
     if [[ -n "$lv" && -n "$fv" ]]; then
         _run uv tool run --with "fastapi==$fv" --from "litellm[proxy]==$lv" litellm --version >/dev/null \
             || warning "Could not pre-download LiteLLM $lv; the first EnMaaS start may time out once"

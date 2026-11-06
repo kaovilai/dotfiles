@@ -268,12 +268,23 @@ def changes(info_root, info, root, config, versions, key, hooks, required):
     return changed, previous, proposed, rerouted
 
 
+def knob_digest():
+    """Stable digest of the knob env the child proxy reads. The Go source
+    hash cannot see HOSTED_ONLY_VISION_FALLBACK & friends, so without this a
+    knob change would leave check() reporting fresh and the running proxy
+    serving the old value. HOSTED_ONLY_OUTAGE_STATE is controller-set per
+    runtime dir (already covered by the runtime-location reason) and excluded."""
+    items = sorted((k, v) for k, v in os.environ.items()
+                   if k.startswith(CHILD_ENV_PREFIXES) and k != 'HOSTED_ONLY_OUTAGE_STATE')
+    return hashlib.sha256(repr(items).encode()).hexdigest()
+
+
 def check(root, port, config, required):
-    """Dry run for `llm-proxy-restart required`: {'state': down|fresh|stale,
+    """Dry run for the restart-required check: {'state': down|fresh|stale,
     'changed': [...], 'busy': bool}; nothing is started, stopped or written."""
     go_impl()
     _, gohash = go_binary()
-    versions = [gohash, 'go']   # a list: the recorded identity holds one (argv slices were lists)
+    versions = [gohash, knob_digest(), 'go']   # last element stays 'go': the zero-gap swap branch keys on it   # a list: the recorded identity holds one (argv slices were lists)
     info_root, info = locate(root, port)
     if not owned(info):
         if listeners(port):
@@ -289,7 +300,7 @@ def check(root, port, config, required):
 def ensure(root, port, config, timeout, required):
     go_impl()
     gobin, gohash = go_binary()
-    versions = [gohash, 'go']   # a list: the recorded identity holds one (argv slices were lists)
+    versions = [gohash, knob_digest(), 'go']   # last element stays 'go': the zero-gap swap branch keys on it   # a list: the recorded identity holds one (argv slices were lists)
     info_root, info = locate(root, port)
     key = os.environ['ENMAAS_API_KEY']
     hooks = gohash
