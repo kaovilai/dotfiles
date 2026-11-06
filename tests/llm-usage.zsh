@@ -1000,8 +1000,11 @@ HTTPServer(("127.0.0.1", int(sys.argv[1])), H).serve_forever()' "$port" &
     _claude_proxy_sync t sync-test "http://127.0.0.1:$port/health" fp1 fakekill 1; [[ "$(<"$verdict")" == fresh ]] || { kill $srv; print -ru2 -- "FAIL: recorded fresh: $(<"$verdict")"; exit 1; }
     _claude_proxy_sync t sync-test "http://127.0.0.1:$port/health" fp2 fakekill 1; [[ "$(<"$verdict")" == stale ]] || { kill $srv; print -ru2 -- "FAIL: recorded stale: $(<"$verdict")"; exit 1; }
     [[ ! -e "$killed" ]] || { kill $srv; print -ru2 -- "FAIL: dry run killed the proxy"; exit 1; }
-    # without the variable the live path still restarts a stale idle proxy
+    # without the variable the live path still restarts a stale idle proxy.
+    # Wait for the health probe's socket to close first: an ESTABLISHED
+    # connection legitimately counts as busy and would be reused, not killed.
     unset _CLAUDE_PROXY_SYNC_CHECK
+    for i in {1..30}; do _claude_port_serving "$port" || break; sleep 0.1; done
     _claude_proxy_sync t sync-test "http://127.0.0.1:$port/health" fp2 fakekill 1 2>/dev/null
     [[ -e "$killed" ]] || { kill $srv; print -ru2 -- "FAIL: live path did not restart the stale proxy"; exit 1; }
     kill $srv 2>/dev/null
