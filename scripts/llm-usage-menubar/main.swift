@@ -1377,11 +1377,13 @@ final class MonitorView: NSView {
         let capH: CGFloat = 10
         let peak = model.peakValue(m)
         metricHit = rect  // clicking a stacked panel cycles the window metric
+        // Range is part of the label: these are per-minute buckets over model.n
+        // minutes, a different window and unit than the % rows' 15m share.
         let label: String
         switch m {
-        case .tokens: label = "tok/s · peak \(compactRate(peak))"
-        case .latency: label = "latency · peak \(compactMs(peak))"
-        case .ttft: label = "ttft · peak \(compactMs(peak))"
+        case .tokens: label = "tok/s · \(model.n)m · peak \(compactRate(peak))"
+        case .latency: label = "latency · \(model.n)m · peak \(compactMs(peak))"
+        case .ttft: label = "ttft · \(model.n)m · peak \(compactMs(peak))"
         default: label = m.title
         }
         drawStr(label, in: NSRect(x: rect.minX, y: rect.maxY - capH, width: rect.width, height: capH), font: tinyFont, color: .secondaryLabelColor)
@@ -1647,14 +1649,29 @@ final class MonitorView: NSView {
         }
 
         let models = shareEntries(d["share"]["models"]), providers = shareEntries(d["share"]["providers"])
+        // Three different metrics share this panel; the headers must say which is
+        // which or the % rows and the history graph read as one contradictory number:
+        //   * "In flight" row = live request count + age of the oldest. No window.
+        //   * model/provider % = share of FINISHED requests (or tokens) over the share
+        //     window (d.share.window, default 15m). A cumulative share, not a rate.
+        //   * history graph = per-minute values over the last ~60m on a shared
+        //     absolute scale (peak of all series in the band). A 49%-of-15m vendor is
+        //     a sliver when its traffic is spread out or outside the peak minute,
+        //     and duration bands only dot minutes that vendor finished requests in.
+        //     % and bar/dot height are different units over different windows.
+        let shareWindow = d["share"]["window"].str ?? "15m"
+        let pctOf = (d["share"]["metric"].str == "tokens") ? "% tok" : "% req"
         let modelRows = min(models.count, layout == .vertical ? 4 : 3)
         if modelRows == 0, let r = next() { drawStr("idle · no traffic", in: r, color: .tertiaryLabelColor) }
+        if modelRows > 0, rowsLeft >= 2, let r = next() {
+            drawStr("Models · \(shareWindow) · \(pctOf)", in: r, font: tinyFont, color: .secondaryLabelColor)
+        }
         for e in models.prefix(modelRows) {
             guard let r = next() else { break }
             drawShareRow(ctx, r, e, marker: graphMode == .lines ? nil : .tick(vendorColor(e.key)), circle: true, hover: .vendor(e.key))
         }
         if !providers.isEmpty, rowsLeft >= 2 {
-            if let r = next() { drawStr("Providers · \(d["share"]["window"].str ?? "15m")", in: r, font: tinyFont, color: .secondaryLabelColor) }
+            if let r = next() { drawStr("Providers · \(shareWindow) · \(pctOf)", in: r, font: tinyFont, color: .secondaryLabelColor) }
             for e in providers.prefix(min(rowsLeft, layout == .vertical ? 3 : 2)) {
                 guard let r = next() else { break }
                 drawShareRow(ctx, r, e, marker: graphMode == .bars ? nil : .line(providerColor(e.key)), circle: false, hover: .provider(e.key))
