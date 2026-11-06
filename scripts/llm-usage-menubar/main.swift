@@ -643,6 +643,22 @@ let vendorChartColors: [String: NSColor] = [
 ]
 func vendorColor(_ key: String) -> NSColor { vendorChartColors[key] ?? vendorChartColors["other"]! }
 
+/// Vendor key for a raw model string (same patterns and order as llm-usage's
+/// MODEL_VENDORS), for data that arrives without the server's "vendor" field:
+/// the in-flight bars read the proxies' files in-process and only know the model.
+func vendorKey(forModel model: String) -> String {
+    let m = model.lowercased()
+    let rules: [(String, String)] = [
+        ("claude", "opus|sonnet|haiku|fable|claude"),
+        ("openai", "gpt|luna|codex|openai|^o[134](-|$)"),
+        ("glm", "glm|zai"),
+        ("deepseek", "deepseek"),
+        ("gemini", "gemini"),
+    ]
+    for (key, pattern) in rules where m.range(of: pattern, options: .regularExpression) != nil { return key }
+    return "other"
+}
+
 /// Line and throttle-ribbon colours per provider. Chosen to stay off the bar hues: lines are drawn over the bars.
 func providerColor(_ key: String) -> NSColor {
     switch key {
@@ -737,7 +753,7 @@ func compactMs(_ ms: Double) -> String { ms >= 1000 ? String(format: "%.1fs", ms
 /// The animated in-flight strip: its own layer-backed view so a 20 Hz needle
 /// repaints a few dozen pixels instead of the whole panel (charts included).
 final class FlightBarsView: NSView {
-    var fractions: [(id: String, fraction: CGFloat)] = [] {
+    var fractions: [(id: String, fraction: CGFloat, vendor: String)] = [] {
         didSet {
             if fractions.count != oldValue.count || fractions.contains(where: { pair in
                 !oldValue.contains { $0.id == pair.id && $0.fraction == pair.fraction }
@@ -767,7 +783,7 @@ final class FlightBarsView: NSView {
             let track = NSRect(x: bounds.minX, y: y, width: bounds.width, height: h)
             NSColor.quaternaryLabelColor.setFill()
             NSBezierPath(roundedRect: track, xRadius: h / 2, yRadius: h / 2).fill()
-            waitColor(bar.fraction).setFill()
+            vendorColor(bar.vendor).setFill()  // the model's color for the bar's whole life; length is the elapsed time
             NSBezierPath(roundedRect: NSRect(x: track.minX, y: y, width: max(track.width * bar.fraction, 3), height: h), xRadius: h / 2, yRadius: h / 2).fill()
             y += h + gap
         }
@@ -792,7 +808,7 @@ final class MonitorView: NSView {
                     flightsAt = waitDataAt
                 }
                 waitNeedle = waitTarget(at: waitDataAt ?? Date())
-                for f in flights { barShown[f.id] = waitTarget(at: waitDataAt ?? Date(), for: f) }
+                for f in flights { barShown[f.id] = waitTarget(at: waitDataAt ?? Date(), for: f); barVendor[f.id] = vendorKey(forModel: f.model) }
             }
             needsDisplay = true
         }
@@ -817,6 +833,7 @@ final class MonitorView: NSView {
     }
     private var flightsAt: Date?
     private var barShown: [String: CGFloat] = [:]
+    private var barVendor: [String: String] = [:]  // id -> vendor key, kept until the bar has drained
     private var waitNeedle: CGFloat = 0
     private var waitTick: Date?
     private var waitDataAt: Date?
@@ -853,6 +870,7 @@ final class MonitorView: NSView {
         // per-request bars: present -> rise toward its age; gone -> drain out
         let live = Set(flights.map { $0.id })
         for f in flights {
+            barVendor[f.id] = vendorKey(forModel: f.model)
             let target = waitTarget(at: t, for: f)
             let shown = barShown[f.id] ?? 0
             let next = shown + (target - shown) * CGFloat(1 - exp(-dt / 0.25))
@@ -861,7 +879,7 @@ final class MonitorView: NSView {
         }
         for (id, shown) in barShown where !live.contains(id) {
             let next = shown * CGFloat(exp(-dt / 0.4))
-            if next > 0.01 { barShown[id] = next } else { barShown.removeValue(forKey: id) }
+            if next > 0.01 { barShown[id] = next } else { barShown.removeValue(forKey: id); barVendor.removeValue(forKey: id) }
             barsMoved = true
         }
         // aggregate needle for the overlay pill (drawn with the rest of the
@@ -883,8 +901,8 @@ final class MonitorView: NSView {
     /// Bars stay visible while they drain, not just while requests are live.
     var waitBarVisible: Bool { waitNeedle > 0.001 || !flights.isEmpty || !barShown.isEmpty }
     /// Bar values to draw, oldest request at the bottom (stack grows upward).
-    var flightBars: [(id: String, fraction: CGFloat)] {
-        var rows = barShown.filter { $0.value > 0.001 }.map { (id: $0.key, fraction: $0.value) }
+    var flightBars: [(id: String, fraction: CGFloat, vendor: String)] {
+        var rows = barShown.filter { $0.value > 0.001 }.map { (id: $0.key, fraction: $0.value, vendor: barVendor[$0.key] ?? "other") }
         let order = flights.map { $0.id }
         rows.sort { a, b in
             let ia = order.firstIndex(of: a.id) ?? Int.max
