@@ -341,26 +341,28 @@ function columns(host, o) {
   }
 }
 
-function lines(host, o) {
+/* One dot per bucket for distribution medians (p50 latency). A line implies a
+   signal between samples that a median does not carry, and empty buckets read
+   as arbitrary breaks; dots keep gaps meaning "no samples" and turn density
+   into something visible. Counts/rates stay bars (columns). */
+function dots(host, o) {
   M.r = o.models.length <= 4 ? 118 : 14; // room for direct end labels
   const all = o.models.flatMap((m) => o.val(m).filter((v) => v != null));
   if (!all.length) { host.replaceChildren(html("div", { class: "empty" }, o.empty)); return; }
   const f = frame(host, o.height || 240, Math.max(...all), false, o.yfmt);
   const slot = f.pw / o.n, X = (i) => M.l + slot * (i + 0.5);
+  const r = Math.min(Math.max(slot * 0.3, 2.2), 4.5); // scales with bucket width
   const ends = [];
   for (const m of o.models) {
     const vals = o.val(m);
-    let d = "", pen = false, last = -1;
+    let last = -1;
     vals.forEach((v, i) => {
-      if (v == null) { pen = false; return; }
-      d += `${pen ? "L" : "M"}${X(i)},${f.y(v)}`; pen = true; last = i;
+      if (v == null) return;
+      const c = svg("circle", { cx: X(i), cy: f.y(v), r, "stroke-width": 1.2 }, f.root);
+      c.style.fill = colorOf(m); c.style.stroke = "var(--surface)";
+      last = i;
     });
-    if (last < 0) continue;
-    const p = svg("path", { d, fill: "none", "stroke-width": 2, "stroke-linejoin": "round", "stroke-linecap": "round" }, f.root);
-    p.style.stroke = colorOf(m);
-    const dot = svg("circle", { cx: X(last), cy: f.y(vals[last]), r: 4, "stroke-width": 2 }, f.root);
-    dot.style.fill = colorOf(m); dot.style.stroke = "var(--surface)";
-    ends.push({ m, x: X(last), y: f.y(vals[last]) });
+    if (last >= 0) ends.push({ m, x: X(last), y: f.y(vals[last]) });
   }
   if (o.models.length <= 4) { // direct end labels; skip any that would collide
     let prev = -99;
@@ -534,7 +536,7 @@ function renderCharts() {
   else columns(ctxHost, { n: D.ctx_bins.length, models, val: (m, i) => D.ctx_hist[m][i], fmt: (v) => String(Math.round(v)), yfmt: (v) => String(Math.round(v)),
     integer: true, height: 220, xlabel: (i) => D.ctx_bins[i], xtitle: (i) => `Context ${D.ctx_bins[i]}` });
 
-  lines(document.getElementById("ch-lat"), { n, models: models.filter((m) => D.series[m].p50.some((v) => v != null)), val: (m) => D.series[m].p50,
+  dots(document.getElementById("ch-lat"), { n, models: models.filter((m) => D.series[m].p50.some((v) => v != null)), val: (m) => D.series[m].p50,
     fmt: ms, yfmt: ms, height: 220, xlabel: (i) => xFormat(D.buckets[i]), xtitle: (i) => fullTime(D.buckets[i]),
     empty: "No latency data. Transcripts carry none; it comes from the LiteLLM proxy log." });
 
