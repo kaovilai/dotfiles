@@ -222,6 +222,8 @@ OUTPUT_RESERVE = int_knob("OUTPUT_RESERVE", 512, 0)
 # (Claude Code asks ~20000) makes summaries truncate.
 # Takes effect: proxy restart (fleet-sync / llm-proxy-sync); see
 # docs/notes/change-take-effect.md. Hook-logic edits change the fingerprint.
+# Why this seam exists + the two "get closer to native" levers and their cost:
+# docs/notes/hosted-only-context-edge.md.
 MIN_OUTPUT = int_knob("MIN_OUTPUT", 16000, 1)
 try:
     BYTES_PER_TOKEN = max(1.0, float(knob("BYTES_PER_TOKEN", "3")))
