@@ -19,9 +19,17 @@ const (
 )
 
 var (
-	durationRe    = regexp.MustCompile(`(\d+(?:\.\d+)?)(ms|h|m|s)`)
-	outageGateway = regexp.MustCompile(`(?i)no_db_connection|database is temporarily unreachable|retry shortly`)
-	outageConn    = regexp.MustCompile(`(?i)connection error|connection (refused|reset|aborted)|connect timeout`)
+	durationRe = regexp.MustCompile(`(\d+(?:\.\d+)?)(ms|h|m|s)`)
+	// The gateway answers 503 no_db_connection when its auth DB is down and
+	// gateway-wide 503 "metering system unavailable" / "service unavailable"
+	// when its metering plane is down (observed 2026-10-22: 90 + 33 unrewritten
+	// events), so they become reset-bearing answers T3 resumes from.
+	outageGateway = regexp.MustCompile(`(?i)no_db_connection|database is temporarily unreachable|retry shortly|metering system unavailable|service unavailable`)
+	// A refused/dropped connect and a DNS failure surface as a 500 with these
+	// shapes — the same transient class as "Connection error".
+	outageConn = regexp.MustCompile(`(?i)connection error|connection (refused|reset|aborted)|connect timeout` +
+		`|cannot connect to host|connect call failed|nodename nor servname` +
+		`|name or service not known|temporary failure in name resolution|network is unreachable`)
 )
 
 type limitInfo struct {
@@ -139,7 +147,7 @@ func isLimitError(status int, headers map[string]string, text string) bool {
 	return strings.EqualFold(asString(err["code"]), "rate_limited")
 }
 
-var outageStatuses = map[int]bool{408: true, 502: true, 504: true, 524: true}
+var outageStatuses = map[int]bool{408: true, 502: true, 504: true, 524: true, 529: true}
 
 func isOutageError(status int, text string) bool {
 	if isLimitError(status, nil, text) {

@@ -33,6 +33,16 @@ type config struct {
 	MinOutput     int
 	BytesPerToken float64
 
+	// Inline image handling (hosted_only_hooks.py item 6): the gateway caps a
+	// request body and answers 413, so old inline images are replaced
+	// oldest-first once the content exceeds ImageBudget. ImageTokens prices
+	// each image in the clamp (base64 bytes are not tokens).
+	ImageBudget    int
+	ImageTokens    int
+	ImageCacheDays int
+	ImageCacheDir  string
+	AttachmentsDir string
+
 	DefaultRetry   int
 	ClientRetryMax int
 	OutageBase     int
@@ -88,6 +98,19 @@ func floatKnob(name string, def float64) float64 {
 		return def
 	}
 	return v
+}
+
+// imageCacheDir is HOSTED_ONLY_IMAGE_CACHE_DIR, else
+// $XDG_STATE_HOME/hosted-only-image-cache (~/.local/state when unset).
+func imageCacheDir() string {
+	if dir := knob("IMAGE_CACHE_DIR", ""); dir != "" {
+		return dir
+	}
+	state := os.Getenv("XDG_STATE_HOME")
+	if state == "" {
+		state = os.Getenv("HOME") + "/.local/state"
+	}
+	return state + "/hosted-only-image-cache"
 }
 
 // coalesceKnob reads HOSTED_ONLY_OUTAGE_COALESCE_SECONDS like the Python hook:
@@ -160,6 +183,11 @@ func loadConfig(flavor, port, runtimeDir string) *config {
 		OutputReserve:  intKnob("OUTPUT_RESERVE", 512, 0),
 		MinOutput:      intKnob("MIN_OUTPUT", 16000, 1),
 		BytesPerToken:  floatKnob("BYTES_PER_TOKEN", 3),
+		ImageBudget:    intKnob("IMAGE_BUDGET_BYTES", 2500000, 0),
+		ImageTokens:    intKnob("IMAGE_TOKENS", 2500, 1),
+		ImageCacheDays: intKnob("IMAGE_CACHE_DAYS", 1, 0),
+		ImageCacheDir:  imageCacheDir(),
+		AttachmentsDir: os.Getenv("HOME") + "/.t3/userdata/attachments",
 		DefaultRetry:   intKnob("RATE_LIMIT_DEFAULT_RETRY_SECONDS", 60, 1),
 		ClientRetryMax: intKnob("CLIENT_RETRY_MAX_SECONDS", 60, 0),
 		OutageBase:     intKnob("OUTAGE_RETRY_SECONDS", 60, 1),

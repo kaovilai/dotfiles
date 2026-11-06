@@ -20,6 +20,11 @@ type requestError struct {
 // (empty for none), a requestError when the request must be refused, and
 // whether the body changed (so an untouched request can be forwarded verbatim).
 func rewriteRequest(cfg *config, path string, data map[string]any) (fallback string, reqErr *requestError, changed bool) {
+	// Image budget prune runs first, for every model and endpoint (the gateway's
+	// body cap applies to all of them), before any other rewrite.
+	if pruneImages(cfg, data) > 0 {
+		changed = true
+	}
 	requested := asString(data["model"])
 	model := requested
 	// Aliases (claude-sonnet-5-5 on the Claude flavor) are served by GLM: the
@@ -187,7 +192,17 @@ func clampOutput(cfg *config, data map[string]any) (*requestError, bool) {
 	if !ok {
 		return nil, false
 	}
-	estimate := int(math.Ceil(float64(contentSize(data)) / cfg.BytesPerToken))
+	// Base64 bytes are not tokens: price text at BytesPerToken and each inline
+	// image at ImageTokens (see imageLoad).
+	imgBytes, imgCount := 0, 0
+	for _, key := range imageContentKeys {
+		if v, ok := data[key]; ok && v != nil {
+			b, c := imageLoad(v)
+			imgBytes += b
+			imgCount += c
+		}
+	}
+	estimate := int(math.Ceil(float64(max(0, contentSize(data)-imgBytes))/cfg.BytesPerToken)) + imgCount*cfg.ImageTokens
 	room := cfg.MaxModelLen - estimate - cfg.OutputReserve
 	minOut := cfg.MinOutput
 	if requested < minOut {
@@ -210,7 +225,41 @@ func clampOutput(cfg *config, data map[string]any) (*requestError, bool) {
 	return nil, false
 }
 
+// stripToolReferences drops the `tool_reference` content blocks Claude Code's
+// tool search sends (vLLM's chat template rejects them). They point at tool
+// definitions the client already holds, so dropping them keeps the request
+// valid; a content list that empties becomes a short text block. litellm's own
+// anthropic handler nests them inside tool_result.content (tool-search
+// results), so nested content lists are walked too.
 func stripToolReferences(data map[string]any) int {
+	var clean func(blocks []any) ([]any, int)
+	clean = func(blocks []any) ([]any, int) {
+		kept := make([]any, 0, len(blocks))
+		dropped := 0
+		for _, block := range blocks {
+			b := asMap(block)
+			if b != nil && asString(b["type"]) == "tool_reference" {
+				dropped++
+				continue
+			}
+			if b != nil {
+				if nestedList, ok := b["content"].([]any); ok {
+					nested, count := clean(nestedList)
+					b["content"] = nested
+					dropped += count
+					if count > 0 && len(nested) == 0 {
+						b["content"] = []any{map[string]any{"type": "text", "text": "(tool reference omitted)"}}
+					}
+				}
+			}
+			kept = append(kept, block)
+		}
+		if dropped > 0 && len(kept) == 0 {
+			kept = []any{map[string]any{"type": "text", "text": "(tool reference omitted)"}}
+		}
+		return kept, dropped
+	}
+
 	total := 0
 	for _, key := range []string{"messages", "input"} {
 		items, ok := data[key].([]any)
@@ -222,27 +271,11 @@ func stripToolReferences(data map[string]any) int {
 			if m == nil {
 				continue
 			}
-			blocks, ok := m["content"].([]any)
-			if !ok {
-				continue
+			if blocks, ok := m["content"].([]any); ok {
+				cleaned, dropped := clean(blocks)
+				m["content"] = cleaned
+				total += dropped
 			}
-			kept := make([]any, 0, len(blocks))
-			dropped := 0
-			for _, block := range blocks {
-				if b := asMap(block); b != nil && asString(b["type"]) == "tool_reference" {
-					dropped++
-					continue
-				}
-				kept = append(kept, block)
-			}
-			if dropped == 0 {
-				continue
-			}
-			if len(kept) == 0 {
-				kept = []any{map[string]any{"type": "text", "text": "(tool reference omitted)"}}
-			}
-			m["content"] = kept
-			total += dropped
 		}
 	}
 	return total
@@ -312,11 +345,22 @@ func stripWebSearchTools(data map[string]any) bool {
 	if len(kept) == len(tools) {
 		return false
 	}
-	if len(kept) > 0 {
-		data["tools"] = kept
-	} else {
+	if len(kept) == 0 {
 		delete(data, "tools")
 		delete(data, "tool_choice")
+		return true
+	}
+	data["tools"] = kept
+	// A forced choice naming the dropped tool would reference an undeclared
+	// tool (400 on strict upstreams); free the choice instead.
+	if choice := asMap(data["tool_choice"]); choice != nil {
+		named := asString(choice["name"])
+		if named == "" {
+			named = asString(asMap(choice["function"])["name"])
+		}
+		if strings.HasPrefix(named, searchToolPrefix) {
+			delete(data, "tool_choice")
+		}
 	}
 	return true
 }
