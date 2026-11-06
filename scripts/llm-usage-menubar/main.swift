@@ -805,7 +805,16 @@ final class MonitorView: NSView {
     // unfinished. The aggregate needle (oldest request) stays for the compact
     // overlay pill.
     let barsView = FlightBarsView(frame: .zero)
-    var flights: [Flight] = [] { didSet { flightsAt = Date(); barsView.needsDisplay = true } }
+    var flights: [Flight] = [] {
+        didSet {
+            flightsAt = Date()
+            barsView.needsDisplay = true
+            if !flights.isEmpty { startWaitAnimation() }  // a bar appeared: resume the needle timer
+            // the row positions the strip during a panel draw, so a changed set
+            // must repaint the panel once (the 20 Hz timer only repaints the strip)
+            if flights.map({ $0.id }) != oldValue.map({ $0.id }) { needsDisplay = true }
+        }
+    }
     private var flightsAt: Date?
     private var barShown: [String: CGFloat] = [:]
     private var waitNeedle: CGFloat = 0
@@ -863,6 +872,11 @@ final class MonitorView: NSView {
         waitNeedle = abs(next - waitNeedle) > 0.0015 ? next : target
         if moved || barsMoved {
             barsView.fractions = flightBars
+        }
+        // nothing live and every bar drained: park the timer until a bar appears
+        if flights.isEmpty && barShown.isEmpty {
+            waitTimer?.invalidate()
+            waitTimer = nil
         }
     }
 
@@ -2289,24 +2303,43 @@ final class AppController: NSObject, NSMenuDelegate, NSWindowDelegate {
         if (d["inflight"]["count"].int ?? 0) > 0 { poll() }
     }
 
+    // The menu-bar image is rebuilt every 5 s tick and every poll; most of those
+    // ticks change nothing but the text (countdown, same share, same state), so
+    // the raster is cached under everything that shapes it.
+    private var statusImageCache: (key: String, image: NSImage)?
+    private var symbolImageCache: [String: NSImage] = [:]
+
     func render(title s: Summary, stale: Bool) {
         guard let button = statusItem.button else { return }
         if showImage, let d = data, d["share"].exists {
             let share = d["share"]
-            let img = statusImage(models: shareEntries(share["models"]), providers: shareEntries(share["providers"]),
+            let shareText = shareDescription(share)
+            let key = "\(s.state)|\(button.effectiveAppearance.name.rawValue)|\(shareText)"
+            let img: NSImage
+            if let hit = statusImageCache, hit.key == key {
+                img = hit.image
+            } else {
+                img = statusImage(models: shareEntries(share["models"]), providers: shareEntries(share["providers"]),
                                   badge: badgeColor(for: s.state), appearance: button.effectiveAppearance)
+                statusImageCache = (key, img)
+            }
             let text = showText ? s.text : ""
-            img.accessibilityDescription = "llm-usage \(s.state). " + shareDescription(share)
+            img.accessibilityDescription = "llm-usage \(s.state). " + shareText
             button.image = img
             button.imagePosition = text.isEmpty ? .imageOnly : .imageLeading
             button.title = text.isEmpty ? "" : " " + text
-            button.setAccessibilityLabel("llm-usage \(s.state). " + shareDescription(share))
+            button.setAccessibilityLabel("llm-usage \(s.state). " + shareText)
             button.appearsDisabled = stale
-            button.toolTip = "llm-usage: \(s.state)\n" + shareDescription(share)
+            button.toolTip = "llm-usage: \(s.state)\n" + shareText
             return
         }
-        if let img = NSImage(systemSymbolName: s.symbol, accessibilityDescription: s.state) {
-            img.isTemplate = true
+        var symbol = symbolImageCache[s.symbol]
+        if symbol == nil {
+            symbol = NSImage(systemSymbolName: s.symbol, accessibilityDescription: s.state)
+            symbol?.isTemplate = true
+            if let symbol { symbolImageCache[s.symbol] = symbol }
+        }
+        if let img = symbol {
             button.image = img
             button.imagePosition = s.text.isEmpty ? .imageOnly : .imageLeading
             button.title = s.text.isEmpty ? "" : " " + s.text
