@@ -233,10 +233,17 @@ def proxy_digest(files):
 
 
 def go_impl():
-    # CLAUDE_ENMAAS_PROXY_IMPL=go runs scripts/hosted-only-go instead of
-    # litellm[proxy]; LLM_PROXY_IMPL flips all the proxies at once.
-    return (os.environ.get('CLAUDE_ENMAAS_PROXY_IMPL')
+    # LiteLLM is the default for EnMaaS: this flavor serves Claude Code over
+    # /v1/messages for every catalog model, GPT/Gemini included, and only
+    # LiteLLM converts Messages <-> Chat/Responses (tools and streaming). The Go
+    # proxy forwards bodies without translating, so it is opt-in here
+    # (CLAUDE_ENMAAS_PROXY_IMPL=go or LLM_PROXY_IMPL=go) and answers a
+    # cross-dialect request with an actionable 400. Hosted-only, whose models
+    # all speak the Anthropic dialect natively, defaults to Go. `auto` is
+    # litellm for EnMaaS until the Go proxy can translate.
+    impl = (os.environ.get('CLAUDE_ENMAAS_PROXY_IMPL')
             or os.environ.get('LLM_PROXY_IMPL') or 'litellm').strip().lower()
+    return 'litellm' if impl == 'auto' else impl
 
 
 def go_source():
@@ -249,15 +256,24 @@ def go_source():
     return files[0].parent.parent / 'scripts' / 'hosted-only-go'
 
 
+def go_source_hash(src):
+    # The canonical Go source hash, identical to _hosted_only_go_hash in
+    # scripts/hosted-only-proxy.zsh: sha256 over go.mod then every *.go in
+    # C-locale (byte) order. Both launchers stamp the same source.sha, so a
+    # different algorithm here made each alternating launch rebuild the binary.
+    digest = hashlib.sha256()
+    digest.update((src / 'go.mod').read_bytes())
+    for path in sorted(src.glob('*.go'), key=lambda p: p.name.encode()):
+        digest.update(path.read_bytes())
+    return digest.hexdigest()
+
+
 def go_binary():
     """Build (or reuse) the Go proxy; returns (binary path, source hash)."""
     src = go_source()
     out = Path(os.environ.get('XDG_STATE_HOME') or Path.home() / '.local' / 'state') / 'hosted-only-go'
     out.mkdir(mode=0o700, parents=True, exist_ok=True)
-    digest = hashlib.sha256()
-    for path in sorted(list(src.glob('*.go')) + [src / 'go.mod']):
-        digest.update(path.name.encode() + b'\0' + path.read_bytes())
-    want = digest.hexdigest()
+    want = go_source_hash(src)
     binary = out / 'hosted-only-proxy'
     stamp = out / 'source.sha'
     if not binary.is_file() or not stamp.is_file() or stamp.read_text().strip() != want:
@@ -283,7 +299,9 @@ def stop(root, info, port=None):
     # Only the process group started and recorded by this controller, never a
     # PID discovered by its port. Verify birth time again before escalation.
     os.killpg(info['pid'], signal.SIGTERM)
-    deadline = time.monotonic() + 8
+    # Longer than the Go proxy's 10 s graceful drain, so a SIGTERMed proxy
+    # finishes its in-flight requests before this escalates to SIGKILL.
+    deadline = time.monotonic() + 15
     while time.monotonic() < deadline and owned(info):
         time.sleep(.1)
     if owned(info):
@@ -347,15 +365,29 @@ def ensure(root, port, config, versions, timeout, required):
     files = hook_files()
     shim = dns_shim() if impl == 'litellm' else None
     hooks = gohash if impl == 'go' else proxy_digest(files)
+    swap = None
     if owned(info):
         if not ready(info, info_root):
             raise RuntimeError('recorded proxy is not ready; run claude-enmaas-kill before relaunching')
         changed, previous, proposed, rerouted = changes(info_root, info, root, config, versions, key, hooks, required)
-        if changed and not busy(port):
-            # Nobody is mid-request: apply the change now instead of refusing.
-            notice('%s changed; restarting the idle proxy' % ', '.join(changed))
-            stop(info_root, info, port)
-            wait_port_free(port)
+        forced = bool(os.environ.get('CLAUDE_ENMAAS_FORCE_RESTART'))
+        if forced and impl == 'go' and not changed:
+            changed = ['restart requested']
+        if changed and (not busy(port) or (forced and impl == 'go')):
+            # Nobody is mid-request (or a Go swap is forced, which loses
+            # nothing): apply the change now instead of refusing.
+            if impl == 'go' and (info.get('versions') or ['', ''])[-1] == 'go':
+                # Zero-refuse restart: the replacement starts ALONGSIDE the old
+                # Go listener (both bind SO_REUSEPORT) and the old group is
+                # retired only once the new one is up, so a request arriving
+                # mid-restart is never refused. The token is kept so a client
+                # that holds it is valid on either listener while both run.
+                notice('%s changed; restarting the proxy (zero-gap swap)' % ', '.join(changed))
+                swap = (info_root, info)
+            else:
+                notice('%s changed; restarting the idle proxy' % ', '.join(changed))
+                stop(info_root, info, port)
+                wait_port_free(port)
         elif rerouted:
             raise RuntimeError('model routing changed or is not loaded while the proxy is serving requests; '
                                'run claude-enmaas-restart once they finish')
@@ -369,23 +401,24 @@ def ensure(root, port, config, versions, timeout, required):
             # merely because discovery or one session's selected tier changed.
             return dict(info, runtime=str(info_root), models=[model for model, want in proposed.items()
                 if previous.get(model, dict(previous['*'], model=previous['*']['model'].replace('*', model))) == want])
-    groups = stray(port, root)
-    if groups:
-        if busy(port):
-            raise RuntimeError('an earlier EnMaaS proxy without its state files is serving requests; '
-                               'run claude-enmaas-restart once they finish')
-        notice('replacing an earlier EnMaaS proxy whose state files are gone')
-        stop_stray(groups, port, root)
-        wait_port_free(port)
-    if listeners(port):
-        raise RuntimeError('proxy port is occupied; refusing to adopt or stop its listener')
-    with socket.socket() as probe:
-        probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        try:
-            probe.bind(('127.0.0.1', port))
-        except OSError:
+    if swap is None:
+        groups = stray(port, root)
+        if groups:
+            if busy(port):
+                raise RuntimeError('an earlier EnMaaS proxy without its state files is serving requests; '
+                                   'run claude-enmaas-restart once they finish')
+            notice('replacing an earlier EnMaaS proxy whose state files are gone')
+            stop_stray(groups, port, root)
+            wait_port_free(port)
+        if listeners(port):
             raise RuntimeError('proxy port is occupied; refusing to adopt or stop its listener')
-    token = 'sk-enmaas-' + secrets.token_hex(32)
+        with socket.socket() as probe:
+            probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            try:
+                probe.bind(('127.0.0.1', port))
+            except OSError:
+                raise RuntimeError('proxy port is occupied; refusing to adopt or stop its listener')
+    token = swap[1]['token'] if swap else 'sk-enmaas-' + secrets.token_hex(32)
     config['general_settings']['master_key'] = token
     if impl == 'litellm':
         if files:
@@ -417,15 +450,73 @@ def ensure(root, port, config, versions, timeout, required):
                    ENMAAS_DNS_DOH_URLS=os.environ.get('ENMAAS_DNS_DOH_URLS', ''))
     # A boot failure (bad config, hook import error) must leave a trace.
     log = root / 'proxy.log'
-    logfd = os.open(log, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
-    try:
-        child = subprocess.Popen(args, env=env, stdin=subprocess.DEVNULL, stdout=logfd,
-                                 stderr=logfd, start_new_session=True)
-    finally:
-        os.close(logfd)
-    info = {'pid': child.pid, 'birth': birth(child.pid), 'port': port, 'token': token,
-            'versions': versions, 'key_signature': signature(key, token), 'hooks': hooks}
-    write_private(root / 'proxy.json', info)
+
+    def spawn():
+        logfd = os.open(log, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
+        try:
+            return subprocess.Popen(args, env=env, stdin=subprocess.DEVNULL, stdout=logfd,
+                                    stderr=logfd, start_new_session=True)
+        finally:
+            os.close(logfd)
+
+    def identity(process):
+        return {'pid': process.pid, 'birth': birth(process.pid), 'port': port, 'token': token,
+                'versions': versions, 'key_signature': signature(key, token), 'hooks': hooks}
+
+    child = spawn()
+    info = identity(child)
+    if swap is not None:
+        swap_root, swap_info = swap
+
+        def accepting():
+            # a listener whose process group is the new child's
+            for pid in listeners(port):
+                try:
+                    if os.getpgid(pid) == child.pid:
+                        return True
+                except ProcessLookupError:
+                    pass
+            return False
+
+        until = time.monotonic() + min(timeout, 30)
+        while time.monotonic() < until and child.poll() is None and not accepting():
+            time.sleep(.05)
+        if child.poll() is None and accepting():
+            write_private(root / 'proxy.json', info)
+            # Retire the old group only now; the recorded identity is already
+            # the new one, so never through stop() (it would unlink it). Signal
+            # it only while it is still the verified old proxy: if it exited
+            # during the replacement's startup its group id may have been reused
+            # by an unrelated process.
+            try:
+                if owned(swap_info):
+                    os.killpg(swap_info['pid'], signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+            # wait out the Go proxy's 10 s graceful drain before escalating
+            until = time.monotonic() + 15
+            while time.monotonic() < until and owned(swap_info):
+                time.sleep(.05)
+            if owned(swap_info):
+                os.killpg(swap_info['pid'], signal.SIGKILL)
+            if swap_root != root and read_private(swap_root / 'proxy.json') == swap_info:
+                (swap_root / 'proxy.json').unlink(missing_ok=True)
+        else:
+            # The overlap start did not take: the old listener cannot share the
+            # port (a Go build from before SO_REUSEPORT). Legacy order, once.
+            notice('overlap start did not take (the old listener cannot share the port); stopping it first')
+            if child.poll() is None:
+                try:
+                    os.killpg(child.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+            stop(swap_root, swap_info, port)
+            wait_port_free(port)
+            swap = None
+            child = spawn()
+            info = identity(child)
+    if swap is None:
+        write_private(root / 'proxy.json', info)
     # Boot wait: a dot per second on stderr so the (up to `timeout` long)
     # litellm startup shows progress instead of a blank terminal.
     deadline = time.monotonic() + timeout

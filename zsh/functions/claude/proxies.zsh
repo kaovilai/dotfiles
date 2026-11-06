@@ -195,10 +195,35 @@ claude-openai-restart() {
     _llm_proxy_wait_up "${CLAUDE_OPENAI_PROXY_PORT:-4145}" openai
 }
 
+# _claude_enmaas_impl: the EnMaaS proxy impl (the controller resolves the same
+# way): CLAUDE_ENMAAS_PROXY_IMPL, then LLM_PROXY_IMPL, default litellm — only
+# LiteLLM translates Messages <-> Chat/Responses, which Claude Code needs for the
+# non-Anthropic models in the EnMaaS catalog. `auto` means litellm here.
+_claude_enmaas_impl() {
+    local impl="${CLAUDE_ENMAAS_PROXY_IMPL:-${LLM_PROXY_IMPL:-litellm}}"
+    impl="${${(L)impl}//[[:space:]]/}"   # lowercase + trim, like the controller (GO and " go " mean go)
+    [[ -z "$impl" || "$impl" == auto ]] && impl=litellm
+    print -r -- "$impl"
+}
+
 claude-enmaas-restart() {
     local host rc
     host=$(_llm_proxy_gateway_host)
     _llm_proxy_dns_probe "$host" enmaas || return 1
+    if [[ "$(_claude_enmaas_impl)" == go ]]; then
+        # Go impl: the controller swaps (the new proxy starts alongside the old
+        # one, the old retires once the new answers) instead of kill-then-start,
+        # so a request arriving mid-restart is never refused. Nothing running
+        # just starts normally.
+        print -ru2 -- 'restart: enmaas swapping (model discovery, then zero-gap swap)'
+        ( CLAUDE_ENMAAS_FORCE_RESTART=1 claude-enmaas --version >/dev/null ) || {
+            rc=0; _llm_proxy_dns_addresses "$host" >/dev/null || rc=$?
+            if (( rc == 2 )); then _llm_proxy_dns_report "$host"; fi
+            return 1
+        }
+        _llm_proxy_wait_up "$(_claude_enmaas_port)" enmaas
+        return
+    fi
     claude-enmaas-kill >/dev/null 2>&1  # non-zero when nothing runs; a stuck listener is caught below
     _llm_proxy_wait_down "$(_claude_enmaas_port)" || return 1
     # Model discovery (three catalog fetches) runs before the proxy boots, so
@@ -491,7 +516,7 @@ llm-proxy-sync() {
                 # arrives, replace the live watcher so the idle restart applies
                 # THIS config instead of reverting to the one it was started
                 # with; a mismatched or dead pid falls back to keeping it.
-                if [[ "$t" == glm-claude || "$t" == glm-codex ]] && [[ "$(_hosted_only_knob PROXY_IMPL litellm)" == go ]]; then
+                if [[ "$t" == glm-claude || "$t" == glm-codex ]] && [[ "$(_hosted_only_impl)" == go ]]; then
                     local wpid wargs
                     wpid="$(<"$dir/watch-$t.pid" 2>/dev/null)"
                     wargs="$(ps -p "$wpid" -o args= 2>/dev/null)"
@@ -607,7 +632,7 @@ llm-proxy-watch() {
     # no per-poll lsof/jq spawns, no zsh to keep alive in bare systemd
     # environments. The fingerprint is computed here so the watcher restarts
     # to the code fleet-sync just pulled; the binary owns the pid/log files.
-    if [[ "$t" == glm-claude || "$t" == glm-codex ]] && [[ "$(_hosted_only_knob PROXY_IMPL litellm)" == go ]]; then
+    if [[ "$t" == glm-claude || "$t" == glm-codex ]] && [[ "$(_hosted_only_impl)" == go ]]; then
         local flavor=claude gobin fp_line
         [[ "$t" == glm-codex ]] && flavor=codex
         _hosted_only_proxy_vars "$flavor" || return 1

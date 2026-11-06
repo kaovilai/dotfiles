@@ -14,6 +14,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"log"
@@ -24,6 +25,10 @@ import (
 	"syscall"
 	"time"
 )
+
+// shutdownDrain bounds how long a SIGTERMed proxy keeps serving in-flight
+// requests; the swap's retire step waits stopWaitFree (15 s) before KILL.
+const shutdownDrain = 10 * time.Second
 
 func main() {
 	if len(os.Args) > 1 {
@@ -82,6 +87,7 @@ func runServe() {
 		os.Exit(1)
 	}
 
+	startCacheSweeper(cfg)
 	server := &http.Server{
 		Handler:           newApp(cfg),
 		ReadHeaderTimeout: 10 * time.Second,
@@ -91,11 +97,21 @@ func runServe() {
 		log.Fatalf("hosted-only-go: %v", err)
 	}
 
+	drained := make(chan struct{})
 	go func() {
 		signals := make(chan os.Signal, 1)
 		signal.Notify(signals, syscall.SIGINT, syscall.SIGTERM)
 		<-signals
-		_ = server.Close()
+		// Stop accepting (the kernel routes new connections to a sibling
+		// SO_REUSEPORT listener during a swap) and let in-flight requests and
+		// streams finish; anything still open past the budget is cut. Close
+		// alone dropped active streams mid-answer.
+		ctx, cancel := context.WithTimeout(context.Background(), shutdownDrain)
+		defer cancel()
+		if server.Shutdown(ctx) != nil {
+			_ = server.Close()
+		}
+		close(drained)
 	}()
 
 	log.Printf("hosted-only-go: %s flavor, 127.0.0.1:%s -> %s, upstream retries off, limit rewrite=%t, fallback=%t",
@@ -103,4 +119,7 @@ func runServe() {
 	if err := server.Serve(listener); err != nil && err != http.ErrServerClosed {
 		log.Fatalf("hosted-only-go: %v", err)
 	}
+	// Serve returns as soon as Shutdown begins; the process must stay until
+	// the in-flight requests have drained (or the budget ran out).
+	<-drained
 }

@@ -77,6 +77,26 @@ _hosted_only_knob() {
     print -r -- "${${(P)new}:-${${(P)old}:-$2}}"
 }
 
+# _hosted_only_resolve_impl <value>: `auto` (or empty) -> go when a go toolchain
+# is installed, else litellm; anything else is returned as given (the caller
+# validates it).
+_hosted_only_resolve_impl() {
+    local impl="${1:-auto}"
+    impl="${${(L)impl}//[[:space:]]/}"   # lowercase, trim (the EnMaaS controller normalizes the same way)
+    [[ -n "$impl" ]] || impl=auto
+    case "$impl" in
+        auto) (( $+commands[go] )) && print -r -- go || print -r -- litellm ;;
+        *) print -r -- "$impl" ;;
+    esac
+}
+
+# _hosted_only_impl: the resolved proxy impl for the hosted-only launchers.
+# Precedence: HOSTED_ONLY_PROXY_IMPL (or its retired GLM_HYBRID_ name), then
+# LLM_PROXY_IMPL (flips every proxy), then auto.
+_hosted_only_impl() {
+    _hosted_only_resolve_impl "$(_hosted_only_knob PROXY_IMPL "${LLM_PROXY_IMPL:-auto}")"
+}
+
 # _hosted_only_proxy_vars <flavor>: sets _hop_* globals for the flavor.
 _hosted_only_proxy_vars() {
     case "$1" in
@@ -104,10 +124,12 @@ _hosted_only_proxy_vars() {
         "$state/glm-hybrid-$other-$_hop_port" "$state/hosted-only-$other-$_hop_port")
     typeset -g _hop_base="http://127.0.0.1:$_hop_port"
     typeset -g _hop_token="$(_hosted_only_knob PROXY_TOKEN hosted-only-local)"
-    # PROXY_IMPL=go runs scripts/hosted-only-go (stdlib Go proxy) instead of
-    # litellm[proxy]. Same knobs, ports, token, fingerprint protocol and stop
-    # command; it reads the same merged config.yaml as its route table.
-    typeset -g _hop_impl="$(_hosted_only_knob PROXY_IMPL litellm)"
+    # The Go proxy (scripts/hosted-only-go, stdlib only) is the default; LiteLLM
+    # stays the escape hatch (HOSTED_ONLY_PROXY_IMPL=litellm, or LLM_PROXY_IMPL=
+    # litellm for every proxy at once). `auto` — the default — is go when a go
+    # toolchain is installed, else litellm. Same knobs, ports, token, fingerprint
+    # protocol and stop command on both; the knob is part of the fingerprint.
+    typeset -g _hop_impl="$(_hosted_only_impl)"
     typeset -g _hop_glm="$(_hosted_only_knob GLM_MODEL "${GLM_HYBRID_MODEL:-rits/zai-org/glm-5-3}")"
     typeset -g _hop_deepseek="$(_hosted_only_knob DEEPSEEK_MODEL rits/deepseek-ai/DeepSeek-V4.1-Flash-1017)"
     typeset -g _hop_vision_fallback="$(_hosted_only_knob VISION_FALLBACK 1)"
@@ -244,7 +266,11 @@ PY
 _hosted_only_go_hash() {
     local src="$_HOSTED_ONLY_SCRIPTS/hosted-only-go"
     [[ -d "$src" ]] || { print -ru2 -- "hosted-only: missing $src"; return 1; }
-    ( cd "$src" && cat go.mod *.go ) | shasum -a 256 | cut -d' ' -f1
+    # Canonical source hash: sha256 over go.mod then every *.go in C-locale byte
+    # order. The EnMaaS controller computes the same thing (go_source_hash), so
+    # alternating hosted-only and EnMaaS launches share one source.sha stamp
+    # instead of rebuilding the unchanged binary each time.
+    ( cd "$src" && LC_ALL=C && cat go.mod *.go ) | shasum -a 256 | cut -d' ' -f1
 }
 
 # _hosted_only_go_bin: build (or reuse) the Go proxy binary in the state dir.
@@ -327,6 +353,10 @@ _hosted_only_proxy_fp_load() {
     IFS='|' read -r _hop_fp _hop_token_fp _hop_dns_hash _hop_dns_host _hop_litellm_version _hop_fastapi_version <<< "$1"
 }
 
+# Every HOSTED_ONLY_* knob the Go config reads must be forwarded here: a setting
+# made in .zshrc without `export` is visible to _hosted_only_knob but not to the
+# child process, so a knob left out is silently ignored (tests/hosted-only-go-
+# proxy.zsh fails when config.go reads one this list does not carry).
 # _hosted_only_go_env: fills _hop_go_env (env-assignment words) with the knobs
 # the Go binary's serve child reads — the same set the LiteLLM branch pins —
 # plus the Go-only pieces (outage-streak state file, DoH allow-list). Call
@@ -344,6 +374,13 @@ _hosted_only_go_env() {
         "HOSTED_ONLY_FALLBACK=$(_hosted_only_knob FALLBACK 1)"
         "HOSTED_ONLY_OUTAGE_REWRITE=$(_hosted_only_knob OUTAGE_REWRITE 1)"
         "HOSTED_ONLY_OUTAGE_STATE=$_hop_runtime/outage-streak.json"
+        "HOSTED_ONLY_OUTAGE_RETRY_SECONDS=$(_hosted_only_knob OUTAGE_RETRY_SECONDS 60)"
+        "HOSTED_ONLY_OUTAGE_RETRY_MAX_SECONDS=$(_hosted_only_knob OUTAGE_RETRY_MAX_SECONDS 600)"
+        "HOSTED_ONLY_OUTAGE_COALESCE_SECONDS=$(_hosted_only_knob OUTAGE_COALESCE_SECONDS 5)"
+        "HOSTED_ONLY_IMAGE_BUDGET_BYTES=$_hop_image_budget"
+        "HOSTED_ONLY_IMAGE_CACHE_DAYS=$_hop_image_cache_days"
+        "HOSTED_ONLY_IMAGE_TOKENS=$(_hosted_only_knob IMAGE_TOKENS 2500)"
+        "HOSTED_ONLY_IMAGE_CACHE_DIR=$(_hosted_only_knob IMAGE_CACHE_DIR '')"
         "HOSTED_ONLY_LIMIT_REWRITE=$_hop_limit_rewrite"
         "HOSTED_ONLY_RATE_LIMIT_DEFAULT_RETRY_SECONDS=$_hop_limit_retry"
         "HOSTED_ONLY_CLIENT_RETRY_MAX_SECONDS=$_hop_client_retry"

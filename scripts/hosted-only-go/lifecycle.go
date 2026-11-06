@@ -423,6 +423,23 @@ func ensureOnce(o ensureOpts) (string, error) {
 		// the port (it predates SO_REUSEPORT) makes the new process exit at
 		// bind; that falls back to stop-then-start once, below.
 		oldPids := listenPIDs(o.port)
+		// Identity first: the old pids get retired by pid (never via the
+		// identity-checked stop, which would match the new process too), so a
+		// listener that is not this proxy's must be refused here — a foreign
+		// process answering the health path is never terminated.
+		live := oldPids[:0]
+		for _, pid := range oldPids {
+			if pidAlive(pid) { // a listener that exited since the scan is not a foreign process
+				live = append(live, pid)
+			}
+		}
+		oldPids = live
+		for _, pid := range oldPids {
+			if !ownsPortListener(procCmdline(pid), o.runtimeDir, o.legacyDirs, o.port) {
+				fmt.Fprintf(os.Stderr, "hosted-only: port %s is held by another process (pid %d); leaving it alone.\n", o.port, pid)
+				return "", errors.New("port held by a listener that is not this proxy")
+			}
+		}
 		swapNote := ""
 		if len(oldPids) > 0 {
 			swapNote = " (zero-gap swap)"

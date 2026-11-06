@@ -4,6 +4,9 @@
 emulate -LR zsh
 setopt err_exit pipe_fail
 umask 077
+# Mocked launcher contracts over a fake repo tree (no Go sources in it): they
+# exercise the LiteLLM impl's controller paths, so pin it; the default is go.
+export CLAUDE_ENMAAS_PROXY_IMPL=litellm
 local repo="${0:A:h:h}" tmp run_pid=''
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/claude-enmaas-tests.XXXXXXXX")
 export XDG_CACHE_HOME="$tmp/cache"

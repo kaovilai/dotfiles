@@ -30,8 +30,20 @@ export XDG_STATE_HOME="$tmp/state"
 source "$repo/scripts/hosted-only-proxy.zsh"
 
 # --- launcher contract -------------------------------------------------------
+# Default impl: go (LiteLLM is the escape hatch). `auto` — the default — is go
+# when a go toolchain is installed and litellm otherwise; HOSTED_ONLY_PROXY_IMPL
+# beats LLM_PROXY_IMPL, which flips every proxy at once.
+unset HOSTED_ONLY_PROXY_IMPL GLM_HYBRID_PROXY_IMPL LLM_PROXY_IMPL
 _hosted_only_proxy_vars claude
-[[ "$_hop_impl" == litellm ]] || fail "default impl should be litellm: $_hop_impl"
+[[ "$_hop_impl" == go ]] || fail "default impl should be go: $_hop_impl"
+LLM_PROXY_IMPL=litellm _hosted_only_proxy_vars claude
+[[ "$_hop_impl" == litellm ]] || fail "LLM_PROXY_IMPL=litellm is the escape hatch: $_hop_impl"
+LLM_PROXY_IMPL=litellm HOSTED_ONLY_PROXY_IMPL=go _hosted_only_proxy_vars claude
+[[ "$_hop_impl" == go ]] || fail "HOSTED_ONLY_PROXY_IMPL must beat LLM_PROXY_IMPL: $_hop_impl"
+[[ "$( ( path=(/nonexistent); rehash; _hosted_only_resolve_impl auto ) )" == litellm ]] || fail "auto without a go toolchain must be litellm"
+[[ "$(_hosted_only_resolve_impl bogus)" == bogus ]] || fail "an explicit value is passed through for the caller to reject"
+[[ "$(_hosted_only_resolve_impl GO)" == go && "$(_hosted_only_resolve_impl ' litellm ')" == litellm ]] || fail "impl values are lowercased and trimmed (the EnMaaS controller does the same)"
+[[ "$(_hosted_only_resolve_impl '')" == "$(_hosted_only_resolve_impl auto)" ]] || fail "an empty value means auto"
 HOSTED_ONLY_PROXY_IMPL=go _hosted_only_proxy_vars claude
 [[ "$_hop_impl" == go ]] || fail "HOSTED_ONLY_PROXY_IMPL=go not read"
 GLM_HYBRID_PROXY_IMPL=go _hosted_only_proxy_vars claude
@@ -58,12 +70,31 @@ bin=$(_hosted_only_go_bin) || fail "go build failed"
 [[ -x "$bin" ]] || fail "no binary at $bin"
 [[ "$bin" == "$tmp/state/hosted-only-go/hosted-only-proxy" ]] || fail "binary path: $bin"
 
+# Every knob the Go config reads must be forwarded by _hosted_only_go_env: a
+# setting made in .zshrc without `export` reaches _hosted_only_knob but not the
+# child process, so a knob left out is silently ignored (the image budget and the
+# outage retry knobs were, before this guard existed).
+_hosted_only_proxy_vars claude
+_hosted_only_go_env
+local knobname missing=() hits
+for knobname in $(grep -oE '(knob|intKnob|boolKnob|floatKnob)\("[A-Z_]+"' "$repo/scripts/hosted-only-go/config.go" | grep -oE '"[A-Z_]+"' | tr -d '"' | sort -u); do
+    hits=(${(M)_hop_go_env:#HOSTED_ONLY_${knobname}=*})   # assign first: ${#${(M)...}} does not count elements
+    (( ${#hits} )) || missing+=($knobname)
+done
+(( ${#missing} == 0 )) || fail "config.go reads knobs _hosted_only_go_env does not forward (ignored when set without export): ${missing[*]}"
+# and a NON-exported setting actually lands in the child's environment
+HOSTED_ONLY_IMAGE_CACHE_DAYS=0 _hosted_only_proxy_vars claude
+_hosted_only_go_env
+hits=(${(M)_hop_go_env:#HOSTED_ONLY_IMAGE_CACHE_DAYS=0})
+(( ${#hits} )) || fail "a non-exported HOSTED_ONLY_IMAGE_CACHE_DAYS=0 was not forwarded"
+_hosted_only_proxy_vars claude
+
 # --- stub upstream -----------------------------------------------------------
 local stub_port pport
 stub_port=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1]); s.close()')
 pport=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1]); s.close()')
 
-python3 - "$stub_port" <<'PY' >"$tmp/stub.log" 2>&1 &
+python3 - "$stub_port" "$tmp/slow.started" <<'PY' >"$tmp/stub.log" 2>&1 &
 import json, sys
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
@@ -80,6 +111,10 @@ class H(BaseHTTPRequestHandler):
         n = int(self.headers.get('content-length') or 0)
         body = json.loads(self.rfile.read(n) or b'{}')
         text = json.dumps(body)
+        if 'SLOW' in text:
+            import time
+            open(sys.argv[2], 'w').close()   # tell the test the request is in hand
+            time.sleep(1.5)
         if 'MONTHLY' in text:
             payload = b'{"error":{"message":"monthly token budget exhausted","type":"insufficient_quota"}}'
             self.send_response(429)
@@ -264,6 +299,25 @@ out=$(curl -s -X POST "$eurl/v1/chat/completions" -H 'content-type: application/
 out=$(curl -s -X POST "$eurl/v1/chat/completions" -H 'content-type: application/json' -H 'authorization: Bearer sk-enmaas-test' \
     -d '{"model":"rits/zai-org/glm-5-3","max_tokens":8,"messages":[{"role":"user","content":"hi"}],"input":[{"type":"additional_tools","tools":[{"type":"function","name":"f"}]}]}')
 [[ "$out" == *'"additional_tools": false'* && "$out" == *'"tools": 1'* ]] || fail "additional_tools not flattened: $out"
+
+# Graceful drain: SIGTERM stops accepting but lets an in-flight request finish
+# (Close alone cut active streams mid-answer — a forced swap can retire a
+# listener that is mid-request). The stub holds this one for 1.5 s.
+local drain_code="$tmp/drain.code"
+( curl -s -o /dev/null -w '%{http_code}' --max-time 10 -X POST "$eurl/v1/chat/completions" -H 'content-type: application/json' \
+    -H 'authorization: Bearer sk-enmaas-test' \
+    -d '{"model":"something-new","max_tokens":8,"messages":[{"role":"user","content":"SLOW"}]}' >| "$drain_code" ) &
+local drainer=$!
+# Wait for the stub to hold the request (a fixed sleep let curl connect AFTER
+# shutdown closed the listener on a loaded host); bounded.
+for i in {1..200}; do [[ -e "$tmp/slow.started" ]] && break; sleep 0.05; done
+[[ -e "$tmp/slow.started" ]] || fail "the stub never received the in-flight request"
+kill -TERM "$eproxy"
+wait $drainer
+[[ "$(<"$drain_code")" == 200 ]] || fail "an in-flight request was cut by SIGTERM instead of drained: $(<"$drain_code")"
+for i in {1..60}; do kill -0 "$eproxy" 2>/dev/null || break; sleep 0.1; done
+if kill -0 "$eproxy" 2>/dev/null; then fail "the proxy did not exit after draining"; fi
+eproxy=
 
 # Stop helper finds the Go process by its runtime dir.
 HOSTED_ONLY_CLAUDE_PROXY_PORT=$pport _hosted_only_proxy_stop claude >/dev/null 2>&1 || fail "stop helper failed"

@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -210,5 +211,31 @@ func TestOutageBackoffUsesKnobs(t *testing.T) {
 	}
 	if got := a.outageWait("m", now.Add(3*time.Second)); got != 30 {
 		t.Fatalf("capped wait = %d, want 30", got)
+	}
+}
+
+func TestDialectMismatchIsRefusedNotForwarded(t *testing.T) {
+	cases := []struct {
+		path, deployment string
+		refused          bool
+	}{
+		{"/v1/messages", "anthropic", false},
+		{"/v1/messages", "openai", true},
+		{"/v1/messages", "responses", true},
+		{"/v1/chat/completions", "openai", false},
+		{"/v1/responses", "responses", false},
+		{"/v1/responses", "openai", false},
+		{"/v1/chat/completions", "responses", true},
+		{"/v1/chat/completions", "anthropic", true},
+		{"/v1/responses", "anthropic", true},
+	}
+	for _, c := range cases {
+		msg := dialectMismatch(c.path, c.deployment, "m")
+		if (msg != "") != c.refused {
+			t.Errorf("%s -> %s: refused=%v, message %q", c.path, c.deployment, c.refused, msg)
+		}
+		if c.refused && !strings.Contains(msg, "litellm") {
+			t.Errorf("the refusal must name the escape hatch: %q", msg)
+		}
 	}
 }

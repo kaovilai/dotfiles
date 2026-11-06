@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -23,6 +24,29 @@ type app struct {
 	usage   *usageLog
 	outages *outageTracker
 	seq     atomic.Uint64
+
+	// quotaUntil is the reset of the last monthly-quota answer per model id.
+	// Quota is account-wide (token quota AND USD budget gate the same EnMaaS
+	// account), so a fallback to the other model would only buy the same 429
+	// plus latency until the reset.
+	quotaMu    sync.Mutex
+	quotaUntil map[string]time.Time
+}
+
+func (a *app) noteQuota(model string, reset time.Time) {
+	a.quotaMu.Lock()
+	defer a.quotaMu.Unlock()
+	if a.quotaUntil == nil {
+		a.quotaUntil = map[string]time.Time{}
+	}
+	a.quotaUntil[model] = reset
+}
+
+func (a *app) quotaActive(model string) bool {
+	a.quotaMu.Lock()
+	defer a.quotaMu.Unlock()
+	until, ok := a.quotaUntil[model]
+	return ok && until.After(time.Now())
 }
 
 type outageStreak struct {
@@ -100,6 +124,9 @@ func (a *app) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	model := asString(data["model"])
+	if fallback != "" && a.quotaActive(model) {
+		fallback = ""
+	}
 
 	// EnMaaS flavor: the launcher's generated config.json decides the
 	// deployment (dialect, api_base, #responses siblings). The hosted-only
@@ -117,6 +144,10 @@ func (a *app) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		entry, upstream, path := a.cfg.Routes.resolve(model, r.URL.Path)
+		if msg := dialectMismatch(r.URL.Path, entry.Dialect, model); msg != "" {
+			a.rejectDialect(w, r, data, requested, started, model, msg)
+			return
+		}
 		if upstream != model {
 			data["model"] = upstream
 			changed = true
@@ -142,8 +173,7 @@ func (a *app) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	stream := asBool(data["stream"]) || strings.Contains(r.Header.Get("Accept"), "text/event-stream")
 	resp, transportErr := a.upstream(r, outBody, upstreamBase, upstreamPath, stream)
 	usedFallback := false
-	if fallback != "" && a.shouldFailover(resp, transportErr) &&
-		(a.cfg.Routes == nil || a.cfg.Routes.known(fallback, r.URL.Path)) {
+	if fallback != "" && a.shouldFailover(resp, transportErr) && a.fallbackServable(fallback, r.URL.Path) {
 		if resp != nil {
 			_, _ = io.Copy(io.Discard, resp.Body)
 			resp.Body.Close()
@@ -170,7 +200,7 @@ func (a *app) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if errors.Is(transportErr, context.Canceled) {
 			return // the client went away; nothing to answer
 		}
-		if a.cfg.OutageRewrite && a.cfg.LimitRewrite {
+		if a.cfg.OutageRewrite {
 			now := time.Now()
 			info := limitInfo{
 				Reset:  now.Add(time.Duration(a.outageWait(served, now)) * time.Second),
@@ -200,7 +230,9 @@ func (a *app) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		text := string(errBody)
 		limit := isLimitError(resp.StatusCode, headers, text)
 		outage := a.cfg.OutageRewrite && isOutageError(resp.StatusCode, text)
-		if a.cfg.LimitRewrite && (limit || outage) {
+		// Either knob is enough: LIMIT_REWRITE=0 must not silence the outage
+		// rewrite (502/504/connect failures would reach the client unwritten).
+		if (a.cfg.LimitRewrite && limit) || outage {
 			now := time.Now()
 			var info limitInfo
 			var outageStatus int
@@ -214,6 +246,9 @@ func (a *app) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				}
 			} else {
 				info = analyzeLimit(a.cfg, resp.StatusCode, headers, text, now)
+				if info.Monthly {
+					a.noteQuota(model, info.Reset)
+				}
 			}
 			status, out, extra := renderLimit(a.cfg, r.URL.Path, served, info, outageStatus, now)
 			for k, v := range extra {
@@ -356,7 +391,7 @@ func (a *app) shouldFailover(resp *http.Response, err error) bool {
 		return true
 	}
 	switch resp.StatusCode {
-	case 408, 429, 500, 502, 503, 504, 524:
+	case 408, 429, 500, 502, 503, 504, 524, 529:
 		return true
 	}
 	return false
@@ -364,6 +399,53 @@ func (a *app) shouldFailover(resp *http.Response, err error) bool {
 
 func (a *app) outageWait(model string, now time.Time) int {
 	return a.outages.wait(model, now)
+}
+
+// fallbackServable reports whether the fallback model can answer THIS client
+// on THIS endpoint: it must be a known route and speak a dialect the proxy can
+// forward without translating. The generated hosted-only routes always do (both
+// models are Anthropic-dialect natively), but an explicit dialect override
+// (CLAUDE_ENMAAS_MODEL_DIALECTS) can give the two models different dialects;
+// forwarding then would send a Messages body to a chat endpoint on a failure
+// path. Not servable means no fallback: the original failure is returned.
+func (a *app) fallbackServable(fallback, path string) bool {
+	if a.cfg.Routes == nil {
+		return true
+	}
+	if !a.cfg.Routes.known(fallback, path) {
+		return false
+	}
+	entry, _, _ := a.cfg.Routes.resolve(fallback, path)
+	return dialectMismatch(path, entry.Dialect, fallback) == ""
+}
+
+// dialectMismatch is non-empty when the client speaks a different protocol
+// family than the deployment, which this proxy cannot bridge: it forwards
+// bodies, it does not translate them. LiteLLM converts Messages <-> Chat <->
+// Responses (tools and streaming included); forwarding a Messages body to a
+// chat endpoint, or handing a chat answer back to a Messages client, produces
+// an answer the client cannot parse. Fail with an actionable 400 instead.
+func dialectMismatch(clientPath, deployment, model string) string {
+	messages := strings.Contains(clientPath, "/v1/messages")
+	chat := strings.Contains(clientPath, "/v1/chat/completions")
+	switch {
+	case chat && deployment == "responses":
+		return fmt.Sprintf("model %s is served over the Responses dialect and this proxy does not translate chat requests to it; "+
+			"set CLAUDE_ENMAAS_PROXY_IMPL=litellm (or LLM_PROXY_IMPL=litellm) to use the LiteLLM proxy, which does", model)
+	case messages && deployment != "anthropic":
+		return fmt.Sprintf("model %s is served over the %s dialect and this proxy does not translate Messages requests to it; "+
+			"set CLAUDE_ENMAAS_PROXY_IMPL=litellm (or LLM_PROXY_IMPL=litellm) to use the LiteLLM proxy, which does", model, deployment)
+	case !messages && deployment == "anthropic":
+		return fmt.Sprintf("model %s is served over the Anthropic dialect and this proxy does not translate chat/Responses requests to it; "+
+			"set CLAUDE_ENMAAS_PROXY_IMPL=litellm (or LLM_PROXY_IMPL=litellm) to use the LiteLLM proxy, which does", model)
+	}
+	return ""
+}
+
+func (a *app) rejectDialect(w http.ResponseWriter, r *http.Request, data map[string]any, requested string, started time.Time, model, message string) {
+	e := &requestError{Status: http.StatusBadRequest, Code: "invalid_request_error", Message: message}
+	a.writeRequestError(w, r.URL.Path, e)
+	a.usage.write(a.event(r, data, requested, model, started, usageInfo{}, false, e.Status, 0, e.Message, false, 0, "", false, 0, false, true, "", 0))
 }
 
 func (a *app) rejectModel(w http.ResponseWriter, r *http.Request, data map[string]any, requested string, started time.Time, model string) {
