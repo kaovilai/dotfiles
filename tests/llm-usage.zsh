@@ -185,6 +185,11 @@ assert sum(d["err_series"]["oth"]) == 1 and sum(d["err_series"]["5xx"]) == 0, d[
 assert set(d["err_series"]) == {"429", "5xx", "oth"} and all(len(v) == len(d["buckets"]) for v in d["err_series"].values())
 assert d["errors"][0]["status"] and d["errors"][0]["kind"], d["errors"]
 assert all("e429" in r and "err_rate" in r for r in d["model_table"])
+# menubar view: same warm caches, compact document the menu-bar app polls
+m = json.load(urllib.request.urlopen(f"http://127.0.0.1:{port}/api/menubar?share_window=15m&share_metric=requests", timeout=10))
+assert m["share"]["total"] == 4 and m["series"]["requests"] and "proxies" in m and "inflight" in m, m.get("share")
+m2 = json.load(urllib.request.urlopen(f"http://127.0.0.1:{port}/api/menubar?share_window=1h&share_metric=tokens", timeout=10))
+assert m2["share"]["window"] == "1h" and m2["share"]["metric"] == "tokens", m2["share"]
 req = urllib.request.Request(f"http://127.0.0.1:{port}/api/data", headers={"Host": "evil.example"})
 try:
     urllib.request.urlopen(req); raise SystemExit("rebinding host accepted")
@@ -654,8 +659,8 @@ if [[ -x /usr/bin/swiftc ]] || command -v swiftc >/dev/null; then
     [[ "$(dump_of empty | head -1)" == "title: ● 0" && "$(dump_of empty)" == *"Last error: none logged"* ]] || fail "empty title/menu: $(dump_of empty | head -3)"
     [[ "$(dump_of old | head -1)" == "title: ⚠ 429 "* ]] || fail "old-events title: $(dump_of old | head -1)"
     dump=$(dump_of inflight)
-    [[ "${dump%%$'\n'*}" == "title: ● 1 ⏳4" ]] || fail "in-flight title: ${dump%%$'\n'*}"
-    [[ "$dump" == *"4 in flight · oldest glm-5.3 waiting"* ]] || fail "in-flight row: $dump"
+    [[ "${dump%%$'\n'*}" == "title: ● 1 ⏳5" ]] || fail "in-flight title: ${dump%%$'\n'*}"
+    [[ "$dump" == *"5 in flight · oldest glm-5.3 waiting"* ]] || fail "in-flight row: $dump"
     [[ "$(dump_of normal)" == *"n/a · no proxy reports in-flight"* ]] || fail "in-flight n/a row"
     dump=$(dump_of reroute-alias)
     [[ "${dump%%$'\n'*}" == "title: ● 4 ↪3" ]] || fail "reroute title: ${dump%%$'\n'*}"
@@ -854,6 +859,13 @@ SH
 print -r -- 'resolver #1'
 print -r -- '  nameserver[0] : 192.168.1.1'
 SH
+    # DoH stub: the pre-flight falls back here, so a real network call would
+    # make this block machine-dependent. DOH_OK=1 answers, otherwise refuses.
+    cat > "$dnsbin/curl" <<'SH'
+#!/bin/zsh
+[[ -z "$DOH_OK" ]] || { print -r -- '{"Status":0,"Answer":[{"type":1,"TTL":60,"data":"198.51.100.7"}]}'; exit 0 }
+exit 7
+SH
     chmod +x "$dnsbin"/*
     (
         path=("$dnsbin" $path)
@@ -872,11 +884,19 @@ SH
         : > "$dnslog"
         export DNS_STUB_DOWN=1
         rc=0 out=$(claude-enmaas-restart 2>&1) || rc=$?
-        [[ $rc == 1 ]] || fail "unresolvable gateway must fail the restart (rc=$rc): $out"
+        [[ $rc == 1 ]] || fail "unresolvable gateway with no DoH must fail the restart (rc=$rc): $out"
         [[ "$out" == *"dns api.enmaas.devshift.net does not resolve"* && "$out" == *"forwarders in use: 192.168.1.1"* \
            && "$out" == *"Wi-Fi: (DHCP)"* && "$out" == *"USB LAN: 1.1.1.1"* && "$out" == *"setdnsservers"* ]] \
             || fail "dns report: $out"
         [[ ! -s "$dnslog" ]] || fail "restart stopped a proxy while DNS was broken"
+        # A dead system resolver is not fatal when DoH answers: the proxy shim
+        # covers inference, so the restart may proceed.
+        export DOH_OK=1
+        : > "$dnslog"
+        rc=0 out=$(claude-enmaas-restart 2>&1) || rc=$?
+        [[ $rc == 0 && "$out" == *"198.51.100.7"*"DoH"* ]] || fail "DoH fallback should allow the restart (rc=$rc): $out"
+        [[ "$(<"$dnslog")" == $'killed\nstarted' ]] || fail "DoH fallback path skipped the restart: $(<"$dnslog")"
+        unset DOH_OK
         # A resolver that cannot be queried at all must not block a restart.
         unset DNS_STUB_DOWN
         export DNS_STUB_BLIND=1
@@ -938,8 +958,13 @@ SH
 
 # copilot records its fingerprint with the same inputs it compares against at
 # launch; a narrower record formula made every launch see a stale gateway.
-[[ "$(grep -cF 'cfp=$(_claude_proxy_fp "$(_claude_file_hash "${capi_data}/github_token" "${capi_data}/config.json" "$monitor")" "$port" "$plugins" "$monitor_dir")' "$repo/zsh/functions/claude/providers/copilot.zsh")" == 2 ]] \
-    || fail "copilot launch-time and recorded fingerprints use different inputs"
+# Every start/restart path must reuse those inputs, so compare all call sites
+# instead of pinning a count that a new record path would silently invalidate.
+local copilot_fp_all copilot_fp_canonical
+copilot_fp_all=$(grep -c '_claude_proxy_fp ' "$repo/zsh/functions/claude/providers/copilot.zsh" || true)
+copilot_fp_canonical=$(grep -cF 'cfp=$(_claude_proxy_fp "$(_claude_file_hash "${capi_data}/github_token" "${capi_data}/config.json" "$monitor")" "$(_claude_copilot_code_hash "$repo_dir")" "$port" "$plugins" "$monitor_dir")' "$repo/zsh/functions/claude/providers/copilot.zsh" || true)
+[[ "$copilot_fp_all" -ge 2 && "$copilot_fp_all" == "$copilot_fp_canonical" ]] \
+    || fail "copilot launch-time and recorded fingerprints use different inputs ($copilot_fp_canonical/$copilot_fp_all call sites canonical)"
 
 # _claude_proxy_sync dry run (_CLAUDE_PROXY_SYNC_CHECK): verdict file, return 1, no kill.
 (

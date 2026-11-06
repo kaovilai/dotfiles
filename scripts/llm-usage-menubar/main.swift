@@ -2370,12 +2370,37 @@ final class AppController: NSObject, NSMenuDelegate, NSWindowDelegate {
 
     func menuDidClose(_ menu: NSMenu) { menuOpen = false }
 
+    /// The dashboard (:4150, `llm-usage serve`) keeps the transcript and proxy
+    /// parse caches warm; polling its /api/menubar answers in milliseconds
+    /// where a fresh `menubar-data` process costs ~0.3 s of parsing. Falls back
+    /// to the CLI when the dashboard is not running.
+    func dashboardMenubarData(window: String, metric: String) -> J? {
+        let port = ProcessInfo.processInfo.environment["LLM_USAGE_PORT"] ?? "4150"
+        guard let url = URL(string: "http://127.0.0.1:\(port)/api/menubar?share_window=\(window)&share_metric=\(metric)") else { return nil }
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 1.5
+        var out: J?
+        let sem = DispatchSemaphore(value: 0)
+        URLSession.shared.dataTask(with: request) { data, response, _ in
+            defer { sem.signal() }
+            guard let data,
+                  (response as? HTTPURLResponse)?.statusCode == 200,
+                  let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+            else { return }
+            out = J(v: obj)
+        }.resume()
+        _ = sem.wait(timeout: .now() + 2)
+        return out
+    }
+
     func poll() {
         if polling { return }
         polling = true
         let args = ["menubar-data", "--share-window", shareWindow, "--share-metric", shareMetric]
+        let window = shareWindow, metric = shareMetric
         DispatchQueue.global(qos: .utility).async { [weak self] in
-            let result = runUsage(args).flatMap(parseJSON)
+            let result = self?.dashboardMenubarData(window: window, metric: metric).map { Result<J, PollError>.success($0) }
+                ?? runUsage(args).flatMap(parseJSON)
             DispatchQueue.main.async {
                 guard let self = self else { return }
                 self.polling = false

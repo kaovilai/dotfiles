@@ -140,28 +140,92 @@ def parse_since(text):
     return ts
 
 
-def load_proxy(since):
+def parse_proxy_file(handle, path):
     events = []
-    for path in sorted(glob.glob(os.path.join(STATE, "events-*.jsonl"))):
-        if os.path.getmtime(path) < since:
+    for line in handle:
+        try:
+            ev = json.loads(line)
+        except ValueError:
             continue
-        with open(path, errors="replace") as handle:
-            for line in handle:
-                try:
-                    ev = json.loads(line)
-                except ValueError:
-                    continue
-                ts = parse_ts(ev.get("ts"))
-                if ts is None or ts < since:
-                    continue
-                ev["t"] = ts
-                ev["source"] = "proxy"
-                events.append(ev)
+        ts = parse_ts(ev.get("ts"))
+        if ts is None:
+            continue
+        ev["t"] = ts
+        ev["source"] = "proxy"
+        events.append(ev)
     return events
 
 
-_FILE_CACHE = {}  # (kind, path) -> (mtime, size, events); only filled by `serve`
+def load_proxy(since):
+    """The events log is append-only and a poll reads it whole; parse each file
+    through the same (mtime, size) cache as the transcripts, so only the live
+    file is re-read and only its new lines are new work."""
+    load_transcript_cache("proxy")
+    paths = sorted(glob.glob(os.path.join(STATE, "events-*.jsonl")))
+    events = []
+    for path in paths:
+        try:
+            if os.path.getmtime(path) < since:
+                continue
+        except OSError:
+            continue
+        events.extend(e for e in parse_cached("proxy", path, parse_proxy_file) if e["t"] >= since)
+    save_transcript_cache("proxy")
+    return events
+
+
+_FILE_CACHE = {}  # (kind, path) -> (mtime, size, events); warm in `serve`, persisted for one-shot polls
+_TRANSCRIPT_CACHE_VERSION = 1
+_TRANSCRIPT_CACHE_LOADED = set()
+_TRANSCRIPT_CACHE_DIRTY = set()
 CACHE_FILES = False
+
+
+def _transcript_cache_path(kind):
+    return os.path.join(STATE, "transcript-cache-%s.pkl" % kind)
+
+
+def load_transcript_cache(kind):
+    """One-shot polls are fresh processes; without this every poll re-parsed
+    each recently-touched transcript (0.33 s of a 0.55 s poll over a 2.6 GB
+    tree). Entries are keyed by (mtime, size), so an unchanged file is never
+    parsed twice across processes."""
+    if kind in _TRANSCRIPT_CACHE_LOADED:
+        return
+    _TRANSCRIPT_CACHE_LOADED.add(kind)
+    try:
+        import pickle
+        with open(_transcript_cache_path(kind), "rb") as handle:
+            doc = pickle.load(handle)
+        if doc.get("version") != _TRANSCRIPT_CACHE_VERSION:
+            return
+        for path, entry in (doc.get("files") or {}).items():
+            _FILE_CACHE[(kind, path)] = entry
+    except Exception:
+        pass
+
+
+def save_transcript_cache(kind):
+    if kind not in _TRANSCRIPT_CACHE_DIRTY:
+        return
+    _TRANSCRIPT_CACHE_DIRTY.discard(kind)
+    try:
+        import pickle
+        cutoff = time.time() - 90 * 86400  # the longest window anything queries (dashboard 90d); shorter prunes broke edits/seen_week
+        files = {}
+        for (k, path), (mtime, size, events) in list(_FILE_CACHE.items()):
+            if k != kind:
+                continue
+            kept = [e for e in events if e.get("t", 0) >= cutoff]
+            if kept or not events:
+                files[path] = (mtime, size, kept)
+        os.makedirs(STATE, mode=0o700, exist_ok=True)
+        tmp = _transcript_cache_path(kind) + ".tmp"
+        with open(tmp, "wb") as handle:
+            pickle.dump({"version": _TRANSCRIPT_CACHE_VERSION, "files": files}, handle, protocol=4)
+        os.replace(tmp, _transcript_cache_path(kind))
+    except Exception:
+        pass
 
 
 def parse_cached(kind, path, parser):
@@ -170,17 +234,17 @@ def parse_cached(kind, path, parser):
         st = os.stat(path)
     except OSError:
         return []
-    if CACHE_FILES:
-        hit = _FILE_CACHE.get((kind, path))
-        if hit and hit[0] == st.st_mtime and hit[1] == st.st_size:
-            return hit[2]
+    hit = _FILE_CACHE.get((kind, path))
+    if hit and hit[0] == st.st_mtime and hit[1] == st.st_size:
+        return hit[2]
     try:
         with open(path, errors="replace") as handle:
             events = parser(handle, path)
     except OSError:
         return []
-    if CACHE_FILES:
-        _FILE_CACHE[(kind, path)] = (st.st_mtime, st.st_size, events)
+    _FILE_CACHE[(kind, path)] = (st.st_mtime, st.st_size, events)
+    if not CACHE_FILES:
+        _TRANSCRIPT_CACHE_DIRTY.add(kind)
     return events
 
 
@@ -251,24 +315,54 @@ def parse_codex_file(handle, path):
     return events
 
 
+def transcript_paths(kind, roots, ttl=20.0):
+    """Session files under the roots. The listing is cached briefly in STATE: a
+    30 s menubar poll used to re-walk ~1200 session dirs (~5000 scandir calls)
+    to find a handful of recently-touched files. A new session shows up within
+    the ttl."""
+    path = os.path.join(STATE, "transcript-index-%s.json" % kind)
+    now = time.time()
+    try:
+        with open(path) as handle:
+            doc = json.load(handle)
+        if doc.get("roots") == roots and now - float(doc.get("ts", 0)) <= ttl:
+            return doc.get("paths") or []
+    except (OSError, ValueError, TypeError):
+        pass
+    paths = []
+    for root in roots:
+        for p in glob.glob(os.path.join(root, "**", "*.jsonl"), recursive=True):
+            paths.append(p)
+    try:
+        os.makedirs(STATE, mode=0o700, exist_ok=True)
+        tmp = path + ".tmp"
+        with open(tmp, "w") as handle:
+            json.dump({"ts": now, "roots": roots, "paths": paths}, handle)
+        os.replace(tmp, path)
+    except OSError:
+        pass
+    return paths
+
+
 def load_transcripts(kind, env, default, parser, since):
     roots = [os.path.expanduser(p) for p in os.environ.get(env, default).split(":")]
+    load_transcript_cache(kind)
     events, seen = [], set()
-    for root in roots:
-        for path in glob.glob(os.path.join(root, "**", "*.jsonl"), recursive=True):
-            try:
-                if os.path.getmtime(path) < since:
-                    continue
-            except OSError:
+    for path in transcript_paths(kind, roots):
+        try:
+            if os.path.getmtime(path) < since:
                 continue
-            for e in parse_cached(kind, path, parser):
-                if e["t"] < since:
+        except OSError:
+            continue
+        for e in parse_cached(kind, path, parser):
+            if e["t"] < since:
+                continue
+            if "id" in e:  # resumed sessions copy history into new files
+                if e["id"] in seen:
                     continue
-                if "id" in e:  # resumed sessions copy history into new files
-                    if e["id"] in seen:
-                        continue
-                    seen.add(e["id"])
-                events.append(e)
+                seen.add(e["id"])
+            events.append(e)
+    save_transcript_cache(kind)
     return events
 
 
@@ -2038,6 +2132,27 @@ def cmd_serve(args):
                         return self.send(200, handle.read(), "text/html; charset=utf-8")
                 except OSError:
                     return self.send(500, b"llm-usage-dashboard.html missing", "text/plain")
+            if url.path == "/api/menubar":
+                # The menubar helper polls this when the dashboard runs: the
+                # transcript/proxy parse caches stay warm in this process, so a
+                # poll costs one dict build instead of a fresh 0.5 s parse.
+                q = parse_qs(url.query)
+                window = (q.get("share_window") or ["15m"])[0]
+                metric = (q.get("share_metric") or ["requests"])[0]
+                key = ("menubar", window, metric)
+                try:
+                    with lock:
+                        hit = cache.get(key)
+                        if not hit or time.time() - hit[0] > args.cache:
+                            body = json.dumps(menubar_data(share_window=window, share_metric=metric),
+                                              separators=(",", ":"), default=str).encode()
+                            hit = (time.time(), body)
+                            cache[key] = hit
+                            for k in [k for k, v in cache.items() if time.time() - v[0] > 60]:
+                                del cache[k]
+                    return self.send(200, hit[1], "application/json")
+                except SystemExit as err:
+                    return self.send(400, json.dumps({"error": str(err)}).encode(), "application/json")
             if url.path == "/api/data":
                 q = parse_qs(url.query)
                 since = (q.get("since") or ["24h"])[0]
