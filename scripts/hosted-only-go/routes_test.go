@@ -1,0 +1,171 @@
+package main
+
+import (
+	"os"
+	"path/filepath"
+	"testing"
+	"time"
+)
+
+const enmaasTestConfig = `{
+  "model_list": [
+    {"model_name": "*", "litellm_params": {"model": "openai/*", "api_base": "https://gw/v1"}},
+    {"model_name": "claude-x", "litellm_params": {"model": "anthropic/claude-x", "api_base": "https://gw"}},
+    {"model_name": "rits/zai-org/glm-5-3", "litellm_params": {"model": "anthropic/rits/zai-org/glm-5-3", "api_base": "https://gw"}},
+    {"model_name": "gpt-6", "litellm_params": {"model": "openai/responses/gpt-6", "api_base": "https://gw/v1"}},
+    {"model_name": "gpt-6#responses", "litellm_params": {"model": "openai/gpt-6", "api_base": "https://gw/v1"}}
+  ],
+  "general_settings": {"master_key": "sk-test"}
+}`
+
+func testRoutes(t *testing.T) *routeTable {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(path, []byte(enmaasTestConfig), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	table, err := loadRouteTable(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return table
+}
+
+func TestRouteResponsesSibling(t *testing.T) {
+	table := testRoutes(t)
+	entry, upstream, path := table.resolve("gpt-6", "/v1/responses")
+	if entry.Name != "gpt-6#responses" || upstream != "gpt-6" || path != "/v1/responses" {
+		t.Fatalf("resolve = %#v %q %q", entry, upstream, path)
+	}
+	if entry.Base != "https://gw/v1" {
+		t.Fatalf("base = %q", entry.Base)
+	}
+}
+
+func TestRouteAnthropicModel(t *testing.T) {
+	table := testRoutes(t)
+	entry, upstream, path := table.resolve("claude-x", "/v1/messages")
+	if entry.Dialect != "anthropic" || upstream != "claude-x" || path != "/v1/messages" {
+		t.Fatalf("resolve = %#v %q %q", entry, upstream, path)
+	}
+	if entry.Base != "https://gw" {
+		t.Fatalf("base = %q (must be the root, not /v1)", entry.Base)
+	}
+}
+
+func TestRouteWildcardFallback(t *testing.T) {
+	table := testRoutes(t)
+	entry, upstream, path := table.resolve("something-new", "/v1/chat/completions")
+	if entry.Dialect != "openai" || upstream != "something-new" || path != "/v1/chat/completions" {
+		t.Fatalf("resolve = %#v %q %q", entry, upstream, path)
+	}
+	if !table.known("something-new", "/v1/chat/completions") {
+		t.Fatal("wildcard route should make any id known")
+	}
+	if entry, ok := table.entries["gpt-6"]; !ok || entry.Dialect != "responses" {
+		t.Fatalf("gpt-6 should be a responses-dialect deployment: %#v", entry)
+	}
+}
+
+func TestRouteToken(t *testing.T) {
+	table := testRoutes(t)
+	if table.token != "sk-test" {
+		t.Fatalf("token = %q", table.token)
+	}
+	if len(table.modelNames()) != 4 {
+		t.Fatalf("model names = %v", table.modelNames())
+	}
+}
+
+func TestJoinURL(t *testing.T) {
+	cases := []struct{ base, path, want string }{
+		{"https://gw", "/v1/messages", "https://gw/v1/messages"},
+		{"https://gw/v1", "/v1/chat/completions", "https://gw/v1/chat/completions"},
+		{"https://gw/v1/", "/v1/responses", "https://gw/v1/responses"},
+		{"https://gw", "/v1/chat/completions", "https://gw/v1/chat/completions"},
+	}
+	for _, tc := range cases {
+		if got := joinURL(tc.base, tc.path); got != tc.want {
+			t.Fatalf("joinURL(%q, %q) = %q, want %q", tc.base, tc.path, got, tc.want)
+		}
+	}
+}
+
+func TestFlattenAdditionalTools(t *testing.T) {
+	data := decode(t, `{"model":"rits/zai-org/glm-5-3","input":[
+		{"type":"additional_tools","tools":[
+			{"type":"function","name":"a"},
+			{"type":"namespace","tools":[{"type":"function","name":"b"},{"type":"local_shell"}]},
+			{"type":"local_shell"}]},
+		{"role":"user","content":[{"type":"input_text","text":"hi"}]}
+	]}`)
+	if !flattenAdditionalTools(data) {
+		t.Fatal("expected a change")
+	}
+	tools := asList(data["tools"])
+	if len(tools) != 2 {
+		t.Fatalf("tools = %#v, want the two function tools", tools)
+	}
+	input := asList(data["input"])
+	if len(input) != 1 || asString(asMap(input[0])["role"]) != "user" {
+		t.Fatalf("input = %#v", input)
+	}
+}
+
+func TestUsageOpenAICacheNotDoubleCounted(t *testing.T) {
+	chat := usageFromObject(decode(t, `{"usage":{"prompt_tokens":100,"completion_tokens":5,"prompt_tokens_details":{"cached_tokens":80}}}`))
+	if chat.In != 20 || chat.CacheRead != 80 || chat.Out != 5 {
+		t.Fatalf("chat usage = %#v", chat)
+	}
+	responses := usageFromObject(decode(t, `{"usage":{"input_tokens":100,"output_tokens":5,"input_tokens_details":{"cached_tokens":80}}}`))
+	if responses.In != 20 || responses.CacheRead != 80 {
+		t.Fatalf("responses usage = %#v", responses)
+	}
+	anthropic := usageFromObject(decode(t, `{"usage":{"input_tokens":7,"output_tokens":3,"cache_read_input_tokens":2}}`))
+	if anthropic.In != 7 || anthropic.CacheRead != 2 {
+		t.Fatalf("anthropic usage = %#v", anthropic)
+	}
+}
+
+func TestAnthropicExhaustedDimensionWins(t *testing.T) {
+	now := time.Now()
+	headers := map[string]string{
+		"anthropic-ratelimit-requests-reset":     now.Add(5 * time.Second).Format(time.RFC3339),
+		"anthropic-ratelimit-requests-remaining": "9",
+		"anthropic-ratelimit-tokens-reset":       now.Add(30 * time.Second).Format(time.RFC3339),
+		"anthropic-ratelimit-tokens-remaining":   "0",
+	}
+	info := analyzeLimit(testConfig(), 429, headers, "rate limited", now)
+	if got := info.Reset.Sub(now); got < 29*time.Second || got > 31*time.Second {
+		t.Fatalf("reset delta = %v, want ~30s (the exhausted tokens dimension)", got)
+	}
+}
+
+func TestIETFExhaustedPolicyWins(t *testing.T) {
+	now := time.Now()
+	headers := map[string]string{"ratelimit": `"requests";r=9;t=5, "tokens";r=0;t=120`}
+	info := analyzeLimit(testConfig(), 429, headers, "rate limited", now)
+	if got := info.Reset.Sub(now); got < 119*time.Second || got > 121*time.Second {
+		t.Fatalf("reset delta = %v, want ~120s (the exhausted policy)", got)
+	}
+}
+
+func TestOutageBackoffUsesKnobs(t *testing.T) {
+	cfg := testConfig()
+	cfg.OutageBase = 7
+	cfg.OutageMax = 30
+	a := newApp(cfg)
+	now := time.Now()
+	if got := a.outageWait("m", now); got != 7 {
+		t.Fatalf("first wait = %d, want 7", got)
+	}
+	if got := a.outageWait("m", now.Add(time.Second)); got != 14 {
+		t.Fatalf("second wait = %d, want 14", got)
+	}
+	if got := a.outageWait("m", now.Add(2*time.Second)); got != 28 {
+		t.Fatalf("third wait = %d, want 28", got)
+	}
+	if got := a.outageWait("m", now.Add(3*time.Second)); got != 30 {
+		t.Fatalf("capped wait = %d, want 30", got)
+	}
+}

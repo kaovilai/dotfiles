@@ -264,16 +264,9 @@ func usageFromObject(data map[string]any) usageInfo {
 	if v, ok := asInt(usage["cache_creation_input_tokens"]); ok {
 		info.CacheWrite = v
 	}
-	if prompt, ok := asInt(usage["prompt_tokens"]); ok {
-		// OpenAI semantics: prompt_tokens includes cached tokens.
-		info.In = prompt - info.CacheRead - info.CacheWrite
-		if info.In < 0 {
-			info.In = 0
-		}
-	}
-	if completion, ok := asInt(usage["completion_tokens"]); ok {
-		info.Out = completion
-	}
+	// Cache details are read before normalizing input: OpenAI's prompt_tokens /
+	// input_tokens include cached tokens, so subtracting them afterwards would
+	// double count (in: 100, cache_read: 80 must become in: 20).
 	if details := asMap(usage["prompt_tokens_details"]); details != nil {
 		if v, ok := asInt(details["cached_tokens"]); ok {
 			info.CacheRead = v
@@ -288,6 +281,28 @@ func usageFromObject(data map[string]any) usageInfo {
 		if v, ok := asInt(details["reasoning_tokens"]); ok {
 			info.Reasoning = v
 		}
+	}
+
+	openai := false
+	if prompt, ok := asInt(usage["prompt_tokens"]); ok {
+		info.In = prompt
+		openai = true
+	}
+	if completion, ok := asInt(usage["completion_tokens"]); ok {
+		info.Out = completion
+		openai = true
+	}
+	if details := asMap(usage["input_tokens_details"]); details != nil {
+		openai = true
+	}
+	if openai {
+		info.In -= info.CacheRead + info.CacheWrite
+		if info.In < 0 {
+			info.In = 0
+		}
+	}
+	if v, ok := asInt(usage["reasoning_tokens"]); ok && info.Reasoning == 0 {
+		info.Reasoning = v
 	}
 	return info
 }

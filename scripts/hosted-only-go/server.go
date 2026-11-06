@@ -2,8 +2,10 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"crypto/subtle"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -31,9 +33,13 @@ type outageStreak struct {
 }
 
 func newApp(cfg *config) *app {
+	// One transport for the process: keep-alive (and HTTP/2 where the gateway
+	// offers it) is shared across requests instead of re-dialing per call.
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.ForceAttemptHTTP2 = true
 	return &app{
 		cfg:     cfg,
-		client:  &http.Client{Timeout: cfg.RequestTimeout},
+		client:  &http.Client{Timeout: cfg.RequestTimeout, Transport: transport},
 		usage:   newUsageLog(cfg.UsageDir, cfg.Port),
 		streaks: map[string]outageStreak{},
 	}
@@ -86,16 +92,54 @@ func (a *app) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	a.usage.start(requestID, served, requested)
 	defer a.usage.end(requestID)
 
-	fallback, reqErr := rewriteRequest(a.cfg, r.URL.Path, data)
+	fallback, reqErr, changed := rewriteRequest(a.cfg, r.URL.Path, data)
 	if reqErr != nil {
 		a.writeRequestError(w, r.URL.Path, reqErr)
 		a.usage.write(a.event(r, data, requested, served, started, usageInfo{}, false, reqErr.Status, 0, reqErr.Message, false, 0, "", false, 0, false, true, "", 0))
 		return
 	}
-	served = asString(data["model"])
+	model := asString(data["model"])
+
+	// EnMaaS flavor: the launcher's generated config.json decides the
+	// deployment (dialect, api_base, #responses siblings). The hosted-only
+	// flavors have no route table and are restricted to the two hosted models,
+	// which is the cost guard.
+	upstreamBase := a.cfg.BaseURL
+	upstreamPath := r.URL.Path
+	upstreamModel := model
+	if a.cfg.Routes != nil {
+		if strings.HasPrefix(model, "rits/") && flattenAdditionalTools(data) {
+			changed = true
+		}
+		if !a.cfg.Routes.known(model, r.URL.Path) {
+			a.rejectModel(w, r, data, requested, started, model)
+			return
+		}
+		entry, upstream, path := a.cfg.Routes.resolve(model, r.URL.Path)
+		if upstream != model {
+			data["model"] = upstream
+			changed = true
+		}
+		if entry.Base != "" {
+			upstreamBase = entry.Base
+		}
+		upstreamPath = path
+		upstreamModel = upstream
+	} else if !a.cfg.allowedModel(model) {
+		a.rejectModel(w, r, data, requested, started, model)
+		return
+	}
+	served = upstreamModel
+
+	// Forward the original bytes when nothing changed: the enmaas path is
+	// mostly pass-through, and re-marshaling a 1M-token prompt is pure CPU.
+	outBody := body
+	if changed {
+		outBody = marshal(data)
+	}
 
 	stream := asBool(data["stream"]) || strings.Contains(r.Header.Get("Accept"), "text/event-stream")
-	resp, transportErr := a.upstream(r, data, stream)
+	resp, transportErr := a.upstream(r, outBody, upstreamBase, upstreamPath, stream)
 	usedFallback := false
 	if fallback != "" && a.shouldFailover(resp, transportErr) {
 		if resp != nil {
@@ -104,11 +148,42 @@ func (a *app) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		clone := cloneObject(data)
 		clone["model"] = fallback
-		resp, transportErr = a.upstream(r, clone, stream)
+		fbBase, fbPath, fbModel := upstreamBase, upstreamPath, fallback
+		if a.cfg.Routes != nil {
+			entry, upstream, path := a.cfg.Routes.resolve(fallback, r.URL.Path)
+			if upstream != fallback {
+				clone["model"] = upstream
+			}
+			fbModel = upstream
+			if entry.Base != "" {
+				fbBase = entry.Base
+			}
+			fbPath = path
+		}
+		resp, transportErr = a.upstream(r, marshal(clone), fbBase, fbPath, stream)
 		usedFallback = true
-		served = fallback
+		served = fbModel
 	}
 	if transportErr != nil {
+		if errors.Is(transportErr, context.Canceled) {
+			return // the client went away; nothing to answer
+		}
+		if a.cfg.OutageRewrite && a.cfg.LimitRewrite {
+			now := time.Now()
+			info := limitInfo{
+				Reset:  now.Add(time.Duration(a.outageWait(served, now)) * time.Second),
+				Kind:   "outage",
+				Source: "estimate:outage",
+			}
+			status, out, extra := renderLimit(a.cfg, r.URL.Path, served, info, http.StatusBadGateway, now)
+			for k, v := range extra {
+				w.Header().Set(k, v)
+			}
+			a.writeJSON(w, status, nil, out)
+			retryAfter := maxInt(1, int(math.Ceil(info.Reset.Sub(now).Seconds())))
+			a.usage.write(a.event(r, data, requested, served, started, usageInfo{}, false, status, http.StatusBadGateway, transportErr.Error(), true, info.Reset.Unix(), info.Source, false, retryAfter, usedFallback, stream, "", 0))
+			return
+		}
 		status := http.StatusBadGateway
 		msg := fmt.Sprintf("upstream request failed: %v", transportErr)
 		a.writeDialectError(w, r.URL.Path, status, msg, "")
@@ -156,7 +231,7 @@ func (a *app) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if stream {
-		a.streamResponse(w, resp, r.URL.Path, data, requested, served, started, usedFallback)
+		a.streamResponse(w, resp, r.URL.Path, data, requested, served, started, usedFallback, r.Header.Get("User-Agent"))
 		return
 	}
 
@@ -197,9 +272,14 @@ func (a *app) writeAuthError(w http.ResponseWriter, path string) {
 }
 
 func (a *app) writeModels(w http.ResponseWriter) {
-	ids := []string{a.cfg.GLM, a.cfg.DeepSeek}
-	for alias := range a.cfg.Aliases {
-		ids = append(ids, alias)
+	var ids []string
+	if a.cfg.Routes != nil {
+		ids = append(ids, a.cfg.Routes.modelNames()...)
+	} else {
+		ids = append(ids, a.cfg.GLM, a.cfg.DeepSeek)
+		for alias := range a.cfg.Aliases {
+			ids = append(ids, alias)
+		}
 	}
 	data := make([]any, 0, len(ids))
 	for _, id := range ids {
@@ -222,11 +302,10 @@ func (a *app) handleCountTokens(w http.ResponseWriter, r *http.Request) {
 	a.writeJSON(w, http.StatusOK, map[string]any{"input_tokens": estimate}, nil)
 }
 
-// upstream sends the (already rewritten) body to EnMaaS using the dialect the
-// path speaks.
-func (a *app) upstream(r *http.Request, data map[string]any, stream bool) (*http.Response, error) {
-	body := marshal(data)
-	req, err := http.NewRequestWithContext(r.Context(), http.MethodPost, a.cfg.BaseURL+r.URL.Path, bytes.NewReader(body))
+// upstream sends the (already rewritten) body to the deployment the route table
+// chose, using the dialect that deployment speaks.
+func (a *app) upstream(r *http.Request, body []byte, base, path string, stream bool) (*http.Response, error) {
+	req, err := http.NewRequestWithContext(r.Context(), http.MethodPost, joinURL(base, path), bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
@@ -236,7 +315,7 @@ func (a *app) upstream(r *http.Request, data map[string]any, stream bool) (*http
 	} else if stream {
 		req.Header.Set("Accept", "text/event-stream")
 	}
-	if isAnthropicPath(r.URL.Path) {
+	if isAnthropicPath(path) {
 		req.Header.Set("x-api-key", a.cfg.APIKey)
 		version := r.Header.Get("anthropic-version")
 		if version == "" {
@@ -254,6 +333,17 @@ func (a *app) upstream(r *http.Request, data map[string]any, stream bool) (*http
 
 func isAnthropicPath(path string) bool {
 	return strings.Contains(path, "/v1/messages")
+}
+
+// joinURL appends an API path to a deployment base. EnMaaS openai deployments
+// carry "/v1" in api_base while the path starts with "/v1/", so that prefix is
+// dropped rather than doubled.
+func joinURL(base, path string) string {
+	base = strings.TrimRight(base, "/")
+	if strings.HasSuffix(base, "/v1") && strings.HasPrefix(path, "/v1/") {
+		path = strings.TrimPrefix(path, "/v1")
+	}
+	return base + path
 }
 
 func (a *app) shouldFailover(resp *http.Response, err error) bool {
@@ -278,14 +368,27 @@ func (a *app) outageWait(model string, now time.Time) int {
 	}
 	streak.last = now
 	a.streaks[model] = streak
-	wait := 60 << (streak.count - 1)
-	if wait > 600 {
-		wait = 600
+	wait := a.cfg.OutageBase
+	for i := 1; i < streak.count && wait < a.cfg.OutageMax; i++ {
+		wait *= 2
+	}
+	if wait > a.cfg.OutageMax {
+		wait = a.cfg.OutageMax
 	}
 	return wait
 }
 
-func (a *app) streamResponse(w http.ResponseWriter, resp *http.Response, path string, data map[string]any, requested, served string, started time.Time, usedFallback bool) {
+func (a *app) rejectModel(w http.ResponseWriter, r *http.Request, data map[string]any, requested string, started time.Time, model string) {
+	e := &requestError{
+		Status:  http.StatusBadRequest,
+		Code:    "invalid_request_error",
+		Message: "Invalid model name passed in model=" + model,
+	}
+	a.writeRequestError(w, r.URL.Path, e)
+	a.usage.write(a.event(r, data, requested, model, started, usageInfo{}, false, e.Status, 0, e.Message, false, 0, "", false, 0, false, true, "", 0))
+}
+
+func (a *app) streamResponse(w http.ResponseWriter, resp *http.Response, path string, data map[string]any, requested, served string, started time.Time, usedFallback bool, userAgent string) {
 	contentType := resp.Header.Get("Content-Type")
 	if contentType == "" {
 		contentType = "text/event-stream"
@@ -298,6 +401,7 @@ func (a *app) streamResponse(w http.ResponseWriter, resp *http.Response, path st
 	parser := &sseUsage{}
 	buf := make([]byte, 32*1024)
 	var firstChunk int
+	var readErr, writeErr error
 	for {
 		n, err := resp.Body.Read(buf)
 		if n > 0 {
@@ -306,6 +410,7 @@ func (a *app) streamResponse(w http.ResponseWriter, resp *http.Response, path st
 			}
 			parser.feed(buf[:n])
 			if _, werr := w.Write(buf[:n]); werr != nil {
+				writeErr = werr
 				break
 			}
 			if flusher != nil {
@@ -313,15 +418,25 @@ func (a *app) streamResponse(w http.ResponseWriter, resp *http.Response, path st
 			}
 		}
 		if err != nil {
+			if err != io.EOF {
+				readErr = err
+			}
 			break
 		}
 	}
-	a.usage.write(a.buildEvent(path, data, requested, served, started, parser.info, true, http.StatusOK, 0, "", false, 0, "", false, 0, usedFallback, true, parser.model, firstChunk, ""))
-}
-
-// eventHTTP exists because the stream callback no longer holds *http.Request.
-func (a *app) eventHTTP(data map[string]any, requested, served string, started time.Time, info usageInfo, ok bool, status, upstreamStatus int, errText string, rewritten bool, resetAt int64, resetSource string, quota bool, retryAfter int, fallback, stream bool, responseModel string, ttft int) map[string]any {
-	return a.buildEvent("", data, requested, served, started, info, ok, status, upstreamStatus, errText, rewritten, resetAt, resetSource, quota, retryAfter, fallback, stream, responseModel, ttft, "")
+	ok := readErr == nil && writeErr == nil
+	status := http.StatusOK
+	errText := ""
+	if !ok {
+		status = http.StatusBadGateway
+		if writeErr != nil {
+			status = 499 // client closed the stream; same convention as nginx
+			errText = "client write failed: " + writeErr.Error()
+		} else {
+			errText = "upstream stream interrupted: " + readErr.Error()
+		}
+	}
+	a.usage.write(a.buildEvent(path, data, requested, served, started, parser.info, ok, status, 0, errText, false, 0, "", false, 0, usedFallback, true, parser.model, firstChunk, userAgent))
 }
 
 func (a *app) event(r *http.Request, data map[string]any, requested, served string, started time.Time, info usageInfo, ok bool, status, upstreamStatus int, errText string, rewritten bool, resetAt int64, resetSource string, quota bool, retryAfter int, fallback, stream bool, responseModel string, ttft int) map[string]any {

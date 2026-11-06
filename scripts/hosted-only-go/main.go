@@ -19,24 +19,43 @@ import (
 )
 
 func main() {
-	flavor := flag.String("flavor", os.Getenv("HOSTED_ONLY_FLAVOR"), "client flavor: claude or codex")
-	port := flag.String("port", "", "listen port (default 4147 codex / 4148 claude)")
+	flavor := flag.String("flavor", os.Getenv("HOSTED_ONLY_FLAVOR"), "client flavor: claude, codex or enmaas")
+	port := flag.String("port", "", "listen port (default 4147 codex / 4148 claude / 4146 enmaas)")
 	runtimeDir := flag.String("runtime-dir", "", "state directory (named in the process command line so the stop helper can find it)")
+	configPath := flag.String("config", os.Getenv("HOSTED_ONLY_CONFIG"), "generated LiteLLM config.json (required for enmaas)")
 	flag.Parse()
 
-	if *flavor != "claude" && *flavor != "codex" {
-		fmt.Fprintln(os.Stderr, "hosted-only-go: --flavor must be claude or codex")
+	if *flavor != "claude" && *flavor != "codex" && *flavor != "enmaas" {
+		fmt.Fprintln(os.Stderr, "hosted-only-go: --flavor must be claude, codex or enmaas")
 		os.Exit(2)
 	}
 	if *port == "" {
-		if *flavor == "codex" {
+		switch *flavor {
+		case "codex":
 			*port = "4147"
-		} else {
+		case "claude":
 			*port = "4148"
+		default:
+			*port = "4146"
 		}
 	}
 
 	cfg := loadConfig(*flavor, *port, *runtimeDir)
+	if *configPath != "" {
+		routes, err := loadRouteTable(*configPath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "hosted-only-go: %s: %v\n", *configPath, err)
+			os.Exit(1)
+		}
+		cfg.Routes = routes
+		if routes.token != "" {
+			cfg.Token = routes.token
+		}
+	}
+	if *flavor == "enmaas" && cfg.Routes == nil {
+		fmt.Fprintln(os.Stderr, "hosted-only-go: --config is required for the enmaas flavor")
+		os.Exit(1)
+	}
 	if cfg.APIKey == "" {
 		fmt.Fprintln(os.Stderr, "hosted-only-go: ENMAAS_API_KEY is not set")
 		os.Exit(1)

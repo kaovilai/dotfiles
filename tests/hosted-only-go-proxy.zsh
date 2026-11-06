@@ -8,9 +8,10 @@ setopt err_exit pipe_fail
 local repo="${0:A:h:h}"
 local tmp
 tmp=$(mktemp -d)
-local stub= proxy=
+local stub= proxy= eproxy=
 cleanup() {
     [[ -n "$proxy" ]] && kill "$proxy" 2>/dev/null
+    [[ -n "$eproxy" ]] && kill "$eproxy" 2>/dev/null
     [[ -n "$stub" ]] && kill "$stub" 2>/dev/null
     rm -rf "$tmp"
 }
@@ -81,7 +82,11 @@ class H(BaseHTTPRequestHandler):
             return
         payload = json.dumps({
             "id": "msg_stub", "type": "message", "role": "assistant",
-            "model": body.get("model"), "content": [{"type": "text", "text": "ok"}],
+            "model": body.get("model"), "path": self.path,
+            "additional_tools": any(isinstance(i, dict) and i.get("type") == "additional_tools"
+                                    for i in (body.get("input") or [])),
+            "tools": len(body.get("tools") or []),
+            "content": [{"type": "text", "text": "ok"}],
             "usage": {"input_tokens": 7, "output_tokens": 3},
         }).encode()
         self.send_response(200)
@@ -157,6 +162,13 @@ code=$(curl -s -D "$hdr" -o "$tmp/body402" -w '%{http_code}' -X POST "$chat" -H 
 if grep -qi '^retry-after:' "$hdr"; then fail "quota answer must not carry retry-after"; fi
 [[ "$(<"$tmp/body402")" == *insufficient_quota* ]] || fail "quota body: $(<"$tmp/body402")"
 
+# Cost guard: the hosted-only flavor must refuse any model it does not serve,
+# even though the upstream key would happily serve it.
+code=$(curl -s -o "$tmp/bodyguard" -w '%{http_code}' -X POST "$chat" -H 'content-type: application/json' -H 'authorization: Bearer test-token' \
+    -d '{"model":"gpt-6-luna","max_tokens":16,"messages":[{"role":"user","content":"hi"}]}')
+[[ "$code" == 400 ]] || fail "cost guard did not reject an unserved model: $code ($(<"$tmp/bodyguard"))"
+[[ "$(<"$tmp/bodyguard")" == *"Invalid model name"* ]] || fail "cost guard body: $(<"$tmp/bodyguard")"
+
 # Usage JSONL: an ok event and a rewritten 429 event, same schema llm-usage reads.
 sleep 0.3
 local events
@@ -180,6 +192,48 @@ quota = [e for e in lines if e.get("status") == 402]
 assert quota and quota[0].get("quota") is True, quota
 print("usage events ok")
 PY
+
+# --- enmaas flavor: config-driven routing ------------------------------------
+local eport ecfg="$tmp/enmaas-config.json"
+eport=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1]); s.close()')
+cat >| "$ecfg" <<JSON
+{"model_list":[
+ {"model_name":"*","litellm_params":{"model":"openai/*","api_base":"http://127.0.0.1:$stub_port/v1"}},
+ {"model_name":"claude-x","litellm_params":{"model":"anthropic/claude-x","api_base":"http://127.0.0.1:$stub_port"}},
+ {"model_name":"gpt-6","litellm_params":{"model":"openai/responses/gpt-6","api_base":"http://127.0.0.1:$stub_port/v1"}},
+ {"model_name":"gpt-6#responses","litellm_params":{"model":"openai/gpt-6","api_base":"http://127.0.0.1:$stub_port/v1"}}
+],"general_settings":{"master_key":"sk-enmaas-test"}}
+JSON
+env ENMAAS_API_KEY=test-key LLM_USAGE_DIR="$tmp/usage-enmaas" \
+    "$bin" --flavor enmaas --config "$ecfg" --port "$eport" --runtime-dir "$tmp/state/enmaas-$eport" >"$tmp/enmaas.log" 2>&1 &
+eproxy=$!
+for i in {1..50}; do
+    curl -sf --max-time 1 "http://127.0.0.1:$eport/health/liveliness" -o /dev/null && break
+    sleep 0.1
+done
+curl -sf --max-time 1 "http://127.0.0.1:$eport/health/liveliness" -o /dev/null || fail "enmaas proxy did not start: $(<"$tmp/enmaas.log")"
+
+local eurl="http://127.0.0.1:$eport"
+code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$eurl/v1/messages" -H 'content-type: application/json' -H 'x-api-key: test-token' \
+    -d '{"model":"claude-x","max_tokens":8,"messages":[{"role":"user","content":"hi"}]}')
+[[ "$code" == 401 ]] || fail "enmaas token must come from master_key: $code"
+
+out=$(curl -s -X POST "$eurl/v1/messages" -H 'content-type: application/json' -H 'x-api-key: sk-enmaas-test' \
+    -d '{"model":"claude-x","max_tokens":8,"messages":[{"role":"user","content":"hi"}]}')
+[[ "$out" == *'"path": "/v1/messages"'* && "$out" == *'"model": "claude-x"'* ]] || fail "anthropic route: $out"
+
+out=$(curl -s -X POST "$eurl/v1/responses" -H 'content-type: application/json' -H 'authorization: Bearer sk-enmaas-test' \
+    -d '{"model":"gpt-6","input":[{"role":"user","content":[{"type":"input_text","text":"hi"}]}],"max_output_tokens":8}')
+[[ "$out" == *'"path": "/v1/responses"'* && "$out" == *'"model": "gpt-6"'* ]] || fail "#responses sibling route: $out"
+
+out=$(curl -s -X POST "$eurl/v1/chat/completions" -H 'content-type: application/json' -H 'authorization: Bearer sk-enmaas-test' \
+    -d '{"model":"something-new","max_tokens":8,"messages":[{"role":"user","content":"hi"}]}')
+[[ "$out" == *'"path": "/v1/chat/completions"'* && "$out" == *'"model": "something-new"'* ]] || fail "wildcard route: $out"
+
+# additional_tools is flattened into tools for rits/ models (Codex item shape).
+out=$(curl -s -X POST "$eurl/v1/chat/completions" -H 'content-type: application/json' -H 'authorization: Bearer sk-enmaas-test' \
+    -d '{"model":"rits/zai-org/glm-5-3","max_tokens":8,"messages":[{"role":"user","content":"hi"}],"input":[{"type":"additional_tools","tools":[{"type":"function","name":"f"}]}]}')
+[[ "$out" == *'"additional_tools": false'* && "$out" == *'"tools": 1'* ]] || fail "additional_tools not flattened: $out"
 
 # Stop helper finds the Go process by its runtime dir.
 HOSTED_ONLY_CLAUDE_PROXY_PORT=$pport _hosted_only_proxy_stop claude >/dev/null 2>&1 || fail "stop helper failed"

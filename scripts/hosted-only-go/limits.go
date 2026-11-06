@@ -257,8 +257,9 @@ func analyzeLimit(cfg *config, status int, headers map[string]string, text strin
 		add(chosen.rank, chosen.at, chosen.source)
 	}
 
-	// Anthropic dimensions.
+	// Anthropic dimensions: the exhausted dimension (remaining 0) decides.
 	var anthropic []resetCand
+	anthropicRemaining := map[string]float64{}
 	for _, dim := range []string{"requests", "tokens", "input-tokens", "output-tokens"} {
 		name := "anthropic-ratelimit-" + dim + "-reset"
 		raw, ok := headers[name]
@@ -270,9 +271,15 @@ func analyzeLimit(cfg *config, status int, headers map[string]string, text strin
 		if !ok {
 			continue
 		}
+		if remRaw, ok := headers["anthropic-ratelimit-"+dim+"-remaining"]; ok {
+			handled["anthropic-ratelimit-"+dim+"-remaining"] = true
+			if rem, ok := parseDuration(remRaw); ok {
+				anthropicRemaining[name] = rem
+			}
+		}
 		anthropic = append(anthropic, resetCand{rank: 5, at: at, source: name})
 	}
-	if chosen, ok := pickReset(anthropic, map[string]float64{}); ok {
+	if chosen, ok := pickReset(anthropic, anthropicRemaining); ok {
 		add(chosen.rank, chosen.at, chosen.source)
 	}
 	if raw, ok := headers["anthropic-ratelimit-unified-reset"]; ok {
@@ -312,19 +319,26 @@ func analyzeLimit(cfg *config, status int, headers map[string]string, text strin
 		add(chosen.rank, chosen.at, chosen.source)
 	}
 
-	// IETF RateLimit headers.
+	// IETF RateLimit headers: each policy carries its own reset (t=/reset=) and
+	// remaining (r=/remaining=), so an exhausted policy decides, like the other
+	// dimensions.
 	if raw, ok := headers["ratelimit"]; ok {
 		handled["ratelimit"] = true
 		var found []resetCand
-		for _, item := range splitRateLimit(raw) {
-			seconds, ok := rateLimitReset(item)
-			if ok {
-				found = append(found, resetCand{rank: 7, at: now.Add(time.Duration(seconds * float64(time.Second))), source: "ratelimit"})
+		policyRemaining := map[string]float64{}
+		for index, item := range splitRateLimit(raw) {
+			seconds, remaining, ok := rateLimitPolicy(item)
+			if !ok {
+				continue
 			}
+			source := fmt.Sprintf("ratelimit#%d", index)
+			if remaining != nil {
+				policyRemaining[source] = *remaining
+			}
+			found = append(found, resetCand{rank: 7, at: now.Add(time.Duration(seconds * float64(time.Second))), source: source})
 		}
-		if len(found) > 0 {
-			sort.Slice(found, func(i, j int) bool { return found[i].at.Before(found[j].at) })
-			add(7, found[0].at, "ratelimit")
+		if chosen, ok := pickReset(found, policyRemaining); ok {
+			add(7, chosen.at, "ratelimit")
 		}
 	}
 	if raw, ok := headers["ratelimit-reset"]; ok {
@@ -467,15 +481,27 @@ func splitRateLimit(raw string) []string {
 	return strings.Split(raw, ",")
 }
 
-func rateLimitReset(item string) (float64, bool) {
+func rateLimitPolicy(item string) (float64, *float64, bool) {
+	var seconds float64
+	var remaining *float64
+	found := false
 	for _, field := range strings.FieldsFunc(item, func(r rune) bool { return r == ';' || r == ',' || r == ' ' }) {
-		if k, v, ok := strings.Cut(field, "="); ok && (k == "reset" || k == "t") {
-			if seconds, err := strconv.ParseFloat(v, 64); err == nil {
-				return seconds, true
+		key, value, ok := strings.Cut(field, "=")
+		if !ok {
+			continue
+		}
+		switch key {
+		case "reset", "t":
+			if v, err := strconv.ParseFloat(value, 64); err == nil {
+				seconds, found = v, true
+			}
+		case "remaining", "r":
+			if v, err := strconv.ParseFloat(value, 64); err == nil {
+				remaining = &v
 			}
 		}
 	}
-	return 0, false
+	return seconds, remaining, found
 }
 
 func monthEnd(now time.Time, tz *time.Location) time.Time {

@@ -35,10 +35,16 @@ type config struct {
 
 	DefaultRetry   int
 	ClientRetryMax int
+	OutageBase     int
+	OutageMax      int
 	RequestTimeout time.Duration
 	QuotaTZ        *time.Location
 	UsageDir       string
 	SearchDelegate string
+
+	// Routes is set for the enmaas flavor: the launcher's generated LiteLLM
+	// config.json, read as a model -> deployment table.
+	Routes *routeTable
 }
 
 // knob reads HOSTED_ONLY_<name>, then the retired GLM_HYBRID_<name>, then def.
@@ -133,6 +139,8 @@ func loadConfig(flavor, port, runtimeDir string) *config {
 		BytesPerToken:  floatKnob("BYTES_PER_TOKEN", 3),
 		DefaultRetry:   intKnob("RATE_LIMIT_DEFAULT_RETRY_SECONDS", 60, 1),
 		ClientRetryMax: intKnob("CLIENT_RETRY_MAX_SECONDS", 60, 0),
+		OutageBase:     intKnob("OUTAGE_RETRY_SECONDS", 60, 1),
+		OutageMax:      intKnob("OUTAGE_RETRY_MAX_SECONDS", 600, 1),
 		RequestTimeout: time.Duration(intKnob("REQUEST_TIMEOUT", 300, 1)) * time.Second,
 		QuotaTZ:        tz,
 		UsageDir:       usageDir,
@@ -152,4 +160,15 @@ func (c *config) isGLM(model string) bool {
 // isRits reports whether the hooks' rits/ workarounds apply to this model.
 func (c *config) isRits(model string) bool {
 	return strings.HasPrefix(model, "rits/") || c.isGLM(model)
+}
+
+// allowedModel is the hosted-only cost guard: only the two hosted models and
+// their aliases may be served. The enmaas flavor is governed by its route table
+// instead.
+func (c *config) allowedModel(model string) bool {
+	if model == c.GLM || model == c.DeepSeek {
+		return true
+	}
+	_, alias := c.Aliases[model]
+	return alias
 }

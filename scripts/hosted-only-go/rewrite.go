@@ -17,8 +17,9 @@ type requestError struct {
 
 // rewriteRequest applies the hosted-only request rewrites in the same order as
 // HostedOnlyHooks.async_pre_call_hook. It returns the model to fall back to
-// (empty for none) and, when the request must be refused, a requestError.
-func rewriteRequest(cfg *config, path string, data map[string]any) (fallback string, reqErr *requestError) {
+// (empty for none), a requestError when the request must be refused, and
+// whether the body changed (so an untouched request can be forwarded verbatim).
+func rewriteRequest(cfg *config, path string, data map[string]any) (fallback string, reqErr *requestError, changed bool) {
 	requested := asString(data["model"])
 	model := requested
 	// Aliases (claude-sonnet-5-5 on the Claude flavor) are served by GLM: the
@@ -26,15 +27,17 @@ func rewriteRequest(cfg *config, path string, data map[string]any) (fallback str
 	if _, ok := cfg.Aliases[model]; ok {
 		model = cfg.GLM
 		data["model"] = model
+		changed = true
 	}
 	if !cfg.isRits(model) {
-		return "", nil
+		return "", nil, changed
 	}
 
 	if cfg.VisionFallback && cfg.isGLM(model) && cfg.DeepSeek != cfg.GLM &&
 		(hasImage(data["messages"]) || hasImage(data["input"])) {
 		data["model"] = cfg.DeepSeek
 		model = cfg.DeepSeek
+		changed = true
 	}
 
 	if tools, ok := data["tools"].([]any); ok {
@@ -45,16 +48,21 @@ func rewriteRequest(cfg *config, path string, data map[string]any) (fallback str
 			}
 			if format := asMap(tool["format"]); format != nil && asString(format["type"]) == "grammar" {
 				delete(tool, "format")
+				changed = true
 			}
 		}
 	}
 
-	if cfg.SearchNudge && stripWebSearchTools(data) && !searchNotePresent(data) {
-		injectSearchNote(cfg, path, data)
+	if cfg.SearchNudge && stripWebSearchTools(data) {
+		changed = true
+		if !searchNotePresent(data) && injectSearchNote(cfg, path, data) {
+			changed = true
+		}
 	}
 
 	if _, hasMessages := data["messages"]; hasMessages && data["input"] == nil && data["thinking"] == nil {
 		data["thinking"] = map[string]any{"type": "disabled"}
+		changed = true
 	}
 
 	if input, ok := data["input"].([]any); ok {
@@ -64,13 +72,20 @@ func rewriteRequest(cfg *config, path string, data map[string]any) (fallback str
 				kept = append(kept, item)
 			}
 		}
-		data["input"] = kept
+		if len(kept) != len(input) {
+			data["input"] = kept
+			changed = true
+		}
 	}
 
-	stripToolReferences(data)
+	if stripToolReferences(data) > 0 {
+		changed = true
+	}
 
-	if e := clampOutput(cfg, data); e != nil {
-		return "", e
+	if e, clamped := clampOutput(cfg, data); e != nil {
+		return "", e, changed
+	} else if clamped {
+		changed = true
 	}
 
 	if cfg.FallbackOn {
@@ -87,7 +102,7 @@ func rewriteRequest(cfg *config, path string, data map[string]any) (fallback str
 			}
 		}
 	}
-	return fallback, nil
+	return fallback, nil, changed
 }
 
 func hasImage(node any) bool {
@@ -157,11 +172,11 @@ func contentSize(data map[string]any) int {
 // clampOutput keeps input + max_tokens inside the served window. A request with
 // no room left for a useful answer is refused with a 400 worded like the
 // provider's context-overflow error, so the client compacts and retries.
-func clampOutput(cfg *config, data map[string]any) *requestError {
+func clampOutput(cfg *config, data map[string]any) (*requestError, bool) {
 	model := asString(data["model"])
 	if model != cfg.GLM && model != cfg.DeepSeek {
 		if _, alias := cfg.Aliases[model]; !alias {
-			return nil
+			return nil, false
 		}
 	}
 	key := "max_tokens"
@@ -170,7 +185,7 @@ func clampOutput(cfg *config, data map[string]any) *requestError {
 	}
 	requested, ok := asInt(data[key])
 	if !ok {
-		return nil
+		return nil, false
 	}
 	estimate := int(math.Ceil(float64(contentSize(data)) / cfg.BytesPerToken))
 	room := cfg.MaxModelLen - estimate - cfg.OutputReserve
@@ -186,15 +201,17 @@ func clampOutput(cfg *config, data map[string]any) *requestError {
 			Message: fmt.Sprintf(
 				"prompt is too long: %d tokens > %d maximum. Input length (~%d) exceeds the model's maximum context length (%d) once %d output tokens are reserved; compact the conversation and retry (context_length_exceeded).",
 				estimate, limit, estimate, cfg.MaxModelLen, minOut),
-		}
+		}, false
 	}
 	if room < requested {
 		data[key] = room
+		return nil, true
 	}
-	return nil
+	return nil, false
 }
 
-func stripToolReferences(data map[string]any) {
+func stripToolReferences(data map[string]any) int {
+	total := 0
 	for _, key := range []string{"messages", "input"} {
 		items, ok := data[key].([]any)
 		if !ok {
@@ -225,8 +242,56 @@ func stripToolReferences(data map[string]any) {
 				kept = []any{map[string]any{"type": "text", "text": "(tool reference omitted)"}}
 			}
 			m["content"] = kept
+			total += dropped
 		}
 	}
+	return total
+}
+
+// flattenAdditionalTools ports unwrap_tools_middleware.py: Codex can send tools
+// as an {"type":"additional_tools"} input item, which vLLM-served rits/ models
+// reject. Function tools (including namespaced ones) move into data["tools"];
+// the item is dropped. Only rits/ models are touched.
+func flattenAdditionalTools(data map[string]any) bool {
+	items, ok := data["input"].([]any)
+	if !ok {
+		return false
+	}
+	var extracted []any
+	kept := make([]any, 0, len(items))
+	found := false
+	for _, item := range items {
+		m := asMap(item)
+		if m == nil || asString(m["type"]) != "additional_tools" {
+			kept = append(kept, item)
+			continue
+		}
+		found = true
+		for _, tool := range asList(m["tools"]) {
+			tm := asMap(tool)
+			if tm == nil {
+				continue
+			}
+			switch asString(tm["type"]) {
+			case "namespace":
+				for _, nested := range asList(tm["tools"]) {
+					if nm := asMap(nested); nm != nil && asString(nm["type"]) == "function" {
+						extracted = append(extracted, nested)
+					}
+				}
+			case "function":
+				extracted = append(extracted, tool)
+			}
+		}
+	}
+	if !found {
+		return false
+	}
+	if len(extracted) > 0 {
+		data["tools"] = append(asList(data["tools"]), extracted...)
+	}
+	data["input"] = kept
+	return true
 }
 
 const searchToolPrefix = "web_search"
