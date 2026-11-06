@@ -2,6 +2,7 @@ package main
 
 import (
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -25,15 +26,52 @@ var chatStreamDone = errors.New("chat stream done")
 
 var chatReasoningModel = regexp.MustCompile(`^o[0-9]`)
 
-// chatUsesMaxCompletionTokens reports whether the model rejects "max_tokens"
-// and wants "max_completion_tokens" (gpt-5*, o-series reasoning models). A
-// provider prefix such as "openai/" is ignored.
+// chatUsesMaxCompletionTokens reports whether to send "max_completion_tokens"
+// instead of "max_tokens". Verified live against the EnMaaS gateway
+// (2026-11-07): gpt-6-sol rejects max_tokens ("Use 'max_completion_tokens'
+// instead"), while gpt-4o-mini, gemini-3.x and gpt-5.x all accept
+// max_completion_tokens, so it is the default. Only self-hosted "rits/"
+// (vLLM) ids keep the classic max_tokens. A provider prefix such as "openai/"
+// is ignored.
 func chatUsesMaxCompletionTokens(model string) bool {
 	m := strings.ToLower(model)
-	if i := strings.LastIndex(m, "/"); i >= 0 {
-		m = m[i+1:]
+	if strings.HasPrefix(m, "rits/") {
+		return false
 	}
-	return strings.HasPrefix(m, "gpt-5") || chatReasoningModel.MatchString(m)
+	return true
+}
+
+// Gemini 3 (via the OpenAI-compatible endpoint) returns a thought_signature on
+// every tool call (extra_content.google.thought_signature) and rejects the next
+// turn with 400 "Function call is missing a thought_signature" unless it is
+// echoed back. A Messages tool_use block has no place for it, and Claude Code
+// echoes only id/name/input, so it rides inside the tool_use id (the same trick
+// LiteLLM uses): <call id>__thought__<base64url(signature)>. The request side
+// splits it again; both the assistant tool_calls id and the matching tool
+// message's tool_call_id carry the ORIGINAL id.
+const chatThoughtSep = "__thought__"
+
+// chatEncodeToolID folds a tool call's thought signature (if any) into its id.
+func chatEncodeToolID(id string, tc map[string]any) string {
+	sig := asString(asMap(asMap(tc["extra_content"])["google"])["thought_signature"])
+	if sig == "" {
+		return id
+	}
+	return id + chatThoughtSep + base64.RawURLEncoding.EncodeToString([]byte(sig))
+}
+
+// chatSplitToolID undoes chatEncodeToolID: the original id and the signature
+// ("" when the id carries none or it does not decode).
+func chatSplitToolID(id string) (string, string) {
+	i := strings.Index(id, chatThoughtSep)
+	if i < 0 {
+		return id, ""
+	}
+	raw, err := base64.RawURLEncoding.DecodeString(id[i+len(chatThoughtSep):])
+	if err != nil {
+		return id[:i], ""
+	}
+	return id[:i], string(raw)
 }
 
 func chatRandomID() string {
@@ -191,7 +229,7 @@ func chatAppendUser(msgs []any, blocks []any) []any {
 		case "tool_result":
 			tools = append(tools, map[string]any{
 				"role":         "tool",
-				"tool_call_id": asString(bm["tool_use_id"]),
+				"tool_call_id": chatOrigToolID(asString(bm["tool_use_id"])),
 				"content":      chatToolResultText(bm),
 			})
 		case "text":
@@ -271,14 +309,19 @@ func chatAppendAssistant(msgs []any, blocks []any) []any {
 			if in := asMap(bm["input"]); in != nil {
 				args = string(marshal(in))
 			}
-			calls = append(calls, map[string]any{
-				"id":   asString(bm["id"]),
+			origID, sig := chatSplitToolID(asString(bm["id"]))
+			call := map[string]any{
+				"id":   origID,
 				"type": "function",
 				"function": map[string]any{
 					"name":      asString(bm["name"]),
 					"arguments": args,
 				},
-			})
+			}
+			if sig != "" {
+				call["extra_content"] = map[string]any{"google": map[string]any{"thought_signature": sig}}
+			}
+			calls = append(calls, call)
 		}
 		// thinking / redacted_thinking and unknown blocks are dropped
 	}
@@ -387,7 +430,7 @@ func (t *chatTranslator) Response(upstream []byte, model string) ([]byte, error)
 			}
 		}
 		content = append(content, map[string]any{
-			"type": "tool_use", "id": id, "name": asString(fn["name"]), "input": input,
+			"type": "tool_use", "id": chatEncodeToolID(id, cm), "name": asString(fn["name"]), "input": input,
 		})
 		hasTool = true
 	}
@@ -523,7 +566,7 @@ func (s *chatStream) onToolCall(tc map[string]any) error {
 			id = "call_" + chatRandomID()
 		}
 		b, err := s.newBlock(true, map[string]any{
-			"type": "tool_use", "id": id, "name": asString(fn["name"]), "input": map[string]any{},
+			"type": "tool_use", "id": chatEncodeToolID(id, tc), "name": asString(fn["name"]), "input": map[string]any{},
 		})
 		if err != nil {
 			return err
@@ -692,4 +735,10 @@ func (t *chatTranslator) Error(status int, body []byte) []byte {
 		"type":  "error",
 		"error": map[string]any{"type": anthropicErrorType(status), "message": msg},
 	})
+}
+
+// chatOrigToolID is chatSplitToolID without the signature.
+func chatOrigToolID(id string) string {
+	orig, _ := chatSplitToolID(id)
+	return orig
 }

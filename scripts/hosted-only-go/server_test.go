@@ -143,7 +143,11 @@ func TestFallbackIsTranslatedForItsDialect(t *testing.T) {
 		h := newProxyHarness(t, 502, `{"error":{"message":"bad gateway"}}`, nil)
 		glm, ds := h.app.cfg.GLM, h.app.cfg.DeepSeek
 		route := func(name, dialect, base string) map[string]any {
-			return map[string]any{"model_name": name, "litellm_params": map[string]any{"model": dialect + "/" + name, "api_base": base}}
+			prefix := dialect
+			if dialect == "responses" {
+				prefix = "openai/responses" // how a Responses deployment is configured
+			}
+			return map[string]any{"model_name": name, "litellm_params": map[string]any{"model": prefix + "/" + name, "api_base": base}}
 		}
 		doc := map[string]any{"model_list": []any{route(glm, "anthropic", h.url), route(ds, fallbackDialect, h.url)},
 			"general_settings": map[string]any{"master_key": "x"}}

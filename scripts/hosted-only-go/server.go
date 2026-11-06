@@ -31,6 +31,12 @@ type app struct {
 	// plus latency until the reset.
 	quotaMu    sync.Mutex
 	quotaUntil map[string]time.Time
+
+	// responsesOnly remembers chat-dialect models whose gateway answered "use
+	// /v1/responses" (gpt-6-* reject function tools on chat completions, live
+	// 2026-11-07): later Messages requests for them go straight to the Responses
+	// translator instead of paying a failed chat call first.
+	responsesOnly sync.Map // upstream model id -> true
 }
 
 func (a *app) noteQuota(model string, reset time.Time) {
@@ -154,6 +160,11 @@ func (a *app) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			// Responses. Bridge it (translate.go) instead of the 400 the proxy
 			// used to answer, which is what kept EnMaaS on LiteLLM.
 			tr = newTranslator(entry.Dialect)
+			if entry.Dialect == "openai" {
+				if _, learned := a.responsesOnly.Load(upstream); learned {
+					tr = newTranslator("responses")
+				}
+			}
 		}
 		if upstream != model {
 			data["model"] = upstream
@@ -229,6 +240,24 @@ func (a *app) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			resp, transportErr = a.upstream(r, fbBody, fbBase, fbPath, stream)
 			usedFallback = true
 			served = fbModel
+		}
+	}
+	// A chat deployment that refuses the request because the model only takes
+	// it on /v1/responses (function tools on gpt-6-*): retry ONCE through the
+	// Responses translator and remember the model. Only the primary deployment
+	// (a fallback already changed base/model).
+	if _, isChat := tr.(*chatTranslator); isChat && !usedFallback && transportErr == nil && resp != nil && resp.StatusCode == http.StatusBadRequest {
+		errBody, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		resp.Body = io.NopCloser(bytes.NewReader(errBody))
+		if bytes.Contains(bytes.ToLower(errBody), []byte("/v1/responses")) {
+			rtr := newResponsesTranslator()
+			if p2, b2, terr := rtr.Request(data); terr == nil {
+				if r2, e2 := a.upstream(r, marshal(b2), upstreamBase, p2, stream); e2 == nil {
+					a.responsesOnly.Store(upstreamModel, true)
+					resp, tr = r2, rtr
+				}
+			}
 		}
 	}
 	if transportErr != nil {

@@ -20,7 +20,7 @@ func chatRoutedApp(t *testing.T, stub http.HandlerFunc) (*app, *httptest.Server)
 	t.Setenv("ENMAAS_API_KEY", "test-key")
 	t.Setenv("LLM_USAGE_DIR", t.TempDir())
 	doc := map[string]any{
-		"model_list": []any{map[string]any{"model_name": "gpt-5-mini", "litellm_params": map[string]any{"model": "openai/gpt-5-mini", "api_base": gw.URL + "/v1"}}},
+		"model_list":       []any{map[string]any{"model_name": "gpt-5-mini", "litellm_params": map[string]any{"model": "openai/gpt-5-mini", "api_base": gw.URL + "/v1"}}},
 		"general_settings": map[string]any{"master_key": "x"},
 	}
 	path := filepath.Join(t.TempDir(), "routes.json")
@@ -133,5 +133,33 @@ func TestMessagesClientChatErrorIsAnthropicShaped(t *testing.T) {
 	}
 	if msg := asString(asMap(out["error"])["message"]); !strings.Contains(msg, "temperature") {
 		t.Fatalf("upstream message lost: %s", rec.Body.String())
+	}
+}
+
+// gpt-6-* refuse function tools on chat completions ("use /v1/responses", live
+// 2026-11-07). The proxy retries once through the Responses translator and
+// remembers the model, so only the FIRST request pays the failed chat call.
+func TestChatDeploymentThatWantsResponsesIsRetriedAndLearned(t *testing.T) {
+	var paths []string
+	a, _ := chatRoutedApp(t, func(w http.ResponseWriter, r *http.Request) {
+		paths = append(paths, r.URL.Path)
+		w.Header().Set("content-type", "application/json")
+		if r.URL.Path == "/v1/chat/completions" {
+			w.WriteHeader(400)
+			_, _ = w.Write([]byte(`{"error":{"message":"Function tools with reasoning_effort are not supported for gpt-5-mini in /v1/chat/completions. To use function tools, use /v1/responses.","type":"invalid_request_error"}}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"id":"resp_1","status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"via responses"}]}],"usage":{"input_tokens":4,"output_tokens":2}}`))
+	})
+	body := `{"model":"gpt-5-mini","max_tokens":64,"tools":[{"name":"f","description":"d","input_schema":{"type":"object","properties":{}}}],"messages":[{"role":"user","content":"hi"}]}`
+	for i := 0; i < 2; i++ {
+		rec := messagesRequest(a, body)
+		if rec.Code != 200 || !strings.Contains(rec.Body.String(), "via responses") {
+			t.Fatalf("request %d: %d %s", i, rec.Code, rec.Body.String())
+		}
+	}
+	want := []string{"/v1/chat/completions", "/v1/responses", "/v1/responses"}
+	if strings.Join(paths, ",") != strings.Join(want, ",") {
+		t.Fatalf("upstream paths %v, want %v (one failed chat call, then learned)", paths, want)
 	}
 }

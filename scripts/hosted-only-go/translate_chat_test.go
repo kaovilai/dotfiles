@@ -61,7 +61,7 @@ func TestChatRequestGolden(t *testing.T) {
 		{
 			"system string + simple user",
 			`{"model":"gpt-4o-mini","max_tokens":100,"system":"be nice","messages":[{"role":"user","content":"hi"}],"top_k":5,"thinking":{"type":"enabled","budget_tokens":1000}}`,
-			`{"model":"gpt-4o-mini","max_tokens":100,"messages":[{"role":"system","content":"be nice"},{"role":"user","content":"hi"}]}`,
+			`{"model":"gpt-4o-mini","max_completion_tokens":100,"messages":[{"role":"system","content":"be nice"},{"role":"user","content":"hi"}]}`,
 		},
 		{
 			"system blocks joined, cache_control ignored",
@@ -174,16 +174,18 @@ func TestChatRequestGolden(t *testing.T) {
 
 func TestChatRequestMaxTokensNaming(t *testing.T) {
 	cases := map[string]string{
-		"gpt-5":              "max_completion_tokens",
-		"GPT-5.1-mini":       "max_completion_tokens",
-		"o1":                 "max_completion_tokens",
-		"o3-mini":            "max_completion_tokens",
-		"O4-mini":            "max_completion_tokens",
-		"openai/gpt-5-codex": "max_completion_tokens",
-		"gpt-4o-mini":        "max_tokens",
-		"gpt-4.1":            "max_tokens",
-		"gemini-2.5-pro":     "max_tokens",
-		"omni-model":         "max_tokens",
+		"gpt-5":                "max_completion_tokens",
+		"GPT-5.1-mini":         "max_completion_tokens",
+		"o1":                   "max_completion_tokens",
+		"o3-mini":              "max_completion_tokens",
+		"O4-mini":              "max_completion_tokens",
+		"openai/gpt-5-codex":   "max_completion_tokens",
+		"gpt-4o-mini":          "max_completion_tokens", // accepted live 2026-11-07
+		"gpt-4.1":              "max_completion_tokens",
+		"gpt-6-sol":            "max_completion_tokens", // rejects max_tokens live 2026-11-07
+		"gemini-3.7-flash":     "max_completion_tokens", // accepted live 2026-11-07
+		"omni-model":           "max_completion_tokens",
+		"rits/zai-org/glm-5-3": "max_tokens", // self-hosted vLLM keeps the classic name
 	}
 	for model, key := range cases {
 		_, out := chatReq(t, `{"model":"`+model+`","max_tokens":77,"messages":[]}`)
@@ -672,5 +674,66 @@ func TestChatNoPanicOnOddInputs(t *testing.T) {
 			}
 			chatCheckInvariants(t, evs)
 		}()
+	}
+}
+
+// Gemini 3 thought signatures survive the Messages round trip inside the
+// tool_use id (live 2026-11-07: a follow-up turn without them is a 400).
+func TestChatThoughtSignatureRoundTrip(t *testing.T) {
+	tr := newChatTranslator()
+	upstream := []byte(`{"id":"c1","choices":[{"finish_reason":"tool_calls","message":{"role":"assistant","tool_calls":[` +
+		`{"id":"call_abc","type":"function","extra_content":{"google":{"thought_signature":"c2ln+/=="}},"function":{"name":"get_weather","arguments":"{\"city\":\"Paris\"}"}}]}}],"usage":{"prompt_tokens":3,"completion_tokens":1}}`)
+	out, err := tr.Response(upstream, "gemini-3.7-flash")
+	if err != nil {
+		t.Fatal(err)
+	}
+	obj, _ := decodeObject(out)
+	block := asMap(asList(obj["content"])[0])
+	id := asString(block["id"])
+	if !strings.HasPrefix(id, "call_abc__thought__") || strings.ContainsAny(id, "+/=") {
+		t.Fatalf("tool_use id must carry the signature in an id-safe form: %q", id)
+	}
+	// the client echoes the block back: assistant tool_use + user tool_result
+	req := map[string]any{"model": "gemini-3.7-flash", "max_tokens": 10, "messages": []any{
+		map[string]any{"role": "user", "content": "w?"},
+		map[string]any{"role": "assistant", "content": []any{map[string]any{"type": "tool_use", "id": id, "name": "get_weather", "input": map[string]any{"city": "Paris"}}}},
+		map[string]any{"role": "user", "content": []any{map[string]any{"type": "tool_result", "tool_use_id": id, "content": "sunny"}}},
+	}}
+	_, body, err := newChatTranslator().Request(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	msgs := asList(body["messages"])
+	call := asMap(asList(asMap(msgs[1])["tool_calls"])[0])
+	if asString(call["id"]) != "call_abc" {
+		t.Fatalf("upstream tool call id must be the original: %v", call["id"])
+	}
+	if sig := asString(asMap(asMap(call["extra_content"])["google"])["thought_signature"]); sig != "c2ln+/==" {
+		t.Fatalf("signature not echoed back: %q", sig)
+	}
+	if asString(asMap(msgs[2])["tool_call_id"]) != "call_abc" {
+		t.Fatalf("tool message must reference the original id: %v", asMap(msgs[2])["tool_call_id"])
+	}
+	// an id without a signature is untouched, a mangled one degrades to the plain id
+	if o, s := chatSplitToolID("call_x"); o != "call_x" || s != "" {
+		t.Fatal("plain id changed")
+	}
+	if o, s := chatSplitToolID("call_x__thought__!!bad!!"); o != "call_x" || s != "" {
+		t.Fatalf("undecodable signature must degrade, got %q %q", o, s)
+	}
+}
+
+func TestChatStreamThoughtSignature(t *testing.T) {
+	sse := "data: {\"id\":\"c1\",\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_z\",\"extra_content\":{\"google\":{\"thought_signature\":\"S1\"}},\"function\":{\"name\":\"f\",\"arguments\":\"{}\"}}]},\"finish_reason\":\"tool_calls\"}]}\n\ndata: [DONE]\n\n"
+	var ids []string
+	_, err := newChatTranslator().Stream(strings.NewReader(sse), func(ev string, d []byte) error {
+		if ev == "content_block_start" {
+			o, _ := decodeObject(d)
+			ids = append(ids, asString(asMap(o["content_block"])["id"]))
+		}
+		return nil
+	}, "gemini-3.7-flash")
+	if err != nil || len(ids) != 1 || !strings.HasPrefix(ids[0], "call_z__thought__") {
+		t.Fatalf("stream tool_use id must carry the signature: err=%v ids=%v", err, ids)
 	}
 }
