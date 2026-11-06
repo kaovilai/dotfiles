@@ -171,7 +171,7 @@ def signature(key, token):
 # callback order) are copied next to the config and loaded as dotted modules:
 # LiteLLM splits a callback on '.', so a file path or `file.py:name` cannot work.
 HOOK_ENV_PREFIXES = ('HOSTED_ONLY_', 'GLM_HYBRID_', 'ENMAAS_RESPONSES_', 'ENMAAS_DNS_')
-CHILD_ENV_PREFIXES = HOOK_ENV_PREFIXES + ('LLM_USAGE_',)
+CHILD_ENV_PREFIXES = HOOK_ENV_PREFIXES + ('LLM_USAGE_', 'T3_WEB_SEARCH_')
 
 
 def hook_files():
@@ -232,6 +232,41 @@ def proxy_digest(files):
     return hook_digest(files + ([shim] if shim else []))
 
 
+def go_impl():
+    # CLAUDE_ENMAAS_PROXY_IMPL=go runs scripts/hosted-only-go instead of
+    # litellm[proxy]; LLM_PROXY_IMPL flips all the proxies at once.
+    return (os.environ.get('CLAUDE_ENMAAS_PROXY_IMPL')
+            or os.environ.get('LLM_PROXY_IMPL') or 'litellm').strip().lower()
+
+
+def go_source():
+    explicit = os.environ.get('CLAUDE_ENMAAS_GO_SRC')
+    if explicit:
+        return Path(explicit)
+    files = hook_files()
+    if not files:
+        raise RuntimeError('CLAUDE_ENMAAS_GO_SRC is not set and no hook files were provided')
+    return files[0].parent.parent / 'scripts' / 'hosted-only-go'
+
+
+def go_binary():
+    """Build (or reuse) the Go proxy; returns (binary path, source hash)."""
+    src = go_source()
+    out = Path(os.environ.get('XDG_STATE_HOME') or Path.home() / '.local' / 'state') / 'hosted-only-go'
+    out.mkdir(mode=0o700, parents=True, exist_ok=True)
+    digest = hashlib.sha256()
+    for path in sorted(list(src.glob('*.go')) + [src / 'go.mod']):
+        digest.update(path.name.encode() + b'\0' + path.read_bytes())
+    want = digest.hexdigest()
+    binary = out / 'hosted-only-proxy'
+    stamp = out / 'source.sha'
+    if not binary.is_file() or not stamp.is_file() or stamp.read_text().strip() != want:
+        subprocess.run(['go', 'build', '-trimpath', '-o', str(binary), '.'], cwd=str(src), check=True)
+        stamp.write_text(want)
+        binary.chmod(0o700)
+    return str(binary), want
+
+
 def install_shim(root, shim):
     fd = os.open(root / 'sitecustomize.py', os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
     with os.fdopen(fd, 'wb') as stream:
@@ -282,6 +317,11 @@ def changes(info_root, info, root, config, versions, key, hooks, required):
 def check(root, port, config, versions, required):
     """Dry run for `llm-proxy-restart required`: {'state': down|fresh|stale,
     'changed': [...], 'busy': bool}; nothing is started, stopped or written."""
+    impl = go_impl()
+    gohash = None
+    if impl == 'go':
+        _, gohash = go_binary()
+        versions = (gohash, 'go')
     info_root, info = locate(root, port)
     if not owned(info):
         if listeners(port):
@@ -290,16 +330,23 @@ def check(root, port, config, versions, required):
     if not ready(info, info_root):
         return {'state': 'stale', 'changed': ['recorded proxy is not ready'], 'busy': busy(port)}
     changed, _, _, _ = changes(info_root, info, root, config, versions, os.environ['ENMAAS_API_KEY'],
-                               proxy_digest(hook_files()), required)
+                               gohash if impl == 'go' else proxy_digest(hook_files()), required)
     return {'state': 'stale' if changed else 'fresh', 'changed': changed, 'busy': busy(port)}
 
 
 def ensure(root, port, config, versions, timeout, required):
+    impl = go_impl()
+    if impl not in ('litellm', 'go'):
+        raise RuntimeError('CLAUDE_ENMAAS_PROXY_IMPL must be litellm or go (got %r)' % impl)
+    gobin = gohash = None
+    if impl == 'go':
+        gobin, gohash = go_binary()
+        versions = (gohash, 'go')
     info_root, info = locate(root, port)
     key = os.environ['ENMAAS_API_KEY']
     files = hook_files()
-    shim = dns_shim()
-    hooks = proxy_digest(files)
+    shim = dns_shim() if impl == 'litellm' else None
+    hooks = gohash if impl == 'go' else proxy_digest(files)
     if owned(info):
         if not ready(info, info_root):
             raise RuntimeError('recorded proxy is not ready; run claude-enmaas-kill before relaunching')
@@ -340,15 +387,22 @@ def ensure(root, port, config, versions, timeout, required):
             raise RuntimeError('proxy port is occupied; refusing to adopt or stop its listener')
     token = 'sk-enmaas-' + secrets.token_hex(32)
     config['general_settings']['master_key'] = token
-    if files:
-        config.setdefault('litellm_settings', {})['callbacks'] = install_hooks(root, files)
-    if shim:
-        install_shim(root, shim)
+    if impl == 'litellm':
+        if files:
+            config.setdefault('litellm_settings', {})['callbacks'] = install_hooks(root, files)
+        if shim:
+            install_shim(root, shim)
     write_private(root / 'config.json', config)
-    args = ['uv', 'tool', 'run', '--with', 'fastapi==' + versions[1],
-            '--from', 'litellm[proxy]==' + versions[0], 'litellm',
-            '--config', str(root / 'config.json'), '--host', '127.0.0.1', '--port', str(port),
-            '--telemetry', 'False']
+    if impl == 'go':
+        # The Go proxy reads the same generated config.json: model_list is its
+        # route table (dialect, api_base, #responses siblings), master_key its
+        # local token. Python hooks are not installed on this path.
+        args = [gobin, '--flavor', 'enmaas', '--config', str(root / 'config.json'), '--port', str(port)]
+    else:
+        args = ['uv', 'tool', 'run', '--with', 'fastapi==' + versions[1],
+                '--from', 'litellm[proxy]==' + versions[0], 'litellm',
+                '--config', str(root / 'config.json'), '--host', '127.0.0.1', '--port', str(port),
+                '--telemetry', 'False']
     env = {k: v for k, v in os.environ.items() if k in
            ('PATH', 'HOME', 'TMPDIR', 'UV_CACHE_DIR', 'UV_OFFLINE', 'XDG_CACHE_HOME', 'XDG_STATE_HOME', 'LANG', 'LC_ALL')
            or k.startswith(CHILD_ENV_PREFIXES)}

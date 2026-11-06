@@ -97,6 +97,10 @@ _hosted_only_proxy_vars() {
     _hop_legacy_runtimes=("$state/glm-hybrid-$1-$_hop_port" "$state/hosted-only-$1-$_hop_port")
     typeset -g _hop_base="http://127.0.0.1:$_hop_port"
     typeset -g _hop_token="$(_hosted_only_knob PROXY_TOKEN hosted-only-local)"
+    # PROXY_IMPL=go runs scripts/hosted-only-go (stdlib Go proxy) instead of
+    # litellm[proxy]. Same knobs, ports, token, fingerprint protocol and stop
+    # command; it reads the same merged config.yaml as its route table.
+    typeset -g _hop_impl="$(_hosted_only_knob PROXY_IMPL litellm)"
     typeset -g _hop_glm="$(_hosted_only_knob GLM_MODEL "${GLM_HYBRID_MODEL:-rits/zai-org/glm-5-3}")"
     typeset -g _hop_deepseek="$(_hosted_only_knob DEEPSEEK_MODEL rits/deepseek-ai/DeepSeek-V4.1-Flash-1017)"
     typeset -g _hop_vision_fallback="$(_hosted_only_knob VISION_FALLBACK 1)"
@@ -229,6 +233,59 @@ print(digest.hexdigest())
 PY
 }
 
+# _hosted_only_go_hash: sha256 over the Go module's sources.
+_hosted_only_go_hash() {
+    local src="$_HOSTED_ONLY_SCRIPTS/hosted-only-go"
+    [[ -d "$src" ]] || { print -ru2 -- "hosted-only: missing $src"; return 1; }
+    ( cd "$src" && cat go.mod *.go ) | shasum -a 256 | cut -d' ' -f1
+}
+
+# _hosted_only_go_bin: build (or reuse) the Go proxy binary in the state dir.
+# Rebuilt when any module source changes, so an edit takes effect like a hook
+# edit does on the LiteLLM path.
+_hosted_only_go_bin() {
+    local src="$_HOSTED_ONLY_SCRIPTS/hosted-only-go"
+    [[ -d "$src" ]] || { print -ru2 -- "hosted-only: missing $src"; return 1; }
+    command -v go >/dev/null || {
+        print -ru2 -- 'hosted-only: go not found (needed for HOSTED_ONLY_PROXY_IMPL=go).'
+        return 1
+    }
+    local out="${XDG_STATE_HOME:-$HOME/.local/state}/hosted-only-go"
+    local bin="$out/hosted-only-proxy" stamp="$out/source.sha" want
+    want=$(_hosted_only_go_hash) || return 1
+    if [[ ! -x "$bin" || "$(<"$stamp" 2>/dev/null)" != "$want" ]]; then
+        mkdir -p "$out" || return 1
+        ( cd "$src" && go build -trimpath -o "$bin" . ) || {
+            print -ru2 -- 'hosted-only: go build failed; see the error above.'
+            return 1
+        }
+        print -r -- "$want" >| "$stamp" || return 1
+    fi
+    print -r -- "$bin"
+}
+
+# _hosted_only_go_routes: JSON route table for the Go path, derived from the same
+# knobs as the merged YAML (which the Go binary does not parse). Bare groups are
+# anthropic, the dialect-suffixed groups are openai.
+_hosted_only_go_routes() {
+    local enmaas="$(_hosted_only_knob ENMAAS_BASE_URL "${ENMAAS_API_BASE_URL:-https://api.enmaas.devshift.net}")"
+    enmaas="${enmaas%/}"
+    enmaas="${enmaas%/v1}"
+    local -a rows
+    local m
+    for m in "$_hop_glm" "$_hop_deepseek"; do
+        rows+=("{\"model_name\":\"$m\",\"litellm_params\":{\"model\":\"anthropic/$m\",\"api_base\":\"$enmaas\"}}")
+        rows+=("{\"model_name\":\"$m$_hop_dialect\",\"litellm_params\":{\"model\":\"openai/$m\",\"api_base\":\"$enmaas/v1\"}}")
+    done
+    local a
+    for a in ${(s:,:)_hop_aliases}; do
+        [[ -n "$a" ]] || continue
+        rows+=("{\"model_name\":\"$a\",\"litellm_params\":{\"model\":\"anthropic/$_hop_glm\",\"api_base\":\"$enmaas\"}}")
+        [[ -n "$_hop_dialect" ]] && rows+=("{\"model_name\":\"$a$_hop_dialect\",\"litellm_params\":{\"model\":\"openai/$_hop_glm\",\"api_base\":\"$enmaas/v1\"}}")
+    done
+    print -r -- "{\"model_list\":[${(j:,:)rows}],\"general_settings\":{\"master_key\":\"os.environ/HOSTED_ONLY_PROXY_TOKEN\"}}"
+}
+
 # _hosted_only_busy <port>: 0 when the proxy is serving a client right now
 # (an ESTABLISHED socket whose local end is the port).
 _hosted_only_busy() {
@@ -245,21 +302,35 @@ _hosted_only_busy() {
 _hosted_only_proxy_ensure() {
     _hosted_only_proxy_vars "$1" || return 1
     local health="$_hop_base/health/liveliness"
-    local litellm_version="$(_hosted_only_knob LITELLM_VERSION 1.97.0)"
-    local fastapi_version="$(_hosted_only_knob FASTAPI_VERSION 0.136.3)"
-    local hooks="$_HOSTED_ONLY_SCRIPTS/hosted_only_hooks.py"
-    local usage_log="$_HOSTED_ONLY_SCRIPTS/litellm_usage_log.py"
+    local impl="$_hop_impl"
+    local litellm_version= fastapi_version= hooks= usage_log= gobin= gohash=
+    if [[ "$impl" == go ]]; then
+        gobin=$(_hosted_only_go_bin) || return 1
+        gohash=$(_hosted_only_go_hash) || return 1
+    elif [[ "$impl" == litellm ]]; then
+        litellm_version="$(_hosted_only_knob LITELLM_VERSION 1.97.0)"
+        fastapi_version="$(_hosted_only_knob FASTAPI_VERSION 0.136.3)"
+        hooks="$_HOSTED_ONLY_SCRIPTS/hosted_only_hooks.py"
+        usage_log="$_HOSTED_ONLY_SCRIPTS/litellm_usage_log.py"
+        command -v uv >/dev/null || { print -ru2 -- 'hosted-only: uv not found.'; return 1; }
+        [[ -r "$hooks" ]] || { print -ru2 -- "hosted-only: missing $hooks"; return 1; }
+        [[ -r "$usage_log" ]] || { print -ru2 -- "hosted-only: missing $usage_log"; return 1; }
+    else
+        print -ru2 -- "hosted-only: HOSTED_ONLY_PROXY_IMPL must be litellm or go (got '$impl')."
+        return 1
+    fi
     [[ -n "${ENMAAS_API_KEY-}" ]] || { print -ru2 -- 'hosted-only: ENMAAS_API_KEY is not set.'; return 1; }
-    command -v uv >/dev/null || { print -ru2 -- 'hosted-only: uv not found.'; return 1; }
-    [[ -r "$hooks" ]] || { print -ru2 -- "hosted-only: missing $hooks"; return 1; }
-    [[ -r "$usage_log" ]] || { print -ru2 -- "hosted-only: missing $usage_log"; return 1; }
 
     local config fp hooks_hash token_fp dns_hash='' dns_host=''
     config=$(_hosted_only_proxy_config)
-    hooks_hash=$(_hosted_only_code_hash "$hooks" "$usage_log") || return 1
+    if [[ "$impl" == go ]]; then
+        hooks_hash=$gohash
+    else
+        hooks_hash=$(_hosted_only_code_hash "$hooks" "$usage_log") || return 1
+    fi
     # DoH fallback for the gateway name only, same shim as the EnMaaS proxy;
     # HOSTED_ONLY_DNS_FALLBACK=0 drops it and changes the fingerprint.
-    if [[ "$(_hosted_only_knob DNS_FALLBACK 1)" != 0 ]]; then
+    if [[ "$impl" == litellm && "$(_hosted_only_knob DNS_FALLBACK 1)" != 0 ]]; then
         dns_hash=$(_hosted_only_code_hash "$_HOSTED_ONLY_SCRIPTS/dns_fallback.py") || return 1
         dns_host=$(_hosted_only_knob ENMAAS_BASE_URL "${ENMAAS_API_BASE_URL:-https://api.enmaas.devshift.net}")
         dns_host="${dns_host#*://}"
@@ -322,24 +393,39 @@ _hosted_only_proxy_ensure() {
         fi
         if (( start && ! result )); then
             print -r -- "$config" >| "$_hop_runtime/config.yaml" || return 1
-            cp -f "$hooks" "$_hop_runtime/hosted_only_hooks.py" || return 1
-            cp -f "$usage_log" "$_hop_runtime/litellm_usage_log.py" || return 1
-            local -a dns_env=()
-            if [[ -n "$dns_hash" ]]; then
-                cp -f "$_HOSTED_ONLY_SCRIPTS/dns_fallback.py" "$_hop_runtime/sitecustomize.py" || return 1
-                dns_env=(PYTHONPATH="$_hop_runtime" ENMAAS_DNS_FALLBACK_HOSTS="$dns_host")
-            fi
             rm -f "$_hop_runtime/fingerprint"
-            ENMAAS_API_KEY="$ENMAAS_API_KEY" HOSTED_ONLY_PROXY_TOKEN="$_hop_token" \
-                HOSTED_ONLY_GLM_MODEL="$_hop_glm" HOSTED_ONLY_DEEPSEEK_MODEL="$_hop_deepseek" HOSTED_ONLY_VISION_FALLBACK="$_hop_vision_fallback" \
-                HOSTED_ONLY_ALIAS_MODELS="$_hop_aliases" HOSTED_ONLY_OUTAGE_STATE="$_hop_runtime/outage-streak.json" \
-                HOSTED_ONLY_LIMIT_REWRITE="$_hop_limit_rewrite" HOSTED_ONLY_RATE_LIMIT_DEFAULT_RETRY_SECONDS="$_hop_limit_retry" HOSTED_ONLY_CLIENT_RETRY_MAX_SECONDS="$_hop_client_retry" LITELLM_LOG="$(_hosted_only_knob LITELLM_LOG ERROR)" \
-                HOSTED_ONLY_IMAGE_BUDGET_BYTES="$_hop_image_budget" HOSTED_ONLY_IMAGE_CACHE_DAYS="$_hop_image_cache_days" HOSTED_ONLY_DIALECT_SUFFIX="$_hop_dialect" \
-                HOSTED_ONLY_MAX_MODEL_LEN="$(_hosted_only_knob MAX_MODEL_LEN 1048576)" HOSTED_ONLY_OUTPUT_RESERVE="$(_hosted_only_knob OUTPUT_RESERVE 512)" HOSTED_ONLY_BYTES_PER_TOKEN="$(_hosted_only_knob BYTES_PER_TOKEN 3)" HOSTED_ONLY_MIN_OUTPUT="$(_hosted_only_knob MIN_OUTPUT 16000)" \
-                env "${dns_env[@]}" \
-                python3 "$_HOSTED_ONLY_SCRIPTS/claude-provider.py" --background "$_hop_runtime/proxy.log" \
-                uv tool run --with "fastapi==$fastapi_version" --from "litellm[proxy]==$litellm_version" litellm \
-                --config "$_hop_runtime/config.yaml" --host 127.0.0.1 --port "$_hop_port" --telemetry False || return 1
+            if [[ "$impl" == go ]]; then
+                # The binary reads a JSON route table derived from the same
+                # knobs (bare = anthropic, suffix = openai/Responses).
+                _hosted_only_go_routes >| "$_hop_runtime/routes.json" || return 1
+                ENMAAS_API_KEY="$ENMAAS_API_KEY" HOSTED_ONLY_PROXY_TOKEN="$_hop_token" \
+                    HOSTED_ONLY_GLM_MODEL="$_hop_glm" HOSTED_ONLY_DEEPSEEK_MODEL="$_hop_deepseek" HOSTED_ONLY_VISION_FALLBACK="$_hop_vision_fallback" \
+                    HOSTED_ONLY_ALIAS_MODELS="$_hop_aliases" HOSTED_ONLY_FALLBACK="$(_hosted_only_knob FALLBACK 1)" \
+                    HOSTED_ONLY_OUTAGE_REWRITE="$(_hosted_only_knob OUTAGE_REWRITE 1)" \
+                    HOSTED_ONLY_LIMIT_REWRITE="$_hop_limit_rewrite" HOSTED_ONLY_RATE_LIMIT_DEFAULT_RETRY_SECONDS="$_hop_limit_retry" HOSTED_ONLY_CLIENT_RETRY_MAX_SECONDS="$_hop_client_retry" \
+                    HOSTED_ONLY_MAX_MODEL_LEN="$(_hosted_only_knob MAX_MODEL_LEN 1048576)" HOSTED_ONLY_OUTPUT_RESERVE="$(_hosted_only_knob OUTPUT_RESERVE 512)" HOSTED_ONLY_BYTES_PER_TOKEN="$(_hosted_only_knob BYTES_PER_TOKEN 3)" HOSTED_ONLY_MIN_OUTPUT="$(_hosted_only_knob MIN_OUTPUT 16000)" \
+                    HOSTED_ONLY_REQUEST_TIMEOUT="$_hop_request_timeout" HOSTED_ONLY_SEARCH_NUDGE="$(_hosted_only_knob SEARCH_NUDGE 1)" HOSTED_ONLY_DIALECT_SUFFIX="$_hop_dialect" \
+                    python3 "$_HOSTED_ONLY_SCRIPTS/claude-provider.py" --background "$_hop_runtime/proxy.log" \
+                    "$gobin" --flavor "$_hop_flavor" --config "$_hop_runtime/routes.json" --port "$_hop_port" --runtime-dir "$_hop_runtime" || return 1
+            else
+                cp -f "$hooks" "$_hop_runtime/hosted_only_hooks.py" || return 1
+                cp -f "$usage_log" "$_hop_runtime/litellm_usage_log.py" || return 1
+                local -a dns_env=()
+                if [[ -n "$dns_hash" ]]; then
+                    cp -f "$_HOSTED_ONLY_SCRIPTS/dns_fallback.py" "$_hop_runtime/sitecustomize.py" || return 1
+                    dns_env=(PYTHONPATH="$_hop_runtime" ENMAAS_DNS_FALLBACK_HOSTS="$dns_host")
+                fi
+                ENMAAS_API_KEY="$ENMAAS_API_KEY" HOSTED_ONLY_PROXY_TOKEN="$_hop_token" \
+                    HOSTED_ONLY_GLM_MODEL="$_hop_glm" HOSTED_ONLY_DEEPSEEK_MODEL="$_hop_deepseek" HOSTED_ONLY_VISION_FALLBACK="$_hop_vision_fallback" \
+                    HOSTED_ONLY_ALIAS_MODELS="$_hop_aliases" HOSTED_ONLY_OUTAGE_STATE="$_hop_runtime/outage-streak.json" \
+                    HOSTED_ONLY_LIMIT_REWRITE="$_hop_limit_rewrite" HOSTED_ONLY_RATE_LIMIT_DEFAULT_RETRY_SECONDS="$_hop_limit_retry" HOSTED_ONLY_CLIENT_RETRY_MAX_SECONDS="$_hop_client_retry" LITELLM_LOG="$(_hosted_only_knob LITELLM_LOG ERROR)" \
+                    HOSTED_ONLY_IMAGE_BUDGET_BYTES="$_hop_image_budget" HOSTED_ONLY_IMAGE_CACHE_DAYS="$_hop_image_cache_days" HOSTED_ONLY_DIALECT_SUFFIX="$_hop_dialect" \
+                    HOSTED_ONLY_MAX_MODEL_LEN="$(_hosted_only_knob MAX_MODEL_LEN 1048576)" HOSTED_ONLY_OUTPUT_RESERVE="$(_hosted_only_knob OUTPUT_RESERVE 512)" HOSTED_ONLY_BYTES_PER_TOKEN="$(_hosted_only_knob BYTES_PER_TOKEN 3)" HOSTED_ONLY_MIN_OUTPUT="$(_hosted_only_knob MIN_OUTPUT 16000)" \
+                    env "${dns_env[@]}" \
+                    python3 "$_HOSTED_ONLY_SCRIPTS/claude-provider.py" --background "$_hop_runtime/proxy.log" \
+                    uv tool run --with "fastapi==$fastapi_version" --from "litellm[proxy]==$litellm_version" litellm \
+                    --config "$_hop_runtime/config.yaml" --host 127.0.0.1 --port "$_hop_port" --telemetry False || return 1
+            fi
             # Boot wait: one dot per second so the (potentially minutes-long)
             # uv/litellm startup is visible progress, not a blank terminal.
             local i boot_max="${LLM_PROXY_SYNC_UP_TIMEOUT:-180}"
@@ -395,6 +481,7 @@ _hosted_only_proxy_stop() {
     for pid in ${(f)"$(lsof -ti "tcp:$_hop_port" -sTCP:LISTEN 2>/dev/null)"}; do
         cmd="$(ps -o command= -p "$pid" 2>/dev/null)"
         if [[ "$cmd" == *"$_hop_runtime/config.yaml"* ]] \
+            || [[ "$cmd" == *"$_hop_runtime/routes.json"* ]] \
             || [[ "$cmd" == *"hosted-only-claude-$_hop_port/config.yaml"* ]] \
             || [[ "$cmd" == *"hosted-only-codex-$_hop_port/config.yaml"* ]] \
             || [[ "$cmd" == *"glm-hybrid-claude-$_hop_port/config.yaml"* ]] \
