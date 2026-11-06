@@ -2298,9 +2298,7 @@ final class AppController: NSObject, NSMenuDelegate, NSWindowDelegate {
         // the throttle expired: poll right away so the title returns to normal
         let th = d["throttled"]
         if th.exists, let reset = parseISO(th["reset_at"].str), reset <= c.now { poll() }
-        // a request is in flight: poll every tick so a completion reaches the
-        // needle within ~5 s instead of the 30 s background cadence
-        if (d["inflight"]["count"].int ?? 0) > 0 { poll() }
+
     }
 
     // The menu-bar image is rebuilt every 5 s tick and every poll; most of those
