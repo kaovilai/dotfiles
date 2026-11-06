@@ -141,7 +141,8 @@ func (a *app) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	stream := asBool(data["stream"]) || strings.Contains(r.Header.Get("Accept"), "text/event-stream")
 	resp, transportErr := a.upstream(r, outBody, upstreamBase, upstreamPath, stream)
 	usedFallback := false
-	if fallback != "" && a.shouldFailover(resp, transportErr) {
+	if fallback != "" && a.shouldFailover(resp, transportErr) &&
+		(a.cfg.Routes == nil || a.cfg.Routes.known(fallback, r.URL.Path)) {
 		if resp != nil {
 			_, _ = io.Copy(io.Discard, resp.Body)
 			resp.Body.Close()

@@ -85,6 +85,13 @@ func floatKnob(name string, def float64) float64 {
 	return v
 }
 
+func dialectSuffixFor(flavor string) string {
+	if flavor == "enmaas" {
+		return knob("DIALECT_SUFFIX", "")
+	}
+	return knob("DIALECT_SUFFIX", "#openai")
+}
+
 func loadConfig(flavor, port, runtimeDir string) *config {
 	base := knob("ENMAAS_BASE_URL", strings.TrimSpace(os.Getenv("ENMAAS_API_BASE_URL")))
 	if base == "" {

@@ -107,12 +107,24 @@ for i in {1..50}; do
 done
 
 # --- start the Go proxy directly --------------------------------------------
-local rtdir="$tmp/state/hosted-only-claude-$pport"
+local rtdir="$tmp/state/hosted-only-$pport"
+mkdir -p "$rtdir"
+local hcfg="$rtdir/routes.json"
+cat >| "$hcfg" <<JSON
+{"model_list":[
+ {"model_name":"rits/zai-org/glm-5-3","litellm_params":{"model":"anthropic/rits/zai-org/glm-5-3","api_base":"http://127.0.0.1:$stub_port"}},
+ {"model_name":"rits/zai-org/glm-5-3#openai","litellm_params":{"model":"openai/rits/zai-org/glm-5-3","api_base":"http://127.0.0.1:$stub_port/v1"}},
+ {"model_name":"rits/deepseek-ai/DeepSeek-V4.1-Flash-1017","litellm_params":{"model":"anthropic/rits/deepseek-ai/DeepSeek-V4.1-Flash-1017","api_base":"http://127.0.0.1:$stub_port"}},
+ {"model_name":"rits/deepseek-ai/DeepSeek-V4.1-Flash-1017#openai","litellm_params":{"model":"openai/rits/deepseek-ai/DeepSeek-V4.1-Flash-1017","api_base":"http://127.0.0.1:$stub_port/v1"}},
+ {"model_name":"claude-sonnet-5-5","litellm_params":{"model":"anthropic/rits/zai-org/glm-5-3","api_base":"http://127.0.0.1:$stub_port"}},
+ {"model_name":"claude-sonnet-5-5#openai","litellm_params":{"model":"openai/rits/zai-org/glm-5-3","api_base":"http://127.0.0.1:$stub_port/v1"}}
+],"general_settings":{"master_key":"os.environ/HOSTED_ONLY_PROXY_TOKEN"}}
+JSON
 env ENMAAS_API_KEY=test-key HOSTED_ONLY_PROXY_TOKEN=test-token \
     HOSTED_ONLY_ENMAAS_BASE_URL="http://127.0.0.1:$stub_port" \
     HOSTED_ONLY_ALIAS_MODELS=claude-sonnet-5-5 \
     LLM_USAGE_DIR="$tmp/usage" \
-    "$bin" --flavor claude --port "$pport" --runtime-dir "$rtdir" >"$tmp/proxy.log" 2>&1 &
+    "$bin" --flavor claude --config "$hcfg" --port "$pport" --runtime-dir "$rtdir" >"$tmp/proxy.log" 2>&1 &
 proxy=$!
 for i in {1..50}; do
     curl -sf --max-time 1 "http://127.0.0.1:$pport/health/liveliness" -o /dev/null && break

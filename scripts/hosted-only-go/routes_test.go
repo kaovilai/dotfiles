@@ -24,7 +24,7 @@ func testRoutes(t *testing.T) *routeTable {
 	if err := os.WriteFile(path, []byte(enmaasTestConfig), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	table, err := loadRouteTable(path)
+	table, err := loadRouteTable(path, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -74,6 +74,49 @@ func TestRouteToken(t *testing.T) {
 	}
 	if len(table.modelNames()) != 4 {
 		t.Fatalf("model names = %v", table.modelNames())
+	}
+}
+
+func TestMergeDialectSuffix(t *testing.T) {
+	cfg := `{"model_list":[
+	 {"model_name":"rits/zai-org/glm-5-3","litellm_params":{"model":"anthropic/rits/zai-org/glm-5-3","api_base":"https://gw"}},
+	 {"model_name":"rits/zai-org/glm-5-3#openai","litellm_params":{"model":"openai/rits/zai-org/glm-5-3","api_base":"https://gw/v1"}},
+	 {"model_name":"claude-sonnet-5-5","litellm_params":{"model":"anthropic/rits/zai-org/glm-5-3","api_base":"https://gw"}}
+	],"general_settings":{"master_key":"os.environ/HOSTED_ONLY_PROXY_TOKEN"}}`
+	path := filepath.Join(t.TempDir(), "merged.json")
+	if err := os.WriteFile(path, []byte(cfg), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	table, err := loadRouteTable(path, "#openai")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// /v1/messages: the bare anthropic group.
+	entry, upstream, up := table.resolve("rits/zai-org/glm-5-3", "/v1/messages")
+	if entry.Dialect != "anthropic" || upstream != "rits/zai-org/glm-5-3" || up != "/v1/messages" {
+		t.Fatalf("messages route = %#v %q %q", entry, upstream, up)
+	}
+	// OpenAI-wire: the #openai sibling, on the deployment's own path.
+	entry, _, up = table.resolve("rits/zai-org/glm-5-3", "/v1/chat/completions")
+	if entry.Dialect != "openai" || entry.Base != "https://gw/v1" || up != "/v1/chat/completions" {
+		t.Fatalf("chat route = %#v %q", entry, up)
+	}
+	entry, _, up = table.resolve("rits/zai-org/glm-5-3", "/v1/responses")
+	if entry.Dialect != "openai" || up != "/v1/responses" {
+		t.Fatalf("responses route = %#v %q", entry, up)
+	}
+	// The alias is served by GLM on the Messages dialect.
+	entry, upstream, _ = table.resolve("claude-sonnet-5-5", "/v1/messages")
+	if entry.Dialect != "anthropic" || upstream != "rits/zai-org/glm-5-3" {
+		t.Fatalf("alias route = %#v %q", entry, upstream)
+	}
+	// The cost guard: an unserved id is unknown on both endpoints, and the
+	// literal os.environ/ token is visible to the caller (main.go ignores it).
+	if table.known("gpt-6-luna", "/v1/messages") || table.known("gpt-6-luna", "/v1/chat/completions") {
+		t.Fatal("an unregistered model must not be known")
+	}
+	if table.token != "os.environ/HOSTED_ONLY_PROXY_TOKEN" {
+		t.Fatalf("token parsed unexpectedly: %q", table.token)
 	}
 }
 

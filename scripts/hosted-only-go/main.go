@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 )
@@ -42,13 +43,15 @@ func main() {
 
 	cfg := loadConfig(*flavor, *port, *runtimeDir)
 	if *configPath != "" {
-		routes, err := loadRouteTable(*configPath)
+		routes, err := loadRouteTable(*configPath, dialectSuffixFor(*flavor))
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "hosted-only-go: %s: %v\n", *configPath, err)
 			os.Exit(1)
 		}
 		cfg.Routes = routes
-		if routes.token != "" {
+		// The hosted config's master_key is the literal os.environ/... token
+		// reference; only take a real token from the file.
+		if routes.token != "" && !strings.HasPrefix(routes.token, "os.environ/") {
 			cfg.Token = routes.token
 		}
 	}

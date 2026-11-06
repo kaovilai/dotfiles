@@ -22,6 +22,7 @@ type routeTable struct {
 	entries  map[string]routeEntry
 	wildcard *routeEntry
 	token    string
+	suffix   string
 	names    []string
 }
 
@@ -35,7 +36,7 @@ type rawConfig struct {
 	} `json:"general_settings"`
 }
 
-func loadRouteTable(path string) (*routeTable, error) {
+func loadRouteTable(path, suffix string) (*routeTable, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
@@ -47,7 +48,7 @@ func loadRouteTable(path string) (*routeTable, error) {
 	if len(raw.ModelList) == 0 {
 		return nil, errors.New("config has no model_list")
 	}
-	table := &routeTable{entries: map[string]routeEntry{}}
+	table := &routeTable{entries: map[string]routeEntry{}, suffix: suffix}
 	for _, row := range raw.ModelList {
 		if row.ModelName == "" {
 			continue
@@ -97,19 +98,24 @@ func dialectOf(params map[string]any) string {
 	return "openai"
 }
 
-// resolve picks the deployment for a client model id and endpoint. It mirrors
-// enmaas_proxy_hooks.route_model: on /v1/responses a model with a "<id>#responses"
-// sibling is served by that sibling (the native Responses passthrough), and an
-// unknown id falls back to the wildcard chat route.
+// resolve picks the deployment for a client model id and endpoint. OpenAI-wire
+// endpoints use the "<id><suffix>" group when the config has one (hosted-only's
+// merged #openai deployments); /v1/responses also accepts a "<id>#responses"
+// sibling (EnMaaS); an unknown id falls back to the wildcard chat route.
 func (t *routeTable) resolve(model, clientPath string) (routeEntry, string, string) {
-	isResponses := strings.Contains(clientPath, "/v1/responses")
-	if isResponses {
-		if entry, ok := t.entries[model+"#responses"]; ok {
-			upstream := entry.UpstreamModel
-			if upstream == "*" {
-				upstream = model
+	isMessages := strings.Contains(clientPath, "/v1/messages")
+	if !isMessages {
+		for _, suffix := range []string{t.suffix, "#responses"} {
+			if suffix == "" {
+				continue
 			}
-			return entry, upstream, "/v1/responses"
+			if entry, ok := t.entries[model+suffix]; ok {
+				upstream := entry.UpstreamModel
+				if upstream == "*" {
+					upstream = model
+				}
+				return entry, upstream, defaultUpstreamPath(clientPath, entry.Dialect)
+			}
 		}
 	}
 	entry, ok := t.entries[model]
@@ -143,16 +149,25 @@ func (t *routeTable) modelNames() []string {
 	return t.names
 }
 
-// known reports whether this id is served: an exact deployment, a #responses
-// sibling on that endpoint, or the wildcard route.
+// known reports whether this id is served on this endpoint: the bare group on
+// /v1/messages, the suffixed group (or a #responses sibling) on OpenAI-wire
+// endpoints, or the wildcard route.
 func (t *routeTable) known(model, clientPath string) bool {
-	if _, ok := t.entries[model]; ok {
-		return true
-	}
-	if strings.Contains(clientPath, "/v1/responses") {
-		if _, ok := t.entries[model+"#responses"]; ok {
+	if strings.Contains(clientPath, "/v1/messages") {
+		if _, ok := t.entries[model]; ok {
 			return true
 		}
+		return t.wildcard != nil
+	}
+	if t.suffix != "" {
+		if _, ok := t.entries[model+t.suffix]; ok {
+			return true
+		}
+	} else if _, ok := t.entries[model]; ok {
+		return true
+	}
+	if _, ok := t.entries[model+"#responses"]; ok {
+		return true
 	}
 	return t.wildcard != nil
 }

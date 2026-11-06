@@ -4,22 +4,22 @@
 `CLAUDE_ENMAAS_PROXY_IMPL=go`) swaps each `litellm[proxy]` process for the
 stdlib-only Go binary in `scripts/hosted-only-go`. LiteLLM stays the default.
 
-It serves all three current flavors from one binary:
+It serves both current proxies from one binary:
 
 | flavor | port | config source |
 |---|---|---|
+| `claude` / `codex` (hosted-only) | 4148, one shared process (4147 only when `HOSTED_ONLY_CODEX_PROXY_PORT` splits it off) | the merged `config.yaml`: bare groups = anthropic, `#openai` groups = OpenAI-wire |
 | `enmaas` | 4146 | the launcher's generated `config.json`, read as a route table |
-| `codex` (hosted-only) | 4147 | `HOSTED_ONLY_*` env knobs |
-| `claude` (hosted-only) | 4148 | `HOSTED_ONLY_*` env knobs |
 
 ## Why
 
 The proxies are local, single-upstream protocol shims, but each one paid for a
 full AI gateway: measured on this repo's machines, `import litellm` costs
 ~268 MB and `import litellm` + FastAPI/uvicorn ~377 MB before serving a
-request, per flavor, inside a `uv tool` environment. Three proxies (enmaas +
-Claude + Codex) meant ~900 MB and three slow cold starts. The Go binary is
-~10 MB and starts in milliseconds.
+request, per flavor, inside a `uv tool` environment. Before #599 that was three
+processes (enmaas + Claude + Codex), ~900 MB and three slow cold starts; today
+it is two (enmaas :4146, merged hosted-only :4148). The Go binary is ~10 MB and
+starts in milliseconds.
 
 ## Enabling
 
@@ -43,12 +43,14 @@ commands are unchanged.
 
 Ports are load-bearing even with one binary:
 
-- **Policy boundary.** :4146 serves the whole discovered EnMaaS catalog; :4147/
-  :4148 serve only GLM, DeepSeek and the Claude alias. That allowlist is the
-  hosted-only cost guard — one port for everything would make it token-only.
+- **Policy boundary.** :4146 serves the whole discovered EnMaaS catalog; the
+  hosted-only proxy serves only the merged groups in its own config (GLM,
+  DeepSeek, the Claude alias — no wildcard). That allowlist is the hosted-only
+  cost guard.
 - **Client configuration.** Each launcher points Claude Code at
   `ANTHROPIC_BASE_URL` and Codex at its provider `base_url`; the port *is* the
-  mode selector.
+  mode selector. The two hosted-only clients already share :4148 (main's #599
+  merge); EnMaaS stays on :4146 because it is a different catalog and policy.
 - **Usage attribution.** `llm-usage`, the menubar and
   `inflight-<port>-<pid>.json` key providers by port (`PROVIDER_PORTS`).
 
@@ -56,6 +58,18 @@ The **process count** is not a boundary: the same binary serves any flavor on
 its own port, and one build can run per flavor. Collapsing to one multi-listener
 process would change lifecycle semantics (per-flavor stop/restart, the "never
 restart under a live session" rule) for a few MB; it is not done here.
+
+## Hosted-only flavor (merged config)
+
+After #599 the launcher generates one `model_list` with both dialects of both
+models: bare groups carry `anthropic/<id>` (Messages at the gateway root) and
+`<id>#openai` groups carry `openai/<id>` (chat/Responses at `/v1`). The launcher
+derives an equivalent `routes.json` from the same knobs (the Go binary does not
+parse YAML) and the proxy picks the group by endpoint — bare on `/v1/messages`,
+the `#openai` sibling on OpenAI-wire paths — so one process serves both clients,
+exactly like the merged LiteLLM. Tokens, the shared runtime dir, the fingerprint
+and the stop helper are unchanged; the cost guard is the absence of a wildcard
+in that table, and an id outside it answers 400.
 
 ## EnMaaS flavor
 
