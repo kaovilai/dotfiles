@@ -5,6 +5,12 @@
 //
 // It is opt-in: set HOSTED_ONLY_PROXY_IMPL=go. Everything else (knobs, state
 // dir, stop/restart commands, fingerprint) behaves like the LiteLLM path.
+//
+// Subcommands (used by the launcher's Go path): `ensure` starts or restarts
+// the proxy to a launcher-computed fingerprint, `stop` retires a listener by
+// identity, `status` reports health/busy/fingerprint, and `watch` restarts at
+// the first idle moment (the Go impl's llm-proxy-watch). With no subcommand
+// the binary serves, as before.
 package main
 
 import (
@@ -20,6 +26,25 @@ import (
 )
 
 func main() {
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case "ensure":
+			os.Exit(runEnsure(os.Args[2:]))
+		case "stop":
+			os.Exit(runStop(os.Args[2:]))
+		case "status":
+			os.Exit(runStatus(os.Args[2:]))
+		case "watch":
+			os.Exit(runWatch(os.Args[2:]))
+		case "serve":
+			rest := append([]string{os.Args[0]}, os.Args[2:]...)
+			os.Args = rest
+		}
+	}
+	runServe()
+}
+
+func runServe() {
 	flavor := flag.String("flavor", os.Getenv("HOSTED_ONLY_FLAVOR"), "client flavor: claude, codex or enmaas")
 	port := flag.String("port", "", "listen port (default 4147 codex / 4148 claude / 4146 enmaas)")
 	runtimeDir := flag.String("runtime-dir", "", "state directory (named in the process command line so the stop helper can find it)")
@@ -31,14 +56,7 @@ func main() {
 		os.Exit(2)
 	}
 	if *port == "" {
-		switch *flavor {
-		case "codex":
-			*port = "4147"
-		case "claude":
-			*port = "4148"
-		default:
-			*port = "4146"
-		}
+		*port = defaultPort(*flavor)
 	}
 
 	cfg := loadConfig(*flavor, *port, *runtimeDir)
@@ -65,9 +83,12 @@ func main() {
 	}
 
 	server := &http.Server{
-		Addr:              "127.0.0.1:" + cfg.Port,
 		Handler:           newApp(cfg),
 		ReadHeaderTimeout: 10 * time.Second,
+	}
+	listener, err := reusePortListener("127.0.0.1:" + cfg.Port)
+	if err != nil {
+		log.Fatalf("hosted-only-go: %v", err)
 	}
 
 	go func() {
@@ -79,7 +100,7 @@ func main() {
 
 	log.Printf("hosted-only-go: %s flavor, 127.0.0.1:%s -> %s, upstream retries off, limit rewrite=%t, fallback=%t",
 		cfg.Flavor, cfg.Port, cfg.BaseURL, cfg.LimitRewrite, cfg.FallbackOn)
-	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+	if err := server.Serve(listener); err != nil && err != http.ErrServerClosed {
 		log.Fatalf("hosted-only-go: %v", err)
 	}
 }

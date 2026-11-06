@@ -62,6 +62,7 @@ HOSTED_ONLY_UPSTREAM_RETRIES=5 _hosted_only_proxy_vars codex
 _hosted_only_proxy_vars codex
 [[ "$_hop_upstream_retries" == 0 ]] || fail "upstream retries default: $_hop_upstream_retries"
 [[ "$(<"$repo/scripts/hosted-only-proxy.zsh")" == *'$_hop_client_retry $_hop_upstream_retries $_hop_fallback $_hop_aliases $_hop_request_timeout $_hop_image_budget $_hop_image_cache_days $_hop_dialect"'* ]] || fail "upstream retries / fallback / alias / timeout / image knobs not in fingerprint"
+[[ "$(<"$repo/scripts/hosted-only-proxy.zsh")" == *'local knobs="$(_hosted_only_knob OUTAGE_COALESCE_SECONDS 5) $litellm_version'* ]] || fail "outage coalesce knob not in fingerprint"
 # fallback + outage knobs are one fingerprint component: a change restarts an idle proxy
 [[ "$_hop_fallback" == "1 1 60 600 1048576 512 3 16000" ]] || fail "fallback knob defaults: $_hop_fallback"
 HOSTED_ONLY_FALLBACK=0 HOSTED_ONLY_MAX_MODEL_LEN=999999 _hosted_only_proxy_vars codex

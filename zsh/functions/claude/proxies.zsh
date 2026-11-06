@@ -486,6 +486,23 @@ llm-proxy-sync() {
             if (( dry )); then
                 print -ru2 -- "== $t (:${port[$t]}) $why; serving a request, would start a watcher that restarts it when idle"
             elif _llm_proxy_watch_alive "$t"; then
+                # A Go watcher bakes its target fingerprint at start (the zsh
+                # loop recomputed it at the idle moment). When a newer sync
+                # arrives, replace the live watcher so the idle restart applies
+                # THIS config instead of reverting to the one it was started
+                # with; a mismatched or dead pid falls back to keeping it.
+                if [[ "$t" == glm-claude || "$t" == glm-codex ]] && [[ "$(_hosted_only_knob PROXY_IMPL litellm)" == go ]]; then
+                    local wpid wargs
+                    wpid="$(<"$dir/watch-$t.pid" 2>/dev/null)"
+                    wargs="$(ps -p "$wpid" -o args= 2>/dev/null)"
+                    if [[ "$wpid" == <-> && "$wargs" == *hosted-only-proxy*watch* ]] && kill "$wpid" 2>/dev/null; then
+                        _llm_proxy_watch_log "$t" "replaced by a newer sync with the current config"
+                        if _llm_proxy_watch_start "$t"; then
+                            print -ru2 -- "== $t (:${port[$t]}) $why; serving a request, watcher replaced with the current config (log: $dir/watch-$t.log)"
+                            continue
+                        fi
+                    fi
+                fi
                 print -ru2 -- "== $t (:${port[$t]}) $why; serving a request, a watcher is already waiting for an idle moment (log: $(_llm_proxy_watch_dir)/watch-$t.log)"
             elif _llm_proxy_watch_start "$t"; then
                 print -ru2 -- "== $t (:${port[$t]}) $why; serving a request, watcher started: restarts it at the first idle moment (log: $(_llm_proxy_watch_dir)/watch-$t.log)"
@@ -528,13 +545,15 @@ _llm_proxy_now() { zmodload zsh/datetime 2>/dev/null; print -r -- "$EPOCHSECONDS
 _llm_proxy_watch_pause() { sleep 2; }
 
 # _llm_proxy_watch_alive <name>: true while a watcher for <name> runs. The pid
-# must also still be an llm-proxy-watch process, so a recycled pid does not count.
+# must also still be a watcher process (the zsh loop or the Go binary's watch
+# subcommand), so a recycled pid does not count.
 _llm_proxy_watch_alive() {
-    local pid file="$(_llm_proxy_watch_dir)/watch-$1.pid"
+    local pid args file="$(_llm_proxy_watch_dir)/watch-$1.pid"
     [[ -r "$file" ]] || return 1
     pid=$(<"$file")
+    args="$(ps -p "$pid" -o args= 2>/dev/null)"
     [[ "$pid" == <-> ]] && kill -0 "$pid" 2>/dev/null \
-        && [[ "$(ps -p "$pid" -o args= 2>/dev/null)" == *llm-proxy-watch* ]]
+        && [[ "$args" == *llm-proxy-watch* || "$args" == *hosted-only-proxy*watch* ]]
 }
 
 # _llm_proxy_watch_log <name> <message...>: timestamped line in the watcher log,
@@ -583,6 +602,27 @@ llm-proxy-watch() {
     local dir pidfile
     dir=$(_llm_proxy_watch_dir)
     mkdir -p "$dir" || return 1
+    # Go impl (hosted-only flavors): hand the whole wait-and-restart loop to
+    # the proxy binary — one static process, inflight-file idle detection with
+    # no per-poll lsof/jq spawns, no zsh to keep alive in bare systemd
+    # environments. The fingerprint is computed here so the watcher restarts
+    # to the code fleet-sync just pulled; the binary owns the pid/log files.
+    if [[ "$t" == glm-claude || "$t" == glm-codex ]] && [[ "$(_hosted_only_knob PROXY_IMPL litellm)" == go ]]; then
+        local flavor=claude gobin fp_line
+        [[ "$t" == glm-codex ]] && flavor=codex
+        _hosted_only_proxy_vars "$flavor" || return 1
+        gobin=$(_hosted_only_go_bin) || { _llm_proxy_watch_log "$t" "go proxy binary build failed"; return 1; }
+        fp_line=$(_hosted_only_proxy_fp) || { _llm_proxy_watch_log "$t" "fingerprint computation failed"; return 1; }
+        _hosted_only_proxy_fp_load "$fp_line"
+        _hosted_only_go_env
+        local -a legacy=()
+        local d
+        for d in $_hop_legacy_runtimes; legacy+=(--legacy-runtime "$d")
+        exec env "${_hop_go_env[@]}" "$gobin" watch \
+            --flavor "$flavor" --port "$_hop_port" --runtime-dir "$_hop_runtime" \
+            --fingerprint "$_hop_fp" --token-fp "$_hop_token_fp" \
+            --name "$t" --state-dir "$dir" "${legacy[@]}"
+    fi
     pidfile="$dir/watch-$t.pid"
     if _llm_proxy_watch_alive "$t" && [[ "$(<"$pidfile")" != "$$" ]]; then
         _llm_proxy_watch_log "$t" "another watcher is already waiting; this one exits"

@@ -1,4 +1,15 @@
 # Loaded by the bridge with /bin/zsh -f -c, with protocol arguments untouched.
+# CLAUDE_PROVIDER_CAPTURE_SCRIPT is pre-set to the running bridge when it is
+# the Go binary (the bridge exports its own path); the Python file is the
+# default. _claude_provider_call runs either shape.
+_claude_provider_call() {
+    if [[ "$CLAUDE_PROVIDER_CAPTURE_SCRIPT" == *.py ]]; then
+        python3 "$CLAUDE_PROVIDER_CAPTURE_SCRIPT" "$@"
+    else
+        "$CLAUDE_PROVIDER_CAPTURE_SCRIPT" "$@"
+    fi
+}
+
 claude-provider-prepare() {
     emulate -L zsh
     unsetopt xtrace verbose monitor
@@ -23,7 +34,7 @@ claude-provider-prepare() {
     path=(/opt/homebrew/bin /usr/local/bin "$HOME/.bun/bin" $path)
     source "$root/zsh/functions/claude/load.zsh"
     export CLAUDE_PROVIDER_NO_RESTART=1
-    export CLAUDE_PROVIDER_CAPTURE_SCRIPT="$root/scripts/claude-provider.py"
+    [[ -n "${CLAUDE_PROVIDER_CAPTURE_SCRIPT:-}" ]] || export CLAUDE_PROVIDER_CAPTURE_SCRIPT="$root/scripts/claude-provider.py"
     export CLAUDE_PROVIDER_PROFILE="$profile"
     unset ANTHROPIC_API_KEY
     # Preserve T3's config directory even if the credential source sets one.
@@ -36,11 +47,11 @@ claude-provider-prepare() {
         _claude_endpoint_guard
         local arg
         for arg in "$@"; do print -rn -- "$arg"$'\0'; done |
-            python3 "$CLAUDE_PROVIDER_CAPTURE_SCRIPT" --capture "$CLAUDE_PROVIDER_PROFILE"
+            _claude_provider_call --capture "$CLAUDE_PROVIDER_PROFILE"
     }
     # Shared proxies must outlive cancellation of this preparation subprocess.
     _claude_proxy_start() {
-        python3 "$CLAUDE_PROVIDER_CAPTURE_SCRIPT" --background "$@"
+        _claude_provider_call --background "$@"
     }
     # A warm Vertex proxy already has its configured tier inventory. Reuse it
     # instead of letting a temporarily unavailable Model Garden catalog select
@@ -77,13 +88,13 @@ claude-provider-prepare() {
         _claude_enmaas_discover() {
             local identity catalog
             identity=$(_claude_proxy_fp "$@")
-            if catalog=$(python3 "$CLAUDE_PROVIDER_CAPTURE_SCRIPT" --catalog-read "$identity"); then
+            if catalog=$(_claude_provider_call --catalog-read "$identity"); then
                 print -r -- "$catalog"
                 return 0
             fi
             catalog=$(_claude_provider_enmaas_discover "$@") || return $?
             print -rn -- "$catalog" |
-                python3 "$CLAUDE_PROVIDER_CAPTURE_SCRIPT" --catalog-write "$identity" || return 1
+                _claude_provider_call --catalog-write "$identity" || return 1
             print -r -- "$catalog"
         }
     fi
