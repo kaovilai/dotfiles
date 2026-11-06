@@ -290,7 +290,9 @@ def stop(root, info, port=None):
     # Only the process group started and recorded by this controller, never a
     # PID discovered by its port. Verify birth time again before escalation.
     os.killpg(info['pid'], signal.SIGTERM)
-    deadline = time.monotonic() + 8
+    # Longer than the Go proxy's 10 s graceful drain, so a SIGTERMed proxy
+    # finishes its in-flight requests before this escalates to SIGKILL.
+    deadline = time.monotonic() + 15
     while time.monotonic() < deadline and owned(info):
         time.sleep(.1)
     if owned(info):
@@ -478,7 +480,8 @@ def ensure(root, port, config, versions, timeout, required):
                 os.killpg(swap_info['pid'], signal.SIGTERM)
             except ProcessLookupError:
                 pass
-            until = time.monotonic() + 8
+            # wait out the Go proxy's 10 s graceful drain before escalating
+            until = time.monotonic() + 15
             while time.monotonic() < until and owned(swap_info):
                 time.sleep(.05)
             if owned(swap_info):

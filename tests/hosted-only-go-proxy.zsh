@@ -68,6 +68,25 @@ bin=$(_hosted_only_go_bin) || fail "go build failed"
 [[ -x "$bin" ]] || fail "no binary at $bin"
 [[ "$bin" == "$tmp/state/hosted-only-go/hosted-only-proxy" ]] || fail "binary path: $bin"
 
+# Every knob the Go config reads must be forwarded by _hosted_only_go_env: a
+# setting made in .zshrc without `export` reaches _hosted_only_knob but not the
+# child process, so a knob left out is silently ignored (the image budget and the
+# outage retry knobs were, before this guard existed).
+_hosted_only_proxy_vars claude
+_hosted_only_go_env
+local knobname missing=() hits
+for knobname in $(grep -oE '(knob|intKnob|boolKnob|floatKnob)\("[A-Z_]+"' "$repo/scripts/hosted-only-go/config.go" | grep -oE '"[A-Z_]+"' | tr -d '"' | sort -u); do
+    hits=(${(M)_hop_go_env:#HOSTED_ONLY_${knobname}=*})   # assign first: ${#${(M)...}} does not count elements
+    (( ${#hits} )) || missing+=($knobname)
+done
+(( ${#missing} == 0 )) || fail "config.go reads knobs _hosted_only_go_env does not forward (ignored when set without export): ${missing[*]}"
+# and a NON-exported setting actually lands in the child's environment
+HOSTED_ONLY_IMAGE_CACHE_DAYS=0 _hosted_only_proxy_vars claude
+_hosted_only_go_env
+hits=(${(M)_hop_go_env:#HOSTED_ONLY_IMAGE_CACHE_DAYS=0})
+(( ${#hits} )) || fail "a non-exported HOSTED_ONLY_IMAGE_CACHE_DAYS=0 was not forwarded"
+_hosted_only_proxy_vars claude
+
 # --- stub upstream -----------------------------------------------------------
 local stub_port pport
 stub_port=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1]); s.close()')

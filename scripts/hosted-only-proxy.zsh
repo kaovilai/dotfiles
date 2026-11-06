@@ -346,6 +346,10 @@ _hosted_only_proxy_fp_load() {
     IFS='|' read -r _hop_fp _hop_token_fp _hop_dns_hash _hop_dns_host _hop_litellm_version _hop_fastapi_version <<< "$1"
 }
 
+# Every HOSTED_ONLY_* knob the Go config reads must be forwarded here: a setting
+# made in .zshrc without `export` is visible to _hosted_only_knob but not to the
+# child process, so a knob left out is silently ignored (tests/hosted-only-go-
+# proxy.zsh fails when config.go reads one this list does not carry).
 # _hosted_only_go_env: fills _hop_go_env (env-assignment words) with the knobs
 # the Go binary's serve child reads — the same set the LiteLLM branch pins —
 # plus the Go-only pieces (outage-streak state file, DoH allow-list). Call
@@ -363,6 +367,13 @@ _hosted_only_go_env() {
         "HOSTED_ONLY_FALLBACK=$(_hosted_only_knob FALLBACK 1)"
         "HOSTED_ONLY_OUTAGE_REWRITE=$(_hosted_only_knob OUTAGE_REWRITE 1)"
         "HOSTED_ONLY_OUTAGE_STATE=$_hop_runtime/outage-streak.json"
+        "HOSTED_ONLY_OUTAGE_RETRY_SECONDS=$(_hosted_only_knob OUTAGE_RETRY_SECONDS 60)"
+        "HOSTED_ONLY_OUTAGE_RETRY_MAX_SECONDS=$(_hosted_only_knob OUTAGE_RETRY_MAX_SECONDS 600)"
+        "HOSTED_ONLY_OUTAGE_COALESCE_SECONDS=$(_hosted_only_knob OUTAGE_COALESCE_SECONDS 5)"
+        "HOSTED_ONLY_IMAGE_BUDGET_BYTES=$_hop_image_budget"
+        "HOSTED_ONLY_IMAGE_CACHE_DAYS=$_hop_image_cache_days"
+        "HOSTED_ONLY_IMAGE_TOKENS=$(_hosted_only_knob IMAGE_TOKENS 2500)"
+        "HOSTED_ONLY_IMAGE_CACHE_DIR=$(_hosted_only_knob IMAGE_CACHE_DIR '')"
         "HOSTED_ONLY_LIMIT_REWRITE=$_hop_limit_rewrite"
         "HOSTED_ONLY_RATE_LIMIT_DEFAULT_RETRY_SECONDS=$_hop_limit_retry"
         "HOSTED_ONLY_CLIENT_RETRY_MAX_SECONDS=$_hop_client_retry"

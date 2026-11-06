@@ -49,6 +49,9 @@ class Gateway(BaseHTTPRequestHandler):
         pass
 
     def do_POST(self):
+        body = self.rfile.read(int(self.headers.get('Content-Length') or 0))
+        if b'SLOW' in body:
+            time.sleep(9.5)   # outlasts the old 8 s SIGKILL escalation, fits the 10 s drain
         payload = json.dumps({'id': 'm', 'type': 'message', 'content': [], 'usage': {'input_tokens': 1, 'output_tokens': 1}}).encode()
         self.send_response(200)
         self.send_header('Content-Type', 'application/json')
@@ -137,6 +140,34 @@ with tempfile.TemporaryDirectory(prefix='enmaas-go-swap-', dir=os.environ.get('T
         assert info3['pid'] != info2['pid']
         wait_for(lambda: not helper['owned'](info2), 'the forced swap did not retire the old group')
         print('PASS: a forced restart swaps')
+
+        # A forced swap while a request is in flight: the old group is SIGTERMed and
+        # must be given its graceful-drain budget (10 s) before any SIGKILL — the
+        # request below takes 9.5 s, longer than the 8 s escalation this used to
+        # have, so a premature kill cuts it.
+        slow = {}
+
+        def slow_request():
+            request = urllib.request.Request('http://127.0.0.1:%d/v1/messages' % port, method='POST',
+                data=json.dumps({'model': 'offline-model', 'max_tokens': 8, 'messages': [{'role': 'user', 'content': 'SLOW'}]}).encode(),
+                headers={'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json'})
+            try:
+                with urllib.request.urlopen(request, timeout=40) as response:
+                    slow['status'] = response.status
+            except Exception as error:
+                slow['error'] = repr(error)
+
+        inflight = threading.Thread(target=slow_request)
+        inflight.start()
+        time.sleep(.6)
+        info_before = json.loads((root / 'proxy.json').read_text())
+        drained = controller('ensure', port, key='different-key', extra={'CLAUDE_ENMAAS_FORCE_RESTART': '1'})
+        assert drained.returncode == 0 and 'zero-gap swap' in drained.stderr, drained.stderr
+        inflight.join(40)
+        assert slow.get('status') == 200, 'the in-flight request was cut by the swap: %r' % slow
+        assert json.loads((root / 'proxy.json').read_text())['pid'] != info_before['pid']
+        info3 = json.loads((root / 'proxy.json').read_text())
+        print('PASS: a forced swap lets an in-flight request finish before the old group is killed')
 
         # An old listener that cannot share the port (no SO_REUSEPORT): the new
         # process exits at bind and the controller falls back to stop-then-start.
