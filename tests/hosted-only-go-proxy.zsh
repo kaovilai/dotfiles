@@ -13,6 +13,9 @@ cleanup() {
     [[ -n "$proxy" ]] && kill "$proxy" 2>/dev/null
     [[ -n "$eproxy" ]] && kill "$eproxy" 2>/dev/null
     [[ -n "$stub" ]] && kill "$stub" 2>/dev/null
+    # ensure/watch-started listeners are not tracked in a pid variable; stop
+    # them by identity so a failed run does not leak them past the tempdir
+    [[ -n "${pport-}" ]] && pkill -f "hosted-only-proxy --flavor claude --port $pport" 2>/dev/null
     rm -rf "$tmp"
 }
 trap cleanup EXIT
@@ -34,6 +37,21 @@ HOSTED_ONLY_PROXY_IMPL=go _hosted_only_proxy_vars claude
 GLM_HYBRID_PROXY_IMPL=go _hosted_only_proxy_vars claude
 [[ "$_hop_impl" == go ]] || fail "retired GLM_HYBRID_PROXY_IMPL ignored"
 _hosted_only_proxy_vars claude
+
+# The fp helper runs inside a command substitution, so every field the spawn
+# paths need travels on its stdout line; the globals cannot cross back
+# (2026-11-06 review: empty litellm/fastapi versions broke the LiteLLM spawn).
+(
+    export HOSTED_ONLY_PROXY_IMPL=litellm ENMAAS_API_KEY=test-key
+    _hosted_only_proxy_vars claude
+    fp_line=$(_hosted_only_proxy_fp) || exit 1
+    _hosted_only_proxy_fp_load "$fp_line"
+    [[ -n "$_hop_fp" && -n "$_hop_token_fp" ]] || exit 2
+    [[ "$_hop_litellm_version" == 1.97.0 ]] || exit 3
+    [[ "$_hop_fastapi_version" == 0.136.3 ]] || exit 4
+    [[ -n "$_hop_dns_hash" ]] || exit 5
+    [[ "$_hop_dns_host" == api.enmaas.devshift.net ]] || exit 6
+) || fail "fp helper contract broken: fields do not reach the caller"
 
 local bin
 bin=$(_hosted_only_go_bin) || fail "go build failed"
@@ -252,5 +270,67 @@ HOSTED_ONLY_CLAUDE_PROXY_PORT=$pport _hosted_only_proxy_stop claude >/dev/null 2
 sleep 0.3
 curl -sf --max-time 1 "http://127.0.0.1:$pport/health/liveliness" -o /dev/null && fail "proxy still listening after stop"
 proxy=
+
+# --- launcher go path: ensure / watch / stop -----------------------------------
+# The whole start path now runs in the binary's ensure subcommand: routes.json
+# generated from the knobs, detached spawn with log rotation, health wait,
+# fingerprint record — and the stale/busy decision on later launches.
+lp() { lsof -ti "tcp:$1" -sTCP:LISTEN 2>/dev/null | head -1 }
+ensure_go() {
+    ( export HOSTED_ONLY_PROXY_IMPL=go HOSTED_ONLY_CLAUDE_PROXY_PORT=$pport ENMAAS_API_KEY=test-key \
+        HOSTED_ONLY_PROXY_TOKEN=test-token HOSTED_ONLY_ENMAAS_BASE_URL="http://127.0.0.1:$stub_port" \
+        HOSTED_ONLY_ALIAS_MODELS=claude-sonnet-5-5 LLM_USAGE_DIR="$tmp/usage"
+      _hosted_only_proxy_ensure "$@" )
+}
+stop_go() {
+    ( export HOSTED_ONLY_PROXY_IMPL=go HOSTED_ONLY_CLAUDE_PROXY_PORT=$pport
+      _hosted_only_proxy_stop "$@" )
+}
+
+ensure_go claude >/dev/null 2>"$tmp/ensure1.log" || fail "go ensure failed: $(<$tmp/ensure1.log)"
+curl -sf --max-time 2 "http://127.0.0.1:$pport/health/liveliness" -o /dev/null || fail "ensure did not start a healthy proxy"
+local rtdir2="$tmp/state/hosted-only-$pport"
+[[ -s "$rtdir2/routes.json" ]] || fail "ensure must generate routes.json from the knobs"
+[[ -s "$rtdir2/fingerprint" ]] || fail "ensure must record the fingerprint"
+local pid1
+pid1=$(lp $pport)
+[[ -n "$pid1" ]] || fail "no listener after ensure"
+
+# A second ensure with the same knobs finds it fresh: same pid, no restart.
+ensure_go claude >/dev/null 2>&1 || fail "second ensure failed"
+[[ "$(lp $pport)" == "$pid1" ]] || fail "a fresh ensure must not restart the proxy"
+
+# A stale fingerprint on an idle proxy: ensure restarts it and repairs the file.
+print -r -- "bogus bogus" >| "$rtdir2/fingerprint"
+ensure_go claude >/dev/null 2>&1 || fail "stale ensure failed"
+local pid3
+pid3=$(lp $pport)
+[[ -n "$pid3" && "$pid3" != "$pid1" ]] || fail "a stale idle proxy must be restarted"
+curl -sf --max-time 2 "http://127.0.0.1:$pport/health/liveliness" -o /dev/null || fail "restarted proxy not healthy"
+[[ "$(<"$rtdir2/fingerprint")" != bogus* ]] || fail "ensure must repair the fingerprint file"
+# The restarted proxy still serves: routes came from the knobs, not the file
+# the test wrote by hand earlier.
+out=$(curl -s -X POST "http://127.0.0.1:$pport/v1/messages" -H 'content-type: application/json' -H 'x-api-key: test-token' \
+    -d '{"model":"claude-sonnet-5-5","max_tokens":16,"messages":[{"role":"user","content":"hi"}]}')
+[[ "$out" == *'"model": "rits/zai-org/glm-5-3"'* ]] || fail "ensured proxy does not serve the alias: $out"
+
+# watch: the Go watcher restarts at the first idle moment and keeps the
+# llm-proxy-sync pid/log contract.
+local watchdir="$tmp/watch"
+env HOSTED_ONLY_PROXY_IMPL=go HOSTED_ONLY_CLAUDE_PROXY_PORT=$pport ENMAAS_API_KEY=test-key \
+    HOSTED_ONLY_PROXY_TOKEN=test-token HOSTED_ONLY_ENMAAS_BASE_URL="http://127.0.0.1:$stub_port" \
+    HOSTED_ONLY_ALIAS_MODELS=claude-sonnet-5-5 LLM_USAGE_DIR="$tmp/usage" \
+    "$bin" watch --flavor claude --port "$pport" --runtime-dir "$rtdir2" \
+    --fingerprint bogus-watch --token-fp bogus-token --name glm-claude --state-dir "$watchdir" \
+    --timeout 30s >/dev/null 2>&1 || fail "watch exited non-zero"
+[[ "$(lp $pport)" != "$pid3" ]] || fail "watch must restart a stale proxy at the idle moment"
+if [[ -f "$watchdir/watch-glm-claude.pid" ]]; then fail "watch must remove its pid file on exit"; fi
+grep -q "restarted with the current code" "$watchdir/watch-glm-claude.log" || fail "watch log: $(<$watchdir/watch-glm-claude.log)"
+curl -sf --max-time 2 "http://127.0.0.1:$pport/health/liveliness" -o /dev/null || fail "watch restart left no healthy proxy"
+
+# The go branch of the zsh stop helper retires the listener.
+stop_go claude >/dev/null 2>&1 || fail "go stop failed"
+sleep 0.3
+curl -sf --max-time 1 "http://127.0.0.1:$pport/health/liveliness" -o /dev/null && fail "proxy still listening after go stop"
 
 print -r -- "ok hosted-only-go-proxy"

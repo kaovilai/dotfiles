@@ -1,4 +1,5 @@
 """Offline bridge regressions: no real credentials, gateways, or inference."""
+import atexit
 import importlib.util
 import json
 import os
@@ -217,6 +218,50 @@ print loaded > "$FIXTURE_BOOTSTRAPPED"
 def sys_executable():
     import sys
     return sys.executable
+
+
+@unittest.skipUnless(shutil.which("go"), "go toolchain not installed")
+class ProviderBridgeGo(ProviderBridge):
+    """The same scenarios against the Go bridge: claude-provider.zsh execs it
+    when CLAUDE_PROVIDER_IMPL=go and a prebuilt binary is pinned, so every
+    fixture (backends, capture contract, exit codes, cancellation of the
+    native tree, detached-proxy survival, catalog cache) covers both bridges."""
+
+    go_bin = None
+
+    @classmethod
+    def setUpClass(cls):
+        build = Path(tempfile.mkdtemp(prefix="claude-provider-go-build-"))
+        atexit.register(shutil.rmtree, build, ignore_errors=True)
+        binary = build / "claude-provider"
+        subprocess.run(["go", "build", "-trimpath", "-o", str(binary), "."],
+                       cwd=REPO / "scripts" / "claude-provider-go",
+                       check=True, capture_output=True)
+        cls.go_bin = str(binary)
+
+    def setUp(self):
+        super().setUp()
+        self.env["CLAUDE_PROVIDER_IMPL"] = "go"
+        self.env["CLAUDE_PROVIDER_GO_BIN"] = self.go_bin
+
+    def test_catalog_cache_is_private_and_credential_scoped(self):
+        environment = dict(self.env, XDG_CACHE_HOME=str(self.root / "cache"))
+        identity = "a" * 64
+        cache = self.root / "cache/claude-provider" / (identity + ".json")
+        write = subprocess.run([self.go_bin, "--catalog-write", identity],
+            input='{"data":[{"id":"fixture-model"}]}', text=True, capture_output=True, env=environment)
+        self.assertEqual(write.returncode, 0)
+        self.assertEqual(cache.stat().st_mode & 0o777, 0o600)
+        read = subprocess.run([self.go_bin, "--catalog-read", identity],
+                              capture_output=True, text=True, env=environment)
+        self.assertEqual(json.loads(read.stdout)["data"][0]["id"], "fixture-model")
+        changed = subprocess.run([self.go_bin, "--catalog-read", "b" * 64],
+                                 capture_output=True, env=environment)
+        self.assertEqual(changed.returncode, 3)
+        os.utime(cache, (0, 0))
+        stale = subprocess.run([self.go_bin, "--catalog-read", identity],
+                               capture_output=True, env=environment)
+        self.assertEqual(stale.returncode, 3)
 
 
 if __name__ == "__main__":

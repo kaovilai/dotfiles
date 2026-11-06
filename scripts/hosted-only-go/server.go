@@ -9,22 +9,20 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"time"
 )
 
 type app struct {
-	cfg    *config
-	client *http.Client
-	usage  *usageLog
-	seq    atomic.Uint64
-
-	streakMu sync.Mutex
-	streaks  map[string]outageStreak
+	cfg     *config
+	client  *http.Client
+	usage   *usageLog
+	outages *outageTracker
+	seq     atomic.Uint64
 }
 
 type outageStreak struct {
@@ -35,13 +33,16 @@ type outageStreak struct {
 func newApp(cfg *config) *app {
 	// One transport for the process: keep-alive (and HTTP/2 where the gateway
 	// offers it) is shared across requests instead of re-dialing per call.
+	// DNS failures for the allow-listed gateway name fall back to DoH
+	// (doh.go), mirroring dns_fallback.py on the LiteLLM path.
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.ForceAttemptHTTP2 = true
+	transport.DialContext = dohDialContext(&net.Dialer{Timeout: 30 * time.Second}, newDoHResolver())
 	return &app{
 		cfg:     cfg,
 		client:  &http.Client{Timeout: cfg.RequestTimeout, Transport: transport},
 		usage:   newUsageLog(cfg.UsageDir, cfg.Port),
-		streaks: map[string]outageStreak{},
+		outages: newOutageTracker(cfg.OutageState, cfg.OutageBase, cfg.OutageMax, time.Duration(cfg.OutageCoalesce*float64(time.Second))),
 	}
 }
 
@@ -236,11 +237,14 @@ func (a *app) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	respBody, _ := io.ReadAll(resp.Body)
+	respBody, readErr := io.ReadAll(resp.Body)
 	info := usageFromJSON(respBody)
 	responseModel := ""
 	if obj, err := decodeObject(respBody); err == nil {
 		responseModel = asString(obj["model"])
+	}
+	if resp.StatusCode < 400 && readErr == nil {
+		a.outages.success(served)
 	}
 	a.writeRaw(w, resp.StatusCode, headers, respBody)
 	a.usage.write(a.event(r, data, requested, served, started, info, true, http.StatusOK, 0, "", false, 0, "", false, 0, usedFallback, false, responseModel, 0))
@@ -359,24 +363,7 @@ func (a *app) shouldFailover(resp *http.Response, err error) bool {
 }
 
 func (a *app) outageWait(model string, now time.Time) int {
-	a.streakMu.Lock()
-	defer a.streakMu.Unlock()
-	streak := a.streaks[model]
-	if now.Sub(streak.last) <= 15*time.Minute {
-		streak.count++
-	} else {
-		streak.count = 1
-	}
-	streak.last = now
-	a.streaks[model] = streak
-	wait := a.cfg.OutageBase
-	for i := 1; i < streak.count && wait < a.cfg.OutageMax; i++ {
-		wait *= 2
-	}
-	if wait > a.cfg.OutageMax {
-		wait = a.cfg.OutageMax
-	}
-	return wait
+	return a.outages.wait(model, now)
 }
 
 func (a *app) rejectModel(w http.ResponseWriter, r *http.Request, data map[string]any, requested string, started time.Time, model string) {
@@ -436,6 +423,9 @@ func (a *app) streamResponse(w http.ResponseWriter, resp *http.Response, path st
 		} else {
 			errText = "upstream stream interrupted: " + readErr.Error()
 		}
+	}
+	if ok {
+		a.outages.success(served)
 	}
 	a.usage.write(a.buildEvent(path, data, requested, served, started, parser.info, ok, status, 0, errText, false, 0, "", false, 0, usedFallback, true, parser.model, firstChunk, userAgent))
 }

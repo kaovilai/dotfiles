@@ -37,6 +37,8 @@ type config struct {
 	ClientRetryMax int
 	OutageBase     int
 	OutageMax      int
+	OutageState    string // HOSTED_ONLY_OUTAGE_STATE: streaks survive a restart
+	OutageCoalesce float64
 	RequestTimeout time.Duration
 	QuotaTZ        *time.Location
 	UsageDir       string
@@ -84,6 +86,17 @@ func floatKnob(name string, def float64) float64 {
 	v, err := strconv.ParseFloat(strings.TrimSpace(knob(name, strconv.FormatFloat(def, 'f', -1, 64))), 64)
 	if err != nil || v < 1 {
 		return def
+	}
+	return v
+}
+
+// coalesceKnob reads HOSTED_ONLY_OUTAGE_COALESCE_SECONDS like the Python hook:
+// any parseable float is accepted (0.5 and 0 are valid same-episode windows),
+// unlike floatKnob which floors at 1 for the bytes-per-token ratio.
+func coalesceKnob() float64 {
+	v, err := strconv.ParseFloat(strings.TrimSpace(knob("OUTAGE_COALESCE_SECONDS", "5")), 64)
+	if err != nil {
+		return 5
 	}
 	return v
 }
@@ -151,6 +164,8 @@ func loadConfig(flavor, port, runtimeDir string) *config {
 		ClientRetryMax: intKnob("CLIENT_RETRY_MAX_SECONDS", 60, 0),
 		OutageBase:     intKnob("OUTAGE_RETRY_SECONDS", 60, 1),
 		OutageMax:      intKnob("OUTAGE_RETRY_MAX_SECONDS", 600, 1),
+		OutageState:    strings.TrimSpace(knob("OUTAGE_STATE", "")),
+		OutageCoalesce: coalesceKnob(),
 		RequestTimeout: time.Duration(intKnob("REQUEST_TIMEOUT", 300, 1)) * time.Second,
 		QuotaTZ:        tz,
 		UsageDir:       usageDir,

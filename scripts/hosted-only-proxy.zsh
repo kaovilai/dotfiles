@@ -64,6 +64,9 @@
 # naming the stop command:
 #   zsh -f <dotfiles>/scripts/codex-provider.zsh hosted-only --stop-proxy   (codex)
 #   claude-hosted-only-kill                                                  (claude)
+# On the Go impl the mechanics (lock, stale/busy decision, spawn, health wait,
+# stop, idle watcher) live in the binary's ensure/stop/watch subcommands; the
+# fingerprint inputs stay here (see docs/notes/hosted-only-go-proxy.md).
 
 typeset -g _HOSTED_ONLY_SCRIPTS="${${(%):-%x}:A:h}"
 
@@ -92,9 +95,13 @@ _hosted_only_proxy_vars() {
     local state="${XDG_STATE_HOME:-$HOME/.local/state}"
     typeset -g _hop_runtime="$state/hosted-only-$_hop_port"
     # legacy runtime dirs (flavor-named before the merge, glm-hybrid before the
-    # rename) whose listeners the stop helper still recognizes
+    # rename) whose listeners the stop helper still recognizes — BOTH flavors'
+    # names, since the port is shared since #599 and either launcher must be
+    # able to retire the other's pre-merge leftovers
+    local other="$1"; [[ "$other" == claude ]] && other=codex || other=claude
     typeset -g -a _hop_legacy_runtimes
-    _hop_legacy_runtimes=("$state/glm-hybrid-$1-$_hop_port" "$state/hosted-only-$1-$_hop_port")
+    _hop_legacy_runtimes=("$state/glm-hybrid-$1-$_hop_port" "$state/hosted-only-$1-$_hop_port"
+        "$state/glm-hybrid-$other-$_hop_port" "$state/hosted-only-$other-$_hop_port")
     typeset -g _hop_base="http://127.0.0.1:$_hop_port"
     typeset -g _hop_token="$(_hosted_only_knob PROXY_TOKEN hosted-only-local)"
     # PROXY_IMPL=go runs scripts/hosted-only-go (stdlib Go proxy) instead of
@@ -255,35 +262,100 @@ _hosted_only_go_bin() {
     want=$(_hosted_only_go_hash) || return 1
     if [[ ! -x "$bin" || "$(<"$stamp" 2>/dev/null)" != "$want" ]]; then
         mkdir -p "$out" || return 1
-        ( cd "$src" && go build -trimpath -o "$bin" . ) || {
+        # Build to a private name and rename into place: go build -o removes
+        # and rewrites its target, so two fleet-synced launches rebuilding at
+        # once could otherwise exec a half-written binary.
+        local tmpbin="$bin.$$"
+        ( cd "$src" && go build -trimpath -o "$tmpbin" . ) || {
+            rm -f "$tmpbin"
             print -ru2 -- 'hosted-only: go build failed; see the error above.'
             return 1
         }
+        mv -f "$tmpbin" "$bin" || return 1
         print -r -- "$want" >| "$stamp" || return 1
     fi
     print -r -- "$bin"
 }
 
-# _hosted_only_go_routes: JSON route table for the Go path, derived from the same
-# knobs as the merged YAML (which the Go binary does not parse). Bare groups are
-# anthropic, the dialect-suffixed groups are openai.
-_hosted_only_go_routes() {
-    local enmaas="$(_hosted_only_knob ENMAAS_BASE_URL "${ENMAAS_API_BASE_URL:-https://api.enmaas.devshift.net}")"
-    enmaas="${enmaas%/}"
-    enmaas="${enmaas%/v1}"
-    local -a rows
-    local m
-    for m in "$_hop_glm" "$_hop_deepseek"; do
-        rows+=("{\"model_name\":\"$m\",\"litellm_params\":{\"model\":\"anthropic/$m\",\"api_base\":\"$enmaas\"}}")
-        rows+=("{\"model_name\":\"$m$_hop_dialect\",\"litellm_params\":{\"model\":\"openai/$m\",\"api_base\":\"$enmaas/v1\"}}")
-    done
-    local a
-    for a in ${(s:,:)_hop_aliases}; do
-        [[ -n "$a" ]] || continue
-        rows+=("{\"model_name\":\"$a\",\"litellm_params\":{\"model\":\"anthropic/$_hop_glm\",\"api_base\":\"$enmaas\"}}")
-        [[ -n "$_hop_dialect" ]] && rows+=("{\"model_name\":\"$a$_hop_dialect\",\"litellm_params\":{\"model\":\"openai/$_hop_glm\",\"api_base\":\"$enmaas/v1\"}}")
-    done
-    print -r -- "{\"model_list\":[${(j:,:)rows}],\"general_settings\":{\"master_key\":\"os.environ/HOSTED_ONLY_PROXY_TOKEN\"}}"
+# _hosted_only_proxy_fp [<config>]: prints one | -separated line
+#   "<fingerprint>|<token-fp>|<dns-hash>|<dns-host>|<litellm-version>|<fastapi-version>"
+# for the current flavor and impl (call _hosted_only_proxy_vars first). Same
+# inputs as always — the generated config, the impl's code hash, the DoH
+# pieces, the key and the knobs — so a Go and a LiteLLM launch of the same
+# knobs restart each other. Everything travels on stdout: this runs inside a
+# command substitution, so globals set here cannot reach the caller (the
+# callers re-export the fields they need as _hop_* globals).
+_hosted_only_proxy_fp() {
+    local impl="$_hop_impl" litellm_version= fastapi_version= hooks_hash= dns_hash='' dns_host=''
+    if [[ "$impl" == go ]]; then
+        hooks_hash=$(_hosted_only_go_hash) || return 1
+    else
+        litellm_version="$(_hosted_only_knob LITELLM_VERSION 1.97.0)"
+        fastapi_version="$(_hosted_only_knob FASTAPI_VERSION 0.136.3)"
+        hooks_hash=$(_hosted_only_code_hash "$_HOSTED_ONLY_SCRIPTS/hosted_only_hooks.py" "$_HOSTED_ONLY_SCRIPTS/litellm_usage_log.py") || return 1
+    fi
+    # The runtime shim (dns_fallback.py, installed as sitecustomize.py) is
+    # hashed into the fingerprint for the LiteLLM impl: it carries the
+    # SO_REUSEPORT patch the zero-refuse restart depends on plus the env-gated
+    # DoH fallback for the gateway name. HOSTED_ONLY_DNS_FALLBACK=0 disables
+    # just the DoH part (empty ENMAAS_DNS_FALLBACK_HOSTS) and changes the
+    # fingerprint; the uvicorn patch is always on. The Go path resolves over
+    # DoH inside the binary, so its fingerprint carries the host (and DoH URL
+    # list) instead, still gated by the same knob.
+    if [[ "$impl" == litellm ]]; then
+        dns_hash=$(_hosted_only_code_hash "$_HOSTED_ONLY_SCRIPTS/dns_fallback.py") || return 1
+    fi
+    if [[ "$(_hosted_only_knob DNS_FALLBACK 1)" != 0 ]]; then
+        dns_host=$(_hosted_only_knob ENMAAS_BASE_URL "${ENMAAS_API_BASE_URL:-https://api.enmaas.devshift.net}")
+        dns_host="${dns_host#*://}"
+        dns_host="${dns_host%%/*}"
+    fi
+    local config="${1:-$(_hosted_only_proxy_config)}"
+    local knobs="$(_hosted_only_knob OUTAGE_COALESCE_SECONDS 5) $litellm_version $fastapi_version $_hop_vision_fallback $_hop_limit_rewrite $_hop_limit_retry $_hop_client_retry $_hop_upstream_retries $_hop_fallback $_hop_aliases $_hop_request_timeout $_hop_image_budget $_hop_image_cache_days $_hop_dialect"
+    [[ "$impl" == go ]] && knobs="$knobs $dns_host ${ENMAAS_DNS_DOH_URLS:-}"
+    local fp token_fp
+    fp=$(print -rn -- "$config"$'\x1f'"$hooks_hash"$'\x1f'"$dns_hash"$'\x1f'"$ENMAAS_API_KEY"$'\x1f'"$knobs" \
+        | shasum -a 256 | cut -d' ' -f1) || return 1
+    token_fp=$(print -rn -- "$_hop_token" | shasum -a 256 | cut -d' ' -f1) || return 1
+    print -r -- "$fp|$token_fp|$dns_hash|$dns_host|$litellm_version|$fastapi_version"
+}
+
+# _hosted_only_proxy_fp_load <line>: splits a _hosted_only_proxy_fp line and
+# exports the fields as the _hop_* globals the spawn paths read (dns, versions).
+_hosted_only_proxy_fp_load() {
+    typeset -g _hop_fp= _hop_token_fp= _hop_dns_hash= _hop_dns_host= _hop_litellm_version= _hop_fastapi_version=
+    IFS='|' read -r _hop_fp _hop_token_fp _hop_dns_hash _hop_dns_host _hop_litellm_version _hop_fastapi_version <<< "$1"
+}
+
+# _hosted_only_go_env: fills _hop_go_env (env-assignment words) with the knobs
+# the Go binary's serve child reads — the same set the LiteLLM branch pins —
+# plus the Go-only pieces (outage-streak state file, DoH allow-list). Call
+# _hosted_only_proxy_vars and _hosted_only_proxy_fp first.
+_hosted_only_go_env() {
+    typeset -g -a _hop_go_env
+    _hop_go_env=(
+        "ENMAAS_API_KEY=$ENMAAS_API_KEY"
+        "HOSTED_ONLY_ENMAAS_BASE_URL=$(_hosted_only_knob ENMAAS_BASE_URL "${ENMAAS_API_BASE_URL:-https://api.enmaas.devshift.net}")"
+        "HOSTED_ONLY_PROXY_TOKEN=$_hop_token"
+        "HOSTED_ONLY_GLM_MODEL=$_hop_glm"
+        "HOSTED_ONLY_DEEPSEEK_MODEL=$_hop_deepseek"
+        "HOSTED_ONLY_VISION_FALLBACK=$_hop_vision_fallback"
+        "HOSTED_ONLY_ALIAS_MODELS=$_hop_aliases"
+        "HOSTED_ONLY_FALLBACK=$(_hosted_only_knob FALLBACK 1)"
+        "HOSTED_ONLY_OUTAGE_REWRITE=$(_hosted_only_knob OUTAGE_REWRITE 1)"
+        "HOSTED_ONLY_OUTAGE_STATE=$_hop_runtime/outage-streak.json"
+        "HOSTED_ONLY_LIMIT_REWRITE=$_hop_limit_rewrite"
+        "HOSTED_ONLY_RATE_LIMIT_DEFAULT_RETRY_SECONDS=$_hop_limit_retry"
+        "HOSTED_ONLY_CLIENT_RETRY_MAX_SECONDS=$_hop_client_retry"
+        "HOSTED_ONLY_MAX_MODEL_LEN=$(_hosted_only_knob MAX_MODEL_LEN 1048576)"
+        "HOSTED_ONLY_OUTPUT_RESERVE=$(_hosted_only_knob OUTPUT_RESERVE 512)"
+        "HOSTED_ONLY_BYTES_PER_TOKEN=$(_hosted_only_knob BYTES_PER_TOKEN 3)"
+        "HOSTED_ONLY_MIN_OUTPUT=$(_hosted_only_knob MIN_OUTPUT 16000)"
+        "HOSTED_ONLY_REQUEST_TIMEOUT=$_hop_request_timeout"
+        "HOSTED_ONLY_SEARCH_NUDGE=$(_hosted_only_knob SEARCH_NUDGE 1)"
+        "HOSTED_ONLY_DIALECT_SUFFIX=$_hop_dialect"
+        "ENMAAS_DNS_FALLBACK_HOSTS=$_hop_dns_host"
+    )
 }
 
 # _hosted_only_busy <port>: 0 when a request is in flight on the port. Same
@@ -301,41 +373,29 @@ _hosted_only_busy() {
 
 # _hosted_only_proxy_launch: start the proxy for the current flavor/impl
 # (globals from _hosted_only_proxy_vars + ensure's $config already written).
+# _hosted_only_proxy_launch: start the LiteLLM proxy (globals from
+# _hosted_only_proxy_vars + ensure's $config already written; the Go impl never
+# reaches this — its ensure subcommand owns the whole start).
 _hosted_only_proxy_launch() {
-    if [[ "$_hop_impl" == go ]]; then
-        # The binary reads a JSON route table derived from the same knobs
-        # (bare = anthropic, suffix = openai/Responses).
-        _hosted_only_go_routes >| "$_hop_runtime/routes.json" || return 1
-        ENMAAS_API_KEY="$ENMAAS_API_KEY" HOSTED_ONLY_PROXY_TOKEN="$_hop_token" \
-            HOSTED_ONLY_GLM_MODEL="$_hop_glm" HOSTED_ONLY_DEEPSEEK_MODEL="$_hop_deepseek" HOSTED_ONLY_VISION_FALLBACK="$_hop_vision_fallback" \
-            HOSTED_ONLY_ALIAS_MODELS="$_hop_aliases" HOSTED_ONLY_FALLBACK="$(_hosted_only_knob FALLBACK 1)" \
-            HOSTED_ONLY_OUTAGE_REWRITE="$(_hosted_only_knob OUTAGE_REWRITE 1)" \
-            HOSTED_ONLY_LIMIT_REWRITE="$_hop_limit_rewrite" HOSTED_ONLY_RATE_LIMIT_DEFAULT_RETRY_SECONDS="$_hop_limit_retry" HOSTED_ONLY_CLIENT_RETRY_MAX_SECONDS="$_hop_client_retry" \
-            HOSTED_ONLY_MAX_MODEL_LEN="$(_hosted_only_knob MAX_MODEL_LEN 1048576)" HOSTED_ONLY_OUTPUT_RESERVE="$(_hosted_only_knob OUTPUT_RESERVE 512)" HOSTED_ONLY_BYTES_PER_TOKEN="$(_hosted_only_knob BYTES_PER_TOKEN 3)" HOSTED_ONLY_MIN_OUTPUT="$(_hosted_only_knob MIN_OUTPUT 16000)" \
-            HOSTED_ONLY_REQUEST_TIMEOUT="$_hop_request_timeout" HOSTED_ONLY_SEARCH_NUDGE="$(_hosted_only_knob SEARCH_NUDGE 1)" HOSTED_ONLY_DIALECT_SUFFIX="$_hop_dialect" \
-            python3 "$_HOSTED_ONLY_SCRIPTS/claude-provider.py" --background "$_hop_runtime/proxy.log" \
-            "$_hop_gobin" --flavor "$_hop_flavor" --config "$_hop_runtime/routes.json" --port "$_hop_port" --runtime-dir "$_hop_runtime" || return 1
-    else
-        cp -f "$_hop_hooks" "$_hop_runtime/hosted_only_hooks.py" || return 1
-        cp -f "$_hop_usage_log" "$_hop_runtime/litellm_usage_log.py" || return 1
-        # The runtime shim is ALWAYS installed: besides the env-gated DoH
-        # fallback it forces uvicorn's SO_REUSEPORT, which the zero-refuse
-        # restart below depends on. ENMAAS_DNS_FALLBACK_HOSTS stays empty to
-        # disable just the DoH part.
-        cp -f "$_HOSTED_ONLY_SCRIPTS/dns_fallback.py" "$_hop_runtime/sitecustomize.py" || return 1
-        local -a dns_env=(PYTHONPATH="$_hop_runtime")
-        [[ -n "$_hop_dns_host" ]] && dns_env+=(ENMAAS_DNS_FALLBACK_HOSTS="$_hop_dns_host")
-        ENMAAS_API_KEY="$ENMAAS_API_KEY" HOSTED_ONLY_PROXY_TOKEN="$_hop_token" \
-            HOSTED_ONLY_GLM_MODEL="$_hop_glm" HOSTED_ONLY_DEEPSEEK_MODEL="$_hop_deepseek" HOSTED_ONLY_VISION_FALLBACK="$_hop_vision_fallback" \
-            HOSTED_ONLY_ALIAS_MODELS="$_hop_aliases" HOSTED_ONLY_OUTAGE_STATE="$_hop_runtime/outage-streak.json" \
-            HOSTED_ONLY_LIMIT_REWRITE="$_hop_limit_rewrite" HOSTED_ONLY_RATE_LIMIT_DEFAULT_RETRY_SECONDS="$_hop_limit_retry" HOSTED_ONLY_CLIENT_RETRY_MAX_SECONDS="$_hop_client_retry" LITELLM_LOG="$(_hosted_only_knob LITELLM_LOG ERROR)" \
-            HOSTED_ONLY_IMAGE_BUDGET_BYTES="$_hop_image_budget" HOSTED_ONLY_IMAGE_CACHE_DAYS="$_hop_image_cache_days" HOSTED_ONLY_DIALECT_SUFFIX="$_hop_dialect" \
-            HOSTED_ONLY_MAX_MODEL_LEN="$(_hosted_only_knob MAX_MODEL_LEN 1048576)" HOSTED_ONLY_OUTPUT_RESERVE="$(_hosted_only_knob OUTPUT_RESERVE 512)" HOSTED_ONLY_BYTES_PER_TOKEN="$(_hosted_only_knob BYTES_PER_TOKEN 3)" HOSTED_ONLY_MIN_OUTPUT="$(_hosted_only_knob MIN_OUTPUT 16000)" \
-            env "${dns_env[@]}" \
-            python3 "$_HOSTED_ONLY_SCRIPTS/claude-provider.py" --background "$_hop_runtime/proxy.log" \
-            uv tool run --with "fastapi==$_hop_fastapi_version" --from "litellm[proxy]==$_hop_litellm_version" litellm \
-            --config "$_hop_runtime/config.yaml" --host 127.0.0.1 --port "$_hop_port" --telemetry False || return 1
-    fi
+    cp -f "$_hop_hooks" "$_hop_runtime/hosted_only_hooks.py" || return 1
+    cp -f "$_hop_usage_log" "$_hop_runtime/litellm_usage_log.py" || return 1
+    # The runtime shim is ALWAYS installed: besides the env-gated DoH
+    # fallback it forces uvicorn's SO_REUSEPORT, which the zero-refuse
+    # restart below depends on. ENMAAS_DNS_FALLBACK_HOSTS stays empty to
+    # disable just the DoH part.
+    cp -f "$_HOSTED_ONLY_SCRIPTS/dns_fallback.py" "$_hop_runtime/sitecustomize.py" || return 1
+    local -a dns_env=(PYTHONPATH="$_hop_runtime")
+    [[ -n "$_hop_dns_host" ]] && dns_env+=(ENMAAS_DNS_FALLBACK_HOSTS="$_hop_dns_host")
+    ENMAAS_API_KEY="$ENMAAS_API_KEY" HOSTED_ONLY_PROXY_TOKEN="$_hop_token" \
+        HOSTED_ONLY_GLM_MODEL="$_hop_glm" HOSTED_ONLY_DEEPSEEK_MODEL="$_hop_deepseek" HOSTED_ONLY_VISION_FALLBACK="$_hop_vision_fallback" \
+        HOSTED_ONLY_ALIAS_MODELS="$_hop_aliases" HOSTED_ONLY_OUTAGE_STATE="$_hop_runtime/outage-streak.json" \
+        HOSTED_ONLY_LIMIT_REWRITE="$_hop_limit_rewrite" HOSTED_ONLY_RATE_LIMIT_DEFAULT_RETRY_SECONDS="$_hop_limit_retry" HOSTED_ONLY_CLIENT_RETRY_MAX_SECONDS="$_hop_client_retry" LITELLM_LOG="$(_hosted_only_knob LITELLM_LOG ERROR)" \
+        HOSTED_ONLY_IMAGE_BUDGET_BYTES="$_hop_image_budget" HOSTED_ONLY_IMAGE_CACHE_DAYS="$_hop_image_cache_days" HOSTED_ONLY_DIALECT_SUFFIX="$_hop_dialect" \
+        HOSTED_ONLY_MAX_MODEL_LEN="$(_hosted_only_knob MAX_MODEL_LEN 1048576)" HOSTED_ONLY_OUTPUT_RESERVE="$(_hosted_only_knob OUTPUT_RESERVE 512)" HOSTED_ONLY_BYTES_PER_TOKEN="$(_hosted_only_knob BYTES_PER_TOKEN 3)" HOSTED_ONLY_MIN_OUTPUT="$(_hosted_only_knob MIN_OUTPUT 16000)" \
+        env "${dns_env[@]}" \
+        python3 "$_HOSTED_ONLY_SCRIPTS/claude-provider.py" --background "$_hop_runtime/proxy.log" \
+        uv tool run --with "fastapi==$_hop_fastapi_version" --from "litellm[proxy]==$_hop_litellm_version" litellm \
+        --config "$_hop_runtime/config.yaml" --host 127.0.0.1 --port "$_hop_port" --telemetry False || return 1
 }
 
 # _hosted_only_boot_wait <port> [<old-pids>]: 0 once a listener that is not one
@@ -402,15 +462,13 @@ _hosted_only_proxy_ensure() {
     local health="$_hop_base/health/liveliness"
     local impl="$_hop_impl"
     # _hosted_only_proxy_launch (a separate function) needs these: function
-    # locals do not cross the call, so they are globals like the _hop_* set
-    typeset -g _hop_litellm_version= _hop_fastapi_version= _hop_hooks= _hop_usage_log= _hop_gobin= _hop_gohash=
-    local litellm_version= fastapi_version= hooks= usage_log= gobin= gohash=
+    # locals do not cross the call, so they are globals like the _hop_* set.
+    # The version and DNS globals come from _hosted_only_proxy_fp_load below.
+    typeset -g _hop_hooks= _hop_usage_log= _hop_gobin=
+    local hooks= usage_log= gobin=
     if [[ "$impl" == go ]]; then
         gobin=$(_hosted_only_go_bin) || return 1
-        gohash=$(_hosted_only_go_hash) || return 1
     elif [[ "$impl" == litellm ]]; then
-        litellm_version="$(_hosted_only_knob LITELLM_VERSION 1.97.0)"
-        fastapi_version="$(_hosted_only_knob FASTAPI_VERSION 0.136.3)"
         hooks="$_HOSTED_ONLY_SCRIPTS/hosted_only_hooks.py"
         usage_log="$_HOSTED_ONLY_SCRIPTS/litellm_usage_log.py"
         command -v uv >/dev/null || { print -ru2 -- 'hosted-only: uv not found.'; return 1; }
@@ -422,30 +480,12 @@ _hosted_only_proxy_ensure() {
     fi
     [[ -n "${ENMAAS_API_KEY-}" ]] || { print -ru2 -- 'hosted-only: ENMAAS_API_KEY is not set.'; return 1; }
 
-    local config fp hooks_hash token_fp dns_hash='' dns_host=''
+    local config fp token_fp fp_line
     config=$(_hosted_only_proxy_config)
-    if [[ "$impl" == go ]]; then
-        hooks_hash=$gohash
-    else
-        hooks_hash=$(_hosted_only_code_hash "$hooks" "$usage_log") || return 1
-    fi
-    # The runtime shim (dns_fallback.py, installed as sitecustomize.py) is
-    # hashed into the fingerprint for the LiteLLM impl: it carries the
-    # SO_REUSEPORT patch the zero-refuse restart depends on plus the env-gated
-    # DoH fallback for the gateway name. HOSTED_ONLY_DNS_FALLBACK=0 disables
-    # just the DoH part (empty ENMAAS_DNS_FALLBACK_HOSTS) and changes the
-    # fingerprint; the uvicorn patch is always on.
-    if [[ "$impl" == litellm ]]; then
-        dns_hash=$(_hosted_only_code_hash "$_HOSTED_ONLY_SCRIPTS/dns_fallback.py") || return 1
-        if [[ "$(_hosted_only_knob DNS_FALLBACK 1)" != 0 ]]; then
-            dns_host=$(_hosted_only_knob ENMAAS_BASE_URL "${ENMAAS_API_BASE_URL:-https://api.enmaas.devshift.net}")
-            dns_host="${dns_host#*://}"
-            dns_host="${dns_host%%/*}"
-        fi
-    fi
-    fp=$(print -rn -- "$config"$'\x1f'"$hooks_hash"$'\x1f'"$dns_hash"$'\x1f'"$ENMAAS_API_KEY"$'\x1f'"$litellm_version $fastapi_version $_hop_vision_fallback $_hop_limit_rewrite $_hop_limit_retry $_hop_client_retry $_hop_upstream_retries $_hop_fallback $_hop_aliases $_hop_request_timeout $_hop_image_budget $_hop_image_cache_days $_hop_dialect" \
-        | shasum -a 256 | cut -d' ' -f1)
-    token_fp=$(print -rn -- "$_hop_token" | shasum -a 256 | cut -d' ' -f1)
+    fp_line=$(_hosted_only_proxy_fp "$config") || return 1
+    _hosted_only_proxy_fp_load "$fp_line"
+    fp="$_hop_fp"
+    token_fp="$_hop_token_fp"
 
     # Dry run for `llm-proxy-restart required`: HOSTED_ONLY_CHECK_OUT=<file>
     # gets "down|fresh|stale <fingerprint> <token hash>" and nothing is
@@ -464,8 +504,33 @@ _hosted_only_proxy_ensure() {
         return 1
     fi
 
-    typeset -g _hop_dns_host="$dns_host"
-    _hop_litellm_version="$litellm_version" _hop_fastapi_version="$fastapi_version" _hop_hooks="$hooks" _hop_usage_log="$usage_log" _hop_gobin="$gobin" _hop_gohash="$gohash"
+    _hop_hooks="$hooks" _hop_usage_log="$usage_log" _hop_gobin="$gobin"
+
+    # Go impl: the binary's ensure subcommand owns the mechanics — startup.lock,
+    # the stale/busy decision, the zero-refuse swap, detached spawn with log
+    # rotation, the health wait and the fingerprint record. It takes the lock
+    # itself, so it must run OUTSIDE the zsh flock below; the LiteLLM path
+    # keeps its own.
+    if [[ "$impl" == go ]]; then
+        mkdir -p "$_hop_runtime" || return 1
+        # Kept for parity with the LiteLLM runtime dir: documents the merged
+        # config. The binary serves from routes.json, which it writes itself
+        # from these knobs (so a watcher-driven restart never pairs a new
+        # fingerprint with an old route table).
+        print -r -- "$config" >| "$_hop_runtime/config.yaml" || return 1
+        _hosted_only_go_env
+        # One --legacy-runtime per directory: a single flag followed by
+        # several words loses all but the first in the Go flag parser.
+        local -a legacy=()
+        local d
+        for d in $_hop_legacy_runtimes; legacy+=(--legacy-runtime "$d")
+        env "${_hop_go_env[@]}" "$gobin" ensure \
+            --flavor "$_hop_flavor" --config "$_hop_runtime/routes.json" \
+            --port "$_hop_port" --runtime-dir "$_hop_runtime" \
+            --fingerprint "$fp" --token-fp "$token_fp" "${legacy[@]}" || return 1
+        return 0
+    fi
+
     local old_umask=$(umask) lockfd result=0
     umask 077
     {
@@ -557,9 +622,20 @@ _hosted_only_proxy_has_state() {
 
 # _hosted_only_proxy_stop <flavor>: stops only a listener whose command line
 # names this proxy's config, under the current or a legacy runtime dir (the
-# flavor-named dirs before the merge, glm-hybrid before the rename).
+# flavor-named dirs before the merge, glm-hybrid before the rename). The Go
+# impl delegates to the binary's stop subcommand (same match set, so it also
+# retires a stale LiteLLM listener after an impl switch).
 _hosted_only_proxy_stop() {
     _hosted_only_proxy_vars "$1" || return 1
+    if [[ "$_hop_impl" == go ]]; then
+        local gobin
+        gobin=$(_hosted_only_go_bin) || return 1
+        local -a legacy=()
+        local d
+        for d in $_hop_legacy_runtimes; legacy+=(--legacy-runtime "$d")
+        "$gobin" stop --flavor "$_hop_flavor" --port "$_hop_port" --runtime-dir "$_hop_runtime" "${legacy[@]}"
+        return $?
+    fi
     local pid stopped=0 cmd d
     local -a fingerprints=("$_hop_runtime/fingerprint")
     for d in "${_hop_legacy_runtimes[@]}"; do

@@ -39,6 +39,33 @@ The first start builds the binary into
 source changes. Ports, tokens, state dirs, the fingerprint protocol and the stop
 commands are unchanged.
 
+## Lifecycle (Go impl)
+
+The binary owns its own process management, so the launcher's Go path is a knob
+resolution plus one call (and the watcher is one static process instead of a
+zsh loop that spawns lsof/jq twice a second):
+
+- `ensure --flavor F --port P --runtime-dir D --fingerprint FP --token-fp TF`
+  takes `startup.lock` (interoperating with the zsh launcher's flock), compares
+  the running proxy's recorded fingerprint, restarts an idle stale one (the Go
+  `stop` also retires a stale LiteLLM listener after an impl switch), refuses
+  only a token change under a busy proxy, spawns the serve mode detached with
+  the same 8 MB log rotation, waits for health (~ms, not LiteLLM's 96 s) and
+  records the fingerprint. For the hosted-only flavors it writes `routes.json`
+  itself from the knobs, so a watcher-driven restart never pairs a new
+  fingerprint with an old route table.
+- `stop --flavor F --port P --runtime-dir D [--legacy-runtime D…]` is the
+  identity-checked stop: only listeners whose command line names this proxy's
+  config under the current or a legacy runtime dir.
+- `status` reports health, busy, listener pids and the recorded fingerprint as
+  JSON.
+- `watch … --name N --state-dir DIR` is the Go `llm-proxy-watch`: polls the
+  port's inflight files (same source as `_claude_port_serving`), restarts at
+  the first idle moment (two consecutive idle polls), keeps the
+  `watch-<name>.{pid,log}` contract and exits when current, gone, restarted or
+  past `LLM_PROXY_WATCH_TIMEOUT`. `llm-proxy-watch glm-claude|glm-codex` execs
+  it when the impl is go; LiteLLM proxies keep the zsh loop.
+
 ## Why the ports stay
 
 Ports are load-bearing even with one binary:
@@ -128,14 +155,20 @@ the route table. Python hooks and the DoH shim are not installed on this path.
 
 - Inline image **pruning/caching** (`IMAGE_BUDGET_BYTES`,
   `IMAGE_CACHE_DAYS`) is not ported.
-- Outage **streak persistence** across restarts (`HOSTED_ONLY_OUTAGE_STATE`):
-  the Go path backs off in memory only.
 - **Drift diagnostics** and the LiteLLM router `reuse:last-reset` path.
 - `cost` is not computed (LiteLLM's `model_cost`); `llm-usage` tolerates it.
-- The **DoH fallback** (`dns_fallback.py`) is Python-only; the Go binary uses
-  the system resolver.
 - LiteLLM's chat↔Responses bridge: a chat request for a Responses-only id is
   answered by the deployment's native endpoint, not translated.
+
+Ported since the first cut: the outage-streak **persistence** across restarts
+(`HOSTED_ONLY_OUTAGE_STATE`, written atomically only when the episode count
+moves, pruned past two streak windows) together with the full
+`hosted_only_hooks.py` backoff semantics — the coalesce window
+(`HOSTED_ONLY_OUTAGE_COALESCE_SECONDS`, parallel requests hitting the same
+blip no longer each double the wait) and the success clear — and the **DoH
+fallback** for the allow-listed gateway name (`ENMAAS_DNS_FALLBACK_HOSTS`,
+`ENMAAS_DNS_DOH_URLS`; the system resolver answers first and always wins),
+both knobs part of the fingerprint like the LiteLLM path's.
 
 ## Tests
 
@@ -149,5 +182,8 @@ hosted-only auth/alias/pass-through, the 503/429/402 shapes and headers, the
 cost guard rejecting an unserved model, usage JSONL fields, the stop helper —
 and the EnMaaS flavor: `master_key` auth, anthropic vs chat vs
 `#responses`-sibling routing (asserted by the upstream path the stub received),
-the wildcard route, and `additional_tools` flattening. It exits 0 with a
-`skip:` notice when `go` is not installed.
+the wildcard route, and `additional_tools` flattening. It also drives the
+launcher's Go path end to end: `ensure` start / fresh no-op / stale restart
+with `routes.json` regenerated from the knobs, the `watch` idle restart with
+its pid/log contract, and the Go branch of the zsh stop helper. It exits 0
+with a `skip:` notice when `go` is not installed.
