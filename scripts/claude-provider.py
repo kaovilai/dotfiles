@@ -173,6 +173,15 @@ def run(backend, native, args):
                                   "tiers": profile["tiers"],
                                   "models": profile["settings"].get("modelPicker", {}).get("options", [])}))
                 return 0
+            # Settings "env" is applied by Claude Code itself, but some limits
+            # (the 32k CLAUDE_CODE_MAX_OUTPUT_TOKENS cap, for one) are read
+            # before that happens. Export the entries into the child's
+            # environment too, so every knob the launcher sets in settings
+            # wins regardless of the client's timing. Existing environment
+            # (transport, credentials) is never overridden.
+            for key, value in (profile["settings"].get("env") or {}).items():
+                if isinstance(value, str):
+                    profile["env"].setdefault(key, value)
             settings_path = Path(temporary) / "settings.json"
             # T3 has no TUI: blast-radius holds tool.call on a Pane nobody can answer.
             profile["settings"].setdefault("enabledPlugins", {})["blast-radius@local-mods"] = False
