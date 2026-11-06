@@ -186,7 +186,10 @@ gateway name; the **inline image budget prune**
 (`HOSTED_ONLY_IMAGE_BUDGET_BYTES`, default 2.5 MB — the gateway caps a body and
 answers 413 — oldest image first, replaced by a note naming the tool call's
 path, a matching T3 attachment and a one-day content-addressed proxy copy, same
-text every turn for prompt caching) and the **per-image pricing** in the window
+text every turn for prompt caching; the copies live in
+`HOSTED_ONLY_IMAGE_CACHE_DIR`, which must be a directory dedicated to this
+proxy: the hourly sweep deletes expired files named `<sha1>.<image ext>`, so a
+shared directory could lose a file that happens to match) and the **per-image pricing** in the window
 clamp (`HOSTED_ONLY_IMAGE_TOKENS`); the **outage shapes** — 529, the gateway's
 503 `metering system unavailable` / `service unavailable`, connect/DNS 500s —
 and the `LIMIT_REWRITE` / `OUTAGE_REWRITE` gate split; the **quota-aware

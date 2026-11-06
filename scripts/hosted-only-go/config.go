@@ -101,7 +101,9 @@ func floatKnob(name string, def float64) float64 {
 }
 
 // imageCacheDir is HOSTED_ONLY_IMAGE_CACHE_DIR, else
-// $XDG_STATE_HOME/hosted-only-image-cache (~/.local/state when unset).
+// $XDG_STATE_HOME/hosted-only-image-cache (~/.local/state when unset). An
+// override must be a directory dedicated to this proxy: the sweep deletes
+// expired <sha1>.<ext> files in it.
 func imageCacheDir() string {
 	if dir := knob("IMAGE_CACHE_DIR", ""); dir != "" {
 		return dir
