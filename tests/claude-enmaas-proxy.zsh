@@ -1,11 +1,15 @@
 #!/bin/zsh
-# Real-proxy regression test with a loopback gateway and stub Claude client,
-# run once per impl: LiteLLM (the escape hatch; cache the pinned uv dependencies
-# first, UV_OFFLINE=1 prevents network installs) and the Go proxy (the default).
+# Real-proxy regression test with a loopback gateway and stub Claude client:
+# the Go proxy (the only impl; the LiteLLM impl is retired). Skipped when `go`
+# is not installed.
 emulate -LR zsh
+if ! command -v go >/dev/null; then
+    print -ru2 -- "skip: go not installed"
+    exit 0
+fi
 export ENMAAS_TEST_REPO="${0:A:h:h}"
 run_suite() {
-export ENMAAS_TEST_IMPL="$1"
+export ENMAAS_TEST_IMPL=go
 python3 - <<'PY'
 import concurrent.futures
 import json
@@ -76,8 +80,19 @@ class Gateway(BaseHTTPRequestHandler):
             return self.json(data)
         if self.path == '/v1/chat/completions':
             if body.get('stream'):
-                choices = [{'index': 0, 'delta': {'role': 'assistant', 'content': 'hello'}, 'finish_reason': None},
-                           {'index': 0, 'delta': {}, 'finish_reason': 'stop'}]
+                if body.get('tools'):
+                    choices = [
+                        {'index': 0, 'delta': {'role': 'assistant', 'content': None, 'tool_calls': [
+                            {'index': 0, 'id': 'call_fixture', 'type': 'function',
+                             'function': {'name': 'fixture_tool', 'arguments': ''}}]}, 'finish_reason': None},
+                        {'index': 0, 'delta': {'tool_calls': [
+                            {'index': 0, 'function': {'arguments': '{"ok":'}}]}, 'finish_reason': None},
+                        {'index': 0, 'delta': {'tool_calls': [
+                            {'index': 0, 'function': {'arguments': 'true}'}}]}, 'finish_reason': None},
+                        {'index': 0, 'delta': {}, 'finish_reason': 'tool_calls'}]
+                else:
+                    choices = [{'index': 0, 'delta': {'role': 'assistant', 'content': 'hello'}, 'finish_reason': None},
+                               {'index': 0, 'delta': {}, 'finish_reason': 'stop'}]
                 return self.sse(''.join('data: ' + json.dumps({'id': 'chat_fixture', 'object': 'chat.completion.chunk',
                     'created': 1, 'model': body['model'], 'choices': [c]}) + '\n\n' for c in choices) + 'data: [DONE]\n\n')
             message = {'role': 'assistant', 'content': 'hello'}
@@ -108,11 +123,8 @@ try:
     urllib.request.urlopen(urllib.request.Request(base + '/v1/models', headers={'Authorization': 'Bearer sk-invalid-token'}))
     raise AssertionError('unknown token accepted')
 except urllib.error.HTTPError as e:
-    # Database-free LiteLLM rejects non-master keys with its no-db error.
     error = json.load(e)
-    # LiteLLM answers a wrong token 400 'No connected db.'; the Go proxy 401.
-    rejected = (e.code, error['error']['message'])
-    assert rejected in ((400, 'No connected db.'), (401, 'invalid proxy token')), error
+    assert (e.code, error['error']['message']) == (401, 'invalid proxy token'), error
 def request(model, **extra):
     body = {'model': model, 'max_tokens': 32, 'messages': [{'role': 'user', 'content': 'offline fixture'}], **extra}
     req = urllib.request.Request(base + '/v1/messages', data=json.dumps(body).encode(),
@@ -124,16 +136,29 @@ translated = ['offline-chat', 'offline-responses', 'gpt-6-luna']
 for model in native + translated:
     with request(model) as r: data = json.load(r)
     assert data['content'][0]['text'] == 'hello', (model, data)
-# Both impls convert Messages <-> Chat/Responses for the non-Anthropic models: the
-# Go proxy used to refuse these with a 400 naming LiteLLM; since the translators
-# (translate*.go) it answers them itself, so an EnMaaS session on Go keeps GPT/Gemini.
+# The proxy converts Messages <-> Chat/Responses for the non-Anthropic models
+# itself (translate*.go), so an EnMaaS session keeps GPT/Gemini.
 for model in ['claude-sonnet-5-5', 'offline-chat']:
     with request(model, stream=True) as r: text = r.read().decode()
     assert 'hello' in text and 'message_stop' in text, (model, text)
-if True:  # tools/streaming through the translator, both impls
-    with request('offline-chat', tools=[{'name': 'fixture_tool', 'description': 'offline',
-         'input_schema': {'type': 'object', 'properties': {'ok': {'type': 'boolean'}}}}]) as r: data = json.load(r)
+if True:  # tools/streaming through the translator
+    tools = [{'name': 'fixture_tool', 'description': 'offline',
+         'input_schema': {'type': 'object', 'properties': {'ok': {'type': 'boolean'}}}}]
+    with request('offline-chat', tools=tools) as r: data = json.load(r)
     assert data['content'][0]['type'] == 'tool_use' and data['content'][0]['input'] == {'ok': True}, data
+    # streamed tool call: the block must open with the tool name and the
+    # argument fragments must assemble into the same input
+    events = []
+    with request('offline-chat', tools=tools, stream=True) as r:
+        for line in r.read().decode().splitlines():
+            if line.startswith('data: '):
+                events.append(json.loads(line[6:]))
+    starts = [e for e in events if e.get('type') == 'content_block_start'
+              and e.get('content_block', {}).get('type') == 'tool_use']
+    deltas = ''.join(e.get('delta', {}).get('partial_json', '')
+                     for e in events if e.get('type') == 'content_block_delta')
+    assert starts and starts[0]['content_block']['name'] == 'fixture_tool', events
+    assert json.loads(deltas) == {'ok': True}, deltas
 try:
     request('offline-error')
     raise AssertionError('upstream error lost')
@@ -170,9 +195,8 @@ try:
                     'CLAUDE_ENMAAS_RUNTIME_DIR': str(Path(tmp) / 'state'),
                     'CLAUDE_ENMAAS_PROXY_PORT': str(proxy_port),
                     'ENMAAS_API_BASE_URL': f'http://127.0.0.1:{gateway.server_port}/v1', 'ENMAAS_API_KEY': 'offline-key-a',
-                    'ENMAAS_TEST_IMPL': os.environ['ENMAAS_TEST_IMPL'],
-                    'CLAUDE_ENMAAS_PROXY_IMPL': os.environ['ENMAAS_TEST_IMPL'],
-                    'CLAUDE_ENMAAS_MODEL_DIALECTS': 'offline-responses=responses offline-error=chat', 'UV_OFFLINE': '1',
+                    'ENMAAS_TEST_IMPL': 'go',
+                    'CLAUDE_ENMAAS_MODEL_DIALECTS': 'offline-responses=responses offline-error=chat',
                     'ANTHROPIC_AUTH_TOKEN': 'parent-token', 'ANTHROPIC_API_KEY': 'parent-key',
                     'CLAUDE_CODE_USE_VERTEX': '1', 'CLAUDE_CODE_USE_BEDROCK': '1'})
         script = '''source "$ENMAAS_TEST_REPO/zsh/functions/claude/load.zsh"
@@ -219,9 +243,8 @@ exit $result
         expected = {'claude-sonnet-5-5': '/v1/messages',
                     'rits/zai-org/glm-5-3': '/v1/messages',
                     'rits/deepseek-ai/DeepSeek-V4.1-Flash-1017': '/v1/messages'}
-        # Both impls convert Messages <-> Chat/Responses for the non-Anthropic models
-        # (LiteLLM natively, the Go proxy via translate*.go): each model must reach
-        # the gateway on ITS dialect's endpoint, never with a Messages body.
+        # Each model must reach the gateway on ITS dialect's endpoint, never
+        # with a Messages body (the translators bridge the non-Anthropic ones).
         expected.update({'offline-chat': '/v1/chat/completions', 'offline-responses': '/v1/responses',
                          'gpt-6-luna': '/v1/responses'})
         for model, endpoint in expected.items():
@@ -237,7 +260,4 @@ finally:
     gateway.shutdown()
 PY
 }
-for impl in litellm go; do
-    print -r -- "== impl: $impl"
-    run_suite $impl || exit 1
-done
+run_suite || exit 1

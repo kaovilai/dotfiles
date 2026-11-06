@@ -196,45 +196,36 @@ claude-openai-restart() {
 }
 
 # _claude_enmaas_impl: the EnMaaS proxy impl (the controller resolves the same
-# way): CLAUDE_ENMAAS_PROXY_IMPL, then LLM_PROXY_IMPL, default `auto` = go when
-# a go toolchain is installed, else litellm. The Go proxy translates Messages <->
-# Chat/Responses itself now (translate*.go), so Claude Code keeps working with
-# the non-Anthropic models in the EnMaaS catalog; =litellm is the escape hatch.
+# way). The Go proxy is the only impl (it translates Messages <-> Chat/Responses
+# itself, translate*.go, so Claude Code keeps working with the non-Anthropic
+# models in the EnMaaS catalog); the retired CLAUDE_ENMAAS_PROXY_IMPL /
+# LLM_PROXY_IMPL=litellm escape hatch errors instead of silently using a path
+# that no longer exists.
 _claude_enmaas_impl() {
-    local impl="${CLAUDE_ENMAAS_PROXY_IMPL:-${LLM_PROXY_IMPL:-auto}}"
+    local impl="${CLAUDE_ENMAAS_PROXY_IMPL:-${LLM_PROXY_IMPL:-go}}"
     impl="${${(L)impl}//[[:space:]]/}"   # lowercase + trim, like the controller (GO and " go " mean go)
-    if [[ -z "$impl" || "$impl" == auto ]]; then
-        (( $+commands[go] )) && impl=go || impl=litellm
+    if [[ -z "$impl" || "$impl" == auto || "$impl" == go ]]; then
+        (( $+commands[go] )) || {
+            print -ru2 -- 'claude-enmaas: go not found (the Go proxy is the only impl; install a go toolchain).'
+            return 1
+        }
+        print -r -- go
+        return 0
     fi
-    print -r -- "$impl"
+    print -ru2 -- "claude-enmaas: the LiteLLM impl is retired; the Go proxy is the only impl (install a go toolchain). CLAUDE_ENMAAS_PROXY_IMPL must be go, got '$impl'."
+    return 1
 }
 
 claude-enmaas-restart() {
     local host rc
     host=$(_llm_proxy_gateway_host)
     _llm_proxy_dns_probe "$host" enmaas || return 1
-    if [[ "$(_claude_enmaas_impl)" == go ]]; then
-        # Go impl: the controller swaps (the new proxy starts alongside the old
-        # one, the old retires once the new answers) instead of kill-then-start,
-        # so a request arriving mid-restart is never refused. Nothing running
-        # just starts normally.
-        print -ru2 -- 'restart: enmaas swapping (model discovery, then zero-gap swap)'
-        ( CLAUDE_ENMAAS_FORCE_RESTART=1 claude-enmaas --version >/dev/null ) || {
-            rc=0; _llm_proxy_dns_addresses "$host" >/dev/null || rc=$?
-            if (( rc == 2 )); then _llm_proxy_dns_report "$host"; fi
-            return 1
-        }
-        _llm_proxy_wait_up "$(_claude_enmaas_port)" enmaas
-        return
-    fi
-    claude-enmaas-kill >/dev/null 2>&1  # non-zero when nothing runs; a stuck listener is caught below
-    _llm_proxy_wait_down "$(_claude_enmaas_port)" || return 1
-    # Model discovery (three catalog fetches) runs before the proxy boots, so
-    # this step is the slow one; keep the user informed instead of blanking.
-    print -ru2 -- 'restart: enmaas starting (model discovery, then proxy boot)'
-    claude-enmaas --version >/dev/null || {
-        # A launcher failure is usually config, but DNS can change between the
-        # probe above and here; only re-explain it when that is what broke.
+    _claude_enmaas_impl >/dev/null || return 1
+    # The controller swaps (the new proxy starts alongside the old one, the old
+    # retires once the new answers) instead of kill-then-start, so a request
+    # arriving mid-restart is never refused. Nothing running just starts.
+    print -ru2 -- 'restart: enmaas swapping (model discovery, then zero-gap swap)'
+    ( CLAUDE_ENMAAS_FORCE_RESTART=1 claude-enmaas --version >/dev/null ) || {
         rc=0; _llm_proxy_dns_addresses "$host" >/dev/null || rc=$?
         if (( rc == 2 )); then _llm_proxy_dns_report "$host"; fi
         return 1

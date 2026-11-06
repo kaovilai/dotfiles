@@ -33,20 +33,17 @@
 #
 # The same proxy also serves Codex (codex-t3-enmaas, scripts/codex-provider.zsh:
 # /v1/responses and /v1/chat/completions) so GLM and DeepSeek work there too.
-# It loads these hooks from scripts/ (copied next to the runtime config, loaded
-# as dotted modules; a boot failure is logged to <runtime>/proxy.log):
-#   hosted_only_hooks      rits/ models only: grammar-tool strip, thinking-off,
-#                          empty developer item filter, GLM->DeepSeek image
-#                          reroute. All models: 429 reset rewrite, image budget
-#                          prune (old inline images -> path notes before the
-#                          gateway's 10 MiB body cap 413s).
-#   unwrap_tools_middleware  rits/ models: Codex additional_tools -> tools
-#   enmaas_proxy_hooks     rits/ ids on /v1/responses use their Responses
-#                          passthrough route; hosted web_search tools dropped
-#   litellm_usage_log      one JSONL line per request for llm-usage
-#   CLAUDE_ENMAAS_VISION_FALLBACK_MODEL=<id> additionally lets LiteLLM retry a
-#   failed GLM request on that model (off by default; the hook already moves
-#   image requests to DeepSeek).
+# The Go binary (scripts/hosted-only-go) does everything the old LiteLLM
+# hooks did (a boot failure is logged to <runtime>/proxy.log): grammar-tool
+# strip and thinking-off for rits/ models, GLM->DeepSeek image reroute, Codex
+# additional_tools flattening, the 429 reset rewrite T3 auto-resumes on, image
+# budget prune before the gateway's 10 MiB body cap 413s, #responses sibling
+# routing, and the usage JSONL for llm-usage.
+#   CLAUDE_ENMAAS_VISION_FALLBACK_MODEL=<id> additionally routes that model
+#   through this proxy (off by default; image requests already move to
+#   DeepSeek). The LiteLLM-era automatic retry of a failed GLM request on it
+#   went with the LiteLLM impl; say the word and the Go proxy grows a generic
+#   fallback table.
 source "${${(%):-%N}:A:h}/enmaas-proxy.zsh"
 typeset -g _CLAUDE_ENMAAS_SCRIPTS="${${(%):-%N}:A:h:h:h:h:h}/scripts"
 
@@ -57,24 +54,18 @@ _claude_enmaas_deepseek_id() {
     print -r -- "${HOSTED_ONLY_DEEPSEEK_MODEL:-${GLM_HYBRID_DEEPSEEK_MODEL:-rits/deepseek-ai/DeepSeek-V4.1-Flash-1017}}"
 }
 
-# Exports what the proxy controller needs to load the hooks. Call in a subshell
-# before _claude_enmaas_proxy_program ensure; both launchers must set the same
-# values or the running proxy refuses the second one (hook digest).
+# Exports what the proxy controller needs: the Go source dir (its hash is the
+# code fingerprint) and the knob values both launchers must agree on or the
+# running proxy refuses the second one. Call in a subshell before
+# _claude_enmaas_proxy_program ensure. The Go binary resolves the gateway name
+# over DoH itself (ENMAAS_DNS_FALLBACK_HOSTS names the only host it may).
 _claude_enmaas_hook_env() {
-    local name file files=''
-    for name in hosted_only_hooks unwrap_tools_middleware enmaas_proxy_hooks litellm_usage_log; do
-        file="$_CLAUDE_ENMAAS_SCRIPTS/$name.py"
-        [[ -r "$file" ]] || {
-            print -ru2 -- "claude-enmaas: missing proxy hook $file."
-            return 1
-        }
-        files+="$file"$'\n'
-    done
-    export CLAUDE_ENMAAS_HOOK_FILES="${files%$'\n'}"
+    [[ -d "$_CLAUDE_ENMAAS_SCRIPTS/hosted-only-go" ]] || {
+        print -ru2 -- "claude-enmaas: missing $_CLAUDE_ENMAAS_SCRIPTS/hosted-only-go."
+        return 1
+    }
+    export CLAUDE_ENMAAS_GO_SRC="$_CLAUDE_ENMAAS_SCRIPTS/hosted-only-go"
     export ENMAAS_RESPONSES_ROUTES="$(_claude_enmaas_glm_id),$(_claude_enmaas_deepseek_id)"
-    # DoH fallback for the gateway name only (scripts/dns_fallback.py, loaded
-    # as sitecustomize in the proxy child). CLAUDE_ENMAAS_DNS_FALLBACK=0 off.
-    export CLAUDE_ENMAAS_DNS_SHIM="$_CLAUDE_ENMAAS_SCRIPTS/dns_fallback.py"
     export ENMAAS_DNS_FALLBACK_HOSTS="$(_claude_enmaas_gateway_host)"
 }
 
@@ -202,8 +193,6 @@ _claude_enmaas_models() {
 # Build JSON (also valid YAML) so model ids/labels/URLs cannot inject config.
 # Anthropic-compatible IDs are deliberately determined by discovery membership,
 # explicit dialect metadata/overrides, or Claude-family naming; never owned_by.
-# Optional _claude_enmaas_fallback_from/_to name a text-only model and the
-# multimodal model LiteLLM retries it on after an upstream error (e.g. images).
 _claude_enmaas_config() {
     local root="$1" token="$2" models="$3"; shift 3
     # request_timeout: cut a hung upstream (no answer, no gateway 504) so the
@@ -212,7 +201,6 @@ _claude_enmaas_config() {
     # gateway (measured 98 s for 900k).
     local rt="${ENMAAS_REQUEST_TIMEOUT:-300}"
     jq -nc --arg root "$root" --arg token "$token" \
-        --arg fb_from "${_claude_enmaas_fallback_from-}" --arg fb_to "${_claude_enmaas_fallback_to-}" \
         --arg routes "${ENMAAS_RESPONSES_ROUTES-}" \
         --argjson rt "$rt" \
         --argjson models "$models" --args '
@@ -226,8 +214,8 @@ _claude_enmaas_config() {
           api_base: ($root + (if $d == "anthropic" then "" else "/v1" end)),
           request_timeout: $rt}};
         # "<id>#responses" siblings (Responses passthrough at /v1, upstream id
-        # without any bridge prefix) serve Codex on /v1/responses; the proxy hook
-        # enmaas_proxy_hooks picks them. Needed for the hosted vLLM models
+        # without any bridge prefix) serve Codex on /v1/responses; the Go proxy
+        # picks them. Needed for the hosted vLLM models
         # (GLM, DeepSeek: Messages dialect at the root for Claude Code) and for
         # every responses-dialect id (whose "openai/responses/<id>" route would
         # send the bridge prefix upstream on a native Responses call).
@@ -245,13 +233,7 @@ _claude_enmaas_config() {
         | ($hosted + ($ids | map(select(. as $id | dialect($id) == "responses"))) | unique
             | map(passthrough(.))) as $siblings
         | {model_list: ([entry("*"; "chat")] + $entries + $siblings),
-           general_settings: {master_key: $token},
-           # Otherwise LiteLLM sends all openai/* Messages requests to Responses,
-           # bypassing the per-model responses/ bridge and leaking its prefix.
-           litellm_settings: {drop_params: true,
-             use_chat_completions_url_for_anthropic_messages: true}}
-          + (if $fb_from != "" and $fb_to != "" and $fb_from != $fb_to
-             then {router_settings: {fallbacks: [{($fb_from): [$fb_to]}]}} else {} end)' "$@"
+           general_settings: {master_key: $token}}' "$@"
 }
 
 # Session cleanup only stops its Claude child; the shared proxy persists.
@@ -391,9 +373,8 @@ claude-enmaas() (
     # gateway transport limits or global Claude settings.
     local glm ds
     glm=$(_claude_enmaas_glm_id) ds=$(_claude_enmaas_deepseek_id)
-    # GLM is text-only; the proxy hook moves requests carrying an image to
-    # DeepSeek. LiteLLM retrying a failed GLM request on another model is opt-in
-    # (it would be a paid model that may be over its cap).
+    # GLM is text-only; the Go proxy moves requests carrying an image to
+    # DeepSeek. The vision-fallback knob only adds the model's route now.
     local vision_fallback="${CLAUDE_ENMAAS_VISION_FALLBACK_MODEL-}"
     local -a ids pairs reply
     ids=("${(@f)$(jq -r '.data[].id' <<< "$models")}" "$selected" "$opus" "$sonnet" "$haiku" "$fable" "$glm" "$ds" "$vision_fallback")
@@ -439,8 +420,8 @@ claude-enmaas() (
     (( ${#reply} )) && settings="$reply[2]"
     # Claude Code caps one response at 32k output tokens by default; the hosted
     # and gateway models take more, and the proxy clamps at the window edge.
-    # COUPLED to scripts/hosted_only_hooks.py (clamp_output, MIN_OUTPUT, MAX_MODEL_LEN):
-    # changing this default means re-reading the comment above MIN_OUTPUT there.
+    # COUPLED to the Go proxy's clamp (scripts/hosted-only-go, MIN_OUTPUT /
+    # MAX_MODEL_LEN): changing this default means re-reading that comment.
     local maxout="${ENMAAS_MAX_OUTPUT_TOKENS:-128000}"
     # Same compaction-window derivation as hosted-only (see
     # _claude_auto_compact_window in common.zsh). A gateway model with a smaller
@@ -464,22 +445,19 @@ claude-enmaas() (
     # window derived above; absent when the knob says off
     [[ -n "$compact_window" ]] && settings=$(jq -c --arg cw "$compact_window" '.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW = $cw' <<< "$settings")
     local token base="http://127.0.0.1:${port}" config service
-    local litellm_version="${CLAUDE_OPENAI_PROXY_LITELLM_VERSION:-1.97.0}"
-    local fastapi_version="${CLAUDE_OPENAI_PROXY_FASTAPI_VERSION:-0.136.3}"
-    # 60 s killed a booting proxy on small hosts: the same LiteLLM needed 96 s
-    # on WSL (proxies.zsh documents it), so every launch there failed (audit)
+    # 60 s killed a booting proxy on small hosts, so every launch there failed
+    # (audit); the Go binary boots in ms but the health wait keeps the budget.
     local timeout="${CLAUDE_ENMAAS_PROXY_START_TIMEOUT:-180}"
     [[ "$timeout" == <-> && "$timeout" -gt 0 && "$timeout" -le 900 ]] || {
         print -ru2 -- 'claude-enmaas: CLAUDE_ENMAAS_PROXY_START_TIMEOUT must be 1 through 900 seconds.'
         return 1
     }
     _claude_enmaas_hook_env || return 1
-    config=$(_claude_enmaas_fallback_from="$glm" _claude_enmaas_fallback_to="$vision_fallback" \
-        _claude_enmaas_config "$root" '' "$models" "${ids[@]}") || return 1
+    config=$(_claude_enmaas_config "$root" '' "$models" "${ids[@]}") || return 1
     _claude_enmaas_proxy_program > "${_claude_enmaas_tmp}/proxy.py" || return 1
     export ENMAAS_API_KEY
     service=$(print -rn -- "$config" | python3 "${_claude_enmaas_tmp}/proxy.py" ensure \
-        "$port" "$litellm_version" "$fastapi_version" "$timeout" "$selected" "$opus" "$sonnet" "$haiku" "$fable" "$glm" "$ds" \
+        "$port" "$timeout" "$selected" "$opus" "$sonnet" "$haiku" "$fable" "$glm" "$ds" \
         "${glm}#responses" "${ds}#responses" ${${=CLAUDE_ENMAAS_MODEL_DIALECTS}%=*}) || return 1
     token=$(jq -er '.token' <<< "$service") || return 1
     # A running proxy's frozen routes win over newly discovered dialects.
@@ -552,7 +530,6 @@ _claude_enmaas_codex_proxy() (
     trap 'command rm -rf -- "$tmp"' EXIT
     _claude_enmaas_proxy_program > "$tmp/proxy.py" || return 1
     service=$(print -rn -- "$config" | python3 "$tmp/proxy.py" ensure "$port" \
-        "${CLAUDE_OPENAI_PROXY_LITELLM_VERSION:-1.97.0}" "${CLAUDE_OPENAI_PROXY_FASTAPI_VERSION:-0.136.3}" \
         "${CLAUDE_ENMAAS_PROXY_START_TIMEOUT:-180}" "$glm" "$ds" "${glm}#responses" "${ds}#responses") || return 1
     jq -nc --argjson s "$service" --arg port "$port" --arg glm "$glm" --arg ds "$ds" \
         '{token: $s.token, port: ($port | tonumber), glm: $glm, deepseek: $ds}'
@@ -590,7 +567,6 @@ _claude_enmaas_check() (
     trap 'command rm -rf -- "$tmp"' EXIT
     _claude_enmaas_proxy_program > "$tmp/proxy.py" || return 1
     print -rn -- "$config" | python3 "$tmp/proxy.py" check "$port" \
-        "${CLAUDE_OPENAI_PROXY_LITELLM_VERSION:-1.97.0}" "${CLAUDE_OPENAI_PROXY_FASTAPI_VERSION:-0.136.3}" \
         0 "$glm" "$ds" "${glm}#responses" "${ds}#responses"
 )
 

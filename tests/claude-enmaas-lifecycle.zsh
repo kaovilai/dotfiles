@@ -1,9 +1,12 @@
 #!/bin/zsh
-# One standard LiteLLM service, tested on fixture-owned ports with cached deps.
+# One standard EnMaaS service (the Go proxy — the only impl), tested on
+# fixture-owned ports. Skipped when `go` is not installed.
 emulate -LR zsh
+if ! command -v go >/dev/null; then
+    print -ru2 -- "skip: go not installed"
+    exit 0
+fi
 export ENMAAS_TEST_REPO="${0:A:h:h}"
-# Real LiteLLM regression: pin the impl under test (the default is go).
-export CLAUDE_ENMAAS_PROXY_IMPL=litellm
 python3 - <<'PY'
 import concurrent.futures
 import json
@@ -19,7 +22,14 @@ import urllib.error
 import urllib.request
 
 repo = Path(os.environ['ENMAAS_TEST_REPO'])
-env = dict(os.environ, UV_OFFLINE='1', ENMAAS_API_KEY='offline-lifecycle-key')
+env = dict(os.environ, ENMAAS_API_KEY='offline-lifecycle-key',
+           CLAUDE_ENMAAS_GO_SRC=str(repo / 'scripts' / 'hosted-only-go'))
+# subprocess env values must be strings: an unset XDG_STATE_HOME would put
+# None into the child environment and every subprocess.run would TypeError.
+if os.environ.get('CLAUDE_ENMAAS_RUNTIME_DIR'):
+    env['XDG_STATE_HOME'] = os.environ['CLAUDE_ENMAAS_RUNTIME_DIR']
+elif os.environ.get('XDG_STATE_HOME'):
+    env['XDG_STATE_HOME'] = os.environ['XDG_STATE_HOME']
 
 
 def wait_for(check, description, timeout=15):
@@ -47,7 +57,7 @@ with tempfile.TemporaryDirectory(prefix='enmaas-lifecycle-') as tmp:
         'general_settings': {'master_key': ''}, 'litellm_settings': {'drop_params': True}}
 
     def controller(op, port, value=config, required=('offline-model',), key=None):
-        args = [str(port), '1.97.0', '0.136.3', '90', *required] if op == 'ensure' else [str(port)]
+        args = [str(port), '90', *required] if op == 'ensure' else [str(port)]
         return subprocess.run(['python3', str(program), op, *args],
             env=dict(env, ENMAAS_API_KEY=key or env['ENMAAS_API_KEY']), input=json.dumps(value),
             text=True, capture_output=True, timeout=110)
@@ -103,14 +113,15 @@ with tempfile.TemporaryDirectory(prefix='enmaas-lifecycle-') as tmp:
         assert helper['ready'](info, root), 'config mismatch stopped a busy service'
         print('PASS: busy proxy is reused on key change; incompatible routing requires explicit restart')
 
-        # Idle: the same key change restarts the proxy with a new identity.
+        # Idle: the same key change swaps the proxy (zero-gap; the Go swap
+        # keeps the token so a client holding it stays valid on either listener).
         wait_for(lambda: not helper['busy'](port), 'closed client connection still busy')
         restarted = controller('ensure', port, key='different-key')
-        assert restarted.returncode == 0 and 'restarting the idle proxy' in restarted.stderr, restarted.stderr
+        assert restarted.returncode == 0 and 'zero-gap swap' in restarted.stderr, restarted.stderr
         info = json.loads((root / 'proxy.json').read_text())
-        assert info['pid'] != original_pid
+        assert info['pid'] != original_pid and info['token'] == original_token
         original_pid, original_token = info['pid'], info['token']
-        print('PASS: idle proxy restarts on key change')
+        print('PASS: idle proxy swaps on key change, token kept')
 
         # Kill only the recorded, birth-time-verified group owned by this fixture.
         assert helper['owned'](info)
@@ -126,7 +137,7 @@ with tempfile.TemporaryDirectory(prefix='enmaas-lifecycle-') as tmp:
             raise AssertionError('old proxy token accepted')
         except urllib.error.HTTPError as error:
             body = json.load(error)
-            assert error.code == 400 and body['error']['message'] == 'No connected db.', body
+            assert (error.code, body['error']['message']) == (401, 'invalid proxy token'), (error.code, body)
         print('PASS: crash/restart uses new identity and rejects old token')
 
         stopped = controller('stop', port)

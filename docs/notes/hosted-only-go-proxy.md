@@ -1,12 +1,13 @@
 # Go proxy for the hosted-only and EnMaaS launchers
 
-The stdlib-only Go binary in `scripts/hosted-only-go` is the **default** proxy
-for every launcher: the hosted-only ones (`claude-hosted-only`,
+The stdlib-only Go binary in `scripts/hosted-only-go` is the **only** proxy
+for these launchers: the hosted-only ones (`claude-hosted-only`,
 `codex-hosted-only` and their T3 launchers) and EnMaaS (`claude-enmaas`,
-:4146). `litellm[proxy]` stays as the escape hatch (`=litellm`) for a machine
-without a go toolchain and for anything the Go proxy gets wrong. EnMaaS needed
-the Messages <-> chat/Responses translators first — see "EnMaaS: dialect
-translation" below.
+:4146). The LiteLLM impl is retired — a go toolchain is required, and the old
+`HOSTED_ONLY_PROXY_IMPL` / `CLAUDE_ENMAAS_PROXY_IMPL` / `LLM_PROXY_IMPL` =
+`litellm` escape-hatch knobs now fail loudly. (The openai and vertex launchers
+still run LiteLLM for their own flavors.) EnMaaS needed the Messages <->
+chat/Responses translators first — see "EnMaaS: dialect translation" below.
 
 It serves both current proxies from one binary:
 
@@ -25,28 +26,15 @@ processes (enmaas + Claude + Codex), ~900 MB and three slow cold starts; today
 it is two (enmaas :4146, merged hosted-only :4148). The Go binary is ~10 MB and
 starts in milliseconds.
 
-## Choosing the impl
+## Impl knobs (retired)
 
-| knob | effect |
-|---|---|
-| (unset) | both: `auto` = go when a go toolchain is installed, else litellm |
-| `HOSTED_ONLY_PROXY_IMPL=litellm\|go\|auto` | the hosted-only launchers (also the retired `GLM_HYBRID_PROXY_IMPL`) |
-| `CLAUDE_ENMAAS_PROXY_IMPL=litellm\|go\|auto` | the EnMaaS controller |
-| `LLM_PROXY_IMPL=litellm\|go` | every proxy at once; a per-launcher knob beats it |
-
-```zsh
-LLM_PROXY_IMPL=litellm claude-hosted-only     # the escape hatch, this launch
-export LLM_PROXY_IMPL=litellm                 # every launcher in this shell
-CLAUDE_ENMAAS_PROXY_IMPL=go claude-enmaas     # opt the EnMaaS proxy into Go
-```
-
-The knob is part of the proxy fingerprint, like a hook edit, so flipping it
-restarts an idle proxy on the next launch; one serving a request is reused with
-a notice until `claude-hosted-only-restart` / `claude-enmaas-restart` /
-`codex-hosted-only --stop-proxy`. The first restart after the default flipped is
-a LiteLLM→Go swap on the shared port: the running LiteLLM listener shares it
-through the runtime shim's `SO_REUSEPORT` (#613), the old pid is retired only
-once the Go listener answers, and the probe in the soak saw zero refusals.
+`HOSTED_ONLY_PROXY_IMPL`, `CLAUDE_ENMAAS_PROXY_IMPL` and `LLM_PROXY_IMPL` used
+to pick the impl. They no longer pick anything: the accepted values (unset,
+`auto`, `go`) all mean the Go proxy and do not change the fingerprint, so
+flipping an old shell from `auto` to `go` reuses the running proxy as fresh.
+`litellm` fails the launch with the retirement message; any other value fails
+it with the same error naming the knob. A missing go toolchain fails the launch
+the same way (install one — `dnf install golang` / `apt install golang-go`).
 
 The first start builds the binary into
 `${XDG_STATE_HOME:-~/.local/state}/hosted-only-go/`, rebuilding when a module
@@ -62,7 +50,8 @@ zsh loop that spawns lsof/jq twice a second):
 - `ensure --flavor F --port P --runtime-dir D --fingerprint FP --token-fp TF`
   takes `startup.lock` (interoperating with the zsh launcher's flock), compares
   the running proxy's recorded fingerprint, restarts an idle stale one (the Go
-  `stop` also retires a stale LiteLLM listener after an impl switch), refuses
+  `stop` also retires a stale LiteLLM listener left over from before the
+  retirement), refuses
   only a token change under a busy proxy, spawns the serve mode detached with
   the same 8 MB log rotation, waits for health (~ms, not LiteLLM's 96 s) and
   records the fingerprint. For the hosted-only flavors it writes `routes.json`
@@ -76,7 +65,7 @@ zsh loop that spawns lsof/jq twice a second):
   predates the patch cannot share the port; the new process then exits at bind
   and `ensure` falls back to stop-then-start once. `HOSTED_ONLY_FORCE_RESTART`
   forces the swap even when the fingerprint is current or the proxy is busy, the
-  same knob the `*-hosted-only-restart` commands use on the LiteLLM path.
+  same knob the `*-hosted-only-restart` commands use.
 - `stop --flavor F --port P --runtime-dir D [--legacy-runtime D…]` is the
   identity-checked stop: only listeners whose command line names this proxy's
   config under the current or a legacy runtime dir.
@@ -87,7 +76,7 @@ zsh loop that spawns lsof/jq twice a second):
   the first idle moment (two consecutive idle polls), keeps the
   `watch-<name>.{pid,log}` contract and exits when current, gone, restarted or
   past `LLM_PROXY_WATCH_TIMEOUT`. `llm-proxy-watch glm-claude|glm-codex` execs
-  it when the impl is go; LiteLLM proxies keep the zsh loop.
+  it.
 
 ## Why the ports stay
 
@@ -123,24 +112,26 @@ in that table, and an id outside it answers 400.
 
 ## EnMaaS flavor
 
-The launcher already generates LiteLLM `config.json` (per-id dialect,
-`api_base`, `<id>#responses` siblings, `master_key`). The Go proxy reads that
-file as its route table instead of inventing a second format:
+The launcher generates a `config.json` (per-id dialect, `api_base`,
+`<id>#responses` siblings, `master_key` — the shape the config generator has
+always produced). The Go proxy reads that file as its route table instead of
+inventing a second format:
 
 - `anthropic/<id>` → `/v1/messages` at the gateway root (Claude Code, GLM,
   DeepSeek on the Messages dialect).
 - `openai/<id>` → `/v1/chat/completions`, or `/v1/responses` when the client
   uses the Responses endpoint.
 - `openai/responses/<id>` → Responses dialect.
-- `<id>#responses` sibling → served on `/v1/responses` (mirrors
-  `enmaas_proxy_hooks.route_model`); the suffix is stripped before upstream.
+- `<id>#responses` sibling → served on `/v1/responses` (what the old
+  EnMaaS hook routed); the suffix is stripped before upstream.
 - `*` (wildcard) → openai chat for any id not registered.
 - Local token = `general_settings.master_key`.
 
-Behaviour ported from the EnMaaS hooks: the `rits/` web-search drop (shared with
-hosted-only), Codex `additional_tools` items flattened into `tools`
-(`unwrap_tools_middleware.py`), and per-endpoint fallback naming falls out of
-the route table. Python hooks and the DoH shim are not installed on this path.
+Behaviour ported from the old Python hooks: the `rits/` web-search drop
+(shared with hosted-only), Codex `additional_tools` items flattened into
+`tools`, and per-endpoint fallback naming falls out of the route table. No
+Python hooks or DoH sitecustomize shim are installed; the binary resolves the
+gateway name over DoH itself.
 
 ## What the Go path implements (all flavors)
 
@@ -210,9 +201,9 @@ streams.
 The EnMaaS flavor serves Claude Code over `/v1/messages` for every catalog
 model, GPT and Gemini included. Those are chat (24 routes today) or, when pinned
 with `CLAUDE_ENMAAS_MODEL_DIALECTS`, Responses deployments, so something must
-convert Messages <-> chat/Responses — tools and streaming included. LiteLLM did;
-since the translators the Go proxy does it itself, which is what let EnMaaS
-default to Go (LiteLLM stays as the `=litellm` escape hatch).
+convert Messages <-> chat/Responses — tools and streaming included. LiteLLM
+used to; since the translators the Go proxy does it itself, which is what let
+the LiteLLM impl retire.
 
 - `translate.go` — the `translator` contract (`Request`, `Response`, `Stream`,
   `Error`), the shared SSE reader and the status -> Anthropic error-type map.

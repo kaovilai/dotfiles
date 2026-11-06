@@ -78,7 +78,7 @@ def strip_model(model):
     """Display name: lowercase, provider/org prefixes, build-date suffix, [1m] and #responses dropped."""
     if not model:
         return "?"
-    # "#responses" = enmaas_proxy_hooks' /v1/responses sibling route of the same model;
+    # "#responses" = the EnMaaS proxy's /v1/responses sibling route of the same model;
     # "#openai" = the merged hosted-only proxy's openai-dialect group (same model)
     m = str(model).lower().replace("[1m]", "").removesuffix("#responses").removesuffix("#openai")
     if "glm" in m:

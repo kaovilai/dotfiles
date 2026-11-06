@@ -20,7 +20,7 @@ from EnMaaS), `status` (what the client sees), `rewritten`, `retry_after`
 it) and, only when upstream sends limit data the hooks do not parse, `drift`;
 see docs/notes/enmaas-reset-forward-compat.md. Callback order matters: LiteLLM runs the logging
 callbacks when the upstream call raises, *before* the proxy's
-async_post_call_failure_hook (hosted_only_hooks.rewrite_limit, which turns a
+async_post_call_failure_hook (the 429 rewrites, which turn a
 429 into a 503 "(reset after ...)" for /v1/messages and edits the exception
 in place). So the usual view here is the original 429, and the rewrite is
 predicted with the hooks' own limit_reset(); if the logger ever runs late and

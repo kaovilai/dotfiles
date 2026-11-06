@@ -259,7 +259,7 @@ _claude_port_serving() {
 # raise (CLAUDE_CODE_MAX_OUTPUT_TOKENS, default 128000). The proxy serves
 # 1,048,576 and vLLM rejects input + max_tokens above it, so at the client's own
 # threshold (~967k for a 1M window) a 128000 request overflows and the proxy
-# has to trim max_tokens (hosted_only_hooks.clamp_output) or, when drift eats
+# has to trim max_tokens (the Go proxy's clamp) or, when drift eats
 # the room, answer a compaction-hint 400. Setting the window so the threshold
 # leaves room for the FULL output budget plus a token-count drift margin makes
 # the client compact proactively instead:
@@ -267,7 +267,7 @@ _claude_port_serving() {
 # (128000 output, 45000 drift -> 908000; threshold 875000.) The clamp and hint
 # stay as the backstop for what the margin does not cover.
 #
-# COUPLED (read hosted_only_hooks.py above MIN_OUTPUT before changing any):
+# COUPLED (read the Go proxy's MIN_OUTPUT comment before changing any):
 # MAX_MODEL_LEN / OUTPUT_RESERVE (hook knobs, same defaults), the output cap
 # the caller passes, HOSTED_ONLY_COMPACT_DRIFT_MARGIN, and the 33000 client
 # constant, which is Claude Code version specific - recheck after a client

@@ -4,9 +4,6 @@
 emulate -LR zsh
 setopt err_exit pipe_fail
 umask 077
-# Mocked launcher contracts over a fake repo tree (no Go sources in it): they
-# exercise the LiteLLM impl's controller paths, so pin it; the default is go.
-export CLAUDE_ENMAAS_PROXY_IMPL=litellm
 local repo="${0:A:h:h}" tmp run_pid=''
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/claude-enmaas-tests.XXXXXXXX")
 export XDG_CACHE_HOME="$tmp/cache"
@@ -41,7 +38,7 @@ if op == 'ensure':
  (p/'ensure.json').write_text(json.dumps({'argv':sys.argv[2:]}))
  (p/'registration.json').write_text(json.dumps({'token':token, 'model_list':config['model_list'], 'config':config,
      'upstream_key':os.environ['ENMAAS_API_KEY'],
-     'hook_files':os.environ.get('CLAUDE_ENMAAS_HOOK_FILES'), 'routes':os.environ.get('ENMAAS_RESPONSES_ROUTES')}))
+     'go_src':os.environ.get('CLAUDE_ENMAAS_GO_SRC'), 'routes':os.environ.get('ENMAAS_RESPONSES_ROUTES')}))
  (p/'session-path').write_text(str(Path(__file__).parent))
  (p/'program-mode').write_text(oct(Path(__file__).stat().st_mode & 0o777))
  (p/'directory-mode').write_text(oct(Path(__file__).parent.stat().st_mode & 0o777))
@@ -170,10 +167,8 @@ assert m[ds]['model']=='anthropic/'+ds and m[ds]['api_base']==root, 'DeepSeek mu
 for hosted in (glm, ds):
     assert m[hosted+'#responses']['model']=='openai/'+hosted and m[hosted+'#responses']['api_base']==root+'/v1'
 assert reg['routes']==glm+','+ds
-hooks=reg['hook_files'].split('\n')
-assert [Path(h).name for h in hooks]==['hosted_only_hooks.py','unwrap_tools_middleware.py','enmaas_proxy_hooks.py','litellm_usage_log.py'], hooks
-assert all(Path(h).is_file() for h in hooks)
-assert 'router_settings' not in reg['config'], 'no paid-model vision fallback unless asked for'
+assert Path(reg['go_src']).is_dir() and (Path(reg['go_src'])/'go.mod').is_file(), reg['go_src']
+assert 'fallbacks' not in reg['config'], 'no paid-model vision fallback unless asked for'
 assert all(row['api_key']=='os.environ/ENMAAS_API_KEY' for row in m.values())
 assert reg['upstream_key']=='upstream-test-secret'
 assert (c/'program-mode').read_text()=='0o600'; assert (c/'directory-mode').read_text()=='0o700'
@@ -211,11 +206,10 @@ assert all('upstream-test-secret' not in json.dumps(r['argv']) and '-L' not in r
 assert 'gpt-6.1-sol' in ids and 'gpt-6-luna' in ids
 assert 'upstream-test-secret' not in (p/'stdout').read_text()+(p/'stderr').read_text()+json.dumps(settings)
 argv=json.loads((c/'ensure.json').read_text())['argv']
-assert argv==['4146','1.97.0','0.136.3','3','gemini-3-pro','claude-opus-4-6','claude-sonnet-4-6','claude-haiku-4-5','claude-sonnet-4-6',glm,ds,glm+'#responses',ds+'#responses'], argv
+assert argv==['4146','3','gemini-3-pro','claude-opus-4-6','claude-sonnet-4-6','claude-haiku-4-5','claude-sonnet-4-6',glm,ds,glm+'#responses',ds+'#responses'], argv
 print('ok - routing, discovery union, hosted routes, hooks, settings, auth, argv, modes and private-file cleanup')
 PY
 local config=$(_claude_enmaas_config 'https://gateway.example' 'test-token' '{"data":[]}' 'custom')
-_claude_enmaas_assert 'config enables explicit Chat conversion' test "$(jq -r '.litellm_settings.use_chat_completions_url_for_anthropic_messages' <<< "$config")" = true
 _claude_enmaas_assert 'config contains no literal upstream credential' test "$(jq -r '.model_list | all(.litellm_params.api_key == "os.environ/ENMAAS_API_KEY")' <<< "$config")" = true
 
 export ENMAAS_TEST_CLAUDE_STATUS=0
@@ -369,53 +363,30 @@ print('ok - TERM removes only mock Claude and private files')
 PY
 unset ENMAAS_TEST_CLAUDE_WAIT
 
-# Opt-in LiteLLM fallback for a failed GLM request (paid model, so never default).
+# The vision-fallback knob now only routes the model (the LiteLLM-era automatic
+# retry went with the LiteLLM impl).
 mkdir "$tmp/fallback-capture"
 export ENMAAS_TEST_CAPTURE="$tmp/fallback-capture"
 CLAUDE_ENMAAS_VISION_FALLBACK_MODEL=claude-sonnet-4-6 claude-enmaas >"$tmp/stdout" 2>"$tmp/stderr"
-_claude_enmaas_assert 'explicit vision fallback model is routed' test "$(jq -c '.config.router_settings.fallbacks' "$ENMAAS_TEST_CAPTURE/registration.json")" = '[{"rits/zai-org/glm-5-3":["claude-sonnet-4-6"]}]'
+_claude_enmaas_assert 'explicit vision fallback model is routed' test "$(jq -r '.config.model_list[] | select(.model_name=="claude-sonnet-4-6") | .litellm_params.model' "$ENMAAS_TEST_CAPTURE/registration.json")" = 'anthropic/claude-sonnet-4-6'
 
-# Hook env: every hook module exists and loads as a dotted LiteLLM callback name
-# (LiteLLM splits on '.', so a file path or `file.py:name` breaks proxy boot).
-( _claude_enmaas_hook_env; python3 - "$CLAUDE_ENMAAS_HOOK_FILES" <<'PY'
-import re, sys
-from pathlib import Path
-for f in map(Path, sys.argv[1].split('\n')):
-    assert f.is_file() and re.fullmatch(r'[A-Za-z_]\w*', f.stem), f
-    assert 'proxy_handler_instance' in f.read_text(), f
-print('ok - hook modules exist and expose proxy_handler_instance')
-PY
-)
+# Go env: the controller gets the Go source dir and the knob values.
+(
+    _claude_enmaas_hook_env
+    [[ "$CLAUDE_ENMAAS_GO_SRC" == "$repo/scripts/hosted-only-go" ]] || exit 1
+    [[ "$ENMAAS_RESPONSES_ROUTES" == "rits/zai-org/glm-5-3,rits/deepseek-ai/DeepSeek-V4.1-Flash-1017" ]] || exit 2
+) || fail "hook env does not export the Go source dir and routes"
 
-# Exercise the actual emitted controller functions with patched sockets/processes.
-# Never touches a real runtime or listener.
+# Exercise the actual emitted controller functions with patched sockets,
+# processes and go_binary. Never touches a real runtime, listener or toolchain.
 python3 - "$tmp/actual-daemon.py" "$tmp" <<'PY'
 import json, os, runpy, sys
 from pathlib import Path
 from unittest.mock import patch
 p=Path(sys.argv[2]); g=runpy.run_path(sys.argv[1]); ns=g['ensure'].__globals__
 
-# Hook digest follows hook code and the knobs the hooks read, nothing else.
-hdir=p/'hooks'; hdir.mkdir()
-for name in ('first_hook.py','second_hook.py'): (hdir/name).write_text('proxy_handler_instance = 1\n')
-files=[hdir/'first_hook.py', hdir/'second_hook.py']
-with patch.dict(os.environ, {'CLAUDE_ENMAAS_HOOK_FILES': '\n'.join(map(str, files))}):
-    assert g['hook_files']()==files
-    d0=g['hook_digest'](files)
-    (hdir/'second_hook.py').write_text('proxy_handler_instance = 2\n')
-    d1=g['hook_digest'](files); assert d1!=d0, 'hook code change not detected'
-    with patch.dict(os.environ, {'HOSTED_ONLY_VISION_FALLBACK':'0'}):
-        assert g['hook_digest'](files)!=d1, 'hook knob change not detected'
-    with patch.dict(os.environ, {'UNRELATED_KNOB':'x'}):
-        assert g['hook_digest'](files)==d1
-assert g['hook_digest']([])==''
-root=p/'runtime-hooks'; root.mkdir(mode=0o700)
-assert g['install_hooks'](root, files)==['first_hook.proxy_handler_instance','second_hook.proxy_handler_instance']
-assert (root/'first_hook.py').stat().st_mode & 0o777==0o600
-
-# ensure(): not owned -> spawn pinned uv with dotted callbacks, a proxy log and a filtered env.
 config={'model_list':[{'model_name':'*','litellm_params':{'model':'openai/*','api_base':'http://x/v1'}}],
-        'general_settings':{'master_key':''},'litellm_settings':{'drop_params':True}}
+        'general_settings':{'master_key':''}}
 spawned=[]
 class FakeChild:
     pid=999999
@@ -429,66 +400,71 @@ class OpenSocket:
     def setsockopt(self,*a): pass
     def bind(self,*a): pass
 env={'ENMAAS_API_KEY':'unit-upstream-secret','ANTHROPIC_API_KEY':'other-secret','HOSTED_ONLY_VISION_FALLBACK':'0',
-     'LLM_USAGE_DIR':str(p/'usage'),'CLAUDE_ENMAAS_HOOK_FILES':'\n'.join(map(str, files)),'ENMAAS_RESPONSES_ROUTES':'a,b'}
+     'LLM_USAGE_DIR':str(p/'usage'),'ENMAAS_RESPONSES_ROUTES':'a,b','CLAUDE_ENMAAS_GO_SRC':'/fake/go-src'}
 froot=p/'runtime-spawn'; froot.mkdir(mode=0o700)
 fresh=lambda: json.loads(json.dumps(config))
-with patch.dict(os.environ, env), patch.object(ns['subprocess'],'Popen',spawn), patch.object(ns['socket'],'socket',OpenSocket), \
-     patch.dict(ns, {'listeners':lambda port:set(),'birth':lambda pid:'t0','ready':lambda info,root:True}):
-    g['ensure'](froot, 4166, fresh(), ['1.97.0','0.136.3'], 3, [])
+gobin=('fake-go-bin', 'hash-1')
+
+# ensure(): not owned -> spawn the Go binary with the generated config, a
+# proxy log and a filtered env; identity records the source hash.
+with patch.dict(os.environ, env), patch.object(ns['subprocess'],'Popen',spawn), patch.object(ns['socket'],'socket',OpenSocket),      patch.dict(ns, {'listeners':lambda port:set(),'birth':lambda pid:'t0','ready':lambda info,root:True,'go_binary':lambda: gobin}):
+    g['ensure'](froot, 4166, fresh(), 3, [])
 argv,options=spawned[0]
+assert argv==['fake-go-bin','--flavor','enmaas','--config',str(froot/'config.json'),'--port','4166'], argv
 cfg=json.loads((froot/'config.json').read_text())
-assert cfg['litellm_settings']['callbacks']==['first_hook.proxy_handler_instance','second_hook.proxy_handler_instance'], cfg
-assert all('/' not in c and ':' not in c and c.count('.')==1 for c in cfg['litellm_settings']['callbacks'])
-assert (froot/'first_hook.py').exists() and (froot/'second_hook.py').exists(), 'hooks must sit next to config.json'
-assert 'litellm[proxy]==1.97.0' in argv and 'fastapi==0.136.3' in argv and str(froot/'config.json') in argv
+assert cfg['model_list']==config['model_list'] and cfg['general_settings']['master_key'], cfg
+assert 'callbacks' not in cfg and 'litellm_settings' not in cfg, 'no LiteLLM callback blocks on the Go path'
 e=options['env']
 assert e['HOSTED_ONLY_VISION_FALLBACK']=='0' and e['LLM_USAGE_DIR']==str(p/'usage') and e['ENMAAS_RESPONSES_ROUTES']=='a,b'
+assert 'CLAUDE_ENMAAS_GO_SRC' not in e, 'the Go child needs no source dir'
 assert 'ANTHROPIC_API_KEY' not in e and e['ENMAAS_API_KEY']=='unit-upstream-secret'
 assert isinstance(options['stdout'], int) and options['stderr']==options['stdout'], 'boot failures must be logged'
 assert (froot/'proxy.log').stat().st_mode & 0o777==0o600
 info=json.loads((froot/'proxy.json').read_text())
-assert info['hooks'] and info['hooks']!=''
+assert info['versions'][0]=='hash-1' and info['versions'][-1]=='go' and len(info['versions'])==3 and info['hooks']=='hash-1', info
+assert info['key_signature']==g['signature']('unit-upstream-secret', info['token'])
 
-# ensure(): owned + ready -> reuse; hook knob change -> reuse while serving a
-# request, restart when idle.
-patched={'owned':lambda i:True,'ready':lambda i,r:True,'stray':lambda port,root:set()}
+# ensure(): owned + ready, same code -> reuse, no spawn.
+patched={'owned':lambda i:True,'ready':lambda i,r:True,'stray':lambda port,root:set(),'go_binary':lambda: gobin}
 with patch.dict(os.environ, env), patch.dict(ns, patched), patch.object(ns['subprocess'],'Popen',side_effect=AssertionError('reuse must not spawn')):
-    assert g['ensure'](froot, 4166, fresh(), ['1.97.0','0.136.3'], 3, [])['token']==info['token']
-with patch.dict(os.environ, dict(env, HOSTED_ONLY_VISION_FALLBACK='1')), patch.dict(ns, dict(patched, busy=lambda port:True)), \
-     patch.object(ns['subprocess'],'Popen',side_effect=AssertionError('busy proxy must be reused, not restarted')):
-    assert g['ensure'](froot, 4166, fresh(), ['1.97.0','0.136.3'], 3, [])['token']==info['token']
-# check(): dry run for `llm-proxy-restart required` -- verdict only, no spawn/stop/write.
-with patch.dict(os.environ, env), patch.object(ns['subprocess'],'Popen',side_effect=AssertionError('check must not spawn')):
-    with patch.dict(ns, {'owned':lambda i:False,'listeners':lambda port:set()}):
-        assert g['check'](froot, 4166, fresh(), ['1.97.0','0.136.3'], [])=={'state':'down','changed':[],'busy':False}
-    with patch.dict(ns, {'owned':lambda i:False,'listeners':lambda port:{1},'busy':lambda port:False}):
-        assert g['check'](froot, 4166, fresh(), ['1.97.0','0.136.3'], [])['state']=='stale'
-    with patch.dict(ns, dict(patched, busy=lambda port:False)):
-        assert g['check'](froot, 4166, fresh(), ['1.97.0','0.136.3'], [])=={'state':'fresh','changed':[],'busy':False}
-        assert g['check'](froot, 4166, fresh(), ['1.98.0','0.136.3'], [])['changed']==['gateway/key or dependency settings']
-    with patch.dict(os.environ, dict(env, HOSTED_ONLY_VISION_FALLBACK='1')), patch.dict(ns, dict(patched, busy=lambda port:True)):
-        verdict=g['check'](froot, 4166, fresh(), ['1.97.0','0.136.3'], [])
-        assert verdict=={'state':'stale','changed':['hook code or knobs'],'busy':True}, verdict
-    assert json.loads((froot/'proxy.json').read_text())==info, 'check must not rewrite state'
-stopped=[]; spawned.clear()
-def fake_stop(root, info, port=None):
-    stopped.append(info['pid']); (root/'proxy.json').unlink()
-idle=dict(patched, busy=lambda port:False, stop=fake_stop, wait_port_free=lambda port:None, listeners=lambda port:set(),
-          owned=lambda i:bool(i), birth=lambda pid:'t0')
-with patch.dict(os.environ, dict(env, HOSTED_ONLY_VISION_FALLBACK='1')), patch.dict(ns, idle), \
-     patch.object(ns['subprocess'],'Popen',spawn), patch.object(ns['socket'],'socket',OpenSocket):
-    g['ensure'](froot, 4166, fresh(), ['1.97.0','0.136.3'], 3, [])
-assert stopped==[info['pid']] and len(spawned)==1, (stopped, spawned)
-assert json.loads((froot/'proxy.json').read_text())['hooks']!=info['hooks']
+    assert g['ensure'](froot, 4166, fresh(), 3, [])['token']==info['token']
 
-# A comment/docstring-only hook edit keeps the digest; a code edit changes it.
-first=files[0]; original=first.read_text()
-with patch.dict(os.environ, env):
-    before=g['hook_digest'](files)
-    first.write_text('"""doc"""\n# a comment\n' + original + '\n# trailing\n'); same=g['hook_digest'](files)
-    first.write_text(original + '\nEXTRA = 1\n'); changed=g['hook_digest'](files)
-first.write_text(original)
-assert before==same and before!=changed, 'hook digest must ignore comments but see code'
-print('ok - hook digest (AST, comment-insensitive), dotted callbacks next to config, proxy log, env passthrough, reuse, busy reuse and idle restart (all mocked)')
+# ensure(): code changed but the proxy is serving -> reuse with a notice.
+with patch.dict(os.environ, env), patch.dict(ns, dict(patched, **{'busy':lambda port:True, 'go_binary':lambda: ('fake-go-bin','hash-2')})),      patch.object(ns['subprocess'],'Popen',side_effect=AssertionError('busy proxy must be reused, not restarted')):
+    assert g['ensure'](froot, 4166, fresh(), 3, [])['token']==info['token']
+
+# check(): dry run for `llm-proxy-restart required` -- verdict only, no spawn/stop/write.
+with patch.dict(os.environ, env), patch.object(ns['subprocess'],'Popen',side_effect=AssertionError('check must not spawn')),      patch.dict(ns, {'go_binary':lambda: gobin}):
+    with patch.dict(ns, {'owned':lambda i:False,'listeners':lambda port:set()}):
+        assert g['check'](froot, 4166, fresh(), [])=={'state':'down','changed':[],'busy':False}
+    with patch.dict(ns, {'owned':lambda i:False,'listeners':lambda port:{1},'busy':lambda port:False}):
+        assert g['check'](froot, 4166, fresh(), [])['state']=='stale'
+    with patch.dict(ns, dict(patched, busy=lambda port:False)):
+        assert g['check'](froot, 4166, fresh(), [])=={'state':'fresh','changed':[],'busy':False}
+    with patch.dict(os.environ, dict(env, ENMAAS_API_KEY='unit-upstream-secret-2')),      patch.dict(ns, dict(patched, busy=lambda port:False)), patch.object(ns['subprocess'],'Popen',side_effect=AssertionError('check must not spawn')):
+        assert g['check'](froot, 4166, fresh(), [])=={'state':'stale','changed':['gateway/key or dependency settings'],'busy':False}
+    with patch.dict(os.environ, dict(env, HOSTED_ONLY_VISION_FALLBACK=str(1-int(env.get('HOSTED_ONLY_VISION_FALLBACK','1') or 1)))),      patch.dict(ns, dict(patched, busy=lambda port:False)), patch.object(ns['subprocess'],'Popen',side_effect=AssertionError('check must not spawn')):
+        assert g['check'](froot, 4166, fresh(), [])=={'state':'stale','changed':['gateway/key or dependency settings'],'busy':False}, 'a knob change must count as a proxy change'
+    with patch.dict(ns, dict(patched, **{'busy':lambda port:True, 'go_binary':lambda: ('fake-go-bin','hash-2')})):
+        verdict=g['check'](froot, 4166, fresh(), [])
+        assert verdict=={'state':'stale','changed':['gateway/key or dependency settings','hook code or knobs'],'busy':True}, verdict
+    assert json.loads((froot/'proxy.json').read_text())==info, 'check must not rewrite state'
+
+# ensure(): code changed and idle -> zero-gap swap: new child spawned, old
+# group retired only after the new one accepts, token kept.
+killed=set()
+def fake_killpg(pid, sig=None):
+    killed.add(pid)
+spawned.clear()
+swap=dict(patched, **{'busy':lambda port:False, 'go_binary':lambda: ('fake-go-bin','hash-2'), 'birth':lambda pid:'t0',
+          'child_serving':lambda log: True, '_port_conflict':lambda log: False},
+          listeners=lambda port:{999999}, owned=lambda i: i['pid'] not in killed)
+with patch.dict(os.environ, env), patch.dict(ns, swap), patch.object(ns['subprocess'],'Popen',spawn),      patch.object(ns['socket'],'socket',OpenSocket), patch.object(ns['os'],'killpg',fake_killpg),      patch.object(ns['os'],'getpgid',lambda pid: 999999):
+    result=g['ensure'](froot, 4166, fresh(), 3, [])
+assert len(spawned)==1 and killed=={info['pid']}, (spawned, killed)
+assert result['token']==info['token'], 'the swap must keep the token'
+new_info=json.loads((froot/'proxy.json').read_text())
+assert new_info['versions'][0]=='hash-2' and new_info['versions'][-1]=='go' and len(new_info['versions'])==3 and new_info['hooks']=='hash-2', new_info   # (FakeChild.pid is constant)
+print('ok - go spawn argv, filtered env, proxy log, identity, reuse, busy reuse, check verdicts and idle zero-gap swap (all mocked)')
 PY
 print 'All claude-enmaas unit/launcher tests passed.'
