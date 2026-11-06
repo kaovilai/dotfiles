@@ -201,6 +201,28 @@ ALIAS_MODELS = frozenset(
 # tokens over. The byte estimate is deliberately conservative.
 MAX_MODEL_LEN = int_knob("MAX_MODEL_LEN", 1048576, 1024)
 OUTPUT_RESERVE = int_knob("OUTPUT_RESERVE", 512, 0)
+# Smallest output budget worth sending. Below it the request is refused with a
+# context-overflow 400 so the client compacts (see clamp_output).
+#
+# COUPLED SETTINGS - revisit all of these together when you change one:
+#   * Claude Code output cap: HOSTED_ONLY_MAX_OUTPUT_TOKENS in
+#     zsh/functions/claude/providers/hosted-only.zsh and ENMAAS_MAX_OUTPUT_TOKENS
+#     in enmaas.zsh (default 128000; sent as CLAUDE_CODE_MAX_OUTPUT_TOKENS, so
+#     it is the max_tokens every main-turn request carries).
+#   * Codex window: HOSTED_ONLY_GLM_CONTEXT / HOSTED_ONLY_DEEPSEEK_CONTEXT in
+#     scripts/codex-provider.zsh (1,000,000, ~48k under MAX_MODEL_LEN).
+#   * This file: MAX_MODEL_LEN, OUTPUT_RESERVE, BYTES_PER_TOKEN, MIN_OUTPUT and
+#     clamp_output().
+# Why they interact: the clients auto-compact on their own token count, assuming
+# a 1M window; a 128000 output cap is NOT reserved by that count. Near the edge
+# input + 128000 exceeds MAX_MODEL_LEN, so clamp_output() trims max_tokens to
+# what fits, and once less than MIN_OUTPUT fits it answers a "prompt is too
+# long" 400 that makes the client compact. Raising the output cap raises how
+# often the trim fires; lowering MIN_OUTPUT below the compaction summary size
+# (Claude Code asks ~20000) makes summaries truncate.
+# Takes effect: proxy restart (fleet-sync / llm-proxy-sync); see
+# docs/notes/change-take-effect.md. Hook-logic edits change the fingerprint.
+MIN_OUTPUT = int_knob("MIN_OUTPUT", 16000, 1)
 try:
     BYTES_PER_TOKEN = max(1.0, float(knob("BYTES_PER_TOKEN", "3")))
 except ValueError:
@@ -1348,14 +1370,24 @@ def install_reset_after_headers():
 
 
 def clamp_output(data):
-    """Shrink max_tokens so input + output fits the served window.
+    """Keep input + max_tokens inside the served window, or tell the client to compact.
 
-    vLLM rejects a request when input_tokens + max_tokens > max_model_len; the
-    client reserves nothing at the edge, so a near-1M turn fails with 400
-    "Input length (1048750) exceeds model's maximum context length (1048576)"
-    even though input alone fit. Returns (key, requested, capped) when it
-    changed something, else None. HOSTED_ONLY_MAX_MODEL_LEN /
-    HOSTED_ONLY_OUTPUT_RESERVE / HOSTED_ONLY_BYTES_PER_TOKEN tune it."""
+    vLLM rejects a request when input_tokens + max_tokens > max_model_len. The
+    clients count tokens with their own heuristic and cap output at 128000
+    (CLAUDE_CODE_MAX_OUTPUT_TOKENS), so a turn near the 1M edge would 400 with
+    "Input length (1048750) exceeds model's maximum context length (1048576)".
+
+    Three outcomes, in order of how much input there is:
+      * room >= requested: untouched, returns None.
+      * MIN_OUTPUT <= room < requested: max_tokens is trimmed to room;
+        returns (key, requested, capped).
+      * room < min(MIN_OUTPUT, requested): a sliver of output is useless, so
+        raise HTTPException 400 worded like the provider overflow errors the
+        clients match ("prompt is too long", "maximum context length",
+        code context_length_exceeded); the client then compacts and retries.
+
+    COUPLED with the clients' output cap and MIN_OUTPUT; see the comment block
+    above MIN_OUTPUT before changing max output tokens or this hook."""
     model = str(data.get("model") or "")
     if model != GLM_MODEL and model != DEEPSEEK_MODEL and model not in ALIAS_MODELS:
         return None
@@ -1366,9 +1398,17 @@ def clamp_output(data):
         return None
     estimate = int(math.ceil(content_size(data) / BYTES_PER_TOKEN))
     room = MAX_MODEL_LEN - estimate - OUTPUT_RESERVE
-    # a sliver of room is useless output: floor there so vLLM answers with its
-    # exact "input length exceeds" message and the client compacts
-    capped = 256 if room < 256 else min(requested, room)
+    if room < min(MIN_OUTPUT, requested):
+        limit = MAX_MODEL_LEN - min(MIN_OUTPUT, requested)
+        raise HTTPException(
+            status_code=400,
+            detail=("prompt is too long: %d tokens > %d maximum. Input length (~%d) "
+                    "exceeds the model's maximum context length (%d) once %d output "
+                    "tokens are reserved; compact the conversation and retry "
+                    "(context_length_exceeded)."
+                    % (estimate, limit, estimate, MAX_MODEL_LEN, min(MIN_OUTPUT, requested))),
+        )
+    capped = min(requested, room)
     if capped >= requested:
         return None
     data[key] = capped

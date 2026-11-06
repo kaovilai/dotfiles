@@ -64,6 +64,9 @@ _claude_hosted_launch() (
     # ("exceeded the 32000 output token maximum") on a long tool call. The
     # hosted models take far more; the proxy clamps max_tokens at the window
     # edge, so a bigger budget is safe.
+    # COUPLED to scripts/hosted_only_hooks.py (clamp_output, MIN_OUTPUT, MAX_MODEL_LEN):
+    # near the window edge the hook trims max_tokens, then refuses with a
+    # compaction-hint 400. Changing this default means re-reading that block.
     local max_output="${HOSTED_ONLY_MAX_OUTPUT_TOKENS:-${GLM_HYBRID_MAX_OUTPUT_TOKENS:-128000}}"
     settings=$(jq -c --arg glm "$glm" --arg ds "$ds" --arg small "$small" --arg sub "$subagent" --arg retries "$max_retries" --arg maxout "$max_output" '. + {
         apiKeyHelper: "",

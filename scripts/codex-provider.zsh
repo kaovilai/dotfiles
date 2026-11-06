@@ -199,6 +199,10 @@ typeset main="${HOSTED_ONLY_MODEL:-$_hop_glm}"
 # 1,000,000 (1M) leaves ~48k of output headroom: vLLM rejects input+max_tokens
 # over its 1,048,576 window, and Codex would otherwise fill the window to the
 # edge and fail the last turn.
+# COUPLED to scripts/hosted_only_hooks.py (MAX_MODEL_LEN, MIN_OUTPUT, clamp_output)
+# and Claude Code's 128000 output cap (HOSTED_ONLY_MAX_OUTPUT_TOKENS): Codex
+# compacts at its own share of THIS number; the proxy hook then trims max_tokens
+# or answers a compaction-hint 400 near the real 1,048,576 edge. Change them together.
 typeset -i glm_ctx="${HOSTED_ONLY_GLM_CONTEXT:-1000000}" ds_ctx="${HOSTED_ONLY_DEEPSEEK_CONTEXT:-1000000}"
 if [[ "$reviewer" != "$_hop_glm" && "$reviewer" != "$ds" ]]; then
     print -ru2 -- "codex-provider: HOSTED_ONLY_REVIEW_MODEL must be $_hop_glm or $ds (the proxy routes only those)."

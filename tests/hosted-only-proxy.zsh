@@ -52,9 +52,9 @@ _hosted_only_proxy_vars codex
 [[ "$_hop_upstream_retries" == 0 ]] || fail "upstream retries default: $_hop_upstream_retries"
 [[ "$(<"$repo/scripts/hosted-only-proxy.zsh")" == *'$_hop_client_retry $_hop_upstream_retries $_hop_fallback $_hop_aliases $_hop_request_timeout $_hop_image_budget $_hop_image_cache_days"'* ]] || fail "upstream retries / fallback / alias / timeout / image knobs not in fingerprint"
 # fallback + outage knobs are one fingerprint component: a change restarts an idle proxy
-[[ "$_hop_fallback" == "1 1 60 600 1048576 512 3" ]] || fail "fallback knob defaults: $_hop_fallback"
+[[ "$_hop_fallback" == "1 1 60 600 1048576 512 3 16000" ]] || fail "fallback knob defaults: $_hop_fallback"
 HOSTED_ONLY_FALLBACK=0 HOSTED_ONLY_MAX_MODEL_LEN=999999 _hosted_only_proxy_vars codex
-[[ "$_hop_fallback" == "0 1 60 600 999999 512 3" ]] || fail "HOSTED_ONLY_FALLBACK / MAX_MODEL_LEN not read: $_hop_fallback"
+[[ "$_hop_fallback" == "0 1 60 600 999999 512 3 16000" ]] || fail "HOSTED_ONLY_FALLBACK / MAX_MODEL_LEN not read: $_hop_fallback"
 _hosted_only_proxy_vars codex
 # GLM alias ids and the per-deployment request timeout are flavor-dependent knobs
 [[ "$_hop_aliases" == "" ]] || fail "codex flavor has no GLM alias by default: $_hop_aliases"
@@ -671,22 +671,31 @@ assert h.strip_tool_references({"model": GLM, "messages": [{"role": "user", "con
 
 # Output clamp: input + max_tokens must fit the served window (vLLM 400s at
 # 1,048,750 input + any output otherwise)
-assert h.MAX_MODEL_LEN == 1048576 and h.OUTPUT_RESERVE == 512 and h.BYTES_PER_TOKEN == 3.0
-near = [{"role": "user", "content": "x" * 3 * 1048000}]          # ~1,048,000 est tokens
-req = {"model": DS, "messages": near, "max_tokens": 8192}
+assert h.MAX_MODEL_LEN == 1048576 and h.OUTPUT_RESERVE == 512 and h.BYTES_PER_TOKEN == 3.0 and h.MIN_OUTPUT == 16000
+def est(tokens): return [{"role": "user", "content": "x" * 3 * tokens}]
+# 128000 requested (the Claude Code cap) with room for ~80k: trimmed, not refused
+req = {"model": DS, "messages": est(968000), "max_tokens": 128000}
 out = h.clamp_output(req)
-assert out and out[0] == "max_tokens" and out[2] < 8192 and req["max_tokens"] == out[2], (out, req.get("max_tokens"))
-assert req["max_tokens"] >= 256
-resp = {"model": DS, "input": [{"role": "user", "content": "x" * 3 * 1048000}], "max_output_tokens": 4096}
+assert out and out[0] == "max_tokens" and req["max_tokens"] == out[2] and 16000 <= out[2] < 128000, (out, req)
+resp = {"model": DS, "input": est(1025000), "max_output_tokens": 128000}
 out = h.clamp_output(resp)
-assert out and out[0] == "max_output_tokens" and resp["max_output_tokens"] < 4096, out
-over = {"model": GLM, "messages": [{"role": "user", "content": "x" * 3 * 1048600}], "max_tokens": 4096}
-assert h.clamp_output(over)[2] == 256, over["max_tokens"]   # clearly over: floor, vLLM reports it
+assert out and out[0] == "max_output_tokens" and resp["max_output_tokens"] == out[2] >= 16000, out
+# under MIN_OUTPUT of room: compaction-hint 400, wording the clients match
+for tokens in (1035000, 1048600):
+    over = {"model": GLM, "messages": est(tokens), "max_tokens": 128000}
+    try:
+        h.clamp_output(over)
+        raise SystemExit("must refuse at %d est tokens" % tokens)
+    except h.HTTPException as e:
+        assert e.status_code == 400 and "prompt is too long" in e.detail and "context_length_exceeded" in e.detail, e.detail
+# a small requested budget is judged against itself (title/classifier calls)
+tiny = {"model": GLM, "messages": est(1040000), "max_tokens": 4096}
+assert h.clamp_output(tiny) is None and tiny["max_tokens"] == 4096
 small = {"model": GLM, "messages": [{"role": "user", "content": "hi"}], "max_tokens": 4096}
 assert h.clamp_output(small) is None, small
-assert h.clamp_output({"model": "gpt-5.5", "messages": near, "max_tokens": 8192}) is None
+assert h.clamp_output({"model": "gpt-5.5", "messages": est(1048000), "max_tokens": 8192}) is None
 h.ALIAS_MODELS = frozenset({"claude-sonnet-5-5"})
-alias_req = {"model": "claude-sonnet-5-5", "messages": near, "max_tokens": 8192}
+alias_req = {"model": "claude-sonnet-5-5", "messages": est(968000), "max_tokens": 128000}
 assert h.clamp_output(alias_req) is not None, "alias must be clamped like GLM"
 h.ALIAS_MODELS = frozenset()
 

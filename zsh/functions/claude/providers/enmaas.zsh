@@ -439,6 +439,8 @@ claude-enmaas() (
     (( ${#reply} )) && settings="$reply[2]"
     # Claude Code caps one response at 32k output tokens by default; the hosted
     # and gateway models take more, and the proxy clamps at the window edge.
+    # COUPLED to scripts/hosted_only_hooks.py (clamp_output, MIN_OUTPUT, MAX_MODEL_LEN):
+    # changing this default means re-reading the comment above MIN_OUTPUT there.
     local maxout="${ENMAAS_MAX_OUTPUT_TOKENS:-128000}"
     settings=$(jq -c --arg glm "$glm" --arg ds "$ds" --arg maxout "$maxout" '. + {
         apiKeyHelper: "",
