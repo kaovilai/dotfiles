@@ -133,6 +133,7 @@ func (a *app) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// flavors have no route table and are restricted to the two hosted models,
 	// which is the cost guard.
 	upstreamBase := a.cfg.BaseURL
+	var tr translator // set when a Messages client is bridged to a chat/Responses deployment
 	upstreamPath := r.URL.Path
 	upstreamModel := model
 	if a.cfg.Routes != nil {
@@ -145,8 +146,14 @@ func (a *app) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		entry, upstream, path := a.cfg.Routes.resolve(model, r.URL.Path)
 		if msg := dialectMismatch(r.URL.Path, entry.Dialect, model); msg != "" {
-			a.rejectDialect(w, r, data, requested, started, model, msg)
-			return
+			if !translatable(r.URL.Path, entry.Dialect) {
+				a.rejectDialect(w, r, data, requested, started, model, msg)
+				return
+			}
+			// Claude Code speaks Messages; this deployment speaks chat or
+			// Responses. Bridge it (translate.go) instead of the 400 the proxy
+			// used to answer, which is what kept EnMaaS on LiteLLM.
+			tr = newTranslator(entry.Dialect)
 		}
 		if upstream != model {
 			data["model"] = upstream
@@ -169,18 +176,27 @@ func (a *app) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if changed {
 		outBody = marshal(data)
 	}
+	if tr != nil {
+		tpath, tbody, terr := tr.Request(data)
+		if terr != nil {
+			a.rejectDialect(w, r, data, requested, started, model, "cannot translate this Messages request for "+model+": "+terr.Error())
+			return
+		}
+		upstreamPath = tpath
+		outBody = marshal(tbody)
+	}
 
 	stream := asBool(data["stream"]) || strings.Contains(r.Header.Get("Accept"), "text/event-stream")
 	resp, transportErr := a.upstream(r, outBody, upstreamBase, upstreamPath, stream)
 	usedFallback := false
 	if fallback != "" && a.shouldFailover(resp, transportErr) && a.fallbackServable(fallback, r.URL.Path) {
-		if resp != nil {
-			_, _ = io.Copy(io.Discard, resp.Body)
-			resp.Body.Close()
-		}
+		// Prepare the fallback request BEFORE giving up the primary answer: a
+		// Messages body must never reach a chat/Responses deployment untranslated
+		// (the original failure is returned instead when translation fails).
 		clone := cloneObject(data)
 		clone["model"] = fallback
 		fbBase, fbPath, fbModel := upstreamBase, upstreamPath, fallback
+		var fbTr translator
 		if a.cfg.Routes != nil {
 			entry, upstream, path := a.cfg.Routes.resolve(fallback, r.URL.Path)
 			if upstream != fallback {
@@ -191,10 +207,29 @@ func (a *app) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				fbBase = entry.Base
 			}
 			fbPath = path
+			if translatable(r.URL.Path, entry.Dialect) {
+				fbTr = newTranslator(entry.Dialect)
+			}
 		}
-		resp, transportErr = a.upstream(r, marshal(clone), fbBase, fbPath, stream)
-		usedFallback = true
-		served = fbModel
+		fbBody := marshal(clone)
+		fbReady := true
+		if fbTr != nil {
+			if p2, b2, terr := fbTr.Request(clone); terr == nil {
+				fbPath, fbBody = p2, marshal(b2)
+			} else {
+				fbReady = false
+			}
+		}
+		if fbReady {
+			if resp != nil {
+				_, _ = io.Copy(io.Discard, resp.Body)
+				resp.Body.Close()
+			}
+			tr = fbTr // the answer to translate back is the fallback's, not the primary's
+			resp, transportErr = a.upstream(r, fbBody, fbBase, fbPath, stream)
+			usedFallback = true
+			served = fbModel
+		}
 	}
 	if transportErr != nil {
 		if errors.Is(transportErr, context.Canceled) {
@@ -262,22 +297,41 @@ func (a *app) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			a.usage.write(a.event(r, data, requested, served, started, usageInfo{}, false, status, resp.StatusCode, text, true, info.Reset.Unix(), info.Source, info.Monthly, retryAfter, usedFallback, stream, "", 0))
 			return
 		}
+		if tr != nil {
+			errBody = tr.Error(resp.StatusCode, errBody)
+			headers["content-type"] = "application/json"
+		}
 		a.writeRaw(w, resp.StatusCode, headers, errBody)
 		a.usage.write(a.event(r, data, requested, served, started, usageInfo{}, false, resp.StatusCode, resp.StatusCode, text, false, 0, "", false, 0, usedFallback, stream, "", 0))
 		return
 	}
 
 	if stream {
+		if tr != nil {
+			a.streamTranslated(w, resp, tr, r.URL.Path, data, requested, served, started, usedFallback, r.Header.Get("User-Agent"))
+			return
+		}
 		a.streamResponse(w, resp, r.URL.Path, data, requested, served, started, usedFallback, r.Header.Get("User-Agent"))
 		return
 	}
 
 	respBody, readErr := io.ReadAll(resp.Body)
-	info := usageFromJSON(respBody)
 	responseModel := ""
 	if obj, err := decodeObject(respBody); err == nil {
 		responseModel = asString(obj["model"])
 	}
+	if tr != nil && readErr == nil {
+		translated, terr := tr.Response(respBody, requested)
+		if terr != nil {
+			msg := "cannot translate the upstream answer: " + terr.Error()
+			a.writeDialectError(w, r.URL.Path, http.StatusBadGateway, msg, "")
+			a.usage.write(a.event(r, data, requested, served, started, usageInfo{}, false, http.StatusBadGateway, resp.StatusCode, msg, false, 0, "", false, 0, usedFallback, false, responseModel, 0))
+			return
+		}
+		respBody = translated
+		headers["content-type"] = "application/json"
+	}
+	info := usageFromJSON(respBody)
 	if resp.StatusCode < 400 && readErr == nil {
 		a.outages.success(served)
 	}
@@ -365,7 +419,7 @@ func (a *app) upstream(r *http.Request, body []byte, base, path string, stream b
 	} else {
 		req.Header.Set("Authorization", "Bearer "+a.cfg.APIKey)
 	}
-	if beta := r.Header.Get("anthropic-beta"); beta != "" {
+	if beta := r.Header.Get("anthropic-beta"); beta != "" && isAnthropicPath(path) {
 		req.Header.Set("anthropic-beta", beta)
 	}
 	return a.client.Do(req)
@@ -416,7 +470,7 @@ func (a *app) fallbackServable(fallback, path string) bool {
 		return false
 	}
 	entry, _, _ := a.cfg.Routes.resolve(fallback, path)
-	return dialectMismatch(path, entry.Dialect, fallback) == ""
+	return dialectMismatch(path, entry.Dialect, fallback) == "" || translatable(path, entry.Dialect)
 }
 
 // dialectMismatch is non-empty when the client speaks a different protocol
