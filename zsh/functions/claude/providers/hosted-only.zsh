@@ -57,11 +57,17 @@ _claude_hosted_launch() (
     local settings='{}'
     (( ${#reply} )) && settings="$reply[2]"
     local max_retries="${HOSTED_ONLY_CLIENT_MAX_RETRIES:-${GLM_HYBRID_CLIENT_MAX_RETRIES:-3}}"
-    settings=$(jq -c --arg glm "$glm" --arg ds "$ds" --arg small "$small" --arg sub "$subagent" --arg retries "$max_retries" '. + {
+    # Claude Code caps one response at 32k output tokens by default and errors
+    # ("exceeded the 32000 output token maximum") on a long tool call. The
+    # hosted models take far more; the proxy clamps max_tokens at the window
+    # edge, so a bigger budget is safe.
+    local max_output="${HOSTED_ONLY_MAX_OUTPUT_TOKENS:-${GLM_HYBRID_MAX_OUTPUT_TOKENS:-64000}}"
+    settings=$(jq -c --arg glm "$glm" --arg ds "$ds" --arg small "$small" --arg sub "$subagent" --arg retries "$max_retries" --arg maxout "$max_output" '. + {
         apiKeyHelper: "",
         env: {ANTHROPIC_CUSTOM_HEADERS: "", CLAUDE_CODE_USE_VERTEX: "0", CLAUDE_CODE_USE_BEDROCK: "0",
           CLAUDE_CODE_USE_FOUNDRY: "0", CLAUDE_CODE_AUTO_MODE_SERVER: "0",
           CLAUDE_CODE_MAX_RETRIES: $retries,
+          CLAUDE_CODE_MAX_OUTPUT_TOKENS: $maxout,
           ANTHROPIC_SMALL_FAST_MODEL: $small, CLAUDE_CODE_SUBAGENT_MODEL: $sub,
           CLAUDE_CODE_SUBAGENT_MODEL_FORCE: "1", CLAUDE_CODE_WORKFLOW_SUBAGENT_MODEL: $sub},
         modelSettings: {($glm): {effortLevel: "medium"}, ($ds): {effortLevel: "medium"}}

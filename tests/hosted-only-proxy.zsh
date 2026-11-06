@@ -190,6 +190,12 @@ launched=$(_claude_hosted_launch) || fail "launcher stub run"
 [[ "$(jq -r .env.CLAUDE_CODE_MAX_RETRIES <<< "$launched")" == 3 ]] || fail "CLAUDE_CODE_MAX_RETRIES default: $launched"
 launched=$(HOSTED_ONLY_CLIENT_MAX_RETRIES=7 _claude_hosted_launch) || fail "launcher stub run (knob)"
 [[ "$(jq -r .env.CLAUDE_CODE_MAX_RETRIES <<< "$launched")" == 7 ]] || fail "HOSTED_ONLY_CLIENT_MAX_RETRIES ignored: $launched"
+# Claude Code's own 32k output ceiling, raised for the hosted models
+local launched_out
+launched_out=$(_claude_hosted_launch) || fail "launcher stub run (max output)"
+[[ "$(jq -r .env.CLAUDE_CODE_MAX_OUTPUT_TOKENS <<< "$launched_out")" == 64000 ]] || fail "CLAUDE_CODE_MAX_OUTPUT_TOKENS default: $launched_out"
+launched_out=$(HOSTED_ONLY_MAX_OUTPUT_TOKENS=96000 _claude_hosted_launch) || fail "launcher stub run (max output knob)"
+[[ "$(jq -r .env.CLAUDE_CODE_MAX_OUTPUT_TOKENS <<< "$launched_out")" == 96000 ]] || fail "HOSTED_ONLY_MAX_OUTPUT_TOKENS ignored: $launched_out"
 
 # Hook helpers (python), including the retired env-name fallback
 GLM_HYBRID_VISION_FALLBACK=0 GLM_HYBRID_MODEL=rits/x/old python3 -I - "$repo/scripts" <<'EOF' || fail "hook module"

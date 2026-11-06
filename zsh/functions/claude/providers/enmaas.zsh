@@ -434,9 +434,13 @@ claude-enmaas() (
     _claude_picker_args "${pairs[@]}"
     local settings='{}'
     (( ${#reply} )) && settings="$reply[2]"
-    settings=$(jq -c --arg glm "$glm" --arg ds "$ds" '. + {
+    # Claude Code caps one response at 32k output tokens by default; the hosted
+    # and gateway models take more, and the proxy clamps at the window edge.
+    local maxout="${ENMAAS_MAX_OUTPUT_TOKENS:-64000}"
+    settings=$(jq -c --arg glm "$glm" --arg ds "$ds" --arg maxout "$maxout" '. + {
         apiKeyHelper: "",
-        env: {ANTHROPIC_CUSTOM_HEADERS: "", CLAUDE_CODE_USE_VERTEX: "0", CLAUDE_CODE_USE_BEDROCK: "0", CLAUDE_CODE_USE_FOUNDRY: "0"},
+        env: {ANTHROPIC_CUSTOM_HEADERS: "", CLAUDE_CODE_USE_VERTEX: "0", CLAUDE_CODE_USE_BEDROCK: "0", CLAUDE_CODE_USE_FOUNDRY: "0",
+          CLAUDE_CODE_MAX_OUTPUT_TOKENS: $maxout},
         modelSettings: {($glm): {effortLevel: "medium"}, ($ds): {effortLevel: "medium"}}
       }' <<< "$settings") || return 1
 
