@@ -60,7 +60,7 @@ HOSTED_ONLY_UPSTREAM_RETRIES=5 _hosted_only_proxy_vars codex
 [[ "$_hop_upstream_retries" == 5 ]] || fail "upstream retries var: $_hop_upstream_retries"
 _hosted_only_proxy_vars codex
 [[ "$_hop_upstream_retries" == 0 ]] || fail "upstream retries default: $_hop_upstream_retries"
-[[ "$(<"$repo/scripts/hosted-only-proxy.zsh")" == *'$_hop_client_retry $_hop_upstream_retries $_hop_fallback $_hop_aliases $_hop_request_timeout $_hop_image_budget $_hop_image_cache_days"'* ]] || fail "upstream retries / fallback / alias / timeout / image knobs not in fingerprint"
+[[ "$(<"$repo/scripts/hosted-only-proxy.zsh")" == *'$_hop_client_retry $_hop_upstream_retries $_hop_fallback $_hop_aliases $_hop_request_timeout $_hop_image_budget $_hop_image_cache_days $_hop_dialect"'* ]] || fail "upstream retries / fallback / alias / timeout / image knobs not in fingerprint"
 # fallback + outage knobs are one fingerprint component: a change restarts an idle proxy
 [[ "$_hop_fallback" == "1 1 60 600 1048576 512 3 16000" ]] || fail "fallback knob defaults: $_hop_fallback"
 HOSTED_ONLY_FALLBACK=0 HOSTED_ONLY_MAX_MODEL_LEN=999999 _hosted_only_proxy_vars codex
@@ -209,7 +209,7 @@ launched_out=$(HOSTED_ONLY_MAX_OUTPUT_TOKENS=96000 _claude_hosted_launch) || fai
 [[ "$(jq -r .env.CLAUDE_CODE_MAX_OUTPUT_TOKENS <<< "$launched_out")" == 96000 ]] || fail "HOSTED_ONLY_MAX_OUTPUT_TOKENS ignored: $launched_out"
 
 # Hook helpers (python), including the retired env-name fallback
-GLM_HYBRID_VISION_FALLBACK=0 GLM_HYBRID_MODEL=rits/x/old python3 -I - "$repo/scripts" <<'EOF' || fail "hook module"
+GLM_HYBRID_VISION_FALLBACK=0 GLM_HYBRID_MODEL=rits/x/old HOSTED_ONLY_DIALECT_SUFFIX=#openai python3 -I - "$repo/scripts" <<'EOF' || fail "hook module"
 import json, sys, time, types
 sys.path.insert(0, sys.argv[1])
 # stub the two third-party imports (litellm / fastapi are not installed here)
@@ -787,7 +787,7 @@ assert [h.outage_wait("co", 1000) for _ in range(5)] == [60] * 5, h.OUTAGE_STREA
 assert h.outage_wait("co", 1003) == 60, "inside OUTAGE_COALESCE: same episode"
 assert h.outage_wait("co", 1100) == 120, "past COALESCE: next episode"
 hook = h.HostedOnlyHooks()
-asyncio.run(hook.async_post_call_success_hook({"model": "co"}, None, 0, 0))
+asyncio.run(hook.async_log_success_event({"model": "co"}, None, 0, 0))
 assert "co" not in h.OUTAGE_STREAK, h.OUTAGE_STREAK
 assert h.outage_wait("co", 1200) == 60, "streak restarted after a success"
 
@@ -845,6 +845,14 @@ assert h.fallback_target(fb) is None, "no fallback while the shared monthly quot
 h.LAST_LIMIT_RESET[GLM] = time.time() - 1
 assert h.fallback_target(fb) == DS, "quota window over: fallback resumes"
 
+# dialect suffixing is opt-in (the EnMaaS proxy loads this hook with it unset):
+# without it, an aresponses request keeps its bare model id
+h.DIALECT_SUFFIX = ""
+hook0 = h.HostedOnlyHooks()
+req = {"model": GLM, "messages": [{"role": "user", "content": "hi"}], "max_tokens": 100}
+out = asyncio.run(hook0.async_pre_call_hook(None, None, req, "aresponses"))
+assert out["model"] == GLM, out["model"]
+h.DIALECT_SUFFIX = "#openai"
 # merged-proxy dialect routing (#599): openai call types get the #openai group,
 # /v1/messages keeps the bare anthropic group; every rewrite keeps the dialect
 hook0 = h.HostedOnlyHooks()

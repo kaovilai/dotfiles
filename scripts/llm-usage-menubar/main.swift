@@ -2365,8 +2365,11 @@ final class AppController: NSObject, NSMenuDelegate, NSWindowDelegate {
     func render(title s: Summary, stale: Bool) {
         guard let button = statusItem.button else { return }
         // rewriting identical button properties still makes AppKit rebuild the
-        // status item snapshot; skip when nothing that shapes it moved
-        let renderKey = "\(s.state)|\(s.text)|\(stale)|\(button.effectiveAppearance.name.rawValue)|\(button.appearsDisabled)"
+        // status item snapshot; skip when nothing that shapes it moved. The
+        // share text shapes the logos/accessibility, and showImage/showText the
+        // toggles — without them a toggle or a share change left the button stale.
+        let shareKey = data?["share"].exists == true ? shareDescription(data!["share"]) : ""
+        let renderKey = "\(s.state)|\(s.text)|\(stale)|\(button.effectiveAppearance.name.rawValue)|\(button.appearsDisabled)|\(showImage)|\(showText)|\(shareKey)"
         if renderKey == lastRenderKey { return }
         lastRenderKey = renderKey
         if showImage, let d = data, d["share"].exists {

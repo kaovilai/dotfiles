@@ -190,18 +190,21 @@ def int_knob(name, default, minimum):
 GLM_MODEL_PREFIXES = ("rits/",)
 GLM_MODEL = knob("GLM_MODEL", os.environ.get("GLM_HYBRID_MODEL", "rits/zai-org/glm-5-3"))
 DEEPSEEK_MODEL = knob("DEEPSEEK_MODEL", "rits/deepseek-ai/DeepSeek-V4.1-Flash-1017")
-# Merged proxy (#599): one LiteLLM serves both dialects. The openai/ deployments
-# live under model groups suffixed with this; async_pre_call_hook adds it for
-# OpenAI-wire call types (Codex Responses, OpenCode chat) so the router cannot
-# load-balance a bare-name request across dialects. Clients never send it.
-DIALECT_SUFFIX = "#openai"
+# Merged hosted-only proxy (#599): one LiteLLM serves both dialects. The
+# openai/ deployments live under model groups suffixed with this;
+# async_pre_call_hook adds it for OpenAI-wire call types (Codex Responses,
+# OpenCode chat) so the router cannot load-balance a bare-name request across
+# dialects. Clients never send it. OPT-IN via HOSTED_ONLY_DIALECT_SUFFIX
+# because the EnMaaS proxy loads this hook too and its groups are bare or
+# #responses — suffixing there would corrupt enmaas_proxy_hooks' routing.
+DIALECT_SUFFIX = knob("DIALECT_SUFFIX", "")
 OPENAI_CALL_TYPES = frozenset({"acompletion", "aresponses", "aembedding"})
 
 
 def split_dialect(model):
-    """(bare model id, dialect suffix) of a possibly #openai-suffixed id."""
+    """(bare model id, dialect suffix) of a possibly suffixed id."""
     model = str(model or "")
-    if model.endswith(DIALECT_SUFFIX):
+    if DIALECT_SUFFIX and model.endswith(DIALECT_SUFFIX):
         return model[: -len(DIALECT_SUFFIX)], DIALECT_SUFFIX
     return model, ""
 VISION_FALLBACK = knob("VISION_FALLBACK", "1") != "0"
@@ -1285,7 +1288,7 @@ def rewrite_limit(exc, request_data, now=None):
     same reset-bearing shape as a rate limit so T3 Code holds the thread and
     resumes at the reset time instead of failing it."""
     outage = is_outage_error(exc)
-    if not outage and not is_limit_error(exc):
+    if not outage and not (LIMIT_REWRITE and is_limit_error(exc)):
         return None
     now = time.time() if now is None else now
     model = str(request_data.get("model") or "")
@@ -1596,9 +1599,12 @@ class HostedOnlyHooks(CustomLogger):
         except Exception:
             return None
 
-    async def async_post_call_success_hook(self, kwargs, response_obj, start_time, end_time):
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         # a success ends the outage episode: without this the backoff only ever
-        # grew, so one 504 burst pinned every client near the 600 s cap
+        # grew, so one 504 burst pinned every client near the 600 s cap.
+        # async_log_success_event (the logging callback) is the right contract:
+        # litellm 1.97.0 calls async_post_call_success_hook with
+        # (data, user_api_key_dict, response), which this signature is not
         try:
             model = str((kwargs or {}).get("model") or "")
             if not model:
@@ -1627,9 +1633,9 @@ class HostedOnlyHooks(CustomLogger):
         # by suffixing the model group; /v1/messages keeps the bare anthropic
         # group. Clients keep their bare ids — the suffix is proxy-internal.
         suffix = ""
-        if model.endswith(DIALECT_SUFFIX):
+        if DIALECT_SUFFIX and model.endswith(DIALECT_SUFFIX):
             model, suffix = model[: -len(DIALECT_SUFFIX)], DIALECT_SUFFIX
-        elif call_type in OPENAI_CALL_TYPES:
+        elif DIALECT_SUFFIX and call_type in OPENAI_CALL_TYPES:
             suffix = DIALECT_SUFFIX
             data["model"] = model + suffix
         # GLM aliases (claude-sonnet-5-5) are served by the GLM deployment, so

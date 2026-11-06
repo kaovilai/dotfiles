@@ -74,8 +74,6 @@ if [[ $timer == install && "$OSTYPE" == darwin* ]]; then
     <true/>
     <key>StartCalendarInterval</key>
     <dict>
-        <key>Hour</key>
-        <integer>0</integer>
         <key>Minute</key>
         <integer>17</integer>
     </dict>

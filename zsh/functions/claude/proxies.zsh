@@ -226,12 +226,15 @@ claude-glm-hybrid-restart() { claude-hosted-only-restart; }
 claude-glm-only-restart() { claude-hosted-only-restart; }
 
 codex-hosted-only-restart() {
+    # shared port since the #599 merge: CODEX_PROXY_PORT defaults to the claude
+    # port, so wait on the resolved port, not the old 4147 literal
+    local port="$(_hosted_only_knob CODEX_PROXY_PORT "$(_hosted_only_knob CLAUDE_PROXY_PORT 4148)")"
     _llm_proxy_dns_probe "$(_llm_proxy_gateway_host "${HOSTED_ONLY_ENMAAS_BASE_URL:-}")" 'hosted-only codex' || return 1
     _hosted_only_proxy_stop codex || return 1
-    _llm_proxy_wait_down "$(_hosted_only_knob CODEX_PROXY_PORT 4147)" || return 1
+    _llm_proxy_wait_down "$port" || return 1
     print -ru2 -- 'restart: hosted-only codex starting'
     ( _hosted_only_proxy_ensure codex ) || return 1
-    _llm_proxy_wait_up "$(_hosted_only_knob CODEX_PROXY_PORT 4147)" 'hosted-only codex'
+    _llm_proxy_wait_up "$port" 'hosted-only codex'
 }
 codex-glm-hybrid-restart() { codex-hosted-only-restart; }
 codex-glm-only-restart() { codex-hosted-only-restart; }
@@ -511,8 +514,14 @@ llm-proxy-sync() {
 # --- idle watcher -----------------------------------------------------------
 # State (one pid file and log per proxy) lives in the llm-proxy-sync state dir.
 _llm_proxy_watch_dir() { print -r -- "${XDG_STATE_HOME:-$HOME/.local/state}/llm-proxy-sync"; }
-# _llm_marker_mtime <file>: epoch mtime, portable across BSD/Linux stat
-_llm_marker_mtime() { stat -f %m "$1" 2>/dev/null || stat -c %Y "$1" 2>/dev/null || print 0 }
+# _llm_marker_mtime <file>: epoch mtime, portable across BSD/Linux stat. Each
+# attempt is captured: a failed GNU `stat -f` still prints filesystem info on
+# stdout, and concatenating that with the fallback's epoch breaks the age math.
+_llm_marker_mtime() {
+    local stamp
+    stamp=$(stat -f %m "$1" 2>/dev/null)         || stamp=$(stat -c %Y "$1" 2>/dev/null)         || stamp=0
+    print -r -- "$stamp"
+}
 _llm_proxy_now() { zmodload zsh/datetime 2>/dev/null; print -r -- "$EPOCHSECONDS"; }
 # 2 s, not 0.5: each poll spawns lsof (~0.08 s CPU each), and the loop needs
 # two consecutive idle polls anyway, so detection moves 2 s -> 4 s next to a

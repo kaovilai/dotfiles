@@ -198,7 +198,7 @@ def load_proxy(since):
 
 
 _FILE_CACHE = {}  # (kind, path) -> (mtime, size, events); warm in `serve`, persisted for one-shot polls
-_TRANSCRIPT_CACHE_VERSION = 2  # 2: proxy entries may carry a consumed offset < file size
+_TRANSCRIPT_CACHE_VERSION = 3  # 3: proxy entries carry (mtime, size, inode, offset-cut events)
 _TRANSCRIPT_CACHE_LOADED = set()
 _TRANSCRIPT_CACHE_DIRTY = set()
 CACHE_FILES = False
@@ -236,12 +236,12 @@ def save_transcript_cache(kind):
         import pickle
         cutoff = time.time() - 90 * 86400  # the longest window anything queries (dashboard 90d); shorter prunes broke edits/seen_week
         files = {}
-        for (k, path), (mtime, size, events) in list(_FILE_CACHE.items()):
+        for (k, path), (mtime, size, ino, events) in list(_FILE_CACHE.items()):
             if k != kind:
                 continue
             kept = [e for e in events if e.get("t", 0) >= cutoff]
             if kept or not events:
-                files[path] = (mtime, size, kept)
+                files[path] = (mtime, size, ino, kept)
         os.makedirs(STATE, mode=0o700, exist_ok=True)
         tmp = _transcript_cache_path(kind) + ".tmp"
         with open(tmp, "wb") as handle:
@@ -264,9 +264,9 @@ def parse_cached(kind, path, parser):
     except OSError:
         return []
     hit = _FILE_CACHE.get((kind, path))
-    if hit and hit[0] == st.st_mtime and hit[1] == st.st_size:
-        return hit[2]
-    if hit and kind == "proxy" and st.st_size >= hit[1] and st.st_mtime >= hit[0]:
+    if hit and hit[0] == st.st_mtime and hit[1] == st.st_size and hit[2] == st.st_ino:
+        return hit[3]
+    if hit and kind == "proxy" and st.st_size >= hit[1] and st.st_mtime >= hit[0] and st.st_ino == hit[2]:
         try:
             with open(path, "rb") as handle:
                 handle.seek(hit[1])
@@ -277,21 +277,33 @@ def parse_cached(kind, path, parser):
         if cut >= 0:
             import io
             new = parse_proxy_file(io.StringIO(tail[:cut + 1].decode("utf-8", "replace")), path)
-            events = hit[2] + new
-            _FILE_CACHE[(kind, path)] = (st.st_mtime, hit[1] + cut + 1, events)
+            events = hit[3] + new
+            _FILE_CACHE[(kind, path)] = (st.st_mtime, hit[1] + cut + 1, st.st_ino, events)
             if not CACHE_FILES:
                 _TRANSCRIPT_CACHE_DIRTY.add(kind)
             return events
         # nothing complete past the offset yet (a half-written line): keep the
         # old offset so the line is picked up once its newline lands
-        _FILE_CACHE[(kind, path)] = (st.st_mtime, hit[1], hit[2])
-        return hit[2]
+        _FILE_CACHE[(kind, path)] = (st.st_mtime, hit[1], st.st_ino, hit[3])
+        return hit[3]
     try:
         with open(path, errors="replace") as handle:
             events = parser(handle, path)
     except OSError:
         return []
-    _FILE_CACHE[(kind, path)] = (st.st_mtime, st.st_size, events)
+    # proxy entries store the offset past the last COMPLETE line, so a
+    # half-written trailing record is re-read once its newline lands
+    size = st.st_size
+    if kind == "proxy" and size:
+        try:
+            with open(path, "rb") as handle:
+                handle.seek(max(0, size - 65536))
+                tail = handle.read()
+            cut = tail.rfind(b"\n")
+            size = size - (len(tail) - cut - 1) if cut >= 0 else 0
+        except OSError:
+            pass
+    _FILE_CACHE[(kind, path)] = (st.st_mtime, size, st.st_ino, events)
     if not CACHE_FILES:
         _TRANSCRIPT_CACHE_DIRTY.add(kind)
     return events

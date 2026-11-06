@@ -1039,6 +1039,14 @@ assert len(fourth) == 6, len(fourth)
 open(path, "w").write(line(1))   # replaced/truncated: falls back to the full parse
 fifth = u.parse_cached("proxy", path, u.parse_proxy_file)
 assert len(fifth) == 1, len(fifth)
+# replaced with the same size and a newer mtime: the inode differs, so this is
+# still a full reparse, not an "append" of nothing
+import os as _os
+tmp2 = path + ".new"
+open(tmp2, "w").write("".join(line(i) for i in (2, 3)))
+_os.replace(tmp2, path)
+sixth = u.parse_cached("proxy", path, u.parse_proxy_file)
+assert [e["t"] for e in sixth] == [e["t"] for e in u.parse_proxy_file(open(path), path)], sixth
 print("ok")
 PY
 

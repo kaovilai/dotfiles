@@ -227,14 +227,18 @@ _claude_port_serving() {
     local -a _cps_files
     _cps_files=("$_cps_dir"/inflight-"$1"-*.json(N))
     if (( ${#_cps_files} )); then
+        local -i _cps_reporter=0
         for _cps_f in $_cps_files; do
             _cps_pid="${${_cps_f:t}:r}"; _cps_pid="${_cps_pid##*-}"
             [[ "$_cps_pid" == <-> ]] && kill -0 "$_cps_pid" 2>/dev/null || continue
+            _cps_reporter=1
             if jq -e '(.requests // {}) | length > 0' "$_cps_f" >/dev/null 2>&1; then
                 return 0
             fi
         done
-        return 1  # the port reports in-flight state and shows none: idle
+        # a live reporter with an empty table says idle; only dead-pid or
+        # unreadable leftovers do not say anything — use the socket test
+        (( _cps_reporter )) && return 1
     fi
     if (( $+commands[lsof] )); then
         lsof -nP -iTCP:"$1" -sTCP:ESTABLISHED -Fn 2>/dev/null | grep -q -- "^n.*:$1->"
