@@ -71,7 +71,9 @@ retired GLM_HYBRID_* name as a fallback.
      -> now + HOSTED_ONLY_RATE_LIMIT_DEFAULT_RETRY_SECONDS (default 60).
    Other statuses are never touched, except Copilot-style limit answers (402;
    503 `upstream rate limited`; any status with error.code `rate_limited`; see
-   is_limit_error): 503 `metering system unavailable` is not a limit. HOSTED_ONLY_LIMIT_REWRITE=0 turns this off.
+   is_limit_error): 503 `upstream rate limited` is a limit, `metering system
+   unavailable` is not. HOSTED_ONLY_LIMIT_REWRITE=0 turns the limit rewrite off
+   (the outage rewrite below keeps running; the two knobs are independent).
    Upstream outages (502/504/408/524, litellm timeout/connection errors, its 500 `Connection
    error` and the gateway's 503 `no_db_connection`, see
    is_outage_error) take the same client shapes below with the reason `Upstream
@@ -80,7 +82,8 @@ retired GLM_HYBRID_* name as a fallback.
    failure of a model up to HOSTED_ONLY_OUTAGE_RETRY_MAX_SECONDS (default 600),
    so T3 Code holds the thread and resumes instead of failing it on a gateway
    504 (DeepSeek hung 2026-11-05). 500 stays untouched.
-   HOSTED_ONLY_OUTAGE_REWRITE=0 turns this off. The outage backoff
+   HOSTED_ONLY_OUTAGE_REWRITE=0 turns this off (independent of
+   HOSTED_ONLY_LIMIT_REWRITE). The outage backoff
    (60 s doubling to 600 s) survives a proxy restart when the launchers point
    HOSTED_ONLY_OUTAGE_STATE at a state file; litellm_usage_log reads
    OUTAGE_LOG to tag outage rewrites in the usage rows.
@@ -181,7 +184,7 @@ def int_knob(name, default, minimum):
     try:
         return max(minimum, int(knob(name, str(default))))
     except ValueError:
-        return default
+        return max(minimum, default)
 
 
 GLM_MODEL_PREFIXES = ("rits/",)
@@ -193,7 +196,7 @@ FALLBACK = knob("FALLBACK", "1") != "0"
 # lists claude-sonnet-5-5 so T3's explicit picker id works): they get GLM's
 # vision reroute and GLM's fallback target.
 ALIAS_MODELS = frozenset(
-    a for a in knob("ALIAS_MODELS", "").split(",") if a
+    a.strip() for a in knob("ALIAS_MODELS", "").split(",") if a.strip()
 )
 # Serving window and output reserve: vLLM rejects input_tokens + max_tokens >
 # max_model_len. Clients count tokens with their own heuristic and leave no
@@ -231,7 +234,13 @@ except ValueError:
     BYTES_PER_TOKEN = 3.0
 IMAGE_BLOCK_TYPES = ("image", "input_image", "image_url")
 LIMIT_REWRITE = knob("LIMIT_REWRITE", "1") != "0"
-IMAGE_BUDGET_BYTES = int_knob("IMAGE_BUDGET_BYTES", 8 * 1024 * 1024, 0)
+# Ceiling is shared with clamp_output: an all-images body at the budget must
+# stay under the clamp's text-equivalent ceiling (~3.1 MB at 3 B/token), or
+# prune_images leaves a body clamp_output then refuses.
+IMAGE_BUDGET_BYTES = int_knob("IMAGE_BUDGET_BYTES", 2500000, 0)
+# Per-image token cost vLLM charges (resolution-dependent, ~1-3k); clamp_output
+# prices each inline image at this instead of its base64 byte length.
+IMAGE_TOKENS = int_knob("IMAGE_TOKENS", 2500, 1)
 IMAGE_CACHE_DAYS = int_knob("IMAGE_CACHE_DAYS", 1, 0)
 IMAGE_CACHE_DIR = knob(
     "IMAGE_CACHE_DIR",
@@ -477,6 +486,31 @@ def content_size(data):
     return size
 
 
+def image_load(value):
+    """(bytes of inline image payloads, number of image blocks) in a content
+    tree. clamp_output uses it so base64 is not priced as text: json bytes of
+    an image are ~1000x its token cost, which made image-heavy turns look
+    over-limit long before they were."""
+    size = count = 0
+    if isinstance(value, dict):
+        if value.get("type") in IMAGE_BLOCK_TYPES:
+            src = value.get("image_url") or value.get("source") or value.get("data")
+            if isinstance(src, dict):
+                src = src.get("url") or src.get("data") or ""
+            if isinstance(src, str) and src:
+                return len(src), 1
+        for v in value.values():
+            b, c = image_load(v)
+            size += b
+            count += c
+    elif isinstance(value, list):
+        for v in value:
+            b, c = image_load(v)
+            size += b
+            count += c
+    return size, count
+
+
 def prune_images(data, budget=None, cache_dir=None, cache_days=None, attachments_dir=None):
     """Replace inline images, oldest first, until the content fits the budget.
     Returns the number of images replaced."""
@@ -550,6 +584,14 @@ def strip_web_search_tools(data):
     else:
         data.pop("tools", None)
         data.pop("tool_choice", None)
+        return True
+    # a forced choice naming the dropped tool would reference an undeclared
+    # tool (400 on strict upstreams); free the choice instead
+    choice = data.get("tool_choice")
+    if isinstance(choice, dict):
+        named = str(choice.get("name") or (choice.get("function") or {}).get("name") or "")
+        if named.startswith(SEARCH_TOOL_PREFIX):
+            data.pop("tool_choice", None)
     return True
 
 
@@ -1112,15 +1154,32 @@ def format_wait(seconds):
 
 
 OUTAGE_REWRITE = knob("OUTAGE_REWRITE", "1") != "0"
-OUTAGE_STATUSES = (408, 502, 504, 524)
+OUTAGE_STATUSES = (408, 502, 504, 524, 529)
 OUTAGE_ERROR_NAMES = ("Timeout", "APITimeoutError", "APIConnectionError")
-OUTAGE_CONNECTION_RE = re.compile(r"connection error|connection (refused|reset|aborted)|connect timeout", re.I)
+# litellm reports a refused/dropped connect and a DNS failure as an
+# InternalServerError 500 "Cannot connect to host ... [Connect call failed]" /
+# "... [nodename nor servname provided, or not known]" — same transient class
+# as its 500 "Connection error", so match those shapes too.
+OUTAGE_CONNECTION_RE = re.compile(
+    r"connection error|connection (refused|reset|aborted)|connect timeout"
+    r"|cannot connect to host|connect call failed|nodename nor servname"
+    r"|name or service not known|temporary failure in name resolution"
+    r"|network is unreachable",
+    re.I,
+)
 # The gateway answers 503 `no_db_connection` ("the authentication database is
-# temporarily unreachable. Please retry shortly.") when its auth DB is down.
-OUTAGE_GATEWAY_RE = re.compile(r"no_db_connection|database is temporarily unreachable|retry shortly", re.I)
+# temporarily unreachable. Please retry shortly.") when its auth DB is down,
+# and gateway-wide 503 `metering system unavailable` / `service unavailable`
+# when its metering plane is down (observed 2026-10-22: 90 + 33 unrewritten).
+OUTAGE_GATEWAY_RE = re.compile(
+    r"no_db_connection|database is temporarily unreachable|retry shortly"
+    r"|metering system unavailable|service unavailable",
+    re.I,
+)
 OUTAGE_BASE_SECONDS = int_knob("OUTAGE_RETRY_SECONDS", 60, 1)
 OUTAGE_MAX_SECONDS = int_knob("OUTAGE_RETRY_MAX_SECONDS", 600, 1)
 OUTAGE_STREAK_WINDOW = 900  # failures this close together count as one outage
+OUTAGE_COALESCE = float(knob("OUTAGE_COALESCE_SECONDS", "5"))  # same-episode window
 OUTAGE_STREAK = {}  # model -> (consecutive failures, epoch of the last one)
 OUTAGE_LOG = {}  # model -> reset epoch of the last outage rewrite (litellm_usage_log reads it)
 # Backoff survives a proxy restart when the launcher points
@@ -1146,8 +1205,12 @@ def save_outage_state(now):
             for model, row in OUTAGE_STREAK.items()
             if row[1] >= now - 2 * OUTAGE_STREAK_WINDOW
         }
-        with open(OUTAGE_STATE_FILE, "w") as stream:
+        # atomic: the restart machinery kills this proxy, and a truncate-then-
+        # write caught mid-flight silently dropped the whole backoff history
+        tmp = f"{OUTAGE_STATE_FILE}.{os.getpid()}.tmp"
+        with open(tmp, "w") as stream:
             json.dump(live, stream)
+        os.replace(tmp, OUTAGE_STATE_FILE)
     except (OSError, ValueError, TypeError):
         pass
 
@@ -1158,11 +1221,12 @@ if OUTAGE_STATE_FILE:
 
 def is_outage_error(exc):
     """True for a transient upstream fault: gateway timeout/bad gateway (408, 502,
-    504, 524), a litellm timeout/connection error, litellm's 500 `Connection
-    error` (how it reports a refused or dropped connection), or the gateway's 503
-    `no_db_connection` (auth database unreachable). Any other 500 is left alone
-    (vLLM uses it for real request errors) and so is any other 503 (`metering
-    system unavailable` is a gateway answer, `upstream rate limited` is a limit)."""
+    504, 524, 529), a litellm timeout/connection error, litellm's 500 `Connection
+    error` and its connect/DNS shapes ("Cannot connect to host ... [Connect call
+    failed]", "[nodename nor servname provided...]"), or the gateway's 503
+    `no_db_connection` / `metering system unavailable` / `service unavailable`.
+    Any other 500 is left alone (vLLM uses it for real request errors) and so is
+    any other 503 (`upstream rate limited` is a limit)."""
     if not OUTAGE_REWRITE or is_limit_error(exc):
         return False
     status = status_of(exc)
@@ -1178,11 +1242,22 @@ def outage_wait(model, now):
     """Seconds a client should wait after an outage answer: HOSTED_ONLY_OUTAGE_
     RETRY_SECONDS (default 60), doubling per consecutive failure of the same model
     up to HOSTED_ONLY_OUTAGE_RETRY_MAX_SECONDS (default 600). A failure more than
-    15 min after the previous one starts over."""
-    count, last = OUTAGE_STREAK.get(model, (0, 0.0))
-    count = count + 1 if now - last <= OUTAGE_STREAK_WINDOW else 1
+    15 min after the previous one starts over. Failures less than
+    OUTAGE_COALESCE_SECONDS apart are one episode — parallel requests hitting the
+    same blip must not each double the wait — and any later success clears the
+    streak (async_post_call_success_hook)."""
+    prev, last = OUTAGE_STREAK.get(model, (0, 0.0))
+    count = prev
+    if now - last > OUTAGE_STREAK_WINDOW:
+        count = 1
+    elif now - last > OUTAGE_COALESCE:
+        count += 1
+    # else: same episode (simultaneous failures), count unchanged
+    grew = count != prev
     OUTAGE_STREAK[model] = (count, now)
-    if OUTAGE_STATE_FILE:
+    # persist only when the episode count moved: `last` alone is not worth a
+    # truncate+write on the event loop for every failing request
+    if OUTAGE_STATE_FILE and grew:
         save_outage_state(now)
     return min(OUTAGE_BASE_SECONDS * 2 ** (count - 1), OUTAGE_MAX_SECONDS)
 
@@ -1398,7 +1473,11 @@ def clamp_output(data):
         requested = int(data[key])
     except (KeyError, TypeError, ValueError):
         return None
-    estimate = int(math.ceil(content_size(data) / BYTES_PER_TOKEN))
+    raw = content_size(data)
+    img_bytes, img_count = image_load([data.get(k) for k in CONTENT_KEYS if data.get(k) is not None])
+    # base64 bytes are not tokens: price text at BYTES_PER_TOKEN and each
+    # inline image at IMAGE_TOKENS (see image_load).
+    estimate = int(math.ceil(max(0, raw - img_bytes) / BYTES_PER_TOKEN)) + img_count * IMAGE_TOKENS
     room = MAX_MODEL_LEN - estimate - OUTPUT_RESERVE
     if room < min(MIN_OUTPUT, requested):
         limit = MAX_MODEL_LEN - min(MIN_OUTPUT, requested)
@@ -1429,6 +1508,13 @@ def strip_tool_references(data):
             if isinstance(block, dict) and block.get("type") == "tool_reference":
                 dropped += 1
                 continue
+            # litellm's own anthropic handler nests tool_reference blocks inside
+            # tool_result.content (tool-search results); walk them too.
+            if isinstance(block, dict) and isinstance(block.get("content"), list):
+                block["content"], nested = clean(block["content"])
+                dropped += nested
+                if nested and not block["content"]:
+                    block["content"] = [{"type": "text", "text": "(tool reference omitted)"}]
             kept.append(block)
         if dropped and not kept:
             kept = [{"type": "text", "text": "(tool reference omitted)"}]
@@ -1470,6 +1556,11 @@ def fallback_target(data):
         return None
     if has_image(data.get("messages") or data.get("input")):
         return None
+    # Monthly quota is account-wide (token quota AND USD budget gate the same
+    # EnMaaS account, see docs/notes/enmaas-reset-forward-compat.md): falling
+    # back would only buy the same 429 plus latency, once per router cooldown.
+    if LAST_LIMIT_KIND.get(model) == "quota" and LAST_LIMIT_RESET.get(model, 0) > time.time():
+        return None
     return other
 
 
@@ -1477,15 +1568,36 @@ class HostedOnlyHooks(CustomLogger):
     async def async_post_call_failure_hook(
         self, request_data, original_exception, user_api_key_dict, traceback_str=None
     ):
-        if not LIMIT_REWRITE:
+        # either knob is enough: LIMIT_REWRITE=0 used to silence the outage
+        # rewrite too, leaving 502/504/connect failures unwritten
+        if not (LIMIT_REWRITE or OUTAGE_REWRITE):
             return None
         try:
             return rewrite_limit(original_exception, request_data)
         except Exception:
             return None
 
+    async def async_post_call_success_hook(self, kwargs, response_obj, start_time, end_time):
+        # a success ends the outage episode: without this the backoff only ever
+        # grew, so one 504 burst pinned every client near the 600 s cap
+        try:
+            model = str((kwargs or {}).get("model") or "")
+            if not model:
+                return
+            def bare(k):
+                return k.rsplit("/", 1)[-1]
+            hit = [k for k in OUTAGE_STREAK if k == model or bare(k) == bare(model)]
+            for k in hit:
+                OUTAGE_STREAK.pop(k, None)
+            # OUTAGE_LOG is left alone: litellm_usage_log reads it while tagging
+            # the failure event, and a concurrent success must not race that.
+            if hit and OUTAGE_STATE_FILE:
+                save_outage_state(time.time())
+        except Exception:
+            pass
+
     async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
-        if LIMIT_REWRITE:
+        if LIMIT_REWRITE or OUTAGE_REWRITE:
             install_reset_after_headers()
         try:
             prune_images(data)
@@ -1542,5 +1654,5 @@ class HostedOnlyHooks(CustomLogger):
 
 
 proxy_handler_instance = HostedOnlyHooks()
-if LIMIT_REWRITE:
+if LIMIT_REWRITE or OUTAGE_REWRITE:
     install_reset_after_headers()

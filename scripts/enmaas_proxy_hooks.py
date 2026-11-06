@@ -84,6 +84,14 @@ def drop_web_search(data):
     else:
         data.pop("tools", None)
         data.pop("tool_choice", None)
+        return True
+    # a forced choice naming the dropped tool would reference an undeclared
+    # tool (400 on strict upstreams); free the choice instead
+    choice = data.get("tool_choice")
+    if isinstance(choice, dict):
+        named = str(choice.get("name") or (choice.get("function") or {}).get("name") or "")
+        if named.startswith("web_search"):
+            data.pop("tool_choice", None)
     return True
 
 

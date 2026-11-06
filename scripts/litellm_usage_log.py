@@ -260,7 +260,7 @@ def error_fields(kwargs, slo):
                 pass
     elif _is_outage(_hooks_module(), exc):
         hooks = _hooks_module()
-        if hooks is not None and getattr(hooks, "LIMIT_REWRITE", False):
+        if hooks is not None and (getattr(hooks, "LIMIT_REWRITE", False) or getattr(hooks, "OUTAGE_REWRITE", False)):
             # The hooks rewrote a transient upstream fault (502/504, gateway
             # 503 no_db_connection) into a reset-bearing answer; the /v1/messages
             # shape is caught by RESET_AFTER_RE above, this covers the rest.

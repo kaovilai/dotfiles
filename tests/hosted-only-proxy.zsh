@@ -223,7 +223,7 @@ assert not h.is_empty_instruction({"role": "user", "content": ""})
 
 # Image budget prune (item 6): oldest inline images -> path notes until the body fits
 import base64, hashlib, os, tempfile
-assert h.IMAGE_BUDGET_BYTES == 8 * 1024 * 1024 and h.IMAGE_CACHE_DAYS == 1
+assert h.IMAGE_BUDGET_BYTES == 2500000 and h.IMAGE_CACHE_DAYS == 1 and h.IMAGE_TOKENS == 2500
 work = tempfile.mkdtemp()
 cache_dir, att_dir = os.path.join(work, "cache"), os.path.join(work, "attachments")
 os.mkdir(att_dir)
@@ -593,7 +593,8 @@ out = h.rewrite_limit(St(402, "payment required"), chat, now=NOW)
 assert out.status_code == 402 and out.type == "insufficient_quota" and iso(NEXT) in out.detail, (out.status_code, out.detail)
 out = h.rewrite_limit(St(402, "payment required"), resp, now=NOW)
 assert out.status_code == 429 and out.type == "usage_limit_reached" and out.headers["x-codex-primary-reset-at"] == str(int(NEXT)), out.headers
-assert h.rewrite_limit(St(503, "metering system unavailable"), msgs, now=NOW) is None
+out = h.rewrite_limit(St(503, "metering system unavailable"), msgs, now=NOW)
+assert out is not None and "Upstream unavailable (503)" in getattr(out, "detail", str(out))
 assert h.rewrite_limit(St(500, "boom"), msgs, now=NOW) is None
 # upstream outages (gateway 504 etc.) become reset-bearing answers T3 can auto-resume on
 h.OUTAGE_STREAK.clear()
@@ -606,8 +607,14 @@ assert h.is_outage_error(St(500, "Invalid message for role `developer`")) is Fal
 # gateway auth DB down (2026-11-05 tailbond thread): 503 no_db_connection is an outage; other 503s are not
 nodb = '{"error":{"message":"Service Unavailable, the authentication database is temporarily unreachable. Please retry shortly.","type":"no_db_connection","param":"None","code":"503"}}'
 assert h.is_outage_error(St(503, nodb)) is True
-assert h.is_outage_error(St(503, "metering system unavailable")) is False
+assert h.is_outage_error(St(503, "metering system unavailable")) is True   # gateway metering plane down (2026-10-22: 90 unrewritten)
+assert h.is_outage_error(St(503, "service unavailable")) is True           # gateway-wide 503 (2026-10-22: 33 unrewritten)
 assert h.is_outage_error(St(503, "upstream rate limited")) is False                 # a limit, not an outage
+# litellm reports connect/DNS failures as 500 "Cannot connect to host ..." (2026-11-06 audit)
+assert h.is_outage_error(St(500, "Cannot connect to host api.enmaas.devshift.net:443 ssl:default [Connect call failed]")) is True
+assert h.is_outage_error(St(500, "Cannot connect to host api.enmaas.devshift.net:443 ssl:default [nodename nor servname provided, or not known]")) is True
+# 529 overloaded_error is a transient outage (2026-10-22: 24 unrewritten)
+assert h.is_outage_error(St(529, '{"type": "error", "error": {"type": "overloaded_error", "message": "Overloaded"}}')) is True
 out = h.rewrite_limit(St(503, nodb), {"model": "m2", "proxy_server_request": {"url": "/v1/messages"}}, now=NOW)
 assert out.status_code == 503 and "Upstream unavailable (503)" in out.detail and "(reset after 1m)" in out.detail, out.detail
 h.OUTAGE_STREAK.clear()
@@ -615,13 +622,15 @@ gw = "<html><body><h1>504 Gateway Time-out</h1></body></html>"
 out = h.rewrite_limit(St(504, gw), msgs, now=NOW)
 assert out.status_code == 503 and "[429]" in out.detail and "(reset after 1m)" in out.detail and "Upstream unavailable (504)" in out.detail, out.detail
 assert h.reset_after_seconds(out.detail.encode()) == 60
-out = h.rewrite_limit(St(504, gw), resp, now=NOW + 5)  # second failure in the window doubles the wait
+# episodes, not requests: failures more than OUTAGE_COALESCE apart double the
+# wait, simultaneous ones do not (see the coalescing test below)
+out = h.rewrite_limit(St(504, gw), resp, now=NOW + 6)
 assert out.status_code == 429 and out.type == "usage_limit_reached", out.status_code
-assert out.headers["retry-after"] == "120" and out.headers["x-codex-primary-reset-at"] == str(int(NOW + 5 + 120)), out.headers
-out = h.rewrite_limit(St(504, gw), chat, now=NOW + 10)
+assert out.headers["retry-after"] == "120" and out.headers["x-codex-primary-reset-at"] == str(int(NOW + 6 + 120)), out.headers
+out = h.rewrite_limit(St(504, gw), chat, now=NOW + 16)
 assert out.status_code == 429 and out.headers["retry-after"] == "240", (out.status_code, out.headers)
 for i in range(8):
-    out = h.rewrite_limit(St(504, gw), resp, now=NOW + 20 + i)
+    out = h.rewrite_limit(St(504, gw), resp, now=NOW + 26 + i * 10)
 assert out.headers["retry-after"] == "600", out.headers  # capped
 out = h.rewrite_limit(St(504, gw), msgs, now=NOW + 5000)  # quiet for a while: starts over
 assert "(reset after 1m)" in out.detail, out.detail
@@ -760,6 +769,70 @@ assert saved == {"persist": [2, 1100]}, saved
 os.environ.pop("HOSTED_ONLY_OUTAGE_STATE")
 importlib.reload(h)
 assert h.OUTAGE_STATE_FILE == "" and h.outage_wait("persist2", 1000) == 60  # off: in-memory only
+
+# Parallel failures are one episode, not five doublings; a success clears it
+h.OUTAGE_STREAK.clear()
+assert [h.outage_wait("co", 1000) for _ in range(5)] == [60] * 5, h.OUTAGE_STREAK
+assert h.outage_wait("co", 1003) == 60, "inside OUTAGE_COALESCE: same episode"
+assert h.outage_wait("co", 1100) == 120, "past COALESCE: next episode"
+hook = h.HostedOnlyHooks()
+asyncio.run(hook.async_post_call_success_hook({"model": "co"}, None, 0, 0))
+assert "co" not in h.OUTAGE_STREAK, h.OUTAGE_STREAK
+assert h.outage_wait("co", 1200) == 60, "streak restarted after a success"
+
+# Gate split: LIMIT_REWRITE=0 must not kill the outage rewrite
+h.LIMIT_REWRITE, h.OUTAGE_REWRITE = False, True
+out = asyncio.run(hook.async_post_call_failure_hook({"model": "m", "proxy_server_request": {"url": "/v1/messages"}}, St(504, "<html>504</html>"), None))
+assert out is not None, "outage rewrite must run with LIMIT_REWRITE=0"
+h.LIMIT_REWRITE, h.OUTAGE_REWRITE = False, False
+out = asyncio.run(hook.async_post_call_failure_hook({"model": "m"}, St(504, "x"), None))
+assert out is None, "both knobs off: no rewrite"
+
+# Images are priced per image, not as base64 text (2026-11-06 audit: 20 x 120 KiB
+# tripped the compaction hint on a small real load)
+imgs = {"model": DS, "messages": [{"role": "user", "content": [
+    {"type": "image_url", "image_url": {"url": "data:image/png;base64," + "A" * 122880}} for _ in range(20)]}],
+    "max_tokens": 128000}
+assert h.clamp_output(imgs) is None, "base64 bytes must not count as text tokens"
+many = {"model": GLM, "messages": [{"role": "user", "content": [
+    {"type": "image", "source": {"type": "base64", "data": "A" * 100}} for _ in range(500)]}],
+    "max_tokens": 8192}
+try:
+    h.clamp_output(many)
+    raise SystemExit("500 images must refuse")
+except h.HTTPException as e:
+    assert e.status_code == 400, e.detail
+
+# tool_reference nested in tool_result.content is stripped too
+nested = {"model": GLM, "messages": [{"role": "user", "content": [
+    {"type": "tool_result", "tool_use_id": "t1", "content": [{"type": "tool_reference", "tool_name": "t"}, {"type": "text", "text": "ok"}]}]}]}
+assert h.strip_tool_references(nested) == 1, nested
+assert nested["messages"][0]["content"][0]["content"][0]["type"] == "text", nested
+
+# a forced tool_choice naming the removed search tool is freed
+ws = {"tools": [{"type": "web_search_20250305"}, {"type": "custom", "name": "c"}],
+      "tool_choice": {"type": "tool", "name": "web_search"}}
+assert h.strip_web_search_tools(ws) is True and len(ws["tools"]) == 1
+assert "tool_choice" not in ws, ws
+
+# ALIAS_MODELS tolerates spaces; int_knob floors a bad value
+os.environ["HOSTED_ONLY_ALIAS_MODELS"] = "claude-sonnet-5-5, claude-opus-5-5"
+importlib.reload(h)
+assert h.ALIAS_MODELS == frozenset({"claude-sonnet-5-5", "claude-opus-5-5"}), h.ALIAS_MODELS
+os.environ.pop("HOSTED_ONLY_ALIAS_MODELS")
+importlib.reload(h)
+os.environ["HOSTED_ONLY_BOGUS_KNOB"] = "abc"
+assert h.int_knob("BOGUS_KNOB", 512, 100) == 512
+del os.environ["HOSTED_ONLY_BOGUS_KNOB"]
+
+# quota-exhausted model does not burn a fallback attempt on the same account
+h.LAST_LIMIT_KIND.clear(); h.LAST_LIMIT_RESET.clear()
+fb = {"model": GLM, "messages": [{"role": "user", "content": "hi"}]}
+assert h.fallback_target(fb) == DS
+h.LAST_LIMIT_KIND[GLM] = "quota"; h.LAST_LIMIT_RESET[GLM] = time.time() + 3600
+assert h.fallback_target(fb) is None, "no fallback while the shared monthly quota is out"
+h.LAST_LIMIT_RESET[GLM] = time.time() - 1
+assert h.fallback_target(fb) == DS, "quota window over: fallback resumes"
 EOF
 
 print -r -- "ok hosted-only-proxy"
