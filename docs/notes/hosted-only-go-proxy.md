@@ -193,8 +193,10 @@ and the `LIMIT_REWRITE` / `OUTAGE_REWRITE` gate split; the **quota-aware
 fallback skip** (an account-wide monthly quota gains nothing from trying the
 other model); nested `tool_reference` stripping; and the forced `tool_choice`
 cleanup after a `web_search` tool is dropped. Graceful drain: SIGTERM stops
-accepting and lets in-flight requests finish (10 s budget) so a forced swap
-never cuts a stream.
+accepting and lets in-flight requests finish within a 10 s budget; a swap or
+stop waits 15 s before escalating to SIGKILL. A response that takes longer than
+the 10 s budget is still cut — the drain is a bound, not a guarantee for long
+streams.
 
 ## Why EnMaaS stays on LiteLLM
 

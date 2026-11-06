@@ -11,6 +11,17 @@ source "$repo/zsh/functions/claude/common.zsh" || fail "common.zsh does not sour
 source "$repo/zsh/functions/claude/proxies.zsh" || fail "proxies.zsh does not source"
 source "$repo/scripts/hosted-only-proxy.zsh" || fail "hosted-only-proxy.zsh does not source"   # _hosted_only_knob, as load.zsh provides it
 
+# The EnMaaS restart path must pick the same impl the controller does: GO and a
+# padded " go " are go (the controller lowercases and trims), the default and
+# `auto` are litellm. A mismatch sent a Go proxy down the kill-then-start path.
+( unset CLAUDE_ENMAAS_PROXY_IMPL LLM_PROXY_IMPL
+  [[ "$(_claude_enmaas_impl)" == litellm ]] || exit 1
+  [[ "$(CLAUDE_ENMAAS_PROXY_IMPL=auto _claude_enmaas_impl)" == litellm ]] || exit 2
+  [[ "$(CLAUDE_ENMAAS_PROXY_IMPL=GO _claude_enmaas_impl)" == go ]] || exit 3
+  [[ "$(CLAUDE_ENMAAS_PROXY_IMPL=' go ' _claude_enmaas_impl)" == go ]] || exit 4
+  [[ "$(LLM_PROXY_IMPL=Go _claude_enmaas_impl)" == go ]] || exit 5
+) || fail "_claude_enmaas_impl does not normalize like the controller (exit $?)"
+
 # Fixed ports so the stubs can key on them; nothing real listens here.
 export COPILOT_API_PORT=59000 CLAUDE_VERTEX_PROXY_PORT=59001 CLAUDE_OPENAI_PROXY_PORT=59002
 export HOSTED_ONLY_CLAUDE_PROXY_PORT=59003 HOSTED_ONLY_CODEX_PROXY_PORT=59004

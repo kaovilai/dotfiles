@@ -201,7 +201,8 @@ claude-openai-restart() {
 # non-Anthropic models in the EnMaaS catalog. `auto` means litellm here.
 _claude_enmaas_impl() {
     local impl="${CLAUDE_ENMAAS_PROXY_IMPL:-${LLM_PROXY_IMPL:-litellm}}"
-    [[ "$impl" == auto ]] && impl=litellm
+    impl="${${(L)impl}//[[:space:]]/}"   # lowercase + trim, like the controller (GO and " go " mean go)
+    [[ -z "$impl" || "$impl" == auto ]] && impl=litellm
     print -r -- "$impl"
 }
 

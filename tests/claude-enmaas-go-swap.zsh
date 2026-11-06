@@ -78,6 +78,14 @@ with tempfile.TemporaryDirectory(prefix='enmaas-go-swap-', dir=os.environ.get('T
     program.write_text(emitted.stdout)
     program.chmod(0o600)
     helper = runpy.run_path(str(program))
+    # Both launchers stamp the same source.sha: the controller's Go source hash must
+    # equal the zsh one, or alternating hosted-only and EnMaaS launches each saw a
+    # mismatch and rebuilt the unchanged binary.
+    zsh_hash = subprocess.run(['zsh', '-f', '-c', 'source "$ENMAAS_TEST_REPO/scripts/hosted-only-proxy.zsh"; _hosted_only_go_hash'],
+                              env=env, text=True, capture_output=True, check=True).stdout.strip()
+    src_dir = repo / 'scripts' / 'hosted-only-go'
+    assert helper['go_source_hash'](src_dir) == zsh_hash, (helper['go_source_hash'](src_dir), zsh_hash)
+    print('PASS: the controller and the zsh launcher compute the same Go source hash')
     config = {'model_list': [{'model_name': model, 'litellm_params': {
         'model': route, 'api_base': gateway_url, 'api_key': 'os.environ/ENMAAS_API_KEY'}}
         for model, route in [('*', 'anthropic/*'), ('offline-model', 'anthropic/offline-model')]],

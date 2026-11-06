@@ -1,6 +1,7 @@
 package main
 
 import (
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -20,10 +21,9 @@ func newProxyHarness(t *testing.T, status int, body string, tweak func(*config))
 	t.Helper()
 	h := &proxyHarness{calls: map[string]int{}}
 	stub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		buf := make([]byte, 1<<16)
-		n, _ := r.Body.Read(buf)
+		reqBody, _ := io.ReadAll(r.Body) // a single Read may return a partial body
 		var model string
-		if data, err := decodeObject(buf[:n]); err == nil {
+		if data, err := decodeObject(reqBody); err == nil {
 			model = asString(data["model"])
 		}
 		h.mu.Lock()

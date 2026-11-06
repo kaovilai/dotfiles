@@ -87,6 +87,7 @@ func runServe() {
 		os.Exit(1)
 	}
 
+	startCacheSweeper(cfg)
 	server := &http.Server{
 		Handler:           newApp(cfg),
 		ReadHeaderTimeout: 10 * time.Second,

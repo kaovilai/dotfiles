@@ -225,6 +225,7 @@ func TestDialectMismatchIsRefusedNotForwarded(t *testing.T) {
 		{"/v1/chat/completions", "openai", false},
 		{"/v1/responses", "responses", false},
 		{"/v1/responses", "openai", false},
+		{"/v1/chat/completions", "responses", true},
 		{"/v1/chat/completions", "anthropic", true},
 		{"/v1/responses", "anthropic", true},
 	}

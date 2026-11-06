@@ -410,7 +410,11 @@ func (a *app) outageWait(model string, now time.Time) int {
 // an answer the client cannot parse. Fail with an actionable 400 instead.
 func dialectMismatch(clientPath, deployment, model string) string {
 	messages := strings.Contains(clientPath, "/v1/messages")
+	chat := strings.Contains(clientPath, "/v1/chat/completions")
 	switch {
+	case chat && deployment == "responses":
+		return fmt.Sprintf("model %s is served over the Responses dialect and this proxy does not translate chat requests to it; "+
+			"set CLAUDE_ENMAAS_PROXY_IMPL=litellm (or LLM_PROXY_IMPL=litellm) to use the LiteLLM proxy, which does", model)
 	case messages && deployment != "anthropic":
 		return fmt.Sprintf("model %s is served over the %s dialect and this proxy does not translate Messages requests to it; "+
 			"set CLAUDE_ENMAAS_PROXY_IMPL=litellm (or LLM_PROXY_IMPL=litellm) to use the LiteLLM proxy, which does", model, deployment)

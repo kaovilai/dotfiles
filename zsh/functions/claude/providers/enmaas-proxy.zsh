@@ -256,15 +256,24 @@ def go_source():
     return files[0].parent.parent / 'scripts' / 'hosted-only-go'
 
 
+def go_source_hash(src):
+    # The canonical Go source hash, identical to _hosted_only_go_hash in
+    # scripts/hosted-only-proxy.zsh: sha256 over go.mod then every *.go in
+    # C-locale (byte) order. Both launchers stamp the same source.sha, so a
+    # different algorithm here made each alternating launch rebuild the binary.
+    digest = hashlib.sha256()
+    digest.update((src / 'go.mod').read_bytes())
+    for path in sorted(src.glob('*.go'), key=lambda p: p.name.encode()):
+        digest.update(path.read_bytes())
+    return digest.hexdigest()
+
+
 def go_binary():
     """Build (or reuse) the Go proxy; returns (binary path, source hash)."""
     src = go_source()
     out = Path(os.environ.get('XDG_STATE_HOME') or Path.home() / '.local' / 'state') / 'hosted-only-go'
     out.mkdir(mode=0o700, parents=True, exist_ok=True)
-    digest = hashlib.sha256()
-    for path in sorted(list(src.glob('*.go')) + [src / 'go.mod']):
-        digest.update(path.name.encode() + b'\0' + path.read_bytes())
-    want = digest.hexdigest()
+    want = go_source_hash(src)
     binary = out / 'hosted-only-proxy'
     stamp = out / 'source.sha'
     if not binary.is_file() or not stamp.is_file() or stamp.read_text().strip() != want:
@@ -475,9 +484,13 @@ def ensure(root, port, config, versions, timeout, required):
         if child.poll() is None and accepting():
             write_private(root / 'proxy.json', info)
             # Retire the old group only now; the recorded identity is already
-            # the new one, so never through stop() (it would unlink it).
+            # the new one, so never through stop() (it would unlink it). Signal
+            # it only while it is still the verified old proxy: if it exited
+            # during the replacement's startup its group id may have been reused
+            # by an unrelated process.
             try:
-                os.killpg(swap_info['pid'], signal.SIGTERM)
+                if owned(swap_info):
+                    os.killpg(swap_info['pid'], signal.SIGTERM)
             except ProcessLookupError:
                 pass
             # wait out the Go proxy's 10 s graceful drain before escalating

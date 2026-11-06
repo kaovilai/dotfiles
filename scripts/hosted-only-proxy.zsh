@@ -81,9 +81,12 @@ _hosted_only_knob() {
 # is installed, else litellm; anything else is returned as given (the caller
 # validates it).
 _hosted_only_resolve_impl() {
-    case "${1:-auto}" in
+    local impl="${1:-auto}"
+    impl="${${(L)impl}//[[:space:]]/}"   # lowercase, trim (the EnMaaS controller normalizes the same way)
+    [[ -n "$impl" ]] || impl=auto
+    case "$impl" in
         auto) (( $+commands[go] )) && print -r -- go || print -r -- litellm ;;
-        *) print -r -- "$1" ;;
+        *) print -r -- "$impl" ;;
     esac
 }
 
@@ -263,7 +266,11 @@ PY
 _hosted_only_go_hash() {
     local src="$_HOSTED_ONLY_SCRIPTS/hosted-only-go"
     [[ -d "$src" ]] || { print -ru2 -- "hosted-only: missing $src"; return 1; }
-    ( cd "$src" && cat go.mod *.go ) | shasum -a 256 | cut -d' ' -f1
+    # Canonical source hash: sha256 over go.mod then every *.go in C-locale byte
+    # order. The EnMaaS controller computes the same thing (go_source_hash), so
+    # alternating hosted-only and EnMaaS launches share one source.sha stamp
+    # instead of rebuilding the unchanged binary each time.
+    ( cd "$src" && LC_ALL=C && cat go.mod *.go ) | shasum -a 256 | cut -d' ' -f1
 }
 
 # _hosted_only_go_bin: build (or reuse) the Go proxy binary in the state dir.

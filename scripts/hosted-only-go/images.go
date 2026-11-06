@@ -21,10 +21,12 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 )
 
 const pruneMarker = "[image-pruned]"
@@ -97,9 +99,13 @@ func collectImages(node any, parent []any, index int, anchor string, out *[]imag
 				return
 			}
 		}
+		// Responses call_id, Anthropic tool_use_id, chat tool_call_id (a chat tool
+		// result names its call this way, so its image resolves to the call's path).
 		if own := asString(v["call_id"]); own != "" {
 			anchor = own
 		} else if own := asString(v["tool_use_id"]); own != "" {
+			anchor = own
+		} else if own := asString(v["tool_call_id"]); own != "" {
 			anchor = own
 		}
 		keys := make([]string, 0, len(v))
@@ -294,41 +300,91 @@ func cacheImage(cfg *config, raw []byte, sha, mime string, now time.Time) string
 			return ""
 		}
 	}
+	sweepImageCache(cfg, now, false)
+	return path
+}
+
+// proxyOwnedCacheName matches only what cacheImage writes: <sha1>.<ext> copies
+// and its <sha1>.<random>.tmp staging files. The sweep must never touch
+// anything else, because HOSTED_ONLY_IMAGE_CACHE_DIR may point at a directory
+// that holds unrelated files.
+var proxyOwnedCacheName = regexp.MustCompile(`^[0-9a-f]{40}\.(?:png|jpg|gif|webp|[^/]*\.tmp)$`)
+
+// sweepImageCache removes expired proxy-owned copies, at most hourly unless
+// forced. It runs after every cache write and, independently, from the
+// proxy's hourly ticker, so an idle proxy still honors the advertised
+// retention instead of keeping old (possibly sensitive) images until the next
+// prune.
+func sweepImageCache(cfg *config, now time.Time, force bool) {
+	if cfg.ImageCacheDays <= 0 {
+		return
+	}
 	cacheSweep.mu.Lock()
-	sweep := now.Sub(cacheSweep.at) > time.Hour
-	if sweep {
+	due := force || now.Sub(cacheSweep.at) > time.Hour
+	if due {
 		cacheSweep.at = now
 	}
 	cacheSweep.mu.Unlock()
-	if sweep {
-		cutoff := now.Add(-time.Duration(cfg.ImageCacheDays) * 24 * time.Hour)
-		entries, _ := os.ReadDir(dir)
-		for _, entry := range entries {
-			if !entry.Type().IsRegular() {
-				continue
-			}
-			if fi, err := entry.Info(); err == nil && fi.ModTime().Before(cutoff) {
-				_ = os.Remove(filepath.Join(dir, entry.Name()))
-			}
+	if !due {
+		return
+	}
+	cutoff := now.Add(-time.Duration(cfg.ImageCacheDays) * 24 * time.Hour)
+	entries, _ := os.ReadDir(cfg.ImageCacheDir)
+	for _, entry := range entries {
+		if !entry.Type().IsRegular() || !proxyOwnedCacheName.MatchString(entry.Name()) {
+			continue
+		}
+		if fi, err := entry.Info(); err == nil && fi.ModTime().Before(cutoff) {
+			_ = os.Remove(filepath.Join(cfg.ImageCacheDir, entry.Name()))
 		}
 	}
-	return path
+}
+
+// startCacheSweeper expires cached copies on a timer, independent of image
+// pruning. A no-op when caching is off.
+func startCacheSweeper(cfg *config) {
+	if cfg.ImageCacheDays <= 0 {
+		return
+	}
+	go func() {
+		sweepImageCache(cfg, time.Now(), true)
+		for now := range time.Tick(time.Hour) {
+			sweepImageCache(cfg, now, true)
+		}
+	}()
+}
+
+// safePath makes a path safe to embed in model-visible text: control
+// characters (newlines especially) become '?', and the length is capped, so a
+// crafted file name cannot smuggle a line of instructions into the note.
+func safePath(path string) string {
+	cleaned := strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return '?'
+		}
+		return r
+	}, path)
+	const limit = 300
+	if len(cleaned) > limit {
+		cleaned = cleaned[:limit] + "..."
+	}
+	return cleaned
 }
 
 func prunePlaceholder(source, attachment, cached string, days int) string {
 	var where []string
 	if source != "" {
-		where = append(where, "source file "+source)
+		where = append(where, "source file "+safePath(source))
 	}
 	if attachment != "" {
-		where = append(where, "T3 attachment "+attachment)
+		where = append(where, "T3 attachment "+safePath(attachment))
 	}
 	if cached != "" {
 		plural := "s"
 		if days == 1 {
 			plural = ""
 		}
-		where = append(where, fmt.Sprintf("proxy copy %s (kept %d day%s)", cached, days, plural))
+		where = append(where, fmt.Sprintf("proxy copy %s (kept %d day%s)", safePath(cached), days, plural))
 	}
 	tail := ". Re-create and view it again if you need it."
 	if len(where) > 0 {
@@ -369,6 +425,9 @@ func imageLoad(value any) (size, count int) {
 			if text, ok := src.(string); ok && text != "" {
 				return len(text), 1
 			}
+			// A file-id or URL image has no inline bytes but the upstream still
+			// charges its tokens: count the image, price no base64.
+			return 0, 1
 		}
 		for _, child := range v {
 			b, c := imageLoad(child)

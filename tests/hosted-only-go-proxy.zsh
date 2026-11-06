@@ -42,6 +42,8 @@ LLM_PROXY_IMPL=litellm HOSTED_ONLY_PROXY_IMPL=go _hosted_only_proxy_vars claude
 [[ "$_hop_impl" == go ]] || fail "HOSTED_ONLY_PROXY_IMPL must beat LLM_PROXY_IMPL: $_hop_impl"
 [[ "$( ( path=(/nonexistent); rehash; _hosted_only_resolve_impl auto ) )" == litellm ]] || fail "auto without a go toolchain must be litellm"
 [[ "$(_hosted_only_resolve_impl bogus)" == bogus ]] || fail "an explicit value is passed through for the caller to reject"
+[[ "$(_hosted_only_resolve_impl GO)" == go && "$(_hosted_only_resolve_impl ' litellm ')" == litellm ]] || fail "impl values are lowercased and trimmed (the EnMaaS controller does the same)"
+[[ "$(_hosted_only_resolve_impl '')" == "$(_hosted_only_resolve_impl auto)" ]] || fail "an empty value means auto"
 HOSTED_ONLY_PROXY_IMPL=go _hosted_only_proxy_vars claude
 [[ "$_hop_impl" == go ]] || fail "HOSTED_ONLY_PROXY_IMPL=go not read"
 GLM_HYBRID_PROXY_IMPL=go _hosted_only_proxy_vars claude
@@ -92,7 +94,7 @@ local stub_port pport
 stub_port=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1]); s.close()')
 pport=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1]); s.close()')
 
-python3 - "$stub_port" <<'PY' >"$tmp/stub.log" 2>&1 &
+python3 - "$stub_port" "$tmp/slow.started" <<'PY' >"$tmp/stub.log" 2>&1 &
 import json, sys
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
@@ -111,6 +113,7 @@ class H(BaseHTTPRequestHandler):
         text = json.dumps(body)
         if 'SLOW' in text:
             import time
+            open(sys.argv[2], 'w').close()   # tell the test the request is in hand
             time.sleep(1.5)
         if 'MONTHLY' in text:
             payload = b'{"error":{"message":"monthly token budget exhausted","type":"insufficient_quota"}}'
@@ -305,7 +308,10 @@ local drain_code="$tmp/drain.code"
     -H 'authorization: Bearer sk-enmaas-test' \
     -d '{"model":"something-new","max_tokens":8,"messages":[{"role":"user","content":"SLOW"}]}' >| "$drain_code" ) &
 local drainer=$!
-sleep 0.4
+# Wait for the stub to hold the request (a fixed sleep let curl connect AFTER
+# shutdown closed the listener on a loaded host); bounded.
+for i in {1..200}; do [[ -e "$tmp/slow.started" ]] && break; sleep 0.05; done
+[[ -e "$tmp/slow.started" ]] || fail "the stub never received the in-flight request"
 kill -TERM "$eproxy"
 wait $drainer
 [[ "$(<"$drain_code")" == 200 ]] || fail "an in-flight request was cut by SIGTERM instead of drained: $(<"$drain_code")"

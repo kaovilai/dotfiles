@@ -335,10 +335,22 @@ func stripWebSearchTools(data map[string]any) bool {
 		return false
 	}
 	kept := make([]any, 0, len(tools))
+	removedNames := map[string]bool{}
+	keptNames := map[string]bool{}
 	for _, tool := range tools {
 		m := asMap(tool)
 		if m != nil && strings.HasPrefix(asString(m["type"]), searchToolPrefix) {
+			// A built-in search tool is addressed as "web_search" when it
+			// declares no name of its own.
+			name := asString(m["name"])
+			if name == "" {
+				name = searchToolPrefix
+			}
+			removedNames[name] = true
 			continue
+		}
+		if m != nil {
+			keptNames[asString(m["name"])] = true
 		}
 		kept = append(kept, tool)
 	}
@@ -351,14 +363,18 @@ func stripWebSearchTools(data map[string]any) bool {
 		return true
 	}
 	data["tools"] = kept
-	// A forced choice naming the dropped tool would reference an undeclared
-	// tool (400 on strict upstreams); free the choice instead.
+	// A forced choice that points at a dropped tool would reference an
+	// undeclared tool (400 on strict upstreams); free it. Match the choice to
+	// the tools actually removed, not a shared prefix: a retained custom tool
+	// such as web_search_local keeps its forced choice, and a type-only
+	// built-in choice ({"type":"web_search_preview"}) is freed too.
 	if choice := asMap(data["tool_choice"]); choice != nil {
 		named := asString(choice["name"])
 		if named == "" {
 			named = asString(asMap(choice["function"])["name"])
 		}
-		if strings.HasPrefix(named, searchToolPrefix) {
+		typeOnlySearch := named == "" && strings.HasPrefix(asString(choice["type"]), searchToolPrefix)
+		if typeOnlySearch || (named != "" && removedNames[named] && !keptNames[named]) {
 			delete(data, "tool_choice")
 		}
 	}
