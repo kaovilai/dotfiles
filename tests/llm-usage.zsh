@@ -292,7 +292,9 @@ assert d["reroutes"] == [] and d["reroutes_15m"] == 0 and d["by_model"][0]["rero
 # LiteLLM logs metadata endpoints with an empty model; they must not surface as
 # a "?" model at 100% error rate in the dashboard/menubar
 d = run("endpoint-probe", [ev(60), err(30, code=400, call_type="/v1/models", requested="", served="",
-                                error="No connected db.", error_type="ProxyException")])
+                                error="No connected db.", error_type="ProxyException"),
+                            err(20, code=401, call_type="/mcp/", requested="", served="",
+                                error="Malformed API Key passed in. Ensure Key has `Bearer ` prefix.")])
 assert "?" not in [m["model"] for m in d["by_model"]], d["by_model"]
 assert d["totals"]["h1"]["errors"]["other"] == 0, d["totals"]["h1"]
 d = run("throttled", [ev(100), err(30, 429, retry_after=300, rewritten=True)])

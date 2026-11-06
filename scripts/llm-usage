@@ -159,16 +159,18 @@ def parse_proxy_file(handle, path):
     return events
 
 
-# LiteLLM logs metadata endpoints as calls with an empty model. They are
-# probes (T3's version check hits GET /v1/models), not model traffic; left in,
-# they show up as a "?" model at a 100% error rate in the dashboard.
-META_PATH_RE = re.compile(r"^/(?:v\d+/)?(?:models|model/info|model_group/info|providers)(?:$|[/?])|^/health(?:$|[/?])", re.I)
+# LiteLLM logs control-plane calls with an empty model: T3's version probe
+# (GET /v1/models), Claude Code's MCP client (/mcp/), key and health checks.
+# They are not model traffic; left in they show up as a "?" model at 100%
+# error rate. Anything without a model that is not an inference route counts.
+INFERENCE_CALL_RE = re.compile(r"^/(?:anthropic/)?(?:v1/)?(?:messages|responses|chat/completions|completions|embeddings|rerank)", re.I)
 
 
 def is_endpoint_probe(e):
     if e.get("served") or e.get("requested") or e.get("model"):
         return False
-    return bool(META_PATH_RE.search(str(e.get("call_type") or "")))
+    ct = str(e.get("call_type") or "")
+    return ct.startswith("/") and not INFERENCE_CALL_RE.search(ct)
 
 
 def load_proxy(since):

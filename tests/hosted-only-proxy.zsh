@@ -661,6 +661,14 @@ assert h.fallback_target({"model": DS, "messages": text, "fallbacks": ["mine"]})
 big = [{"role": "user", "content": "x" * 4000000}]                                        # ~1M tokens: both windows are 1048576
 assert h.fallback_target({"model": DS, "messages": big}) == GLM
 assert h.fallback_target({"model": GLM, "messages": big}) == DS
+# tool_reference blocks (Claude Code tool search) are dropped before vLLM
+mref = {"model": GLM, "messages": [{"role": "user", "content": [
+    {"type": "tool_reference", "tool_name": "mcp__x__y"}, {"type": "text", "text": "hi"}]}]}
+assert h.strip_tool_references(mref) == 1 and [b["type"] for b in mref["messages"][0]["content"]] == ["text"], mref
+onlyref = {"model": GLM, "input": [{"role": "user", "content": [{"type": "tool_reference", "tool_name": "t"}]}]}
+assert h.strip_tool_references(onlyref) == 1 and onlyref["input"][0]["content"][0]["type"] == "text", onlyref
+assert h.strip_tool_references({"model": GLM, "messages": [{"role": "user", "content": "hi"}]}) == 0
+
 # Output clamp: input + max_tokens must fit the served window (vLLM 400s at
 # 1,048,750 input + any output otherwise)
 assert h.MAX_MODEL_LEN == 1048576 and h.OUTPUT_RESERVE == 512 and h.BYTES_PER_TOKEN == 3.0

@@ -1375,6 +1375,35 @@ def clamp_output(data):
     return key, requested, capped
 
 
+def strip_tool_references(data):
+    """Claude Code's tool search sends `tool_reference` content blocks; vLLM's
+    chat template rejects them ("DeepSeek V4.1 supports text and image content
+    only; got 'tool_reference'"). They point at tool definitions the client
+    already holds, so dropping them keeps the request valid; a content list
+    that empties becomes a short text block."""
+    def clean(blocks):
+        kept, dropped = [], 0
+        for block in blocks:
+            if isinstance(block, dict) and block.get("type") == "tool_reference":
+                dropped += 1
+                continue
+            kept.append(block)
+        if dropped and not kept:
+            kept = [{"type": "text", "text": "(tool reference omitted)"}]
+        return kept, dropped
+
+    total = 0
+    for key in ("messages", "input"):
+        items = data.get(key)
+        if not isinstance(items, list):
+            continue
+        for item in items:
+            if isinstance(item, dict) and isinstance(item.get("content"), list):
+                item["content"], dropped = clean(item["content"])
+                total += dropped
+    return total
+
+
 def fallback_target(data):
     """The other hosted model to fall back to for this request, or None.
 
@@ -1459,6 +1488,7 @@ class HostedOnlyHooks(CustomLogger):
             data["thinking"] = {"type": "disabled"}
         if isinstance(data.get("input"), list):
             data["input"] = [i for i in data["input"] if not is_empty_instruction(i)]
+        strip_tool_references(data)
         clamped = clamp_output(data)
         if clamped:
             LOG.info("hosted_only_hooks: %s %s %s -> %s (input over the window)",
