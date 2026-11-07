@@ -1697,7 +1697,9 @@ final class MonitorView: NSView {
         let fhosts = d["fleet"]["enabled"].bool ? (d["fleet"]["hosts"].arr ?? []) : []
         let fleetShow = fhosts.prefix(2)
         if !fleetShow.isEmpty, layout == .vertical, rowsLeft >= fleetShow.count + 1, let r = next() {
-            drawStr("Fleet · 15m", in: r, font: tinyFont, color: .secondaryLabelColor)
+            // "+N more" in the header: the menu holds the full host list, the window must say when it truncated one
+            drawStr("Fleet · 15m" + (fhosts.count > fleetShow.count ? " · +\(fhosts.count - fleetShow.count) more" : ""),
+                    in: r, font: tinyFont, color: .secondaryLabelColor)
             for h in fleetShow {
                 guard let row = next() else { break }
                 let state = h["state"].str ?? "down"

@@ -209,7 +209,8 @@ def load_proxy(since):
 
 
 _FILE_CACHE = {}  # (kind, path) -> (mtime, size, events); warm in `serve`, persisted for one-shot polls
-_TRANSCRIPT_CACHE_VERSION = 3  # 3: proxy entries carry (mtime, size, inode, offset-cut events)
+_TRANSCRIPT_CACHE_VERSION = 4  # 4: truncated entries are no longer stored (old pickles with them are
+# discarded, so mixed old+recent transcript files re-parse whole and fleet backfills see their old events)
 _TRANSCRIPT_CACHE_LOADED = set()
 _TRANSCRIPT_CACHE_DIRTY = set()
 CACHE_FILES = False
@@ -857,6 +858,11 @@ def fleet_pull_one(name, entry, force=False, ttl=FLEET_TTL):
         if months:
             y, m = min(months).split("-")
             oldest = datetime(int(y), int(m), 1, tzinfo=timezone.utc).timestamp()
+        if backfilled and oldest is not None and cursor > oldest:
+            # the peer now advertises older history than we walked (an older events
+            # month appeared, or the saved state predates the months-aware stop
+            # rule): a persisted backfilled flag must not pin the walk shut
+            backfilled = False
         backfill_note = None
         if not backfilled:
             try:

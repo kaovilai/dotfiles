@@ -698,8 +698,6 @@ assert sum(r["n"] for r in json.loads(agg_run("summary", "--since", "1h", "--sou
 # a peer with no config: fleet disabled, nothing changes
 d = run("no-fleet", [ev(30)])
 assert d["fleet"] == {"enabled": False} and d["totals"]["m15"]["requests"] == 1, d.get("fleet")
-# same events without the fleet config: the window render must differ (fleet rows drawn)
-run("fleet-nofleet", [ev(30), err(50, 500)])
 
 # in-flight tracking in the proxy logger (stub litellm so it runs without the proxy venv)
 state = tempfile.mkdtemp(dir=tmp)
@@ -828,6 +826,43 @@ st = mod.fleet_status("p4")
 assert st["backfilled"], st
 assert any(r["eid"] == mod.event_eid(old120) for r in host_lines("p4")), "the event behind the gap must be pulled"
 
+# a persisted backfilled flag must not pin the walk shut when the peer advertises
+# older history than the saved cursor walked (an older month appeared, or the
+# state predates the months-aware stop rule)
+mod.fleet_write_status("p5", backfilled=True, backfill_cursor=now - 7 * 86400,
+                       last_ok=now - 60, last_event_t=now - 60)
+scripted.clear()
+old_aug = ev(now - 100 * 86400)
+for i in range(10):
+    scripted += [(meta_g, [], []), (meta_g, [old_aug] if i >= 1 else [], [])]
+    mod.fleet_pull_one("p5", {"name": "p5", "local_dir": "/x"}, force=True)
+    if mod.fleet_status("p5").get("backfilled"):
+        break
+st = mod.fleet_status("p5")
+assert st["backfilled"], st
+assert any(r["eid"] == mod.event_eid(old_aug) for r in host_lines("p5")), "resume must reach the newly advertised history"
+
+# a v3 pickle with a truncated entry is discarded (cache version 4): the file
+# re-parses whole, so the old event a backfill asks for is not hidden
+import pickle
+cdir = os.path.join(tmp, "claude-cache")
+os.makedirs(cdir)
+tfile = os.path.join(cdir, "s.jsonl")
+with open(tfile, "w") as h:
+    for i, (ago, out) in enumerate(((100 * 86400, 3), (60, 4))):
+        h.write(json.dumps({"type": "assistant", "timestamp": mod.iso_utc(now - ago), "uuid": f"u{i}", "sessionId": "s",
+                            "message": {"id": f"mc{i}", "model": "claude-sonnet-5.5",
+                                        "usage": {"input_tokens": 1, "output_tokens": out}}}) + "\n")
+stf = os.stat(tfile)
+with open(os.path.join(mod.STATE, "transcript-cache-claude.pkl"), "wb") as h:
+    pickle.dump({"version": 3, "files": {tfile: (stf.st_mtime, stf.st_size, stf.st_ino,
+                                                 [{"id": "mc1", "t": now - 60, "source": "claude",
+                                                   "served": "claude-sonnet-5.5", "ok": True, "in": 1, "out": 4}])}},
+                 h, protocol=4)
+os.environ["LLM_USAGE_CLAUDE_DIRS"] = cdir
+loaded = mod.load_claude(0)
+assert sorted(e["out"] for e in loaded) == [3, 4], loaded
+
 # control socket dir: a predictable /tmp path is trusted only when provably ours
 # (real dir, owned by us, no group/other bits); a planted or loosened dir falls back to STATE
 import stat as stat_mod
@@ -860,9 +895,11 @@ if [[ -x /usr/bin/swiftc ]] || command -v swiftc >/dev/null; then
     [[ "$dump" == *"FLEET (15m / 1h)"* && "$dump" == *"● peerA  up  2/15m 2/1h 429:1"* ]] || fail "fleet section: $dump"
     [[ "$dump" == *"last pulled"* && "$dump" == *"Copy host name (peerA)"* ]] || fail "fleet submenu: $dump"
     [[ "$(dump_of normal)" != *"FLEET ("* ]] || fail "no fleet config must not render a fleet section"
-    # the vertical floating window actually draws the fleet rows (not just tolerates the data)
+    # the vertical floating window actually draws the fleet rows (not just tolerates the data):
+    # identical payload with only the fleet block stripped must render differently
+    python3 -c 'import json,sys; d = json.load(open(sys.argv[1])); d["fleet"] = {"enabled": False}; json.dump(d, open(sys.argv[2], "w"))' "$mbjson/fleet.json" "$tmp/fleet-stripped.json"
     "$mb" --window-png "$tmp/w-fleet-on.png" --layout vertical --data-file "$mbjson/fleet.json" >/dev/null || fail "window-png fleet vertical"
-    "$mb" --window-png "$tmp/w-fleet-off.png" --layout vertical --data-file "$mbjson/fleet-nofleet.json" >/dev/null || fail "window-png fleet-nofleet vertical"
+    "$mb" --window-png "$tmp/w-fleet-off.png" --layout vertical --data-file "$tmp/fleet-stripped.json" >/dev/null || fail "window-png fleet-stripped vertical"
     cmp -s "$tmp/w-fleet-on.png" "$tmp/w-fleet-off.png" && fail "fleet rows must change the vertical window render"
     [[ "$dump" == *"[chart] requests/min"* && "$dump" == *"[chart] by model"* && "$dump" == *"[chart] by proxy"* ]] || fail "charts missing: $dump"
     [[ "$(dump_of normal --no-charts)" != *"[chart]"* && "$(dump_of normal --no-charts)" == *"Top models (1h): glm-5.3"* ]] || fail "--no-charts"
