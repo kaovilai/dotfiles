@@ -71,6 +71,7 @@ export CLAUDE_CODE_ENABLE_TASKS=1
 _safe_source ~/git/dotfiles/zsh/paths.zsh
 _safe_source ~/git/dotfiles/zsh/functions/openshift/load-lazy.zsh
 _safe_source ~/git/dotfiles/zsh/functions/claude/functions.zsh
+_safe_source ~/git/dotfiles/zsh/functions/automode-gate.zsh
 _safe_source ~/git/dotfiles/zsh/functions/hermes/functions.zsh
 _safe_source ~/git/dotfiles/zsh/functions/t3code.zsh
 _safe_source ~/git/dotfiles/zsh/functions/s3/load-lazy.zsh
