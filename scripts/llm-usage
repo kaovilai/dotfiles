@@ -778,8 +778,9 @@ def fleet_pull_one(name, entry, force=False, ttl=FLEET_TTL):
         # Backfill: first sync is the last 7 days; walk older history back in
         # 30d chunks until the peer's oldest events month is covered ("months"
         # in the export meta — proxy log only, so a transcript-heavy peer also
-        # stops after two empty chunks), one chunk per refresh so a big history
-        # trickles in without ever blocking the incremental pull.
+        # stops after two empty chunks; that is a documented bound, see
+        # docs/notes/fleet-usage-streaming.md), one chunk per refresh so a big
+        # history trickles in without ever blocking the incremental pull.
         cursor = st.get("backfill_cursor", now - FLEET_FIRST_SYNC)
         backfilled = bool(st.get("backfilled"))
         empty = st.get("backfill_empty", 0)

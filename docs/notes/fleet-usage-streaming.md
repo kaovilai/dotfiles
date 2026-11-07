@@ -12,7 +12,11 @@ Status: implemented (all phases). 2026-11-07. Decisions from review:
 2. **First-sync history** — last 7 days, then incremental backfill in 30d
    chunks per refresh until the peer's oldest events month is covered (the
    export meta carries the months present, so backfill never stops early on a
-   quiet month).
+   quiet month). Bound: the months manifest covers the proxy log only; a
+   transcript-heavy peer (copilot usage) instead stops after two consecutive
+   empty chunks, so transcript history older than a ~60-day usage gap is not
+   pulled — a reliable bound would mean parsing every transcript on the peer
+   on every export. Documented tradeoff, not a silent miss.
 3. **Fleet membership** — tailscale-reachable hosts only for now (netbird/LAN
    hosts are just another `ssh:` entry when wanted).
 
