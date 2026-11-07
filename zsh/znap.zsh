@@ -28,6 +28,26 @@ znap prompt sindresorhus/pure
 znap source zsh-users/zsh-syntax-highlighting
 # Tame zsh-autocomplete: require 2+ chars before suggesting from history
 zstyle ':autocomplete:*' min-input 2
+# Hosts missing the local terminal's terminfo entry (e.g. TERM=xterm-ghostty over
+# ssh to a machine without ghostty's terminfo) leave $terminfo empty and READ-ONLY
+# (not fixable in-shell: zsh/terminfo caches the entry from the shell's startup
+# TERM, even across module unload/reload). zsh-autocomplete then reads
+# $terminfo[kcbt] unguarded, which errors under nounset:
+# ".autocomplete__key-bindings:39: terminfo[kcbt]: parameter not set".
+# Patch the plugin's unguarded terminfo reads with ${...-} defaults, idempotently
+# (re-applies after `znap pull` overwrites the file). Real fix for the missing
+# entry itself is on the remote host:
+#   infocmp -x xterm-ghostty | ssh <host> -- tic -x -
+() {
+  local -P kb=$HOME/.zsh-snap/marlonrichert/zsh-autocomplete/functions/Init/.autocomplete__key-bindings
+  [[ -f $kb ]] || return
+  local -P c=$(<$kb)
+  [[ $c == *'$terminfo[kcbt]'* ]] || return  # already patched / layout changed
+  c=${c//'$terminfo[kcbt]'/'${terminfo[kcbt]-}'}
+  c=${c//'$terminfo[kpp]'/'${terminfo[kpp]-}'}
+  c=${c//'$terminfo[knp]'/'${terminfo[knp]-}'}
+  print -r -- $c > $kb
+}
 znap source marlonrichert/zsh-autocomplete
 
 # zsh-autocomplete rebinds ^R to its own async completion-menu toggle instead of
