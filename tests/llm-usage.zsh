@@ -716,6 +716,11 @@ assert any(r["t"] < now.timestamp() - 99 * 86400 for r in rows), "the 100d-old p
 out = subprocess.run([sys.executable, usage, "summary", "--since", "all", "--by", "host", "--json"], capture_output=True, text=True,
                      timeout=60, env={**os.environ, "LLM_USAGE_DIR": agg2, **fenv2})
 assert {r["key"]["host"]: r["n"] for r in json.loads(out.stdout)} == {"oldpeer": 3}, out.stdout
+# peer transcript rows are labelled by their client like local ones (menubar keeps the :4141 attribution)
+out = subprocess.run([sys.executable, usage, "summary", "--since", "all", "--by", "proxy", "--json"], capture_output=True, text=True,
+                     timeout=60, env={**os.environ, "LLM_USAGE_DIR": agg2, **fenv2})
+labels = {r["key"]["proxy"] for r in json.loads(out.stdout)}
+assert "claude" in labels and "copilot-api" not in labels and "hosted-only" in labels, labels
 
 # menubar-data: fleet-wide totals, per-host block, peer throttle + in-flight, host-tagged last_error
 d = run("fleet", [ev(30), err(50, 500)], state=agg, extra_env=fenv)

@@ -81,17 +81,20 @@ Three pieces:
    transcript caches reused), plus the current `inflight` snapshot, and prints
    JSONL on stdout: one event per line, each carrying the full existing event
    schema plus `"host": "<shortname>"` (from `hostname -s` or config) and an
-   `"id"` (see dedup). Non-zero exit with a one-line stderr on failure.
+   `"eid"` (see dedup). Non-zero exit with a one-line stderr on failure.
    Stdlib only, works on macOS + Linux peers, needs nothing but the dotfiles
    checkout — i.e. nothing new to deploy.
 
 2. **Local: `llm-usage fleet refresh`** — the puller. For each configured host,
    concurrently (ThreadPoolExecutor, 10 s hard timeout per host):
-   `ssh -o ControlMaster=auto -o ControlPath=$STATE/fleet/cm-%r@%h:%p -o
+   `ssh -o ControlMaster=auto -o ControlPath=/tmp/llm-usage-fleet-<uid>/cm-%C -o
    ControlPersist=15m -o BatchMode=yes -o ConnectTimeout=3 <target> '<dotfiles>/scripts/llm-usage export --since <T>'`
-   and append the result to `$STATE/fleet/<host>/events-YYYY-MM.jsonl`.
-   ControlMaster keeps the steady-state cost one reused TCP connection; the
-   Tailscale/WireGuard path is already warm.
+   and store the result in `$STATE/fleet/<host>/events-YYYY-MM.jsonl`. The
+   ControlPath dir is only used after lstat validation (real dir, our uid, no
+   group/other bits) or falls back to `$STATE/fleet`; multiplexing is dropped
+   entirely when even that path is too long for a unix socket. ControlMaster
+   keeps the steady-state cost one reused TCP connection; the Tailscale/
+   WireGuard path is already warm.
 
    Guarded so any caller can trigger it cheaply:
    - `flock` on `$STATE/fleet/refresh.lock` — one refresh at a time, later
@@ -115,14 +118,19 @@ Three pieces:
 
 ### Event identity (dedup on ingest)
 
-Today's events have no unique id. `export` synthesizes an `eid` field:
-`sha1(t | port | served | requested | in | out | cache_read)` — every field an
-append-only writer emits per request, plus the transcript message id when
-there is one. The host is not part of the hash (it is stamped at ingest
-instead, from the config name). On ingest the puller drops ids
-already present in the host's current month file (kept as a small in-memory
-set of the last N ids + a tail-scan of the file). Collisions beyond the
-overlap window are practically impossible (same second + same token counts).
+Today's events have no unique id. `export` synthesizes an `eid` field
+(`event_eid`): for transcript events, a hash of the message `id` alone — usage
+grows while a reply streams, so the identity must not depend on token counts;
+a changed line under the same eid is a revision and replaces the stored one
+(and a revision whose new timestamp crossed a UTC month boundary is relocated
+from the neighbouring month file). For proxy events, a
+`sha1(t | start | port | served | requested | in | out | cache_read)` — both
+writers emit `start` with millisecond precision, which separates same-second
+requests. The host is not part of the hash (it is stamped at ingest instead,
+from the config name). On ingest the puller drops eids already present in the
+host's month file (`_fleet_month_eids` scans the month whole; only the months
+a pull touches are read). Residual collision: identical requests starting in
+the same millisecond.
 
 ### Copilot is transcript-derived — export handles that
 

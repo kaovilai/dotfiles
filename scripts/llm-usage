@@ -252,9 +252,13 @@ def save_transcript_cache(kind):
             if k != kind:
                 continue
             kept = [e for e in events if e.get("t", 0) >= cutoff]
-            if len(kept) == len(events) or not events:
+            if kind == "proxy":
+                # append-only logs: the whole file is the truth, and load_proxy(0)/load_fleet(0)
+                # read all of it — pruning these entries made every poll re-parse old months
+                files[path] = (mtime, size, ino, events)
+            elif len(kept) == len(events) or not events:
                 files[path] = (mtime, size, ino, kept)
-            # a truncated entry (mixed old+recent events) is NOT stored: the next
+            # a truncated transcript entry (mixed old+recent events) is NOT stored: the next
             # process re-parses the file whole, so an export asking past the
             # window (fleet backfill) still sees the old events
         os.makedirs(STATE, mode=0o700, exist_ok=True)
@@ -501,6 +505,10 @@ def load(since, source, host=None):
     # export lines keep their origin).
     if fleet_hosts():
         fleet = load_fleet(since)
+        # CLI/dashboard views label transcript rows by their client, like local ones
+        # (port "transcript" -> claude/codex in --by proxy); only menubar_data, which
+        # reads load_fleet directly, wants the copilot-api :4141 attribution
+        fleet = [{**e, "port": "transcript"} if e.get("via") == "transcript" else e for e in fleet]
         if source not in ("auto", "all"):
             wanted = set(source.split(","))
             fleet = [e for e in fleet if e.get("source", "proxy") in wanted]
