@@ -347,6 +347,8 @@ func chatCheckInvariants(t *testing.T, evs []chatEv) {
 				t.Fatalf("stop for non-open block %d", idx)
 			}
 			delete(open, idx)
+		case "ping":
+			// keepalive, allowed anywhere mid-stream
 		default:
 			t.Fatalf("unexpected mid-stream event %s", e.name)
 		}
@@ -412,7 +414,7 @@ func TestChatStreamGolden(t *testing.T) {
 				`{"id":"chatcmpl-1","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}`,
 				`{"id":"chatcmpl-1","choices":[],"usage":{"prompt_tokens":20,"completion_tokens":4,"prompt_tokens_details":{"cached_tokens":5}}}`,
 				`[DONE]`),
-			want: []string{"message_start", "start:text", "text:Hel", "text:lo", "stop", "delta:end_turn", "message_stop"},
+			want: []string{"message_start", "start:text", "text:Hel", "ping", "text:lo", "stop", "delta:end_turn", "message_stop"},
 			use:  usageInfo{In: 15, Out: 4, CacheRead: 5},
 			out:  4,
 		},
@@ -802,5 +804,77 @@ func TestChatStreamUpstreamErrorObjectFails(t *testing.T) {
 	}
 	if sawStop {
 		t.Fatal("a failed stream must not emit message_stop")
+	}
+}
+
+// A block-diffusion model (DiffusionGemma on vLLM) streams a whole 256-token
+// canvas per chunk: reasoning-only chunks first, then one chunk that carries the
+// answer text, every complete tool call and the finish reason together. The
+// translator must keepalive through the reasoning, never leak it as text, and
+// turn the fat final chunk into well-formed blocks.
+func TestChatStreamBlockDeliveredChunks(t *testing.T) {
+	sse := chatSSE(
+		`{"id":"c","model":"m","choices":[{"index":0,"delta":{"role":"assistant","reasoning_content":"step one, a whole block of thinking"}}]}`,
+		`{"id":"c","choices":[{"index":0,"delta":{"reasoning":"more thinking under the newer field name"}}]}`,
+		`{"id":"c","choices":[{"index":0,"delta":{"content":"Checking both files.","tool_calls":[`+
+			`{"index":0,"id":"call_a","type":"function","function":{"name":"read","arguments":"{\"path\":\"a.go\"}"}},`+
+			`{"index":1,"id":"call_b","type":"function","function":{"name":"read","arguments":"{\"path\":\"b.go\"}"}}]},"finish_reason":"tool_calls"}]}`,
+		`{"id":"c","choices":[],"usage":{"prompt_tokens":40,"completion_tokens":300,"completion_tokens_details":{"reasoning_tokens":260}}}`,
+		`[DONE]`)
+	evs, use := chatRunStream(t, sse)
+	want := []string{"message_start", "ping", "ping", "start:text", "text:Checking both files.", "stop",
+		"start:tool_use:call_a:read", `json:{"path":"a.go"}`, "start:tool_use:call_b:read", `json:{"path":"b.go"}`,
+		"stop", "stop", "delta:tool_use", "message_stop"}
+	if got := chatSummary(evs); strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Fatalf("block-delivered stream:\n got %q\nwant %q", got, want)
+	}
+	for _, e := range evs {
+		if strings.Contains(string(marshal(e.data)), "thinking") {
+			t.Fatalf("reasoning leaked into the Messages stream: %s", marshal(e.data))
+		}
+	}
+	if use.Out != 300 || use.Reasoning != 260 {
+		t.Fatalf("usage = %+v", use)
+	}
+}
+
+// The whole answer in one chunk, finish reason included, with a null content
+// field and the newer "reasoning" name: still one text block and end_turn.
+func TestChatStreamSingleChunkAnswer(t *testing.T) {
+	evs, _ := chatRunStream(t, chatSSE(
+		`{"id":"c","choices":[{"index":0,"delta":{"role":"assistant","content":"done.","reasoning":"quick"},"finish_reason":"stop"}]}`,
+		`[DONE]`))
+	want := []string{"message_start", "ping", "start:text", "text:done.", "stop", "delta:end_turn", "message_stop"}
+	if got := chatSummary(evs); strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Fatalf("single-chunk answer:\n got %q\nwant %q", got, want)
+	}
+}
+
+// Messages "thinking" becomes the vLLM chat-template switch, for vLLM-hosted
+// (rits/) ids only: a hosted OpenAI-compatible API may reject the field.
+func TestChatRequestThinkingSwitchForVLLM(t *testing.T) {
+	cases := []struct {
+		model, thinking, want string
+	}{
+		{"rits/google/diffusiongemma-26B-A4B-it", `{"type":"enabled","budget_tokens":2000}`, `{"enable_thinking":true}`},
+		{"rits/google/diffusiongemma-26B-A4B-it", `{"type":"adaptive"}`, `{"enable_thinking":true}`},
+		{"rits/google/diffusiongemma-26B-A4B-it", `{"type":"disabled"}`, `{"enable_thinking":false}`},
+		{"rits/google/diffusiongemma-26B-A4B-it", ``, ``},
+		{"gpt-4o-mini", `{"type":"enabled","budget_tokens":2000}`, ``},
+	}
+	for _, c := range cases {
+		in := `{"model":"` + c.model + `","max_tokens":9,"messages":[{"role":"user","content":"x"}]`
+		if c.thinking != "" {
+			in += `,"thinking":` + c.thinking
+		}
+		_, out := chatReq(t, in+`}`)
+		got, has := out["chat_template_kwargs"]
+		if c.want == "" {
+			if has {
+				t.Errorf("%s thinking=%s: unexpected chat_template_kwargs %v", c.model, c.thinking, got)
+			}
+			continue
+		}
+		chatJSONEq(t, got, c.want)
 	}
 }

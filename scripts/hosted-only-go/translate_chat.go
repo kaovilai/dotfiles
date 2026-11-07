@@ -80,6 +80,27 @@ func chatSplitToolID(id string) (string, string) {
 	return id[:i], string(raw)
 }
 
+// chatTemplateKwargs maps a Messages "thinking" setting onto the vLLM chat
+// template switch (chat_template_kwargs.enable_thinking) that reasoning models
+// such as DiffusionGemma/Gemma 4 read; nil when the model is not vLLM-hosted or
+// the request does not say. Only self-hosted "rits/" ids get it: a hosted
+// OpenAI-compatible API may reject an unknown request field, vLLM passes it to
+// the template. budget_tokens has no vLLM equivalent and is dropped. These
+// models call tools more reliably with thinking on, so a client that asks for
+// it gets it.
+func chatTemplateKwargs(model string, thinking map[string]any) map[string]any {
+	if !strings.HasPrefix(strings.ToLower(model), "rits/") || thinking == nil {
+		return nil
+	}
+	switch asString(thinking["type"]) {
+	case "enabled", "adaptive":
+		return map[string]any{"enable_thinking": true}
+	case "disabled":
+		return map[string]any{"enable_thinking": false}
+	}
+	return nil
+}
+
 func chatRandomID() string {
 	var b [12]byte
 	if _, err := rand.Read(b[:]); err != nil {
@@ -150,6 +171,9 @@ func (t *chatTranslator) Request(req map[string]any) (string, map[string]any, er
 	}
 	if uid := asString(asMap(req["metadata"])["user_id"]); uid != "" {
 		out["user"] = uid
+	}
+	if kwargs := chatTemplateKwargs(model, asMap(req["thinking"])); kwargs != nil {
+		out["chat_template_kwargs"] = kwargs
 	}
 	if asBool(req["stream"]) {
 		out["stream"] = true
@@ -653,6 +677,17 @@ func (s *chatStream) onChunk(data []byte) error {
 	delta := asMap(choice["delta"])
 	if delta == nil {
 		return nil
+	}
+	// Reasoning is not forwarded (Messages thinking blocks need a signature the
+	// upstream cannot supply), but a reasoning-only stretch must not look like a
+	// stalled stream: a block-diffusion model denoises a whole 256-token canvas per
+	// chunk and a long thinking phase is many such chunks with no visible output.
+	// A Messages "ping" is the protocol's keepalive. "reasoning_content" is the
+	// classic vLLM field, "reasoning" the newer one.
+	if asString(delta["reasoning_content"]) != "" || asString(delta["reasoning"]) != "" {
+		if err := s.send("ping", map[string]any{"type": "ping"}); err != nil {
+			return err
+		}
 	}
 	if err := s.onText(chatContentText(delta["content"])); err != nil {
 		return err

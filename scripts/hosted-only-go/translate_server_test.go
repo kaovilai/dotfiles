@@ -15,12 +15,18 @@ import (
 // chat-dialect deployment served by stub (the EnMaaS GPT/Gemini case).
 func chatRoutedApp(t *testing.T, stub http.HandlerFunc) (*app, *httptest.Server) {
 	t.Helper()
+	return chatRoutedModelApp(t, "gpt-5-mini", stub)
+}
+
+// chatRoutedModelApp is chatRoutedApp for any chat-dialect model id.
+func chatRoutedModelApp(t *testing.T, model string, stub http.HandlerFunc) (*app, *httptest.Server) {
+	t.Helper()
 	gw := httptest.NewServer(stub)
 	t.Cleanup(gw.Close)
 	t.Setenv("ENMAAS_API_KEY", "test-key")
 	t.Setenv("LLM_USAGE_DIR", t.TempDir())
 	doc := map[string]any{
-		"model_list":       []any{map[string]any{"model_name": "gpt-5-mini", "litellm_params": map[string]any{"model": "openai/gpt-5-mini", "api_base": gw.URL + "/v1"}}},
+		"model_list":       []any{map[string]any{"model_name": model, "litellm_params": map[string]any{"model": "openai/" + model, "api_base": gw.URL + "/v1"}}},
 		"general_settings": map[string]any{"master_key": "x"},
 	}
 	path := filepath.Join(t.TempDir(), "routes.json")
@@ -252,5 +258,45 @@ func TestUsageWriteRejectsNonDateTimestamp(t *testing.T) {
 	entries, err = os.ReadDir(dir)
 	if err != nil || len(entries) != 1 || entries[0].Name() != "events-2026-11.jsonl" {
 		t.Fatalf("a valid ts must land in events-2026-11.jsonl: %v %v", entries, err)
+	}
+}
+
+// DiffusionGemma-style end to end: a Messages client with thinking on talks to a
+// vLLM-hosted (rits/) chat deployment that answers in whole blocks. The upstream
+// must get the vLLM thinking switch and the classic max_tokens; the client must
+// see a keepalive ping during the reasoning-only block, the answer as text, and
+// none of the reasoning.
+func TestMessagesClientBlockDiffusionStream(t *testing.T) {
+	const model = "rits/google/diffusiongemma-26B-A4B-it"
+	var got map[string]any
+	a, _ := chatRoutedModelApp(t, model, func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		got, _ = decodeObject(raw)
+		w.Header().Set("content-type", "text/event-stream")
+		for _, c := range []string{
+			`{"id":"c1","choices":[{"delta":{"role":"assistant","reasoning_content":"a whole canvas of private thinking"}}]}`,
+			`{"id":"c1","choices":[{"delta":{"content":"The answer is 42."},"finish_reason":"stop"}]}`,
+			`{"id":"c1","choices":[],"usage":{"prompt_tokens":9,"completion_tokens":280}}`,
+			`[DONE]`,
+		} {
+			_, _ = io.WriteString(w, "data: "+c+"\n\n")
+		}
+	})
+	rec := messagesRequest(a, `{"model":"`+model+`","max_tokens":64,"stream":true,"thinking":{"type":"enabled","budget_tokens":2000},"messages":[{"role":"user","content":"hi"}]}`)
+	if rec.Code != 200 {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body.String())
+	}
+	if kw := asMap(got["chat_template_kwargs"]); kw == nil || !asBool(kw["enable_thinking"]) {
+		t.Fatalf("the vLLM thinking switch did not reach the upstream: %v", got)
+	}
+	if _, ok := got["max_tokens"]; !ok {
+		t.Fatalf("a rits/ chat model keeps classic max_tokens: %v", got)
+	}
+	body := rec.Body.String()
+	if ping, text := strings.Index(body, "event: ping"), strings.Index(body, `"text":"The answer is 42."`); ping < 0 || text < 0 || ping > text {
+		t.Fatalf("want a keepalive ping before the answer text:\n%s", body)
+	}
+	if strings.Contains(body, "private thinking") {
+		t.Fatalf("reasoning leaked to the client:\n%s", body)
 	}
 }
