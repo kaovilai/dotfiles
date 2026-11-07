@@ -59,34 +59,68 @@ _claude_mlx_resolve_model() {
     print -r -- "$CLAUDE_MLX_DEFAULT_MODEL"
 }
 
+# mlx_lm.server answers /health BEFORE the weights are resident -- it binds
+# its socket first and loads the model lazily on the first completion (a
+# freshly-started server idles at ~100MB RSS while "Fetching 15 files").
+# Probe the listener's RSS instead: already multi-GB means the weights are
+# in (or loading into) RAM and no forcing is needed; otherwise send a
+# 1-token completion so the download/load happens here, in the wrapper,
+# instead of inside Claude's first API request where it would look like a
+# hung turn. CLAUDE_MLX_LOAD_TIMEOUT (default 600s) bounds a first-ever
+# 15-20GB+ download.
+_claude_mlx_wait_loaded() {
+    local model="$1" base="$2" pid rss
+    pid=$(_claude_listen_pids "${CLAUDE_MLX_PORT:-4143}" | head -1)
+    if [[ -n "$pid" ]]; then
+        rss=$(ps -o rss= -p "$pid" 2>/dev/null | tr -d ' ')
+        # rss is in KB; the smallest useful 4bit weights are multiple GB.
+        [[ -n "$rss" && "$rss" -gt 10000000 ]] && return 0
+    fi
+    local timeout="${CLAUDE_MLX_LOAD_TIMEOUT:-600}"
+    echo "Loading ${model} into RAM (first run downloads it -- up to ${timeout}s)..." >&2
+    if curl -sf --max-time "$timeout" "${base}/v1/chat/completions" \
+        -H 'Content-Type: application/json' \
+        -d "{\"model\":\"${model}\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}],\"max_tokens\":1}" \
+        -o /dev/null; then
+        return 0
+    fi
+    echo "❌ ${model} failed to load within ${timeout}s." >&2
+    echo "   Check the log: tail -f ${TMPDIR:-/tmp}/mlx-lm-server.log" >&2
+    return 1
+}
+
 # Ensure a local mlx_lm.server is reachable, auto-starting one if not.
 # Mirrors _claude_ollama_ensure_server's shape exactly (detached subshell +
 # up-to-60s poll loop + log-file-under-TMPDIR idiom) -- only the readiness
-# probe path differs (/health, not Ollama's /api/tags).
+# probe path differs (/health, not Ollama's /api/tags), and health only
+# proves the socket, so _claude_mlx_wait_loaded force-loads after it.
 _claude_mlx_ensure_server() {
     local model="$1"
     local base="$(_claude_mlx_base)"
     local port="${CLAUDE_MLX_PORT:-4143}"
     local log="${TMPDIR:-/tmp}/mlx-lm-server.log"
 
-    curl -sf --max-time 2 "${base}/health" -o /dev/null && return 0
+    if ! curl -sf --max-time 2 "${base}/health" -o /dev/null; then
+        if ! command -v uv &>/dev/null; then
+            echo "❌ uv not found. Install it with: $(_claude_pkg_install_hint uv 'curl -LsSf https://astral.sh/uv/install.sh | sh')" >&2
+            return 1
+        fi
 
-    if ! command -v uv &>/dev/null; then
-        echo "❌ uv not found. Install it with: $(_claude_pkg_install_hint uv 'curl -LsSf https://astral.sh/uv/install.sh | sh')" >&2
-        return 1
+        echo "Starting mlx_lm.server (model: ${model}) on ${base} (log: ${log})..." >&2
+        (uvx --from mlx-lm mlx_lm.server --model "$model" --port "$port" >> "${log}" 2>&1 &)
+        local SECONDS=0
+        while (( SECONDS < 60 )); do
+            curl -sf --max-time 2 "${base}/health" -o /dev/null && break
+            sleep 1
+        done
+        if ! curl -sf --max-time 2 "${base}/health" -o /dev/null; then
+            echo "❌ mlx_lm.server not ready on ${base} after 60s (still downloading the model?)." >&2
+            echo "   Check the log: tail -f ${log}" >&2
+            return 1
+        fi
     fi
 
-    echo "Starting mlx_lm.server (model: ${model}) on ${base} (log: ${log})..." >&2
-    echo "First run downloads the model from Hugging Face -- can take several minutes for a 15-20GB+ 4bit repo." >&2
-    (uvx --from mlx-lm mlx_lm.server --model "$model" --port "$port" >> "${log}" 2>&1 &)
-    local SECONDS=0
-    while (( SECONDS < 60 )); do
-        curl -sf --max-time 2 "${base}/health" -o /dev/null && return 0
-        sleep 1
-    done
-    echo "❌ mlx_lm.server not ready on ${base} after 60s (still downloading/loading the model?)." >&2
-    echo "   Check the log: tail -f ${log}" >&2
-    return 1
+    _claude_mlx_wait_loaded "$model" "$base"
 }
 
 # Resolves the model, ensures mlx_lm.server + the Go proxy are both up,
@@ -136,7 +170,30 @@ _claude_mlx_prepare() {
     HOSTED_ONLY_UPSTREAM_KEY=mlx-local HOSTED_ONLY_IMAGE_BUDGET_BYTES=0 \
         _claude_go_proxy_ensure mlx "$port" "$routes" "$master_key" || return 1
 
+    _claude_mlx_watch_start
+
     typeset -g _cmx_base="$base" _cmx_master_key="$master_key" _cmx_model="$model"
+}
+
+# Starts the idle reaper (scripts/mlx-idle-watch.zsh) unless one is already
+# running, so the model weights only stay in RAM while a client is actually
+# connected -- see that script's header for why ESTABLISHED-on-the-proxy-port
+# is the idle signal. CLAUDE_MLX_IDLE_TIMEOUT (seconds, default 120) both
+# tunes the reaper and disables it at 0; CLAUDE_MLX_IDLE_KEEP_PROXY=1 keeps
+# the Go proxy resident and only stops mlx_lm.server. A changed timeout
+# takes effect on the next cold start, not on a live watcher.
+_claude_mlx_watch_start() {
+    local timeout="${CLAUDE_MLX_IDLE_TIMEOUT:-120}"
+    (( timeout > 0 )) || return 0
+    local state="${XDG_STATE_HOME:-$HOME/.local/state}/claude-mlx"
+    local pidfile="$state/watch.pid"
+    if [[ -r "$pidfile" ]] && kill -0 "$(<"$pidfile")" 2>/dev/null; then
+        return 0
+    fi
+    mkdir -p "$state"
+    _claude_proxy_start "$state/watch.log" zsh "${_CLAUDE_SCRIPTS_DIR}/mlx-idle-watch.zsh" \
+        "$timeout" "${CLAUDE_MLX_PORT:-4143}" "${CLAUDE_MLX_PROXY_PORT:-4144}" \
+        "${CLAUDE_MLX_IDLE_KEEP_PROXY:-0}"
 }
 
 claude-mlx() {

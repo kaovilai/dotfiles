@@ -246,7 +246,7 @@ def main():
         backend, native, *args = sys.argv[1:]
         if backend in ("glm-hybrid", "glm-only", "hybrid"):  # retired names of hosted-only
             backend = "hosted-only"
-        if backend not in ("copilot", "vertex", "openai", "enmaas", "hosted-only"):
+        if backend not in ("copilot", "vertex", "openai", "enmaas", "hosted-only", "mlx"):
             raise ValueError("invalid provider")
         return run(backend, native, args)
     except (ValueError, OSError, KeyError, json.JSONDecodeError):
