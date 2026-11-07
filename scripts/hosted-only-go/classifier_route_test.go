@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // classifierSystem is the head a Claude Code auto-mode classifier request
@@ -691,5 +692,37 @@ func TestFailoverRecordsFallbackReason(t *testing.T) {
 	}
 	if ev["served"] != ds {
 		t.Fatalf("the fallback model must be the served one: %v", ev["served"])
+	}
+}
+
+// A monthly-quota primary must record reason "quota", not "rate-limit": the
+// floating window shows budget exhaustion differently from plain throttling.
+func TestFailoverRecordsQuotaReason(t *testing.T) {
+	h := classifierHarness(t, "")
+	glm, ds := h.app.cfg.GLM, h.app.cfg.DeepSeek
+	h.app.cfg.FallbackOn = true
+	h.quotaModel = glm
+	classifierRequest(t, h, glm)
+	if h.count(glm) != 1 || h.count(ds) != 1 {
+		t.Fatalf("expected one primary attempt and one fallback: glm=%d ds=%d", h.count(glm), h.count(ds))
+	}
+	ev := lastUsageEvent(t)
+	if ev["fallback"] != true || ev["fallback_reason"] != "quota" {
+		t.Fatalf("a monthly-quota primary must record quota, got fallback=%v reason=%v", ev["fallback"], ev["fallback_reason"])
+	}
+}
+
+// The reason reaches the event builder the streaming paths use too
+// (streamResponse/streamTranslated call buildEvent with the same flag), and
+// stays absent on direct events.
+func TestBuildEventCarriesFallbackReason(t *testing.T) {
+	a := &app{cfg: &config{}}
+	ev := a.buildEvent("/v1/messages", map[string]any{}, "glm", "deepseek", time.Now(), usageInfo{}, true, 200, 0, "", false, 0, "", false, 0, true, "outage-500", true, "", 0, "ua")
+	if ev["fallback_reason"] != "outage-500" {
+		t.Fatalf("streaming events must carry the reason: %v", ev["fallback_reason"])
+	}
+	ev = a.buildEvent("/v1/messages", map[string]any{}, "glm", "glm", time.Now(), usageInfo{}, true, 200, 0, "", false, 0, "", false, 0, false, "", false, "", 0, "ua")
+	if _, ok := ev["fallback_reason"]; ok {
+		t.Fatalf("a direct event must not carry a reason: %v", ev["fallback_reason"])
 	}
 }

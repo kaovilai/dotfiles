@@ -1693,6 +1693,22 @@ final class MonitorView: NSView {
                 drawShareRow(ctx, r, e, marker: graphMode == .bars ? nil : .line(providerColor(e.key)), circle: false, hover: .provider(e.key))
             }
         }
+        // Reroutes: why traffic moved — the same kinds the menu's REROUTES
+        // section lists (alias / vision / fallback:reason), compacted into one
+        // row so the window shows redirect reasons without opening the menu.
+        let rrs = d["reroutes"].arr
+        if !rrs.isEmpty, rowsLeft >= 1, let r = next() {
+            var kinds: [String: Int] = [:]
+            for rr in rrs {
+                if rr["kinds"].exists {
+                    for k in rr["kinds"].keys { kinds[k, default: 0] += rr["kinds"][k].int ?? 0 }
+                } else { kinds[rr["kind"].str ?? "?", default: 0] += rr["count"].int ?? 0 }
+            }
+            let total = kinds.values.reduce(0, +)
+            let top = kinds.sorted { $0.value > $1.value }.prefix(2)
+                .map { "\($0.key) \($0.value)" }.joined(separator: " · ")
+            drawStr("↪ \(total) reroute\(total == 1 ? "" : "s") · \(top)", in: r, font: tinyFont, color: .secondaryLabelColor)
+        }
         // Fleet: pulled peers (dot = up/stale/down), after the share rows — a long
         // host list must not crowd Models/Providers out — and capped at two.
         // Both layouts show it: the horizontal window's stats column has the
@@ -2145,11 +2161,21 @@ final class Builder {
             add(info("none: every request served the model it asked for", dim: true))
         } else {
             var kinds: [String: Int] = [:]
-            for r in rr { kinds[r["kind"].str ?? "?", default: 0] += r["count"].int ?? 0 }
+            for r in rr {
+                if r["kinds"].exists {
+                    for k in r["kinds"].keys { kinds[k, default: 0] += r["kinds"][k].int ?? 0 }
+                } else { kinds[r["kind"].str ?? "?", default: 0] += r["count"].int ?? 0 }
+            }
             add(info(kinds.sorted { $0.value > $1.value }.map { "\($0.key) \($0.value)" }.joined(separator: " · ") +
                      "  (alias = Claude name served by GLM/DeepSeek, vision = glm→deepseek, fallback:why = router retry, why = outage-500/rate-limit/…)", dim: true))
             for r in rr.prefix(6) {
-                add(info("\(r["from"].str ?? "?")→\(r["to"].str ?? "?") ×\(r["count"].int ?? 0) \(r["kind"].str ?? "")  [\(r["proxy"].str ?? "?")]", mono: true))
+                // one row per route: several reasons on it read as "a 2+b 1"
+                let kinds = r["kinds"]
+                let multi = kinds.exists && kinds.keys.count > 1
+                let kindText = multi
+                    ? kinds.keys.map { k in "\(k) \(kinds[k].int ?? 0)" }.sorted().joined(separator: "+")
+                    : (r["kind"].str ?? "")
+                add(info("\(r["from"].str ?? "?")→\(r["to"].str ?? "?") ×\(r["count"].int ?? 0) \(kindText)  [\(r["proxy"].str ?? "?")]", mono: true))
             }
         }
 

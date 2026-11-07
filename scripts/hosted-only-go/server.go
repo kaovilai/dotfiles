@@ -313,7 +313,18 @@ func (a *app) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	usedFallback := false
 	fallbackReason := ""
 	if fallback != "" && a.shouldFailover(resp, transportErr) && a.fallbackServable(fallback, r.URL.Path) {
-		fallbackReason = failoverReason(resp, transportErr)
+		// The primary answer is about to be thrown away: read its (bounded)
+		// error body once so the reason can tell a monthly quota from plain
+		// throttling, and put it back in case fallback preparation fails and
+		// the client still gets this answer.
+		var primaryText string
+		if resp != nil && resp.Body != nil {
+			body, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
+			resp.Body.Close()
+			resp.Body = io.NopCloser(bytes.NewReader(body))
+			primaryText = string(body)
+		}
+		fallbackReason = failoverReason(resp, primaryText, transportErr)
 		// Prepare the fallback request BEFORE giving up the primary answer: a
 		// Messages body must never reach a chat/Responses deployment untranslated
 		// (the original failure is returned instead when translation fails).
@@ -611,18 +622,20 @@ func (a *app) shouldFailover(resp *http.Response, err error) bool {
 // llm-usage surfaces it as the redirect's reason (rate-limit, outage-500, …)
 // in the floating window. The body is not read here — it belongs to the
 // answer being discarded, and the status alone names the class.
-func failoverReason(resp *http.Response, err error) string {
+func failoverReason(resp *http.Response, text string, err error) string {
 	if err != nil {
 		return "outage-transport"
 	}
-	switch resp.StatusCode {
-	case 429:
+	status := resp.StatusCode
+	if status == 429 || status == 402 || isLimitError(status, normalizeHeaders(resp.Header), text) {
+		// A 429 carrying monthly-budget wording is a quota, not throttling:
+		// the floating window shows the two differently.
+		if bodyKind(errorObject(errorBodyObject(text))) == "quota" {
+			return "quota"
+		}
 		return "rate-limit"
-	case 402:
-		return "quota"
-	default:
-		return fmt.Sprintf("outage-%d", resp.StatusCode)
 	}
+	return fmt.Sprintf("outage-%d", status)
 }
 
 func (a *app) outageWait(model string, now time.Time) int {

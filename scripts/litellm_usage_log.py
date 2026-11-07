@@ -235,10 +235,13 @@ def _fallback_reason(previous, hooks):
         exc = entry.get("exception")
         code = _status(exc) if exc is not None else None
         lowered = exc_type.lower()
-        if code == 429 or "ratelimit" in lowered or (hooks is not None and _is_limit(hooks, exc)):
-            return "rate-limit"
-        if code == 402 or "quota" in lowered or "budget" in lowered:
+        limited = (code == 429 or "ratelimit" in lowered or "rate limit" in text.lower()
+                   or "rate_limited" in text.lower() or (hooks is not None and _is_limit(hooks, exc)))
+        # A 429 carrying monthly-budget wording is a quota, not throttling
+        if code == 402 or QUOTA_RE.search(text) or "quota" in lowered or "budget" in lowered:
             return "quota"
+        if limited:
+            return "rate-limit"
         if "timeout" in lowered or "timeout" in text.lower():
             return "timeout"
         if "connection" in lowered or (hooks is not None and _is_outage(hooks, exc)):
