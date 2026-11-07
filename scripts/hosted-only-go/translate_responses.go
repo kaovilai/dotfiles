@@ -137,13 +137,19 @@ func respAppendUser(items []any, content any) []any {
 				"output":  respToolResultOutput(b),
 			})
 			// function_call_output takes a string, so images ride the user
-			// message that follows (vision models keep seeing them).
+			// message that follows (vision models keep seeing them), labeled
+			// so their provenance stays distinguishable.
+			var imgs []any
 			for _, raw := range asList(b["content"]) {
 				if im := asMap(raw); im != nil && asString(im["type"]) == "image" {
 					if url := respImageURL(asMap(im["source"])); url != "" {
-						parts = append(parts, map[string]any{"type": "input_image", "image_url": url})
+						imgs = append(imgs, map[string]any{"type": "input_image", "image_url": url})
 					}
 				}
+			}
+			if len(imgs) > 0 {
+				parts = append(parts, map[string]any{"type": "input_text", "text": toolImageMarker})
+				parts = append(parts, imgs...)
 			}
 		}
 	}

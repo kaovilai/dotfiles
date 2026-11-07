@@ -110,7 +110,7 @@ func TestChatRequestGolden(t *testing.T) {
 		{
 			"tool_result with image block",
 			`{"model":"m","messages":[{"role":"user","content":[{"type":"tool_result","tool_use_id":"t","content":[{"type":"text","text":"shot"},{"type":"image","source":{"type":"base64","media_type":"image/png","data":"QQ=="}}]}]}]}`,
-			`{"model":"m","messages":[{"role":"tool","tool_call_id":"t","content":"shot"},{"role":"user","content":[{"type":"image_url","image_url":{"url":"data:image/png;base64,QQ=="}}]}]}`,
+			`{"model":"m","messages":[{"role":"tool","tool_call_id":"t","content":"shot"},{"role":"user","content":[{"type":"text","text":"[tool_result image follows; not user-provided]"},{"type":"image_url","image_url":{"url":"data:image/png;base64,QQ=="}}]}]}`,
 		},
 		{
 			"images",

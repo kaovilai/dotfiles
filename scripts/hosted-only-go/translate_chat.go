@@ -51,6 +51,12 @@ func chatUsesMaxCompletionTokens(model string) bool {
 // message's tool_call_id carry the ORIGINAL id.
 const chatThoughtSep = "__thought__"
 
+// toolImageMarker labels tool_result images re-homed into the following user
+// message (chat/Responses tool outputs take strings only), so the upstream
+// model cannot read tool output — a screenshot, fetched web content — as
+// user-provided intent.
+const toolImageMarker = "[tool_result image follows; not user-provided]"
+
 // chatEncodeToolID folds a tool call's thought signature (if any) into its id.
 func chatEncodeToolID(id string, tc map[string]any) string {
 	sig := asString(asMap(asMap(tc["extra_content"])["google"])["thought_signature"])
@@ -233,9 +239,11 @@ func chatAppendUser(msgs []any, blocks []any) []any {
 				"content":      chatToolResultText(bm),
 			})
 			// A tool message takes string content only, so images ride the
-			// user message that follows (vision models keep seeing them).
+			// user message that follows (vision models keep seeing them),
+			// labeled so their provenance stays distinguishable.
 			if imgs := chatToolResultImages(bm); len(imgs) > 0 {
 				hasImage = true
+				parts = append(parts, map[string]any{"type": "text", "text": toolImageMarker})
 				parts = append(parts, imgs...)
 			}
 		case "text":

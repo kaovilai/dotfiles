@@ -239,7 +239,7 @@ func TestResponsesRequestGolden(t *testing.T) {
 				{"type":"function_call","call_id":"toolu_2","name":"Noop","arguments":"{}"},
 				{"type":"function_call_output","call_id":"toolu_1","output":"a\nb"},
 				{"type":"function_call_output","call_id":"toolu_2","output":"Error: x\ny"},
-				{"type":"message","role":"user","content":[{"type":"input_text","text":"and then"},{"type":"input_image","image_url":"data:image/png;base64,AA=="}]}]}`,
+				{"type":"message","role":"user","content":[{"type":"input_text","text":"and then"},{"type":"input_text","text":"[tool_result image follows; not user-provided]"},{"type":"input_image","image_url":"data:image/png;base64,AA=="}]}]}`,
 		},
 		{
 			name: "assistant tool_use without input and string content",
