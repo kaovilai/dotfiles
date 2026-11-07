@@ -2415,6 +2415,18 @@ def menubar_data(now=None, up_ports=None, share_window="15m", share_metric="requ
         else:
             state = "down"
         hflights = [f for f in f_flights if f.get("host") == name]
+        # per-minute requests for the last hour, same 60-bucket window as the
+        # main series: what the floating window draws when a host row is hovered
+        # (the chart dims to that host's traffic). Errors ride a parallel array.
+        hseries = [0] * 60
+        herrors = [0] * 60
+        for e in evs:
+            if e["t"] >= now - MB_HOUR:
+                i = int((e["t"] - minute0) // 60)
+                if 0 <= i < 60:
+                    hseries[i] += 1
+                    if not e.get("ok", True):
+                        herrors[i] += 1
         hosts_block["hosts"].append({
             "name": name, "state": state, "target": entry.get("ssh") or entry.get("local_dir"),
             "last_ok_s": int(now - last_ok) if last_ok else None,
@@ -2422,6 +2434,7 @@ def menubar_data(now=None, up_ports=None, share_window="15m", share_metric="requ
             "backfilled": bool(st.get("backfilled")),
             "last_error": st.get("last_error"),
             "m15": counts(evs, MB_RECENT), "h1": counts(evs, MB_HOUR),
+            "series": hseries, "errors": herrors,
             "inflight": {"count": len(hflights), "oldest_s": max((f["seconds"] for f in hflights), default=0)},
         })
     if not hosts_block["hosts"]:

@@ -217,8 +217,9 @@ host `local` and is always `up`.
   provider share (same vendor logos/colors as the status cluster).
 - **Floating window**: a compact fleet strip — per-host one line
   (name · sparkline of the hour · reqs · errors) above or beside the existing
-  provider panel; hovering a host could later filter the charts
-  (`--hover host:<name>`, mirrors the existing `--hover vendor:` plumbing).
+  provider panel; hovering a host row filters the traffic graph to that host's
+  per-minute series (`--hover host:<name>`, the same plumbing as
+  `--hover vendor:` — implemented).
 - The helper's existing 30 s `poll()` is the trigger cadence: `menubar-data`
   fires the lock-guarded async refresh, then reads the cache — the UI path
   never blocks on ssh.

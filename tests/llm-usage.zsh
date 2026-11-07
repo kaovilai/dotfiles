@@ -805,6 +805,7 @@ fb = d["fleet"]
 assert fb["enabled"] and [(h["name"], h["state"]) for h in fb["hosts"]] == [("peerA", "up")], fb
 h = fb["hosts"][0]
 assert h["m15"]["requests"] == 2 and h["m15"]["errors"]["429"] == 1 and h["inflight"]["count"] == 1 and h["backfilled"], h
+assert len(h["series"]) == 60 and sum(h["series"]) == 2 and sum(h["errors"]) == 1, (h["series"], h["errors"])  # per-host 60-min series for the window hover
 assert d["totals"]["m15"]["requests"] == 4, d["totals"]  # 2 local + 2 peer
 assert d["throttled"] and d["throttled"]["proxy"] == "hosted-only@peerA" and d["throttled"]["host"] == "peerA", d["throttled"]
 # spans are per host: the local success must not end the peer's 429 span; the local error (50s) is newer than the peer's (120s)
@@ -1093,6 +1094,36 @@ if [[ -x /usr/bin/swiftc ]] || command -v swiftc >/dev/null; then
     "$mb" --window-png "$tmp/w-fleet-on-h.png" --layout horizontal --data-file "$mbjson/fleet.json" >/dev/null || fail "window-png fleet horizontal"
     "$mb" --window-png "$tmp/w-fleet-off-h.png" --layout horizontal --data-file "$tmp/fleet-stripped.json" >/dev/null || fail "window-png fleet-stripped horizontal"
     cmp -s "$tmp/w-fleet-on-h.png" "$tmp/w-fleet-off-h.png" && fail "fleet rows must change the horizontal window render"
+    # hovering a host row filters the graph to that host's series (host: hover plumbing)
+    "$mb" --window-png "$tmp/w-fleet-hover.png" --layout vertical --hover host:peerA --data-file "$mbjson/fleet.json" >/dev/null || fail "window-png fleet host-hover"
+    cmp -s "$tmp/w-fleet-hover.png" "$tmp/w-fleet-on.png" && fail "host hover must change the render"
+    "$mb" --window-png "$tmp/w-fleet-hover2.png" --layout vertical --graph lines --hover host:peerA --data-file "$mbjson/fleet.json" >/dev/null || fail "window-png fleet host-hover lines"
+    cmp -s "$tmp/w-fleet-hover2.png" "$tmp/w-fleet-hover.png" && fail "host hover line must render in lines mode too"
+    # the host-series overlay itself: hover alone recolors the row and dims the
+    # share rows, so pin hover+mode and zero only peerA.series — identical renders
+    # would mean the overlay never drew
+    python3 -c 'import json,sys; d = json.load(open(sys.argv[1])); [h.update(series=[0]*60) for h in d["fleet"]["hosts"] if h["name"] == "peerA"]; json.dump(d, open(sys.argv[2], "w"))' "$mbjson/fleet.json" "$tmp/fleet-hostzero.json"
+    "$mb" --window-png "$tmp/w-fleet-hz-bars.png" --layout vertical --hover host:peerA --data-file "$tmp/fleet-hostzero.json" >/dev/null || fail "window-png fleet host-zero bars"
+    cmp -s "$tmp/w-fleet-hz-bars.png" "$tmp/w-fleet-hover.png" && fail "host overlay must draw in bars mode (zeroed series must differ)"
+    "$mb" --window-png "$tmp/w-fleet-hz-lines.png" --layout vertical --graph lines --hover host:peerA --data-file "$tmp/fleet-hostzero.json" >/dev/null || fail "window-png fleet host-zero lines"
+    cmp -s "$tmp/w-fleet-hz-lines.png" "$tmp/w-fleet-hover2.png" && fail "host overlay must draw in lines mode (zeroed series must differ)"
+    # bars mode pinned explicitly (the default "both" already draws bars alongside
+    # the lines, but a bars-only render makes the mode coverage unambiguous)
+    "$mb" --window-png "$tmp/w-fleet-hover-bars.png" --layout vertical --graph bars --hover host:peerA --data-file "$mbjson/fleet.json" >/dev/null || fail "window-png fleet host-hover bars"
+    "$mb" --window-png "$tmp/w-fleet-hz-only.png" --layout vertical --graph bars --hover host:peerA --data-file "$tmp/fleet-hostzero.json" >/dev/null || fail "window-png fleet host-zero bars-only"
+    cmp -s "$tmp/w-fleet-hz-only.png" "$tmp/w-fleet-hover-bars.png" && fail "host overlay must draw in bars-only mode (zeroed series must differ)"
+    # a host hover that can filter nothing (tokens metric, fleet data stripped) must
+    # not change the render at all — not the data, not the share rows, not the
+    # error/throttle chart chrome
+    "$mb" --window-png "$tmp/w-fleet-tok-plain.png" --layout vertical --window-metric tokens --data-file "$tmp/fleet-stripped.json" >/dev/null || fail "window-png fleet tokens plain"
+    "$mb" --window-png "$tmp/w-fleet-tok-hover.png" --layout vertical --window-metric tokens --hover host:peerA --data-file "$tmp/fleet-stripped.json" >/dev/null || fail "window-png fleet tokens host-hover"
+    cmp -s "$tmp/w-fleet-tok-hover.png" "$tmp/w-fleet-tok-plain.png" || fail "host hover without a host series must not change the render"
+    # the compact fleet line (horizontal window's short stats column) carries the
+    # first host's hover target: same zeroed-series payload, hovering the row's own
+    # host vs a name that matches nothing — the only difference is the row highlight
+    "$mb" --window-png "$tmp/w-fleet-cz-on.png" --layout horizontal --hover host:peerA --data-file "$tmp/fleet-hostzero.json" >/dev/null || fail "window-png compact host-hover"
+    "$mb" --window-png "$tmp/w-fleet-cz-off.png" --layout horizontal --hover host:zzz --data-file "$tmp/fleet-hostzero.json" >/dev/null || fail "window-png compact host-hover control"
+    cmp -s "$tmp/w-fleet-cz-on.png" "$tmp/w-fleet-cz-off.png" && fail "compact fleet row must highlight under its host hover"
     [[ "$dump" == *"[chart] requests/min"* && "$dump" == *"[chart] by model"* && "$dump" == *"[chart] by proxy"* ]] || fail "charts missing: $dump"
     [[ "$(dump_of normal --no-charts)" != *"[chart]"* && "$(dump_of normal --no-charts)" == *"Top models (1h): glm-5.3"* ]] || fail "--no-charts"
     [[ "$dump" == *"Open dashboard"* && "$dump" == *"Open logs folder"* && "$dump" == *"Refresh now"* && "$dump" == *"Copy status"* && "$dump" == *"Copy last error"* && "$dump" == *Quit* ]] || fail "actions missing"
