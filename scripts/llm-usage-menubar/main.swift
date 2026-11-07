@@ -2399,7 +2399,21 @@ final class AppController: NSObject, NSMenuDelegate, NSWindowDelegate {
             }
         }
         flights.sort { $0.age > $1.age }  // oldest first: bars stack upward above it
-        monitorView.flights = flights.prefix(16).map { Flight(id: $0.id, model: $0.model, seconds: $0.age) }
+        var merged = flights.prefix(16).map { Flight(id: $0.id, model: $0.model, seconds: $0.age) }
+        // Peer in-flight requests are not readable from this machine's files: keep the ones
+        // from the last payload in the bars too, advancing their ages from the payload time
+        // (the 1s tick cannot read them; the next poll refreshes or drops them).
+        if let d = data, let generated = parseISO(d["generated_at"].str) {
+            let rows = d["inflight"]["requests"].arr
+            let local = Set(merged.map { $0.id })
+            let drift = max(0, now.timeIntervalSince(generated))
+            for row in rows {
+                guard let id = row["id"].str, row["host"].str != nil, !local.contains(id), merged.count < 16 else { continue }
+                merged.append(Flight(id: id, model: row["model"].str ?? "", seconds: (row["seconds"].dbl ?? 0) + drift))
+            }
+            merged.sort { $0.seconds > $1.seconds }
+        }
+        monitorView.flights = merged
     }
 
     func context() -> MenuContext {

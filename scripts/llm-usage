@@ -650,6 +650,7 @@ def fleet_ingest(name, events):
     written or replaced."""
     written = 0
     months = {}
+    neighbors = {}  # month -> neighbour-month scan, read+indexed once per batch (not per event)
     for ev in sorted(events, key=lambda e: e["t"]):
         ev["host"] = name  # the configured name wins over the peer's self-reported hostname
         month = datetime.fromtimestamp(ev["t"], timezone.utc).strftime("%Y-%m")
@@ -668,14 +669,40 @@ def fleet_ingest(name, events):
                             state["lines"] = handle.read().splitlines()
                     except OSError:
                         state["lines"] = []
-                new_lines = [line if _line_eid(l) == eid else l for l in state["lines"]]
-                state["lines"] = new_lines
+                state["lines"] = [line if _line_eid(l) == eid else l for l in state["lines"]]
                 state["eids"][eid] = line
-                _rewrite_month(state["path"], new_lines)
+                _rewrite_month(state["path"], state["lines"])
                 written += 1
             continue
         if ev.get("id"):  # transcript identity: the old copy may live in a neighbouring month
-            _fleet_relocate_eid(name, month, eid)
+            for other in _neighbor_months(month):
+                if other in months:  # also a target month this batch: its state is current
+                    ostate = months[other]
+                    if eid in ostate["eids"]:
+                        if ostate["lines"] is None:
+                            try:
+                                with open(ostate["path"], errors="replace") as handle:
+                                    ostate["lines"] = handle.read().splitlines()
+                            except OSError:
+                                ostate["lines"] = []
+                        ostate["lines"] = [l for l in ostate["lines"] if _line_eid(l) != eid]
+                        ostate["eids"].pop(eid, None)
+                        _rewrite_month(ostate["path"], ostate["lines"])
+                        written += 1
+                    continue
+                nb = neighbors.get(other)
+                if nb is None:
+                    path = os.path.join(fleet_dir(name), "events-%s.jsonl" % other)
+                    try:
+                        with open(path, errors="replace") as handle:
+                            lines = handle.read().splitlines()
+                    except OSError:
+                        lines = None
+                    nb = neighbors[other] = {"path": path, "lines": lines,
+                                             "eids": {_line_eid(l) for l in lines} if lines else set(),
+                                             "removed": set()}
+                if nb["lines"] is not None and eid in nb["eids"] and eid not in nb["removed"]:
+                    nb["removed"].add(eid)
         state["eids"][eid] = line
         if state["lines"] is not None:
             state["lines"].append(line)
@@ -683,22 +710,11 @@ def fleet_ingest(name, events):
         with open(state["path"], "a") as handle:
             handle.write(line + "\n")
         written += 1
+    for nb in neighbors.values():  # neighbour removals are applied once, not per event
+        if nb["removed"]:
+            _rewrite_month(nb["path"], [l for l in nb["lines"] if _line_eid(l) not in nb["removed"]])
+            written += 1
     return written
-
-
-def _fleet_relocate_eid(name, month, eid):
-    """Remove an eid from the months adjacent to `month` (a revision that crossed
-    a UTC month boundary lands next door, since a message's streamed copies span
-    at most a month edge). Adjacent-only keeps the scan bounded to two files."""
-    for other in _neighbor_months(month):
-        path = os.path.join(fleet_dir(name), "events-%s.jsonl" % other)
-        try:
-            with open(path, errors="replace") as handle:
-                lines = handle.read().splitlines()
-        except OSError:
-            continue
-        if any(_line_eid(l) == eid for l in lines):
-            _rewrite_month(path, [l for l in lines if _line_eid(l) != eid])
 
 
 def _neighbor_months(month):
@@ -833,12 +849,11 @@ def fleet_pull_one(name, entry, force=False, ttl=FLEET_TTL):
         with open(tmp, "w") as handle:
             json.dump(snap, handle)
         os.replace(tmp, os.path.join(fleet_dir(name), "inflight.json"))
-        new_events = [e for e in events if e["t"] >= since]
+        new_events = events  # the export window IS the ingest set: `since` events plus the
+        # modified-since revisions (old timestamps); eid dedup absorbs the re-sent overlap
         written = fleet_ingest(name, new_events)  # raises OSError when a write fails: no watermark advance
-        # The watermark tracks only events actually ingested: the backfill export
-        # below also returns events newer than its chunk (already ingested, or
-        # arriving between the two pulls — those must stay pending, not advance
-        # the resume point past themselves).
+        # The watermark tracks only events actually ingested; a revision's old timestamp
+        # cannot move it backwards (max with the stored value).
         last_event_t = max([st.get("last_event_t", 0)] + [e["t"] for e in new_events])
         # Backfill: first sync is the last 7 days; walk older history back in
         # 30d chunks, bounded by --until so a peer with months of history never

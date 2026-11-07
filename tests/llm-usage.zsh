@@ -863,6 +863,19 @@ os.environ["LLM_USAGE_CLAUDE_DIRS"] = cdir
 loaded = mod.load_claude(0)
 assert sorted(e["out"] for e in loaded) == [3, 4], loaded
 
+# a revision with an old timestamp still lands after the watermark moved past it
+# (the old `t >= since` filter on the incremental response dropped exactly what
+# --modified-since had re-exported)
+m_rev = {"t": now - 3600, "id": "mr", "source": "claude", "port": "4141", "served": "sonnet", "ok": True, "in": 5, "out": 5}
+newer = ev(now - 10)
+scripted.clear()
+scripted += [(meta, [m_rev, newer], []), (meta, [], [])]
+mod.fleet_pull_one("p6", {"name": "p6", "local_dir": "/x"}, force=True)
+scripted.append((meta, [{**m_rev, "out": 9}, newer], []))  # the revised message re-exported (old t)
+mod.fleet_pull_one("p6", {"name": "p6", "local_dir": "/x"}, force=True)
+revs = [r for r in host_lines("p6") if r.get("id") == "mr"]
+assert len(revs) == 1 and revs[0]["out"] == 9, revs
+
 # control socket dir: a predictable /tmp path is trusted only when provably ours
 # (real dir, owned by us, no group/other bits); a planted or loosened dir falls back to STATE
 import stat as stat_mod
