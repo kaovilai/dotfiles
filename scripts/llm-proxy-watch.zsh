@@ -1,5 +1,6 @@
 #!/usr/bin/env zsh
-# Detached watcher for one LiteLLM proxy that was behind the current dotfiles
+# Detached watcher for one local LLM proxy (Go binary, bun, or LiteLLM per
+# flavor) that was behind the current dotfiles
 # code while it was serving a request (started by llm-proxy-sync, which
 # scripts/fleet-sync.zsh runs). Waits for the first idle moment, then restarts
 # the proxy so the change lands without anyone coming back to it. The loop is

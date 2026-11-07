@@ -18,8 +18,8 @@
 #                  handled by the proxy step below like every other proxy.
 #   dotfiles       import new or changed T3 provider instances
 #                  (import-t3-providers); shells and launchers read it in place.
-#   LiteLLM proxies  every listening proxy (copilot-api, EnMaaS, hosted-only,
-#                  vertex, openai)
+#   LLM proxies     every listening proxy (copilot-api, EnMaaS, hosted-only,
+#                  vertex, openai; Go binary, bun, or LiteLLM per flavor)
 #                  that is behind what a launch would start now (hooks, config,
 #                  knobs, key) is restarted when idle (llm-proxy-sync). One that
 #                  is serving a request gets a detached watcher
@@ -285,7 +285,7 @@ if [[ -n "${before[copilot-api]-}" ]]; then
     fi
 fi
 
-# LiteLLM proxies (:4146 EnMaaS, :4147/:4148 hosted-only, vertex, openai) load
+# LLM proxies (:4146 EnMaaS, :4147/:4148 hosted-only, vertex, openai) load
 # their hooks and config at start, and a running T3 session never launches
 # anything, so a pulled change would keep serving the old code for days. Each
 # listening proxy behind what a launch would start now is restarted when idle; a
