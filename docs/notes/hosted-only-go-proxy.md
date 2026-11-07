@@ -253,6 +253,60 @@ call whose name arrives in a later stream chunk than its id starts with an empty
 name; a signature that arrives in a later chunk than the tool call's id cannot
 be added to an already-emitted `tool_use` block.
 
+## Block-diffusion and other vLLM-hosted fast models
+
+Source: the vLLM recipe for `google/diffusiongemma-26B-A4B-it` (read 2026-11-07;
+the model was not yet on the gateway). It is a Gemma 4 MoE (26B total, 4B active)
+that generates **256-token blocks by iterative denoising** instead of one token
+at a time: ~10x the time to first token, 1.9x the output tokens per second.
+vLLM serves it on the standard OpenAI chat endpoint, so the proxy sees an
+ordinary `openai`-dialect deployment (the `rits/` prefix marks self-hosted vLLM).
+Claude Code reaches it through the existing Messages -> chat translation.
+
+What the wire looks like, and what the proxy does about it:
+
+- **Whole-block chunks.** A stream chunk can carry answer text, every complete
+  tool call and `finish_reason` together. The translator handles that (tested:
+  `TestChatStreamBlockDeliveredChunks`, `TestChatStreamSingleChunkAnswer`).
+- **Reasoning.** `--reasoning-parser gemma4` puts thinking in
+  `reasoning_content` (older vLLM) or `reasoning` (newer). It is not forwarded:
+  a Messages thinking block needs a signature the upstream cannot supply. A
+  reasoning-bearing chunk now emits a Messages `ping`, so a long denoising-only
+  stretch does not look like a stalled stream.
+- **Thinking switch.** Claude Code's `thinking` becomes
+  `chat_template_kwargs.enable_thinking` (true for `enabled`/`adaptive`, false for
+  `disabled`; `budget_tokens` has no vLLM equivalent). Only `rits/` ids get it: a
+  hosted OpenAI-compatible API may reject the field. The recipe says tool calls
+  work best in thinking mode, so this is what makes Claude Code's tool use
+  dependable on these models.
+- **`max_tokens`.** `rits/` ids already keep the classic `max_tokens`. The
+  checkpoint's `generation_config.json` caps a request that omits it at 256 unless
+  the server runs `--generation-config vllm`; Messages requests always carry
+  `max_tokens`, so the proxy is unaffected, but anything else pointed at the
+  same server is not.
+
+To put a model like this behind the proxy, add its id to the EnMaaS route table
+with the `openai` dialect (`CLAUDE_ENMAAS_MODEL_DIALECTS` overrides the guess) and,
+to make it the cheap fast tier, point an alias at it. Gateway-side flags the
+recipe requires, for whoever runs it: `--max-num-seqs 4` (diffusion state is
+`seqs x 256 x 262K-vocab`, higher OOMs), `--generation-config vllm`,
+`--reasoning-parser gemma4 --tool-call-parser gemma4`, `--limit-mm-per-prompt`
+`'{"image": 7}'`.
+
+Not done, because the model is not online and the right numbers are not known yet:
+
+- **Per-model context window.** `clampOutput` prices every clamped model against
+  one `MaxModelLen` and only covers the two hosted models and aliases. The recipe
+  serves 262144, but the gateway's actual limit decides it.
+- **Image count limit.** The image budget is bytes. A server started with
+  `--limit-mm-per-prompt '{"image": 7}'` answers 400 beyond seven images, however
+  small.
+- **Concurrency.** `--max-num-seqs 4` queues the fifth request server-side;
+  many Claude Code threads on one such model will see latency, not errors.
+  A per-model in-flight limit in the proxy would shape that, but needs a measured
+  queue behaviour first.
+- **Streamed reasoning as thinking blocks**, for the signature reason above.
+
 ## Tests
 
 ```zsh
