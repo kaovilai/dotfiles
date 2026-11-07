@@ -129,16 +129,30 @@ claude-copilot() {
     # steady state (profiled 2026-11-07). An empty result means not serving
     # (connection refused fails fast; a slow gateway gets 5s before that
     # verdict).
-    local models_json=""
+    local models_json="" listener=""
     if [[ -z "${_CLAUDE_COPILOT_FORCE_START-}" ]]; then
         models_json=$(curl -sf --max-time 5 "${base}/v1/models") || models_json=""
         # The zero-gap swap (proxies.zsh claude-copilot-restart) retires the old
         # gateway itself; this launch must not restart or kill anything on its own.
         local assume_up=0
         [[ -n "$models_json" ]] && assume_up=1
+        if [[ -z "$models_json" ]]; then
+            listener=$(_claude_listen_pids "$port")
+            # /v1/models unanswered but a listener is bound: the gateway is up,
+            # its GitHub upstream is what is slow (see the restart-only comment
+            # below). Treat it as serving for the sync probe -- a `down` dry-run
+            # verdict would make `llm-proxy-restart required` swap out a healthy
+            # gateway -- and for the start decision below; the fetch after the
+            # start block retries the live one.
+            [[ -n "$listener" ]] && assume_up=1
+        fi
         _claude_proxy_sync claude-copilot copilot-api "${base}/v1/models" "$cfp" claude-copilot-kill 1 "$assume_up" || return 1
-        # sync may have killed a stale idle gateway; its model list died with it
-        (( _CLAUDE_PROXY_SYNC_KILLED )) && models_json=""
+        # sync may have killed a stale idle gateway; its model list and listener
+        # died with it
+        if (( _CLAUDE_PROXY_SYNC_KILLED )); then
+            models_json=""
+            listener=""
+        fi
     else
         # force-start swaps in a replacement gateway; the old process's model
         # list cannot be trusted for this launch
@@ -152,11 +166,11 @@ claude-copilot() {
     # An empty models_json alone does not mean "not serving" — the fetch can
     # time out on a live gateway (/v1/models needs GitHub upstream). Starting
     # anyway would leave a second gateway bound via SO_REUSEPORT that nothing
-    # ever retires, so a slow answer is distinguished from a missing listener
-    # here; the fetch below retries against the live one. Only run when the
-    # first fetch actually failed (steady state pays nothing for this).
+    # ever retires, so the listener captured above (only consulted when the
+    # first fetch failed; steady state pays nothing for this) distinguishes a
+    # slow answer from a missing listener.
     if [[ -n "${_CLAUDE_COPILOT_FORCE_START-}" ]] ||
-       { [[ -z "$models_json" ]] && [[ -z "$(_claude_listen_pids "$port")" ]]; }; then
+       { [[ -z "$models_json" ]] && [[ -z "$listener" ]]; }; then
         local -a runner
         local have_checkout=0 bun_bin=${commands[bun]-}
         [[ -d "$repo_dir/.git" ]] && have_checkout=1
