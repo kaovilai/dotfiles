@@ -1107,6 +1107,11 @@ if [[ -x /usr/bin/swiftc ]] || command -v swiftc >/dev/null; then
     cmp -s "$tmp/w-fleet-hz-bars.png" "$tmp/w-fleet-hover.png" && fail "host overlay must draw in bars mode (zeroed series must differ)"
     "$mb" --window-png "$tmp/w-fleet-hz-lines.png" --layout vertical --graph lines --hover host:peerA --data-file "$tmp/fleet-hostzero.json" >/dev/null || fail "window-png fleet host-zero lines"
     cmp -s "$tmp/w-fleet-hz-lines.png" "$tmp/w-fleet-hover2.png" && fail "host overlay must draw in lines mode (zeroed series must differ)"
+    # bars mode pinned explicitly (the default "both" already draws bars alongside
+    # the lines, but a bars-only render makes the mode coverage unambiguous)
+    "$mb" --window-png "$tmp/w-fleet-hover-bars.png" --layout vertical --graph bars --hover host:peerA --data-file "$mbjson/fleet.json" >/dev/null || fail "window-png fleet host-hover bars"
+    "$mb" --window-png "$tmp/w-fleet-hz-only.png" --layout vertical --graph bars --hover host:peerA --data-file "$tmp/fleet-hostzero.json" >/dev/null || fail "window-png fleet host-zero bars-only"
+    cmp -s "$tmp/w-fleet-hz-only.png" "$tmp/w-fleet-hover-bars.png" && fail "host overlay must draw in bars-only mode (zeroed series must differ)"
     # the compact fleet line (horizontal window's short stats column) carries the
     # first host's hover target: same zeroed-series payload, hovering the row's own
     # host vs a name that matches nothing — the only difference is the row highlight
