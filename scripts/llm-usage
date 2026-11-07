@@ -145,12 +145,17 @@ def parse_since(text):
         return 0.0
     if text == "today":
         return datetime.now().replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
-    if text is not None and re.fullmatch(r"\d+(?:\.\d+)?", text.strip()):  # bare epoch (fleet pulls pass one)
-        return float(text)
-    match = re.fullmatch(r"(\d+)\s*([smhdw])", text)
-    if match:
-        unit = {"s": 1, "m": 60, "h": 3600, "d": 86400, "w": 604800}[match.group(2)]
-        return now - int(match.group(1)) * unit
+    # Hand-parsed (no regex): the old \d+ patterns tripped CodeQL's
+    # polynomial-ReDoS check on long digit runs.
+    stripped = text.strip() if text is not None else ""
+    if stripped:
+        whole, dot, frac = stripped.partition(".")
+        if whole.isdigit() and (not dot or frac.isdigit()):  # bare epoch (fleet pulls pass one)
+            return float(stripped)
+    if text:
+        unit, body = text[-1], text[:-1].rstrip()  # the old regex allowed spaces before the unit
+        if unit in "smhdw" and body.isdigit():
+            return now - int(body) * {"s": 1, "m": 60, "h": 3600, "d": 86400, "w": 604800}[unit]
     ts = parse_ts(text)
     if ts is None:
         sys.exit(f"llm-usage: bad --since {text!r} (use 30m, 24h, 7d, today, all, or an ISO time)")
