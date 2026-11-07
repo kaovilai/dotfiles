@@ -30,6 +30,39 @@ _claude_copilot_latest_model() {
     ' <<< "$models_json"
 }
 
+# _claude_copilot_parse_models <models_json>: everything claude-copilot needs
+# from /v1/models in ONE jq pass — the latest model per Claude family, the
+# display names for those pinned tiers, and the non-embedding model list for
+# the /model picker. Replaces nine separate jq spawns (4x latest-model, 4x
+# per-tier display-name lookup, 1x extras) that cost ~15ms each on every
+# claude-copilot launch (profiled 2026-11-07). Same per-family winner as
+# _claude_copilot_latest_model. Prints tab-separated lines, pins before
+# extras (the order _claude_picker_args received them before):
+#   tier <family> <model-id>
+#   pin  <family>=<model-id> <display name>
+#   model <model-id>|<display name>
+_claude_copilot_parse_models() {
+    jq -r '
+      def vnum: (try (capture("(?<maj>[0-9]+)(?:[.-](?<min>[0-9]+))?")) catch null) as $m
+                | if $m == null then 0
+                  else (($m.maj | tonumber) * 1000) + (($m.min // "0") | tonumber) end;
+      (.data // []) as $data
+      | [$data[] | select(((.id? // empty) | strings) as $i | ($i | test("claude"; "i")))] as $claudes
+      | def latest($fam):
+          [$claudes[] | select((.id | test($fam; "i")))
+           | {out: (.claude_model_id? // .id), v: (.id | vnum)}]
+          | sort_by(.v) | last // {} | (.out // "");
+      ({opus: latest("opus"), sonnet: latest("sonnet"),
+        haiku: latest("haiku"), fable: latest("fable")}) as $t
+      | ($t | to_entries[] | select(.value != "") | "tier\t\(.key)\t\(.value)"),
+        ($t | to_entries[] | select(.value != "")
+         | (.value | split("[")[0]) as $bare
+         | "pin\t\(.key)=\(.value)\t\([$data[] | select(.id == $bare)][0] | (.display_name // .name // ""))"),
+        ($data[] | select(((.id? // empty) | strings) | test("embedding"; "i") | not)
+         | "model\t\(.id)|\(.display_name // .name // "")")
+    ' <<< "$1"
+}
+
 # Names only (no values) — used to clean up when switching to `vertex` mode
 # so gateway config doesn't leak across.
 typeset -ga _claude_copilot_env_names=(
@@ -173,15 +206,34 @@ _claude_picker_extras() {
 # from the one recorded when it was started, and _claude_proxy_record stores
 # it once the new process is healthy. State: ~/.local/state/claude-<name>.fingerprint.
 
-# sha256 hex of stdin. sha256sum (coreutils) where present, else shasum
-# (macOS base system). Fedora ships no shasum unless perl-Digest-SHA is
-# installed; without this fallback every fingerprint hashed to "" and matched,
-# which silently disabled hot reload.
+# sha256 hex of stdin. sha256sum (coreutils) where present, else openssl
+# (C binary, faster to spawn than perl shasum), else shasum (macOS base
+# system). Fedora ships no shasum unless perl-Digest-SHA is installed; without
+# this fallback every fingerprint hashed to "" and matched, which silently
+# disabled hot reload. Digest values are identical across all three.
 _claude_sha256() {
     if (( $+commands[sha256sum] )); then
         sha256sum | cut -d' ' -f1
+    elif (( $+commands[openssl] )); then
+        openssl dgst -sha256 -r | cut -d' ' -f1
     else
         shasum -a 256 | cut -d' ' -f1
+    fi
+}
+
+# "<sha256> <path>" lines for every given path, in ONE process. A per-file
+# hash spawn costs 15-25ms; hashing a 188-file checkout per-file cost ~2.8s
+# and dominated every claude launch (profiled 2026-11-07). sha256sum (two
+# spaces before the path) first, openssl ("*" separator), shasum last — the
+# digest is the same, only the line format differs, which moves a fingerprint
+# once per machine, not per call.
+_claude_hash_paths() {
+    if (( $+commands[sha256sum] )); then
+        sha256sum -- "$@"
+    elif (( $+commands[openssl] )); then
+        openssl dgst -sha256 -r -- "$@"
+    else
+        shasum -a 256 -- "$@"
     fi
 }
 
@@ -192,11 +244,19 @@ _claude_proxy_fp() {
 }
 
 # Combined hash of the given files' contents; missing files hash as "missing".
+# One _claude_hash_paths process for all present files (see its comment); the
+# per-file line now carries the path too, which moves each provider's
+# fingerprint once, then stays stable.
 _claude_file_hash() {
     local f
+    local -a present=() missing=()
     for f in "$@"; do
-        if [[ -r "$f" ]]; then _claude_sha256 < "$f"; else print -r -- "missing"; fi
-    done | _claude_sha256
+        if [[ -r "$f" ]]; then present+=("$f"); else missing+=("$f"); fi
+    done
+    {
+        (( ${#present} )) && _claude_hash_paths "${present[@]}"
+        for f in "${missing[@]}"; do print -r -- "missing"; done
+    } | _claude_sha256
 }
 
 # Port probes for the proxy kill/restart/hot-reload paths. lsof where
@@ -292,21 +352,29 @@ _claude_auto_compact_window() {
     print -r -- "$window"
 }
 
-# _claude_proxy_sync <label> <name> <health-url> <fingerprint> <kill-fn> <adopt>
+# _claude_proxy_sync <label> <name> <health-url> <fingerprint> <kill-fn> <adopt> [assume-up]
 # Running + fingerprint differs -> when idle, kill via <kill-fn> and wait for
 # the port to free so the caller's normal start path relaunches it; while it is
 # serving a request, reuse it (the change applies on a later idle launch). Running with no
 # recorded fingerprint: adopt=1 records the current one and leaves the process
 # alone; adopt=0 treats it as stale and restarts.
+# assume-up=1 skips the initial health probe, for a caller that just confirmed
+# the same URL itself (claude-copilot fetches /v1/models before syncing, so
+# the probe would re-ask what it already knows). The fingerprint comparison
+# still runs.
+# Sets the global _CLAUDE_PROXY_SYNC_KILLED=1 when it killed the process, so
+# a caller holding state fetched from the old process (e.g. a model list)
+# knows to drop it and refetch after its start path relaunches.
 # Dry run: with _CLAUDE_PROXY_SYNC_CHECK=<file> (set by `llm-proxy-restart
 # required`) the verdict `down`, `fresh` or `stale` is written to that file and
 # the function returns 1 so the launcher stops there; nothing is killed,
 # recorded or started.
 _claude_proxy_sync() {
-    local label="$1" name="$2" health="$3" fp="$4" killfn="$5" adopt="$6"
+    local label="$1" name="$2" health="$3" fp="$4" killfn="$5" adopt="$6" assume_up="${7:-0}"
+    typeset -g _CLAUDE_PROXY_SYNC_KILLED=0
     local state="${XDG_STATE_HOME:-$HOME/.local/state}/claude-${name}.fingerprint"
     local check="${_CLAUDE_PROXY_SYNC_CHECK-}"
-    if ! curl -sf --max-time 2 "$health" -o /dev/null; then
+    if (( ! assume_up )) && ! curl -sf --max-time 2 "$health" -o /dev/null; then
         [[ -n "$check" ]] && { print -r -- down >| "$check"; return 1; }
         return 0
     fi
@@ -336,6 +404,7 @@ _claude_proxy_sync() {
         return 0
     fi
     echo "${label}: config or credentials changed -- restarting the idle proxy..." >&2
+    _CLAUDE_PROXY_SYNC_KILLED=1
     "$killfn" >/dev/null 2>&1
     local j
     for j in {1..20}; do

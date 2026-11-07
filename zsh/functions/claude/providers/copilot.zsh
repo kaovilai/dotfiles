@@ -26,16 +26,67 @@ alias copilot-api="NODE_USE_SYSTEM_CA=1 bun run --cwd \$HOME/git/copilot-api ./s
 # source (src/ and plugin/) — bun runs the TS working tree, so this is what a
 # launch would start, committed or not. "none"/"empty" keep the fingerprint
 # moving when a checkout appears or loses its files.
+#
+# Reading and hashing all ~190 files costs ~150ms (one _claude_hash_paths
+# process; a per-file spawn version cost ~2.8s and dominated every
+# claude-copilot launch — profiled 2026-11-07), so the result is cached keyed
+# on a stat signature: inode, mtime and size of every tracked file, collected
+# with the zsh/stat builtin in ~7ms. Any content change moves a file's mtime,
+# changing the signature and forcing a recompute; an unchanged tree reuses
+# the cached hash without reading file contents. Worst case staleness is a
+# same-second, same-size rewrite that restores the old mtime — the next real
+# change re-syncs it. Without zsh/stat the full hash runs every time.
+#
+# The `git ls-files` spawn itself (~20ms) is cached too, keyed on .git/index
+# inode/mtime/size: git rewrites the index (atomically, new inode) on every
+# add/rm/mv/checkout/reset that could change the tracked list, so a matching
+# index stat means the cached list is current. Without zsh/stat, or on an
+# unreadable index, the list is refetched every call.
 _claude_copilot_code_hash() {
     local repo="$1" files f
     [[ -d "$repo/.git" ]] || { print -r -- none; return 0; }
-    files=$(cd -q "$repo" && git ls-files -- src plugin 2>/dev/null) || { print -r -- none; return 0; }
+    zmodload zsh/stat 2>/dev/null
+    local -a st
+    if (( $+builtins[zstat] )) && zstat -A st "$repo/.git/index" 2>/dev/null; then
+        local ikey="index $st[2] $st[10] $st[8]" list_cache lcached
+        list_cache="${XDG_STATE_HOME:-$HOME/.local/state}/claude-copilot-code-files.cache"
+        [[ -r "$list_cache" ]] && { lcached=$(<"$list_cache"); } 2>/dev/null
+        if [[ "${lcached%%$'\n'*}" == "$ikey" ]]; then
+            files="${lcached#*$'\n'}"
+        else
+            files=$(git -C "$repo" ls-files -- src plugin 2>/dev/null) || { print -r -- none; return 0; }
+            mkdir -p "${list_cache:h}" && print -r -- "$ikey"$'\n'"$files" >| "$list_cache"
+        fi
+    else
+        files=$(git -C "$repo" ls-files -- src plugin 2>/dev/null) || { print -r -- none; return 0; }
+    fi
     [[ -n "$files" ]] || { print -r -- empty; return 0; }
-    {
-        for f in ${(f)files}; do
-            if [[ -r "$repo/$f" ]]; then shasum -a 256 -- "$repo/$f"; else print -r -- "missing $f"; fi
+    local -a present=() missing=()
+    for f in ${(f)files}; do
+        if [[ -r "$repo/$f" ]]; then present+=("$repo/$f"); else missing+=("$f"); fi
+    done
+    local cache="" sig=""
+    if (( $+builtins[zstat] )); then
+        local cached
+        for f in "${present[@]}"; do
+            zstat -A st "$f" 2>/dev/null && sig+="$f $st[2] $st[10] $st[8]"$'\n' || sig+="missing $f"$'\n'
         done
-    } | shasum -a 256 | cut -d' ' -f1
+        for f in "${missing[@]}"; do sig+="missing $f"$'\n'; done
+        cache="${XDG_STATE_HOME:-$HOME/.local/state}/claude-copilot-code-hash.cache"
+        [[ -r "$cache" ]] && { cached=$(<"$cache"); } 2>/dev/null
+        if [[ "${cached%%$'\n'*}" == "$sig" ]]; then
+            print -r -- "${cached#*$'\n'}"
+            return 0
+        fi
+    fi
+    local hash
+    hash=$({ (( ${#present} )) && _claude_hash_paths "${present[@]}"
+             for f in "${missing[@]}"; do print -r -- "missing $f"; done
+           } | _claude_sha256)
+    if [[ -n "$cache" ]]; then
+        mkdir -p "${cache:h}" && print -r -- "$sig"$'\n'"$hash" >| "$cache"
+    fi
+    print -r -- "$hash"
 }
 
 claude-copilot() {
@@ -64,17 +115,33 @@ claude-copilot() {
     [[ -z "$plugins" && -r "$monitor" ]] && plugins="[\"$monitor\"]"
     local cfp
     cfp=$(_claude_proxy_fp "$(_claude_file_hash "${capi_data}/github_token" "${capi_data}/config.json" "$monitor")" "$(_claude_copilot_code_hash "$repo_dir")" "$port" "$plugins" "$monitor_dir")
-    # The zero-gap swap (proxies.zsh claude-copilot-restart) retires the old
-    # gateway itself; this launch must not restart or kill anything on its own.
+    # Fetch the model list once and let it double as the serving check: the
+    # health probe in _claude_proxy_sync and the "is anything serving" curl
+    # below used to re-ask the same URL, three round trips per launch in the
+    # steady state (profiled 2026-11-07). An empty result means not serving
+    # (connection refused fails fast; a slow gateway gets 5s before that
+    # verdict).
+    local models_json=""
     if [[ -z "${_CLAUDE_COPILOT_FORCE_START-}" ]]; then
-        _claude_proxy_sync claude-copilot copilot-api "${base}/v1/models" "$cfp" claude-copilot-kill 1 || return 1
+        models_json=$(curl -sf --max-time 5 "${base}/v1/models") || models_json=""
+        # The zero-gap swap (proxies.zsh claude-copilot-restart) retires the old
+        # gateway itself; this launch must not restart or kill anything on its own.
+        local assume_up=0
+        [[ -n "$models_json" ]] && assume_up=1
+        _claude_proxy_sync claude-copilot copilot-api "${base}/v1/models" "$cfp" claude-copilot-kill 1 "$assume_up" || return 1
+        # sync may have killed a stale idle gateway; its model list died with it
+        (( _CLAUDE_PROXY_SYNC_KILLED )) && models_json=""
+    else
+        # force-start swaps in a replacement gateway; the old process's model
+        # list cannot be trusted for this launch
+        models_json=""
     fi
 
     # Start the gateway if nothing is serving yet. _CLAUDE_COPILOT_FORCE_START
     # (the zero-gap restart swap in proxies.zsh) starts a replacement ALONGSIDE
     # the still-serving old process: both listeners bind SO_REUSEPORT (the fork's
     # serve options), so this start never refuses a connection.
-    if [[ -n "${_CLAUDE_COPILOT_FORCE_START-}" ]] || ! curl -sf --max-time 2 "${base}/v1/models" -o /dev/null; then
+    if [[ -n "${_CLAUDE_COPILOT_FORCE_START-}" ]] || [[ -z "$models_json" ]]; then
         local -a runner
         local have_checkout=0 bun_bin=${commands[bun]-}
         [[ -d "$repo_dir/.git" ]] && have_checkout=1
@@ -134,17 +201,28 @@ claude-copilot() {
     fi
 
     [[ -n "${_CLAUDE_COPILOT_RESTART_ONLY-}" ]] && return 0
-    local models_json
-    models_json=$(curl -sf --max-time 10 "${base}/v1/models") || {
-        echo "❌ Failed to fetch ${base}/v1/models" >&2
-        return 1
-    }
+    # Steady state already has the list from the pre-sync fetch above; only a
+    # freshly started (or force-swapped) gateway needs it fetched here.
+    if [[ -z "$models_json" ]]; then
+        models_json=$(curl -sf --max-time 10 "${base}/v1/models") || {
+            echo "❌ Failed to fetch ${base}/v1/models" >&2
+            return 1
+        }
+    fi
 
-    local opus sonnet haiku fable
-    opus=$(_claude_copilot_latest_model opus "$models_json")
-    sonnet=$(_claude_copilot_latest_model sonnet "$models_json")
-    haiku=$(_claude_copilot_latest_model haiku "$models_json")
-    fable=$(_claude_copilot_latest_model fable "$models_json")
+    # One jq pass for the per-family picks, their display names and the picker
+    # extras (was nine jq spawns; see _claude_copilot_parse_models).
+    local -A _tiers=()
+    local -a _pairs=()
+    local _kind _a _b
+    while IFS=$'\t' read -r _kind _a _b; do
+        case "$_kind" in
+            tier)  _tiers[$_a]="$_b" ;;
+            pin)   _pairs+=("$_a|$_b") ;;      # _a="family=id", _b=display name
+            model) _pairs+=("=$_a") ;;          # _a="id|display name" verbatim
+        esac
+    done < <(_claude_copilot_parse_models "$models_json")
+    local opus="${_tiers[opus]}" sonnet="${_tiers[sonnet]}" haiku="${_tiers[haiku]}" fable="${_tiers[fable]}"
 
     local main_model="${sonnet:-$opus}"
     if [[ -z "$main_model" ]]; then
@@ -210,16 +288,8 @@ claude-copilot() {
     # recursion while keeping the exported vars in this same shell.
     export "${envs[@]}"
     # Gateway display names (e.g. "Claude Opus 4.8") for pinned tiers and extras
-    local -a picker_extras
-    picker_extras=(${(f)"$(print -r -- "$models_json" | jq -r '.data[] | select(.id | test("embedding"; "i") | not) | "\(.id)|\(.display_name // .name // "")"' 2>/dev/null | _claude_picker_extras)"})
-    local _t _id _suffix
-    local -a picker_pins
-    for _t in opus sonnet haiku fable; do
-        _id="${(P)_t}"
-        [[ -z "$_id" ]] && continue
-        picker_pins+=("${_t}=${_id}|$(print -r -- "$models_json" | jq -r --arg id "${_id%\[*}" '[.data[] | select(.id == $id)][0] | (.display_name // .name // "")' 2>/dev/null)")
-    done
-    _claude_picker_args "${picker_pins[@]}" "${picker_extras[@]}"
+    # — pins first, then extras, already ordered by _claude_copilot_parse_models.
+    _claude_picker_args "${_pairs[@]}"
     _claude_invoke "${reply[@]}" "$@"
 }
 
