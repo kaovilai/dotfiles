@@ -540,6 +540,20 @@ llm-proxy-sync() {
     for t in $order; do
         if [[ -n "$(_claude_listen_pids "${port[$t]}")" ]]; then
             if (( $+covered[${port[$t]}] )); then
+                # The listener is up, so its recovery marker must still be
+                # refreshed: a later sync — or the flavors split onto separate
+                # ports again — relies on up-<t> to restart a proxy it
+                # remembers as always-on.
+                print -r -- "${port[$t]}" >| "$dir/up-$t"
+                # A watcher the skipped flavor still has waiting (armed before
+                # the ports were shared, or by an older sync) bakes the
+                # fingerprint it was started with and would restart the shared
+                # proxy to that stale config after the target above made it
+                # current: stop it — the target above owns the port.
+                if _llm_proxy_watch_alive "$t" && _llm_proxy_watch_kill "$t"; then
+                    _llm_proxy_watch_log "$t" "stopped: the port is handled by another target this sync"
+                    (( quiet )) || print -ru2 -- "== $t (:${port[$t]}) stale watcher stopped; the target handled above owns the port"
+                fi
                 (( quiet )) || print -ru2 -- "== $t (:${port[$t]}) shares :${port[$t]} with the target handled above; covered by its restart"
                 continue
             fi
@@ -643,6 +657,18 @@ _llm_proxy_watch_alive() {
     args="$(ps -p "$pid" -o args= 2>/dev/null)"
     [[ "$pid" == <-> ]] && kill -0 "$pid" 2>/dev/null \
         && [[ "$args" == *llm-proxy-watch* || "$args" == *hosted-only-proxy*watch* ]]
+}
+
+# _llm_proxy_watch_kill <name>: TERM the watcher recorded for <name>, under the
+# same identity check as _llm_proxy_watch_alive (a recycled pid is never
+# signalled). Returns 0 when a watcher was signalled.
+_llm_proxy_watch_kill() {
+    local pid args file="$(_llm_proxy_watch_dir)/watch-$1.pid"
+    [[ -r "$file" ]] || return 1
+    pid=$(<"$file")
+    args="$(ps -p "$pid" -o args= 2>/dev/null)"
+    [[ "$pid" == <-> ]] && [[ "$args" == *llm-proxy-watch* || "$args" == *hosted-only-proxy*watch* ]] \
+        && kill "$pid" 2>/dev/null
 }
 
 # _llm_proxy_watch_log <name> <message...>: timestamped line in the watcher log,

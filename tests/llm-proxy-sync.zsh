@@ -45,11 +45,12 @@ trap 'rm -rf "$tmp"' EXIT
 export XDG_STATE_HOME="$tmp/state"   # watcher pid files and logs
 
 typeset -A listening stub_verdict serving restart_rc
-typeset -a restarted confirmed watch_started
+typeset -a restarted confirmed watch_started watch_killed
 integer WATCH_ALIVE=0 WATCH_START_RC=0 FAKE_NOW=1000 BUSY_UNTIL=0
 # The real helpers are tested at the end; the sync tests use stubs for them.
 functions[_real_port_serving]=$functions[_claude_port_serving]
 functions[_real_watch_alive]=$functions[_llm_proxy_watch_alive]
+functions[_real_watch_kill]=$functions[_llm_proxy_watch_kill]
 functions[_real_watch_start]=$functions[_llm_proxy_watch_start]
 functions[_real_sync_confirm]=$functions[_llm_proxy_sync_confirm]
 # listening: port -> 1; stub_verdict: name -> fresh|stale: why|down|unknown; serving: port -> 1
@@ -70,13 +71,14 @@ codex-hosted-only-restart() { restarted+=(glm-codex); return ${restart_rc[glm-co
 _llm_proxy_sync_confirm() { confirmed+=($1); [[ "${CONFIRM_RESULT-1}" == 1 ]]; }
 _llm_proxy_watch_alive() { (( WATCH_ALIVE )); }
 _llm_proxy_watch_start() { watch_started+=($1); return $WATCH_START_RC; }
+_llm_proxy_watch_kill() { watch_killed+=($1); return 0; }
 # fake clock: every poll pause is one second
 _llm_proxy_now() { print -r -- $FAKE_NOW; }
 _llm_proxy_watch_pause() { (( FAKE_NOW++ )); }
 
 local out rc outfile="$tmp/out"
 reset() {
-    listening=(); stub_verdict=(); serving=(); restart_rc=(); restarted=(); confirmed=(); watch_started=()
+    listening=(); stub_verdict=(); serving=(); restart_rc=(); restarted=(); confirmed=(); watch_started=(); watch_killed=()
     unset CONFIRM_RESULT LLM_PROXY_WATCH_TIMEOUT
     WATCH_ALIVE=0 WATCH_START_RC=0 FAKE_NOW=1000 BUSY_UNTIL=0
     rm -rf "$XDG_STATE_HOME"
@@ -215,6 +217,23 @@ reset; listening=(59003 1)
 stub_verdict=(glm-codex "stale: hooks" glm-claude "stale: hooks")
 HOSTED_ONLY_CODEX_PROXY_PORT=59003 sync --quiet
 [[ "$out" == *"glm-claude"* ]] && fail "--quiet reported the covered flavor: $out"
+# 13b. the covered flavor's recovery marker is still refreshed (a later sync,
+# or the flavors split onto separate ports again, relies on it to restart a
+# crashed always-on proxy), and a watcher it still has waiting — armed before
+# the ports were shared or by an older sync, baking an old fingerprint — is
+# stopped instead of left to restart the shared proxy to stale config
+reset; listening=(59003 1); WATCH_ALIVE=1
+stub_verdict=(glm-codex "stale: hooks" glm-claude "stale: hooks"); serving=(59003 1)
+HOSTED_ONLY_CODEX_PROXY_PORT=59003 sync
+[[ -s "$XDG_STATE_HOME/llm-proxy-sync/up-glm-claude" ]] || fail "covered flavor's up-marker not refreshed"
+[[ "$(<"$XDG_STATE_HOME/llm-proxy-sync/up-glm-claude")" == 59003 ]] || fail "covered flavor's up-marker has the wrong port"
+[[ "${watch_killed[*]}" == glm-claude ]] || fail "covered flavor's stale watcher not stopped: killed=$watch_killed"
+[[ "$out" == *"stale watcher stopped; the target handled above owns the port"* ]] || fail "watcher stop not reported: $out"
+# no live watcher for the covered flavor: nothing to stop, still covered
+reset; listening=(59003 1)
+stub_verdict=(glm-codex "stale: hooks" glm-claude "stale: hooks")
+HOSTED_ONLY_CODEX_PROXY_PORT=59003 sync
+(( rc == 0 )) && [[ ${#watch_killed} -eq 0 ]] || fail "stopped a watcher that was not alive: killed=$watch_killed"
 
 # --- llm-proxy-watch (the detached watcher) ---------------------------------
 
@@ -283,6 +302,7 @@ LLM_PROXY_SYNC_UP_TIMEOUT=2 PATH="$tmp/bin:$PATH" _llm_proxy_sync_confirm 59999 
 
 # H2. the real alive check: no pid file, dead pid, live non-watcher pid, live watcher
 functions[_llm_proxy_watch_alive]=$functions[_real_watch_alive]
+functions[_llm_proxy_watch_kill]=$functions[_real_watch_kill]
 reset
 _llm_proxy_watch_alive enmaas && fail "alive with no pid file"
 mkdir -p "$XDG_STATE_HOME/llm-proxy-sync"
@@ -297,7 +317,14 @@ sh "$tmp/bin/llm-proxy-watch-fake.sh" & local fake=$!
 print -r -- $fake > "$XDG_STATE_HOME/llm-proxy-sync/watch-enmaas.pid"
 sleep 0.3
 _llm_proxy_watch_alive enmaas || { kill $fake 2>/dev/null; fail "live watcher not recognised"; }
-kill $fake 2>/dev/null; wait $fake 2>/dev/null
+# the real kill helper TERMs that watcher (same identity check) ...
+_llm_proxy_watch_kill enmaas || { kill $fake 2>/dev/null; fail "kill helper did not signal the live watcher"; }
+wait $fake 2>/dev/null; local wrc=$?
+(( wrc == 143 )) || fail "watcher exited with $wrc, expected SIGTERM (143)"
+# ... and never signals a dead pid or a non-watcher process
+_llm_proxy_watch_kill enmaas && fail "kill helper signalled a dead pid"
+print -r -- $$ > "$XDG_STATE_HOME/llm-proxy-sync/watch-enmaas.pid"
+_llm_proxy_watch_kill enmaas && fail "kill helper signalled a non-watcher process"
 
 # H3. the real start helper: detaches the watcher script with the proxy name...
 functions[_llm_proxy_watch_start]=$functions[_real_watch_start]
