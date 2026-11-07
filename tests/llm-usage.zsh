@@ -1087,6 +1087,10 @@ if [[ -x /usr/bin/swiftc ]] || command -v swiftc >/dev/null; then
     "$mb" --window-png "$tmp/w-fleet-on.png" --layout vertical --data-file "$mbjson/fleet.json" >/dev/null || fail "window-png fleet vertical"
     "$mb" --window-png "$tmp/w-fleet-off.png" --layout vertical --data-file "$tmp/fleet-stripped.json" >/dev/null || fail "window-png fleet-stripped vertical"
     cmp -s "$tmp/w-fleet-on.png" "$tmp/w-fleet-off.png" && fail "fleet rows must change the vertical window render"
+    # the horizontal window draws them too (full section or the compact line)
+    "$mb" --window-png "$tmp/w-fleet-on-h.png" --layout horizontal --data-file "$mbjson/fleet.json" >/dev/null || fail "window-png fleet horizontal"
+    "$mb" --window-png "$tmp/w-fleet-off-h.png" --layout horizontal --data-file "$tmp/fleet-stripped.json" >/dev/null || fail "window-png fleet-stripped horizontal"
+    cmp -s "$tmp/w-fleet-on-h.png" "$tmp/w-fleet-off-h.png" && fail "fleet rows must change the horizontal window render"
     [[ "$dump" == *"[chart] requests/min"* && "$dump" == *"[chart] by model"* && "$dump" == *"[chart] by proxy"* ]] || fail "charts missing: $dump"
     [[ "$(dump_of normal --no-charts)" != *"[chart]"* && "$(dump_of normal --no-charts)" == *"Top models (1h): glm-5.3"* ]] || fail "--no-charts"
     [[ "$dump" == *"Open dashboard"* && "$dump" == *"Open logs folder"* && "$dump" == *"Refresh now"* && "$dump" == *"Copy status"* && "$dump" == *"Copy last error"* && "$dump" == *Quit* ]] || fail "actions missing"

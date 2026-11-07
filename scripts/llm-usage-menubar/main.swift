@@ -1694,13 +1694,16 @@ final class MonitorView: NSView {
             }
         }
         // Fleet: pulled peers (dot = up/stale/down), after the share rows — a long
-        // host list must not crowd Models/Providers out — and capped at two
+        // host list must not crowd Models/Providers out — and capped at two.
+        // Both layouts show it: the horizontal window's stats column has the
+        // vertical's slack below Providers. When the column is too short for the
+        // section, one compact line stands in; the menu holds the full list.
         let fhosts = d["fleet"]["enabled"].bool ? (d["fleet"]["hosts"].arr ?? []) : []
         let fleetShow = fhosts.prefix(2)
-        if !fleetShow.isEmpty, layout == .vertical, rowsLeft >= fleetShow.count + 1, let r = next() {
+        let fleetMore = fhosts.count > fleetShow.count ? " · +\(fhosts.count - fleetShow.count) more" : ""
+        if !fleetShow.isEmpty, rowsLeft >= fleetShow.count + 1, let r = next() {
             // "+N more" in the header: the menu holds the full host list, the window must say when it truncated one
-            drawStr("Fleet · 15m" + (fhosts.count > fleetShow.count ? " · +\(fhosts.count - fleetShow.count) more" : ""),
-                    in: r, font: tinyFont, color: .secondaryLabelColor)
+            drawStr("Fleet · 15m" + fleetMore, in: r, font: tinyFont, color: .secondaryLabelColor)
             for h in fleetShow {
                 guard let row = next() else { break }
                 let state = h["state"].str ?? "down"
@@ -1717,9 +1720,13 @@ final class MonitorView: NSView {
                 let value = "\(h["m15"]["requests"].int ?? 0) req" + (errs > 0 ? " · \(errs) err" : "") + (inflight > 0 ? " · ⏳\(inflight)" : "")
                 drawStr(value, in: row, font: tinyFont, color: errs > 0 ? NSColor.systemRed : .secondaryLabelColor, align: .right)
             }
-        } else if !fleetShow.isEmpty, layout == .vertical, rowsLeft >= 1, let r = next() {
-            // no room for the section: say the hosts exist, the menu holds them
-            drawStr("Fleet · \(fhosts.count) host\(fhosts.count == 1 ? "" : "s") · see menu", in: r, font: tinyFont, color: .tertiaryLabelColor)
+        } else if !fleetShow.isEmpty, let r = next(), let first = fleetShow.first {
+            // one line instead of the section: first host + how many others there are
+            let e = first["m15"]["errors"]
+            let errs = (e["429"].int ?? 0) + (e["5xx"].int ?? 0) + (e["other"].int ?? 0)
+            let others = fhosts.count > 1 ? " · +\(fhosts.count - 1) host\(fhosts.count == 2 ? "" : "s")" : ""
+            drawStr("Fleet · \(first["name"].str ?? "?") \(first["m15"]["requests"].int ?? 0) req" + (errs > 0 ? " · \(errs) err" : "") + others,
+                    in: r, font: tinyFont, color: errs > 0 ? NSColor.systemRed : .tertiaryLabelColor)
         }
         if let note = d["throttle_notes"]["github-copilot"].str, spans.allSatisfy({ $0.provider != "github-copilot" }), rowsLeft >= 1,
            providers.contains(where: { $0.key == "github-copilot" }), layout == .vertical, let r = next() {
