@@ -441,7 +441,13 @@ func TestMintKeyRedactsApprovalFromLogs(t *testing.T) {
 		case "/service/v1/apps/app-1/keys":
 			_, _ = w.Write([]byte(`{"raw_api_key":"rk-1"}`))
 		default:
-			t.Errorf("unexpected platform call %s", r.URL.Path)
+			// stray GET / probes hit ephemeral localhost ports on WSL; the
+			// shim only ever POSTs with a path, so ignore them
+			if r.Method == http.MethodGet && r.URL.Path == "/" {
+				w.WriteHeader(http.StatusNotFound)
+				return
+			}
+			t.Errorf("unexpected platform call %s %s", r.Method, r.URL.Path)
 			w.WriteHeader(http.StatusNotFound)
 		}
 	}))

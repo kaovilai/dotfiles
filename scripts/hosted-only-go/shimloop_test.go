@@ -12,6 +12,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -456,6 +457,19 @@ func TestSynthesizeSSEResponses(t *testing.T) {
 }
 
 // --- shim off: byte-identical behavior ------------------------------------------
+
+// The shim ships disabled: with no HOSTED_ONLY_SEARCH_SHIM in the environment
+// the config must come up off, whatever the upstream verdict says. A refactor
+// that flips this default breaks the "off until soaked" contract.
+func TestSearchShimDefaultOff(t *testing.T) {
+	for _, k := range []string{"HOSTED_ONLY_SEARCH_SHIM", "GLM_HYBRID_SEARCH_SHIM"} {
+		os.Unsetenv(k)
+	}
+	cfg := loadConfig("claude", "0", t.TempDir())
+	if cfg.SearchShim {
+		t.Fatal("SearchShim must default to off (off until soaked)")
+	}
+}
 
 func TestShimOffKeepsStripPath(t *testing.T) {
 	a, cfg := shimApp(t, &stubUpstream{t: t, dialect: "anthropic"}, true)
