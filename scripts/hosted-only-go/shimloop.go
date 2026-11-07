@@ -168,7 +168,10 @@ func appendSearchRound(dialect string, data map[string]any, round map[string]any
 
 func recordResultText(rec shimRecord) string {
 	if rec.err != nil {
-		return "web search unavailable this turn: " + rec.err.Error()
+		// Fixed message: the error text can carry untrusted upstream response
+		// bodies (truncated into transport errors), so it never enters the
+		// model-visible tool result. Details go to the proxy log instead.
+		return "web search unavailable this turn"
 	}
 	return frameResults(rec.call.Query, rec.results)
 }
@@ -190,7 +193,9 @@ func searchRecords(dialect string, recs []shimRecord) []any {
 				})
 			}
 			if rec.err != nil {
-				content = append(content, map[string]any{"type": "text", "text": "web search error: " + rec.err.Error()})
+				// client-visible trail: details are fine here, but still
+				// sanitized — the text can carry upstream response bodies
+				content = append(content, map[string]any{"type": "text", "text": "web search error: " + sanitizeSnippet(rec.err.Error())})
 			}
 			records = append(records,
 				map[string]any{"type": "server_tool_use", "id": rec.call.ID, "name": searchToolPrefix, "input": map[string]any{"query": rec.call.Query}},
