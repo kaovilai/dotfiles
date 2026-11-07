@@ -151,7 +151,7 @@ func (a *app) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if reqErr != nil {
 		a.writeRequestError(w, r.URL.Path, reqErr)
-		a.usage.write(a.event(r, data, requested, served, started, usageInfo{}, false, reqErr.Status, 0, reqErr.Message, false, 0, "", false, 0, false, true, "", 0))
+		a.usage.write(a.event(r, data, requested, served, started, usageInfo{}, false, reqErr.Status, 0, reqErr.Message, false, 0, "", false, 0, false, "", true, "", 0))
 		return
 	}
 	model := asString(data["model"])
@@ -215,7 +215,7 @@ func (a *app) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			// the pair has its own window and must be clamped against it.
 			if e, clamped := clampOutput(a.cfg, data); e != nil {
 				a.writeRequestError(w, r.URL.Path, e)
-				a.usage.write(a.event(r, data, requested, served, started, usageInfo{}, false, e.Status, 0, e.Message, false, 0, "", false, 0, false, true, "", 0))
+				a.usage.write(a.event(r, data, requested, served, started, usageInfo{}, false, e.Status, 0, e.Message, false, 0, "", false, 0, false, "", true, "", 0))
 				return
 			} else if clamped {
 				changed = true
@@ -311,7 +311,23 @@ func (a *app) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	resp, transportErr := a.upstream(r, outBody, upstreamBase, upstreamPath, stream)
 	usedFallback := false
+	fallbackReason := ""
 	if fallback != "" && a.shouldFailover(resp, transportErr) && a.fallbackServable(fallback, r.URL.Path) {
+		// The primary answer is about to be thrown away: read its (bounded)
+		// error body once so the reason can tell a monthly quota from plain
+		// throttling, and put it back in case fallback preparation fails and
+		// the client still gets this answer.
+		var primaryText string
+		if resp != nil && resp.Body != nil {
+			// Cap what is stored for classification, but keep the unread
+			// remainder streamable: re-attaching only the read prefix would cut
+			// a larger body short if fallback preparation fails and the client
+			// still gets the original answer.
+			body, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
+			primaryText = string(body)
+			resp.Body = readCloser{io.MultiReader(bytes.NewReader(body), resp.Body), resp.Body}
+		}
+		fallbackReason = failoverReason(resp, primaryText, transportErr)
 		// Prepare the fallback request BEFORE giving up the primary answer: a
 		// Messages body must never reach a chat/Responses deployment untranslated
 		// (the original failure is returned instead when translation fails).
@@ -402,13 +418,13 @@ func (a *app) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 			a.writeJSON(w, status, nil, out)
 			retryAfter := maxInt(1, int(math.Ceil(info.Reset.Sub(now).Seconds())))
-			a.usage.write(a.event(r, data, requested, served, started, usageInfo{}, false, status, http.StatusBadGateway, transportErr.Error(), true, info.Reset.Unix(), info.Source, false, retryAfter, usedFallback, stream, "", 0))
+			a.usage.write(a.event(r, data, requested, served, started, usageInfo{}, false, status, http.StatusBadGateway, transportErr.Error(), true, info.Reset.Unix(), info.Source, false, retryAfter, usedFallback, fallbackReason, stream, "", 0))
 			return
 		}
 		status := http.StatusBadGateway
 		msg := fmt.Sprintf("upstream request failed: %v", transportErr)
 		a.writeDialectError(w, r.URL.Path, status, msg, "")
-		a.usage.write(a.event(r, data, requested, served, started, usageInfo{}, false, status, 0, msg, false, 0, "", false, 0, usedFallback, stream, "", 0))
+		a.usage.write(a.event(r, data, requested, served, started, usageInfo{}, false, status, 0, msg, false, 0, "", false, 0, usedFallback, fallbackReason, stream, "", 0))
 		return
 	}
 	defer resp.Body.Close()
@@ -448,7 +464,7 @@ func (a *app) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			if retryAfter < 1 {
 				retryAfter = 1
 			}
-			a.usage.write(a.event(r, data, requested, served, started, usageInfo{}, false, status, resp.StatusCode, text, true, info.Reset.Unix(), info.Source, info.Monthly, retryAfter, usedFallback, stream, "", 0))
+			a.usage.write(a.event(r, data, requested, served, started, usageInfo{}, false, status, resp.StatusCode, text, true, info.Reset.Unix(), info.Source, info.Monthly, retryAfter, usedFallback, fallbackReason, stream, "", 0))
 			return
 		}
 		if tr != nil {
@@ -456,16 +472,16 @@ func (a *app) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			headers["content-type"] = "application/json"
 		}
 		a.writeRaw(w, resp.StatusCode, headers, errBody)
-		a.usage.write(a.event(r, data, requested, served, started, usageInfo{}, false, resp.StatusCode, resp.StatusCode, text, false, 0, "", false, 0, usedFallback, stream, "", 0))
+		a.usage.write(a.event(r, data, requested, served, started, usageInfo{}, false, resp.StatusCode, resp.StatusCode, text, false, 0, "", false, 0, usedFallback, fallbackReason, stream, "", 0))
 		return
 	}
 
 	if stream {
 		if tr != nil {
-			a.streamTranslated(w, resp, tr, r.URL.Path, data, requested, served, started, usedFallback, r.Header.Get("User-Agent"))
+			a.streamTranslated(w, resp, tr, r.URL.Path, data, requested, served, started, usedFallback, fallbackReason, r.Header.Get("User-Agent"))
 			return
 		}
-		a.streamResponse(w, resp, r.URL.Path, data, requested, served, started, usedFallback, r.Header.Get("User-Agent"))
+		a.streamResponse(w, resp, r.URL.Path, data, requested, served, started, usedFallback, fallbackReason, r.Header.Get("User-Agent"))
 		return
 	}
 
@@ -479,7 +495,7 @@ func (a *app) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if terr != nil {
 			msg := "cannot translate the upstream answer: " + terr.Error()
 			a.writeDialectError(w, r.URL.Path, http.StatusBadGateway, msg, "")
-			a.usage.write(a.event(r, data, requested, served, started, usageInfo{}, false, http.StatusBadGateway, resp.StatusCode, msg, false, 0, "", false, 0, usedFallback, false, responseModel, 0))
+			a.usage.write(a.event(r, data, requested, served, started, usageInfo{}, false, http.StatusBadGateway, resp.StatusCode, msg, false, 0, "", false, 0, usedFallback, fallbackReason, false, responseModel, 0))
 			return
 		}
 		respBody = translated
@@ -490,7 +506,7 @@ func (a *app) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		a.outages.success(served)
 	}
 	a.writeRaw(w, resp.StatusCode, headers, respBody)
-	a.usage.write(a.event(r, data, requested, served, started, info, true, http.StatusOK, 0, "", false, 0, "", false, 0, usedFallback, false, responseModel, 0))
+	a.usage.write(a.event(r, data, requested, served, started, info, true, http.StatusOK, 0, "", false, 0, "", false, 0, usedFallback, fallbackReason, false, responseModel, 0))
 }
 
 func (a *app) authorized(r *http.Request) bool {
@@ -594,6 +610,13 @@ func joinURL(base, path string) string {
 	return base + path
 }
 
+// readCloser joins a re-read prefix with the unread rest of a response body:
+// the failover classifier peeks at the primary answer without consuming it.
+type readCloser struct {
+	io.Reader
+	io.Closer
+}
+
 func (a *app) shouldFailover(resp *http.Response, err error) bool {
 	if err != nil {
 		return true
@@ -603,6 +626,26 @@ func (a *app) shouldFailover(resp *http.Response, err error) bool {
 		return true
 	}
 	return false
+}
+
+// failoverReason classifies the primary attempt's failure for the usage log:
+// llm-usage surfaces it as the redirect's reason (rate-limit, outage-500, …)
+// in the floating window. The body is not read here — it belongs to the
+// answer being discarded, and the status alone names the class.
+func failoverReason(resp *http.Response, text string, err error) string {
+	if err != nil {
+		return "outage-transport"
+	}
+	status := resp.StatusCode
+	if status == 429 || status == 402 || isLimitError(status, normalizeHeaders(resp.Header), text) {
+		// A 429 carrying monthly-budget wording is a quota, not throttling:
+		// the floating window shows the two differently.
+		if bodyKind(errorObject(errorBodyObject(text))) == "quota" || quotaMessage.MatchString(text) {
+			return "quota"
+		}
+		return "rate-limit"
+	}
+	return fmt.Sprintf("outage-%d", status)
 }
 
 func (a *app) outageWait(model string, now time.Time) int {
@@ -711,7 +754,7 @@ func dialectMismatch(clientPath, deployment, model string) string {
 func (a *app) rejectDialect(w http.ResponseWriter, r *http.Request, data map[string]any, requested string, started time.Time, model, message string) {
 	e := &requestError{Status: http.StatusBadRequest, Code: "invalid_request_error", Message: message}
 	a.writeRequestError(w, r.URL.Path, e)
-	a.usage.write(a.event(r, data, requested, model, started, usageInfo{}, false, e.Status, 0, e.Message, false, 0, "", false, 0, false, true, "", 0))
+	a.usage.write(a.event(r, data, requested, model, started, usageInfo{}, false, e.Status, 0, e.Message, false, 0, "", false, 0, false, "", true, "", 0))
 }
 
 func (a *app) rejectModel(w http.ResponseWriter, r *http.Request, data map[string]any, requested string, started time.Time, model string) {
@@ -721,10 +764,10 @@ func (a *app) rejectModel(w http.ResponseWriter, r *http.Request, data map[strin
 		Message: "Invalid model name passed in model=" + model,
 	}
 	a.writeRequestError(w, r.URL.Path, e)
-	a.usage.write(a.event(r, data, requested, model, started, usageInfo{}, false, e.Status, 0, e.Message, false, 0, "", false, 0, false, true, "", 0))
+	a.usage.write(a.event(r, data, requested, model, started, usageInfo{}, false, e.Status, 0, e.Message, false, 0, "", false, 0, false, "", true, "", 0))
 }
 
-func (a *app) streamResponse(w http.ResponseWriter, resp *http.Response, path string, data map[string]any, requested, served string, started time.Time, usedFallback bool, userAgent string) {
+func (a *app) streamResponse(w http.ResponseWriter, resp *http.Response, path string, data map[string]any, requested, served string, started time.Time, usedFallback bool, fallbackReason string, userAgent string) {
 	contentType := resp.Header.Get("Content-Type")
 	if contentType == "" {
 		contentType = "text/event-stream"
@@ -775,14 +818,14 @@ func (a *app) streamResponse(w http.ResponseWriter, resp *http.Response, path st
 	if ok {
 		a.outages.success(served)
 	}
-	a.usage.write(a.buildEvent(path, data, requested, served, started, parser.info, ok, status, 0, errText, false, 0, "", false, 0, usedFallback, true, parser.model, firstChunk, userAgent))
+	a.usage.write(a.buildEvent(path, data, requested, served, started, parser.info, ok, status, 0, errText, false, 0, "", false, 0, usedFallback, fallbackReason, true, parser.model, firstChunk, userAgent))
 }
 
-func (a *app) event(r *http.Request, data map[string]any, requested, served string, started time.Time, info usageInfo, ok bool, status, upstreamStatus int, errText string, rewritten bool, resetAt int64, resetSource string, quota bool, retryAfter int, fallback, stream bool, responseModel string, ttft int) map[string]any {
-	return a.buildEvent(r.URL.Path, data, requested, served, started, info, ok, status, upstreamStatus, errText, rewritten, resetAt, resetSource, quota, retryAfter, fallback, stream, responseModel, ttft, r.Header.Get("User-Agent"))
+func (a *app) event(r *http.Request, data map[string]any, requested, served string, started time.Time, info usageInfo, ok bool, status, upstreamStatus int, errText string, rewritten bool, resetAt int64, resetSource string, quota bool, retryAfter int, fallback bool, fallbackReason string, stream bool, responseModel string, ttft int) map[string]any {
+	return a.buildEvent(r.URL.Path, data, requested, served, started, info, ok, status, upstreamStatus, errText, rewritten, resetAt, resetSource, quota, retryAfter, fallback, fallbackReason, stream, responseModel, ttft, r.Header.Get("User-Agent"))
 }
 
-func (a *app) buildEvent(path string, data map[string]any, requested, served string, started time.Time, info usageInfo, ok bool, status, upstreamStatus int, errText string, rewritten bool, resetAt int64, resetSource string, quota bool, retryAfter int, fallback, stream bool, responseModel string, ttft int, userAgent string) map[string]any {
+func (a *app) buildEvent(path string, data map[string]any, requested, served string, started time.Time, info usageInfo, ok bool, status, upstreamStatus int, errText string, rewritten bool, resetAt int64, resetSource string, quota bool, retryAfter int, fallback bool, fallbackReason string, stream bool, responseModel string, ttft int, userAgent string) map[string]any {
 	if path == "" {
 		path = "/v1/chat/completions"
 	}
@@ -844,6 +887,12 @@ func (a *app) buildEvent(path string, data map[string]any, requested, served str
 		"role":           role,
 		"fallback":       fallback,
 		"status":         status,
+	}
+	if fallback && fallbackReason != "" {
+		// Why the primary attempt was abandoned (rate-limit, outage-500, …):
+		// llm-usage shows it as the redirect's reason. Only the failover path
+		// knows it, so it stays absent on direct and non-fallback events.
+		ev["fallback_reason"] = fallbackReason
 	}
 	if !ok {
 		ev["error"] = truncate(errText, 300)

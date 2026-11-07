@@ -430,6 +430,11 @@ d = run("reroute-vision", [ev(60, served=DS), ev(30)])
 assert [(r["from"], r["to"], r["kind"], r["count"]) for r in d["reroutes"]] == [("glm-5.3", "deepseek-v4.1-flash", "vision", 1)], d["reroutes"]
 d = run("reroute-fallback", [ev(60, fallback=True), ev(30, served=SON, requested=SON, fallback=True), ev(20)])
 assert {r["kind"] for r in d["reroutes"]} == {"fallback"} and sum(r["count"] for r in d["reroutes"]) == 2, d["reroutes"]
+# fallback_reason rides along as the redirect's reason (outage/500, rate-limit, ...)
+d = run("reroute-fallback-reason", [ev(60, fallback=True, fallback_reason="outage-500"), ev(45, fallback=True, fallback_reason="outage-500"), ev(30, fallback=True, fallback_reason="rate-limit")])
+# one row per route: the two reasons group with their counts
+assert [(r["kind"], r["kinds"], r["count"]) for r in d["reroutes"]] == [
+    ("fallback:outage-500", {"fallback:outage-500": 2, "fallback:rate-limit": 1}, 3)], d["reroutes"]
 d = run("reroute-none", [ev(60), ev(30, port="4147", requested="gpt-6-luna", served="gpt-6-luna")])
 assert d["reroutes"] == [] and d["reroutes_15m"] == 0
 assert d["by_proxy"][0]["models"], d["by_proxy"]
@@ -1084,6 +1089,10 @@ if [[ -x /usr/bin/swiftc ]] || command -v swiftc >/dev/null; then
     "$mb" --window-png "$tmp/w-fleet-on.png" --layout vertical --data-file "$mbjson/fleet.json" >/dev/null || fail "window-png fleet vertical"
     "$mb" --window-png "$tmp/w-fleet-off.png" --layout vertical --data-file "$tmp/fleet-stripped.json" >/dev/null || fail "window-png fleet-stripped vertical"
     cmp -s "$tmp/w-fleet-on.png" "$tmp/w-fleet-off.png" && fail "fleet rows must change the vertical window render"
+    # the horizontal window draws them too (full section or the compact line)
+    "$mb" --window-png "$tmp/w-fleet-on-h.png" --layout horizontal --data-file "$mbjson/fleet.json" >/dev/null || fail "window-png fleet horizontal"
+    "$mb" --window-png "$tmp/w-fleet-off-h.png" --layout horizontal --data-file "$tmp/fleet-stripped.json" >/dev/null || fail "window-png fleet-stripped horizontal"
+    cmp -s "$tmp/w-fleet-on-h.png" "$tmp/w-fleet-off-h.png" && fail "fleet rows must change the horizontal window render"
     [[ "$dump" == *"[chart] requests/min"* && "$dump" == *"[chart] by model"* && "$dump" == *"[chart] by proxy"* ]] || fail "charts missing: $dump"
     [[ "$(dump_of normal --no-charts)" != *"[chart]"* && "$(dump_of normal --no-charts)" == *"Top models (1h): glm-5.3"* ]] || fail "--no-charts"
     [[ "$dump" == *"Open dashboard"* && "$dump" == *"Open logs folder"* && "$dump" == *"Refresh now"* && "$dump" == *"Copy status"* && "$dump" == *"Copy last error"* && "$dump" == *Quit* ]] || fail "actions missing"
@@ -1109,6 +1118,9 @@ if [[ -x /usr/bin/swiftc ]] || command -v swiftc >/dev/null; then
     [[ "$dump" == *"sonnet→glm-5.3 ×2 alias"* && "$dump" == *"sonnet→deepseek-v4.1-flash ×1 alias"* ]] || fail "alias rows: $dump"
     [[ "$(dump_of reroute-vision)" == *"glm-5.3→deepseek-v4.1-flash ×1 vision"* ]] || fail "vision row"
     [[ "$(dump_of reroute-fallback)" == *"fallback 2"* ]] || fail "fallback row"
+    dump=$(dump_of reroute-fallback-reason)
+    [[ "$dump" == *"fallback:outage-500 2 · fallback:rate-limit 1"* ]] || fail "reason kinds summary: $dump"
+    [[ "$dump" == *"×3 fallback:outage-500 2+fallback:rate-limit 1"* ]] || fail "reason route row: $dump"
     dump=$(dump_of copilot-quota)
     [[ "$dump" == *"COPILOT-API (:4141) · TRANSCRIPT-DERIVED"* && "$dump" == *"premium: 120/300 left (40%)"* && "$dump" == *"resets 2026-11-01"* && "$dump" == *"in flight: n/a"* ]] || fail "copilot section: $dump"
     [[ "$(dump_of copilot-unlimited)" == *"premium: unlimited · 301.6k credits used"* ]] || fail "copilot unlimited row"

@@ -30,6 +30,10 @@ var (
 	outageConn = regexp.MustCompile(`(?i)connection error|connection (refused|reset|aborted)|connect timeout` +
 		`|cannot connect to host|connect call failed|nodename nor servname` +
 		`|name or service not known|temporary failure in name resolution|network is unreachable`)
+	// Monthly-budget wording that only appears in the message (bodyKind reads
+	// the structured reason/type/code fields), used by the failover-reason
+	// classifier so a quota 429 is not filed under plain throttling.
+	quotaMessage = regexp.MustCompile(`(?i)token budget exhausted|monthly token budget|monthly_quota`)
 )
 
 type limitInfo struct {

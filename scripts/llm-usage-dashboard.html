@@ -484,7 +484,7 @@ function renderTables() {
     D.model_table.map((r) => [sw(r.model, colorOf(r.model)), num(r.n), r.err ? num(r.err) : "-", r.e429 ? num(r.e429) : "-", r.e5xx ? num(r.e5xx) : "-", r.err ? pctf(r.err_rate) : "-", human(r.in), human(r.out), human(r.cread), pctf(r.hit), human(r.ctxmax), r.long ? num(r.long) : "-", ms(r.p50), ms(r.p95), r.tps ? Math.round(r.tps) : "-", r.cost ? "$" + r.cost.toFixed(2) : "-"]),
     ["l", "r", "r", "r", "r", "r", "r", "r", "r", "r", "r", "r", "r", "r", "r", "r"]);
 
-  // alias = Claude name served by GLM/DeepSeek, vision = glm→deepseek image fallback, fallback = router retry.
+  // alias = Claude name served by GLM/DeepSeek, vision = glm→deepseek image fallback, fallback:why = router retry (why = outage-500/rate-limit/…).
   // Older servers send no `kinds`; fall back to the plain rerouted/direct tag.
   const kindTag = (r) => {
     const kinds = Object.entries(r.kinds || {});
@@ -555,7 +555,7 @@ function renderKpis() {
   tile("Output tokens", human(k.out), `${human(k.in)} fresh in · ${human(k.cread)} cached`);
   tile("Cache hit", pctf(k.hit), "cached / (fresh + cached) input");
   tile("Latency p50", ms(k.p50), k.p95 != null ? `p95 ${ms(k.p95)}${k.tps ? " · " + Math.round(k.tps) + " tok/s" : ""}` : "needs proxy log");
-  tile("Rerouted", k.n ? pctf(k.reroutes / k.n) : "-", k.reroutes ? `${k.reroutes} requests served by another model` : "none (or no proxy log)");
+  tile("Rerouted", k.n ? pctf(k.reroutes / k.n) : "-", k.reroutes ? `${k.reroutes} requests rerouted or served by a fallback` : "none (or no proxy log)");
   tile("1M-context requests", String(k.long), `context > 200k · largest ${human(k.ctxmax)}`);
   if (k.classifier) tile("Classifier calls", String(k.classifier), "auto-mode safety checks");
 }

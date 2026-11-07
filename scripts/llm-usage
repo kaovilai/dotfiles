@@ -145,12 +145,17 @@ def parse_since(text):
         return 0.0
     if text == "today":
         return datetime.now().replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
-    if text is not None and re.fullmatch(r"\d+(?:\.\d+)?", text.strip()):  # bare epoch (fleet pulls pass one)
-        return float(text)
-    match = re.fullmatch(r"(\d+)\s*([smhdw])", text)
-    if match:
-        unit = {"s": 1, "m": 60, "h": 3600, "d": 86400, "w": 604800}[match.group(2)]
-        return now - int(match.group(1)) * unit
+    # Hand-parsed (no regex): the old \d+ patterns tripped CodeQL's
+    # polynomial-ReDoS check on long digit runs.
+    stripped = text.strip() if text is not None else ""
+    if stripped:
+        whole, dot, frac = stripped.partition(".")
+        if whole.isdigit() and (not dot or frac.isdigit()):  # bare epoch (fleet pulls pass one)
+            return float(stripped)
+    if text:
+        unit, body = text[-1], text[:-1].rstrip()  # the old regex allowed spaces before the unit
+        if unit in "smhdw" and body.isdigit():
+            return now - int(body) * {"s": 1, "m": 60, "h": 3600, "d": 86400, "w": 604800}[unit]
     ts = parse_ts(text)
     if ts is None:
         sys.exit(f"llm-usage: bad --since {text!r} (use 30m, 24h, 7d, today, all, or an ISO time)")
@@ -1226,7 +1231,8 @@ def aggregate(events, keyfns):
             "ctxmax": max(ctx_of(e) for e in evs), "long": sum(1 for e in evs if ctx_of(e) > LONG_CTX),
             "p50": pct(lat, 50), "p95": pct(lat, 95), "ttft": pct(ttft, 50),
             "tps": statistics.median(speeds) if speeds else None, "cost": cost,
-            "reroutes": sum(1 for e in evs if is_reroute(e)),
+            # a same-model failover (glm deployment A -> glm B) moved traffic too
+            "reroutes": sum(1 for e in evs if is_reroute(e) or e.get("fallback")),
         })
     if any(fn in (KEYS["day"], KEYS["hour"]) for fn in keyfns):
         return sorted(rows, key=lambda r: r["key"])
@@ -2010,12 +2016,15 @@ def reroute_kind(ev):
 
     alias     a Claude name (sonnet, T3's claude-sonnet-5-5, the classifier tier) served by GLM/DeepSeek
     vision    glm requested, deepseek served (image input fallback)
-    fallback  the router retried on another deployment after a failed first attempt
+    fallback  the router retried on another deployment after a failed first attempt;
+              with a fallback_reason on the event (proxies that classify the primary
+              failure), the reason rides along: fallback:outage-500, fallback:rate-limit
     other     any other requested != served
     """
     req, srv = ev.get("requested"), ev.get("served")
     if ev.get("fallback"):
-        return "fallback"
+        reason = ev.get("fallback_reason")
+        return f"fallback:{reason}" if reason else "fallback"
     if not req or family(req) == family(srv):
         return None
     if family(req) == "glm" and family(srv) == "deepseek":
@@ -2269,7 +2278,10 @@ def menubar_data(now=None, up_ports=None, share_window="15m", share_metric="requ
     overrides = provider_overrides()
     by_model = defaultdict(lambda: {"requests": 0, "reroutes": 0, "sources": set()})
     by_proxy = defaultdict(lambda: {"requests": 0, "models": Counter(), "provider": "other"})
-    reroutes = defaultdict(lambda: {"count": 0, "count_15m": 0})
+    # One entry per route (from, served, proxy) with the reasons counted inside
+    # it: a route that failed over for two reasons must stay ONE row, or the
+    # menubar's row cap would hide whole routes behind reason variants.
+    reroutes = defaultdict(lambda: {"count": 0, "count_15m": 0, "kinds": Counter()})
     for e in hour:
         model, pname = strip_model(e.get("served")), proxy_name({**e, "port": e.get("port")}) if e.get("via") != "transcript" else "copilot-api"
         kind = reroute_kind(e)
@@ -2283,9 +2295,10 @@ def menubar_data(now=None, up_ports=None, share_window="15m", share_metric="requ
         bp["provider"] = event_provider(e, overrides)[0]
         if kind:
             frm = family(e["requested"]) if family(e["requested"]) in CLAUDE_FAMILIES else strip_model(e["requested"])
-            r = reroutes[(frm, model, kind, pname)]
+            r = reroutes[(frm, model, pname)]
             r["count"] += 1
             r["count_15m"] += e["t"] >= now - MB_RECENT
+            r["kinds"][kind] += 1
     total = len(hour) or 1
     minute0 = int(now // 60) * 60 - 59 * 60
     series = {k: [0] * 60 for k in ("requests", "e429", "e5xx", "eother")}
@@ -2443,8 +2456,11 @@ def menubar_data(now=None, up_ports=None, share_window="15m", share_metric="requ
         "by_proxy": [{"proxy": n, "provider": v["provider"], "requests": v["requests"], "source": "transcript" if n == "copilot-api" else "proxy-log",
                       "models": [{"model": m, "requests": c} for m, c in v["models"].most_common(4)]}
                      for n, v in sorted(by_proxy.items(), key=lambda x: -x[1]["requests"])],
-        "reroutes": [{"from": f, "to": t, "kind": k, "proxy": pr, **v}
-                     for (f, t, k, pr), v in sorted(reroutes.items(), key=lambda x: -x[1]["count"])],
+        # kind = the route's dominant reason (old payload shape); kinds = every
+        # reason seen on the route, so one row can show "outage-500 2 · rate-limit 1"
+        "reroutes": [{"from": f, "to": t, "proxy": pr, "kind": v["kinds"].most_common(1)[0][0],
+                      "kinds": dict(v["kinds"]), "count": v["count"], "count_15m": v["count_15m"]}
+                     for (f, t, pr), v in sorted(reroutes.items(), key=lambda x: -x[1]["count"])],
         "series": {"bucket_s": 60, "start": iso_utc(minute0), **series},
         "series_by_provider": series_by_provider,
         "throttle_spans": span_rows, "throttle_notes": notes,
@@ -2926,7 +2942,7 @@ def dashboard_data(since_text, source, hide, host=None):
         "err_series": err_series, "err_limit": limit,
         "spikes": [{"start": w["start"], "end": w["end"], "n": w["n"], "e429": w["counts"][0], "e5xx": w["counts"][1], "eoth": w["counts"][2], "peak": w["peak"]} for w in windows],
         "recent": [{"t": e["t"], "proxy": proxy_name(e), "client": e.get("client"), "requested": strip_model(e["requested"]) if e.get("requested") else None,
-                    "served": strip_model(e.get("served")), "rerouted": is_reroute(e), "ok": e.get("ok", True), "status": err_status_label(e) if not e.get("ok", True) else None, "ctx": ctx_of(e),
+                    "served": strip_model(e.get("served")), "rerouted": is_reroute(e) or bool(e.get("fallback")), "ok": e.get("ok", True), "status": err_status_label(e) if not e.get("ok", True) else None, "ctx": ctx_of(e),
                     "out": e.get("out", 0), "ms": e.get("ms"), "role": e.get("role"), "fallback": bool(e.get("fallback")), "kind": reroute_kind(e),
                     "error": (e.get("error") or "")[:160] or None} for e in recent],
         "status": status,

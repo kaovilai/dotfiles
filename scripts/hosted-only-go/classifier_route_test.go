@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // classifierSystem is the head a Claude Code auto-mode classifier request
@@ -667,5 +668,121 @@ func TestClassifierFailoverCannotReachDisallowedModels(t *testing.T) {
 	}
 	if h.count(ds) != 1 {
 		t.Fatalf("the target must have been tried: ds=%d", h.count(ds))
+	}
+}
+
+// A failover event records WHY the primary was abandoned: fallback_reason
+// (rate-limit, outage-503, ...) is what llm-usage surfaces as the redirect's
+// reason in the floating window. The stub's 503 must classify as outage-503.
+func TestFailoverRecordsFallbackReason(t *testing.T) {
+	h := classifierHarness(t, "")
+	glm, ds := h.app.cfg.GLM, h.app.cfg.DeepSeek
+	h.app.cfg.FallbackOn = true
+	h.failModel = glm
+	classifierRequest(t, h, glm)
+	if h.count(glm) != 1 || h.count(ds) != 1 {
+		t.Fatalf("expected one primary attempt and one fallback: glm=%d ds=%d", h.count(glm), h.count(ds))
+	}
+	ev := lastUsageEvent(t)
+	if ev["fallback"] != true {
+		t.Fatalf("the event must be flagged as a fallback: %v", ev)
+	}
+	if ev["fallback_reason"] != "outage-503" {
+		t.Fatalf("the 503 primary must record outage-503, got %v", ev["fallback_reason"])
+	}
+	if ev["served"] != ds {
+		t.Fatalf("the fallback model must be the served one: %v", ev["served"])
+	}
+}
+
+// A monthly-quota primary must record reason "quota", not "rate-limit": the
+// floating window shows budget exhaustion differently from plain throttling.
+func TestFailoverRecordsQuotaReason(t *testing.T) {
+	h := classifierHarness(t, "")
+	glm, ds := h.app.cfg.GLM, h.app.cfg.DeepSeek
+	h.app.cfg.FallbackOn = true
+	h.quotaModel = glm
+	classifierRequest(t, h, glm)
+	if h.count(glm) != 1 || h.count(ds) != 1 {
+		t.Fatalf("expected one primary attempt and one fallback: glm=%d ds=%d", h.count(glm), h.count(ds))
+	}
+	ev := lastUsageEvent(t)
+	if ev["fallback"] != true || ev["fallback_reason"] != "quota" {
+		t.Fatalf("a monthly-quota primary must record quota, got fallback=%v reason=%v", ev["fallback"], ev["fallback_reason"])
+	}
+}
+
+// The reason reaches the event builder the streaming paths use too
+// (streamResponse/streamTranslated call buildEvent with the same flag), and
+// stays absent on direct events.
+func TestBuildEventCarriesFallbackReason(t *testing.T) {
+	a := &app{cfg: &config{}}
+	ev := a.buildEvent("/v1/messages", map[string]any{}, "glm", "deepseek", time.Now(), usageInfo{}, true, 200, 0, "", false, 0, "", false, 0, true, "outage-500", true, "", 0, "ua")
+	if ev["fallback_reason"] != "outage-500" {
+		t.Fatalf("streaming events must carry the reason: %v", ev["fallback_reason"])
+	}
+	ev = a.buildEvent("/v1/messages", map[string]any{}, "glm", "glm", time.Now(), usageInfo{}, true, 200, 0, "", false, 0, "", false, 0, false, "", false, "", 0, "ua")
+	if _, ok := ev["fallback_reason"]; ok {
+		t.Fatalf("a direct event must not carry a reason: %v", ev["fallback_reason"])
+	}
+}
+
+// The native streaming path (streamResponse) must keep the fallback reason:
+// assert on the actual call site, not only the builder it delegates to.
+func TestStreamingFailoverRecordsFallbackReason(t *testing.T) {
+	h := classifierHarness(t, "")
+	h.app.cfg.Routes = nil // hosted-only flavor: same dialect, no translator
+	glm, ds := h.app.cfg.GLM, h.app.cfg.DeepSeek
+	h.app.cfg.FallbackOn = true
+	h.failModel = glm
+	rec := streamRequest(t, h, glm)
+	if rec.Code != 200 || h.count(ds) != 1 {
+		t.Fatalf("expected a streaming fallback answer: status=%d ds=%d", rec.Code, h.count(ds))
+	}
+	ev := lastUsageEvent(t)
+	if ev["fallback"] != true || ev["fallback_reason"] != "outage-503" || ev["stream"] != true {
+		t.Fatalf("streaming failover lost the reason: fallback=%v reason=%v stream=%v", ev["fallback"], ev["fallback_reason"], ev["stream"])
+	}
+}
+
+// Same through the translated streaming path (streamTranslated): the Messages
+// client is bridged to the chat-dialect fallback.
+func TestTranslatedStreamingFailoverRecordsFallbackReason(t *testing.T) {
+	h := classifierHarness(t, "")
+	glm, ds := h.app.cfg.GLM, h.app.cfg.DeepSeek
+	h.app.cfg.FallbackOn = true
+	h.failModel = glm
+	rec := streamRequest(t, h, glm)
+	if rec.Code != 200 || h.count(ds) != 1 {
+		t.Fatalf("expected a translated streaming fallback answer: status=%d ds=%d", rec.Code, h.count(ds))
+	}
+	ev := lastUsageEvent(t)
+	if ev["fallback"] != true || ev["fallback_reason"] != "outage-503" || ev["stream"] != true {
+		t.Fatalf("translated streaming failover lost the reason: fallback=%v reason=%v stream=%v", ev["fallback"], ev["fallback_reason"], ev["stream"])
+	}
+}
+
+func streamRequest(t *testing.T, h *classifierHarnessT, model string) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages",
+		strings.NewReader(`{"model":"`+model+`","max_tokens":16,"stream":true,"messages":[{"role":"user","content":"hi"}]}`))
+	req.Header.Set("x-api-key", h.app.cfg.Token)
+	req.Header.Set("content-type", "application/json")
+	req.Header.Set("accept", "text/event-stream")
+	rec := httptest.NewRecorder()
+	h.app.ServeHTTP(rec, req)
+	return rec
+}
+
+// A quota 429 whose monthly-budget wording lives only in the message field
+// still records "quota": bodyKind reads structured fields, the fallback
+// classifier also reads the text.
+func TestFailoverReasonReadsQuotaWordingFromTheBody(t *testing.T) {
+	resp := &http.Response{StatusCode: 429, Header: http.Header{}}
+	if got := failoverReason(resp, `{"error":{"message":"monthly token budget exhausted"}}`, nil); got != "quota" {
+		t.Fatalf("message-only quota wording must record quota, got %q", got)
+	}
+	if got := failoverReason(resp, `{"error":{"message":"slow down"}}`, nil); got != "rate-limit" {
+		t.Fatalf("plain throttling must stay rate-limit, got %q", got)
 	}
 }

@@ -1693,14 +1693,33 @@ final class MonitorView: NSView {
                 drawShareRow(ctx, r, e, marker: graphMode == .bars ? nil : .line(providerColor(e.key)), circle: false, hover: .provider(e.key))
             }
         }
+        // Reroutes: why traffic moved — the same kinds the menu's REROUTES
+        // section lists (alias / vision / fallback:reason), compacted into one
+        // row so the window shows redirect reasons without opening the menu.
+        let rrs = d["reroutes"].arr
+        if !rrs.isEmpty, rowsLeft >= 1, let r = next() {
+            var kinds: [String: Int] = [:]
+            for rr in rrs {
+                if rr["kinds"].exists {
+                    for k in rr["kinds"].keys { kinds[k, default: 0] += rr["kinds"][k].int ?? 0 }
+                } else { kinds[rr["kind"].str ?? "?", default: 0] += rr["count"].int ?? 0 }
+            }
+            let total = kinds.values.reduce(0, +)
+            let top = kinds.sorted { $0.value > $1.value }.prefix(2)
+                .map { "\($0.key) \($0.value)" }.joined(separator: " · ")
+            drawStr("↪ \(total) reroute\(total == 1 ? "" : "s") · \(top)", in: r, font: tinyFont, color: .secondaryLabelColor)
+        }
         // Fleet: pulled peers (dot = up/stale/down), after the share rows — a long
-        // host list must not crowd Models/Providers out — and capped at two
+        // host list must not crowd Models/Providers out — and capped at two.
+        // Both layouts show it: the horizontal window's stats column has the
+        // vertical's slack below Providers. When the column is too short for the
+        // section, one compact line stands in; the menu holds the full list.
         let fhosts = d["fleet"]["enabled"].bool ? (d["fleet"]["hosts"].arr ?? []) : []
         let fleetShow = fhosts.prefix(2)
-        if !fleetShow.isEmpty, layout == .vertical, rowsLeft >= fleetShow.count + 1, let r = next() {
+        let fleetMore = fhosts.count > fleetShow.count ? " · +\(fhosts.count - fleetShow.count) more" : ""
+        if !fleetShow.isEmpty, rowsLeft >= fleetShow.count + 1, let r = next() {
             // "+N more" in the header: the menu holds the full host list, the window must say when it truncated one
-            drawStr("Fleet · 15m" + (fhosts.count > fleetShow.count ? " · +\(fhosts.count - fleetShow.count) more" : ""),
-                    in: r, font: tinyFont, color: .secondaryLabelColor)
+            drawStr("Fleet · 15m" + fleetMore, in: r, font: tinyFont, color: .secondaryLabelColor)
             for h in fleetShow {
                 guard let row = next() else { break }
                 let state = h["state"].str ?? "down"
@@ -1717,9 +1736,13 @@ final class MonitorView: NSView {
                 let value = "\(h["m15"]["requests"].int ?? 0) req" + (errs > 0 ? " · \(errs) err" : "") + (inflight > 0 ? " · ⏳\(inflight)" : "")
                 drawStr(value, in: row, font: tinyFont, color: errs > 0 ? NSColor.systemRed : .secondaryLabelColor, align: .right)
             }
-        } else if !fleetShow.isEmpty, layout == .vertical, rowsLeft >= 1, let r = next() {
-            // no room for the section: say the hosts exist, the menu holds them
-            drawStr("Fleet · \(fhosts.count) host\(fhosts.count == 1 ? "" : "s") · see menu", in: r, font: tinyFont, color: .tertiaryLabelColor)
+        } else if !fleetShow.isEmpty, let r = next(), let first = fleetShow.first {
+            // one line instead of the section: first host + how many others there are
+            let e = first["m15"]["errors"]
+            let errs = (e["429"].int ?? 0) + (e["5xx"].int ?? 0) + (e["other"].int ?? 0)
+            let others = fhosts.count > 1 ? " · +\(fhosts.count - 1) host\(fhosts.count == 2 ? "" : "s")" : ""
+            drawStr("Fleet · \(first["name"].str ?? "?") \(first["m15"]["requests"].int ?? 0) req" + (errs > 0 ? " · \(errs) err" : "") + others,
+                    in: r, font: tinyFont, color: errs > 0 ? NSColor.systemRed : .tertiaryLabelColor)
         }
         if let note = d["throttle_notes"]["github-copilot"].str, spans.allSatisfy({ $0.provider != "github-copilot" }), rowsLeft >= 1,
            providers.contains(where: { $0.key == "github-copilot" }), layout == .vertical, let r = next() {
@@ -2138,11 +2161,21 @@ final class Builder {
             add(info("none: every request served the model it asked for", dim: true))
         } else {
             var kinds: [String: Int] = [:]
-            for r in rr { kinds[r["kind"].str ?? "?", default: 0] += r["count"].int ?? 0 }
+            for r in rr {
+                if r["kinds"].exists {
+                    for k in r["kinds"].keys { kinds[k, default: 0] += r["kinds"][k].int ?? 0 }
+                } else { kinds[r["kind"].str ?? "?", default: 0] += r["count"].int ?? 0 }
+            }
             add(info(kinds.sorted { $0.value > $1.value }.map { "\($0.key) \($0.value)" }.joined(separator: " · ") +
-                     "  (alias = Claude name served by GLM/DeepSeek, vision = glm→deepseek, fallback = router retry)", dim: true))
+                     "  (alias = Claude name served by GLM/DeepSeek, vision = glm→deepseek, fallback:why = router retry, why = outage-500/rate-limit/…)", dim: true))
             for r in rr.prefix(6) {
-                add(info("\(r["from"].str ?? "?")→\(r["to"].str ?? "?") ×\(r["count"].int ?? 0) \(r["kind"].str ?? "")  [\(r["proxy"].str ?? "?")]", mono: true))
+                // one row per route: several reasons on it read as "a 2+b 1"
+                let kinds = r["kinds"]
+                let multi = kinds.exists && kinds.keys.count > 1
+                let kindText = multi
+                    ? kinds.keys.map { k in "\(k) \(kinds[k].int ?? 0)" }.sorted().joined(separator: "+")
+                    : (r["kind"].str ?? "")
+                add(info("\(r["from"].str ?? "?")→\(r["to"].str ?? "?") ×\(r["count"].int ?? 0) \(kindText)  [\(r["proxy"].str ?? "?")]", mono: true))
             }
         }
 
