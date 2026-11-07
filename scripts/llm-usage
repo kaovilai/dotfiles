@@ -2909,12 +2909,88 @@ def dashboard_data(since_text, source, hide, host=None):
     }
 
 
+def _serve_state_path():
+    return os.path.join(STATE, "serve.json")
+
+
+def _serve_pid_alive(doc):
+    """The recorded serve pid, but only if it is really THIS script's serve (a
+    recycled pid must not be mistaken for a live dashboard)."""
+    pid = doc.get("pid")
+    if not isinstance(pid, int) or pid <= 0:
+        return None
+    try:
+        out = subprocess.run(["ps", "-p", str(pid), "-o", "command="], capture_output=True, text=True, timeout=3).stdout
+    except Exception:
+        return None
+    return pid if "llm-usage" in out and "serve" in out else None
+
+
+def _serve_replace_stale():
+    """One serve per state dir: a healthy one makes a second start a no-op
+    (the menubar's "Open dashboard" is then idempotent); one running code older
+    than this script is killed so the new start takes over. Without this a
+    day-old serve kept answering /api/menubar with pre-fleet data and shadowed
+    the menubar helper (which prefers the endpoint while it is up)."""
+    try:
+        with open(_serve_state_path()) as handle:
+            doc = json.load(handle)
+    except (OSError, ValueError):
+        return
+    pid = _serve_pid_alive(doc)
+    if not pid:
+        return
+    try:
+        stale = float(doc.get("code_mtime") or 0) != os.path.getmtime(os.path.realpath(__file__))
+    except OSError:
+        stale = False
+    if not stale:
+        url = f"http://127.0.0.1:{doc.get('port')}/"
+        print(f"llm-usage: dashboard already running at {url} (pid {pid}); nothing to start", flush=True)
+        sys.exit(0)
+    print(f"llm-usage: replacing stale-code dashboard (pid {pid})...", flush=True)
+    try:
+        os.kill(pid, 15)
+        for _ in range(50):  # wait for the port to actually free up
+            if not _serve_pid_alive({"pid": pid}):
+                break
+            time.sleep(0.1)
+    except OSError:
+        pass
+
+
+def _serve_watch_code(start_mtime):
+    """A serve outlives the code it was started with (fleet-sync updates the
+    repo under it); serve.json records the script mtime at start, and this
+    watchdog re-execs the process when that changes, so the endpoint can never
+    keep serving yesterday's payload to the menubar helper."""
+    import threading
+    script = os.path.realpath(__file__)
+
+    def watch():
+        while True:
+            time.sleep(5)
+            try:
+                if os.path.getmtime(script) != start_mtime:
+                    print("llm-usage: dashboard code changed; restarting", flush=True)
+                    os.execv(sys.executable, [sys.executable, script, "serve",
+                                              "--port", str(SERVE_PORT[0]), "--host", SERVE_PORT[1]])
+            except OSError:
+                continue
+    threading.Thread(target=watch, daemon=True).start()
+
+
+SERVE_PORT = [4150, "127.0.0.1"]  # what the watchdog re-exec needs to reproduce this server
+
+
 def cmd_serve(args):
     import threading
     from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
     from urllib.parse import parse_qs, urlparse
     global CACHE_FILES
     CACHE_FILES = True
+    SERVE_PORT[0], SERVE_PORT[1] = args.port, args.host
+    _serve_replace_stale()
     if args.reset_colors:
         try:
             os.remove(os.path.join(STATE, "colors.json"))
@@ -2994,6 +3070,15 @@ def cmd_serve(args):
         server = ThreadingHTTPServer((args.host, args.port), Handler)
     except OSError as err:
         sys.exit(f"llm-usage: cannot listen on {args.host}:{args.port}: {err}")
+    try:  # record the instance: pid + port + the code it runs (see _serve_replace_stale)
+        os.makedirs(STATE, mode=0o700, exist_ok=True)
+        with open(_serve_state_path() + ".tmp", "w") as handle:
+            json.dump({"pid": os.getpid(), "port": args.port, "host": args.host,
+                       "started": time.time(), "code_mtime": os.path.getmtime(os.path.realpath(__file__))}, handle)
+        os.replace(_serve_state_path() + ".tmp", _serve_state_path())
+    except OSError:
+        pass
+    _serve_watch_code(os.path.getmtime(os.path.realpath(__file__)))
     url = f"http://127.0.0.1:{args.port}/"
     print(f"llm-usage dashboard: {url}  (ctrl-c to stop)", flush=True)
     if args.open:

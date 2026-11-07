@@ -227,6 +227,75 @@ assert any(r["rerouted"] and r["served"] == "deepseek-v4.1-flash" for r in d["ro
 PY
 kill $server 2>/dev/null
 
+# serve: one instance per state dir - a second start is a no-op, a stale-code one is
+# replaced, and a running serve re-execs itself when its script changes under it
+# (a day-old serve otherwise shadows the menubar helper with old /api/menubar data)
+local sport2=$(python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1])')
+LLM_USAGE_DIR=$errdir python3 "$usage" serve --port $sport2 >/dev/null 2>&1 &
+local sserver=$!
+python3 -I - "$usage" "$errdir" "$sport2" <<'PY' || fail "serve single-instance / stale replace"
+import json, os, subprocess, sys, time, urllib.request
+usage, state, port = sys.argv[1:4]
+env = {**os.environ, "LLM_USAGE_DIR": state}
+for _ in range(50):
+    try:
+        urllib.request.urlopen(f"http://127.0.0.1:{port}/", timeout=1); break
+    except Exception:
+        time.sleep(0.1)
+# a second start on the same state dir is a no-op pointing at the running one
+res = subprocess.run([sys.executable, usage, "serve", "--port", str(int(port) + 1)],
+                     capture_output=True, text=True, timeout=30, env=env)
+assert res.returncode == 0 and "already running" in res.stdout, (res.returncode, res.stdout, res.stderr)
+doc = json.load(open(os.path.join(state, "serve.json")))
+assert doc["pid"] > 0 and doc["port"] == int(port) and doc["code_mtime"] > 0, doc
+# stale code on record: the next start kills the old instance and takes over
+doc["code_mtime"] = 0
+json.dump(doc, open(os.path.join(state, "serve.json"), "w"))
+proc = subprocess.Popen([sys.executable, usage, "serve", "--port", str(int(port) + 1)],
+                        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=env)
+first = proc.stdout.readline()
+assert "replacing stale-code" in first, first
+for _ in range(50):
+    try:
+        d = json.load(urllib.request.urlopen(f"http://127.0.0.1:{int(port) + 1}/api/data?since=2h&source=proxy", timeout=2))
+        break
+    except Exception:
+        time.sleep(0.1)
+else:
+    raise SystemExit("replacement serve never answered")
+assert d["events"] > 0, d
+with open(os.path.join(state, "replace.pid"), "w") as h:
+    h.write(str(proc.pid))
+PY
+kill $sserver 2>/dev/null || true
+kill $(cat "$errdir/replace.pid" 2>/dev/null) 2>/dev/null || true
+
+local sport3=$(python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1])')
+LLM_USAGE_DIR=$errdir python3 "$usage" serve --port $sport3 >/dev/null 2>&1 &
+local wserver=$!
+python3 -I - "$usage" "$errdir" "$sport3" <<'PY' || fail "serve code watchdog"
+import json, os, sys, time, urllib.request
+usage, state, port = sys.argv[1:4]
+script = os.path.realpath(usage)
+st = os.stat(script)
+doc = json.load(open(os.path.join(state, "serve.json")))
+assert doc["code_mtime"] == st.st_mtime, (doc, st.st_mtime)
+os.utime(script, (st.st_atime, st.st_mtime + 5))  # simulate fleet-sync updating the code
+try:
+    for _ in range(30):  # the watchdog checks every 5s
+        time.sleep(1)
+        doc = json.load(open(os.path.join(state, "serve.json")))
+        if doc["code_mtime"] == st.st_mtime + 5:
+            break
+    else:
+        raise SystemExit("watchdog did not restart the serve")
+    d = json.load(urllib.request.urlopen(f"http://127.0.0.1:{port}/api/menubar", timeout=10))
+    assert "proxies" in d
+finally:
+    os.utime(script, (st.st_atime, st.st_mtime))  # restore: later code-mtime reads see the real file
+PY
+kill $wserver 2>/dev/null || true
+
 # errors: closing "Code needs updating" block when the proxy logger attached drift notes (absent field = no block)
 local driftdir="$tmp/driftstate"
 mkdir -p "$driftdir"
