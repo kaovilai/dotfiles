@@ -876,6 +876,15 @@ mod.fleet_pull_one("p6", {"name": "p6", "local_dir": "/x"}, force=True)
 revs = [r for r in host_lines("p6") if r.get("id") == "mr"]
 assert len(revs) == 1 and revs[0]["out"] == 9, revs
 
+# automatic-kick backoff: a recently failed host is not due (one attempt per 5 min
+# while unreachable, not one per poll); a fresh success is not due either
+mod.fleet_write_status("p7", last_ok=now - 3600, last_fail=now - 10, last_error="ssh: no route to host")
+assert not mod._fleet_due("p7", now), "recent failure must back off"
+mod.fleet_write_status("p7", last_ok=now - 3600, last_fail=now - 400)
+assert mod._fleet_due("p7", now), "backoff expired: due again"
+mod.fleet_write_status("p7", last_ok=now - 10, last_fail=None)
+assert not mod._fleet_due("p7", now), "a fresh success is not due"
+
 # control socket dir: a predictable /tmp path is trusted only when provably ours
 # (real dir, owned by us, no group/other bits); a planted or loosened dir falls back to STATE
 import stat as stat_mod

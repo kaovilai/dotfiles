@@ -229,7 +229,10 @@ the same `host` field; no schema change beyond what menubar-data gets.
 
 A machine that goes offline keeps its last-synced events in the cache and the
 UI marks them stale — history never disappears, only freshness does. When it
-comes back, the next pull resumes from `last_event_t` with no gap.
+comes back, the next pull resumes from `last_event_t` with no gap. While the
+aggregator itself is offline (or a peer needs a tailscale reauth), the
+automatic kick backs off: a host whose last pull failed is retried once per
+5 minutes, not once per poll (`llm-usage fleet refresh` by hand always tries).
 
 ## Privacy & security
 

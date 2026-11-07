@@ -525,6 +525,9 @@ FLEET_SSH_TIMEOUT = 10         # s: per-host hard timeout (connect + export)
 FLEET_FIRST_SYNC = 7 * 86400   # first pull covers the last 7 days
 FLEET_BACKFILL_CHUNK = 30 * 86400  # older history walks back 30d per refresh
 FLEET_STALE_AFTER = 180        # s: last successful pull older than this = stale
+FLEET_BACKOFF = 300            # s: after a failed pull, the automatic kick waits this long
+# before retrying that host (airplane mode / a tailscale reauth must not wake a
+# spawn per poll); a manual `llm-usage fleet refresh` always tries
 FLEET_LOCAL = "local"          # --host value for this machine
 
 
@@ -930,6 +933,16 @@ def fleet_refresh(force=False, only=None, ttl=FLEET_TTL):
         lock.close()
 
 
+def _fleet_due(name, now, ttl=FLEET_TTL):
+    """Is this host due for an AUTOMATIC kick? A fresh success says no; so does a
+    recent failure (backoff — a peer unreachable for hours gets one attempt per
+    FLEET_BACKOFF, not one per poll). Manual `fleet refresh` bypasses this."""
+    st = fleet_status(name)
+    if now - st.get("last_ok", 0) < ttl:
+        return False
+    return now - (st.get("last_fail") or 0) >= FLEET_BACKOFF
+
+
 def fleet_kick(ttl=FLEET_TTL):
     """Spawn a detached `fleet refresh` when a real (ssh) host is due and none
     ran recently. The menubar poll calls this every 30 s: the UI reads the cache
@@ -941,7 +954,7 @@ def fleet_kick(ttl=FLEET_TTL):
     if not any(e.get("ssh") for _, e in hosts):
         return
     now = time.time()
-    if not any(now - fleet_status(n).get("last_ok", 0) >= ttl for n, _ in hosts):
+    if not any(_fleet_due(n, now, ttl) for n, _ in hosts):
         return
     kick = os.path.join(STATE, "fleet", "kick")
     try:
