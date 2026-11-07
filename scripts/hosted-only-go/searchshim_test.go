@@ -566,3 +566,84 @@ func TestMain(m *testing.M) {
 	_ = os.Unsetenv("PARALLEL_API_KEY")
 	os.Exit(m.Run())
 }
+
+// Caller instruction fields quoting the markers survive a degrade, for the
+// Responses developer item and the instructions fallback too (not just the
+// Messages system shapes covered above).
+func TestDegradeShimPreservesCallerInstructionsEverywhere(t *testing.T) {
+	cfg := testConfig()
+	cfg.SearchNudge = true
+	plan := &shimPlan{Mode: "shim"}
+
+	// Responses dialect: developer input item quoting the shim marker
+	data := map[string]any{
+		"model": "rits/zai-org/glm-5-3",
+		"input": []any{map[string]any{"role": "developer", "content": []any{map[string]any{"type": "input_text", "text": "Caller rule: cite sources. " + shimNoteMarker + " lookalike"}}}},
+		"tools": []any{map[string]any{"type": "web_search"}},
+	}
+	if _, err, _ := rewriteRequestMode(cfg, "/v1/responses", data, plan); err != nil {
+		t.Fatal(err)
+	}
+	degradeShimToStrip(cfg, "/v1/responses", data)
+	if !strings.Contains(string(marshal(data["input"])), "Caller rule: cite sources.") {
+		t.Fatalf("caller developer item must survive: %#v", data["input"])
+	}
+
+	// instructions fallback quoting the shim marker
+	data2 := map[string]any{
+		"model":        "rits/zai-org/glm-5-3",
+		"instructions": "Caller rule: be terse. " + shimNoteMarker + " lookalike",
+	}
+	if _, err, _ := rewriteRequestMode(cfg, "/v1/responses", data2, plan); err != nil {
+		t.Fatal(err)
+	}
+	degradeShimToStrip(cfg, "/v1/responses", data2)
+	if !strings.Contains(asString(data2["instructions"]), "Caller rule: be terse.") {
+		t.Fatalf("caller instructions must survive: %#v", data2["instructions"])
+	}
+}
+
+// A caller quoting the bare shim marker in a USER MESSAGE must not suppress
+// the injection: the presence check matches the full note text.
+func TestCallerMarkerQuoteDoesNotSuppressShimNote(t *testing.T) {
+	cfg := testConfig()
+	cfg.SearchNudge = true
+	data := shimTestData()
+	data["messages"] = []any{map[string]any{"role": "user", "content": "please note " + shimNoteMarker + " is a marker"}}
+	plan := shimRewriteTools("/v1/messages", data)
+	plan.Mode = "shim"
+	if _, err, _ := rewriteRequestMode(cfg, "/v1/messages", data, plan); err != nil {
+		t.Fatal(err)
+	}
+	// assert the full note text (not shimNotePresent: with the old
+	// marker-based check that would be true from the caller quote alone)
+	if !strings.Contains(string(marshal(data)), shimNoteText()) {
+		t.Fatal("a bare marker quote in a user message must not suppress the shim note")
+	}
+}
+
+// A stale strip note (an earlier request injected it and the conversation
+// kept it) is dropped when the shim engages, so the model never sees both.
+func TestShimEngagementDropsStaleStripNote(t *testing.T) {
+	cfg := testConfig()
+	cfg.SearchNudge = true
+	data := shimTestData()
+	data["system"] = []any{
+		map[string]any{"type": "text", "text": "You are helpful."},
+		map[string]any{"type": "text", "text": searchNoteText(cfg)},
+	}
+	plan := shimRewriteTools("/v1/messages", data)
+	plan.Mode = "shim"
+	if _, err, _ := rewriteRequestMode(cfg, "/v1/messages", data, plan); err != nil {
+		t.Fatal(err)
+	}
+	if !shimNotePresent(data) {
+		t.Fatal("the shim note must be injected")
+	}
+	if searchNotePresent(data) {
+		t.Fatal("the stale strip note must be dropped when the shim engages")
+	}
+	if !strings.Contains(string(marshal(data["system"])), "You are helpful.") {
+		t.Fatalf("the caller system block must survive: %#v", data["system"])
+	}
+}

@@ -72,7 +72,9 @@ func rewriteRequestMode(cfg *config, path string, data map[string]any, plan *shi
 		}
 	} else if plan != nil && plan.Mode == "shim" && cfg.SearchNudge && !shimNotePresent(data) {
 		// The strip note says search is unavailable; with the shim active the
-		// opposite is true and the model must know to use the tool.
+		// opposite is true. Drop a stale strip note (exact match) so the model
+		// never sees both, then say the tool works.
+		removeSearchNote(cfg, data)
 		if injectShimNote(path, data) {
 			changed = true
 		}
@@ -407,9 +409,12 @@ func shimNoteText() string {
 		"or the user asks to look something up; report findings with their URLs."
 }
 
+// shimNotePresent reports whether OUR note is already in the request: the
+// full note text, not the bare marker — a caller quoting the marker in a user
+// message must not suppress the injection.
 func shimNotePresent(data map[string]any) bool {
 	b, _ := json.Marshal(data)
-	return strings.Contains(string(b), shimNoteMarker)
+	return strings.Contains(string(b), shimNoteText())
 }
 
 func injectShimNote(path string, data map[string]any) bool {
@@ -432,7 +437,19 @@ func injectShimNote(path string, data map[string]any) bool {
 // instructions with a separator, so the exact forms below are the only ones
 // it can produce.
 func removeShimNote(data map[string]any) {
-	note := shimNoteText()
+	removeExactNote(data, shimNoteText())
+}
+
+// removeSearchNote drops a stale strip note when the shim engages, so the
+// model never sees "no web search" and "use web_search" together.
+func removeSearchNote(cfg *config, data map[string]any) {
+	removeExactNote(data, searchNoteText(cfg))
+}
+
+// removeExactNote drops exactly the given note from every shape its injector
+// produces — matched in full, never by marker substring, so caller content
+// that merely quotes a marker survives (2026-11-07 CodeQL + Copilot review).
+func removeExactNote(data map[string]any, note string) {
 	if system, ok := data["system"].([]any); ok {
 		kept := make([]any, 0, len(system))
 		for _, block := range system {
