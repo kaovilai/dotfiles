@@ -307,9 +307,15 @@ def knob_digest():
     hash cannot see HOSTED_ONLY_VISION_FALLBACK & friends, so without this a
     knob change would leave check() reporting fresh and the running proxy
     serving the old value. HOSTED_ONLY_OUTAGE_STATE is controller-set per
-    runtime dir (already covered by the runtime-location reason) and excluded."""
+    runtime dir (already covered by the runtime-location reason) and excluded.
+    T3_WEB_SEARCH_* is ambient session wiring (an interactive shell exports
+    it, the hourly timer's fleet-sync does not): hashing it made the timer
+    and an interactive sync fight over the identity, restarting the proxy
+    every cycle, so it is excluded too."""
     items = sorted((k, v) for k, v in os.environ.items()
-                   if k.startswith(CHILD_ENV_PREFIXES) and k != 'HOSTED_ONLY_OUTAGE_STATE')
+                   if k.startswith(CHILD_ENV_PREFIXES)
+                   and k != 'HOSTED_ONLY_OUTAGE_STATE'
+                   and not k.startswith('T3_WEB_SEARCH_'))
     return hashlib.sha256(repr(items).encode()).hexdigest()
 
 

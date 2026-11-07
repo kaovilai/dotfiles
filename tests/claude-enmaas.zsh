@@ -445,6 +445,8 @@ with patch.dict(os.environ, env), patch.object(ns['subprocess'],'Popen',side_eff
         assert g['check'](froot, 4166, fresh(), [])=={'state':'stale','changed':['gateway/key or dependency settings'],'busy':False}
     with patch.dict(os.environ, dict(env, HOSTED_ONLY_VISION_FALLBACK=str(1-int(env.get('HOSTED_ONLY_VISION_FALLBACK','1') or 1)))),      patch.dict(ns, dict(patched, busy=lambda port:False)), patch.object(ns['subprocess'],'Popen',side_effect=AssertionError('check must not spawn')):
         assert g['check'](froot, 4166, fresh(), [])=={'state':'stale','changed':['gateway/key or dependency settings'],'busy':False}, 'a knob change must count as a proxy change'
+    with patch.dict(os.environ, dict(env, T3_WEB_SEARCH_MCP='other')),      patch.dict(ns, dict(patched, busy=lambda port:False)), patch.object(ns['subprocess'],'Popen',side_effect=AssertionError('check must not spawn')):
+        assert g['check'](froot, 4166, fresh(), [])=={'state':'fresh','changed':[],'busy':False}, 'ambient T3_WEB_SEARCH_* wiring must not count as a proxy change'
     with patch.dict(ns, dict(patched, **{'busy':lambda port:True, 'go_binary':lambda: ('fake-go-bin','hash-2')})):
         verdict=g['check'](froot, 4166, fresh(), [])
         assert verdict=={'state':'stale','changed':['gateway/key or dependency settings','hook code or knobs'],'busy':True}, verdict
