@@ -54,8 +54,14 @@ LONG_CTX = 200_000
 # port -> (name, config path or None). LLM_USAGE_PORT_NAMES="4150=foo,4151=bar" adds/overrides names.
 PROXIES = {
     "4141": ("copilot-api", None),
-    "4142": ("vertex", os.path.expanduser("~/.config/claude-vertex-proxy.yaml")),
-    "4145": ("openai", os.path.expanduser("~/.config/claude-openai-proxy.yaml")),
+    # vertex/openai/mlx run the shared Go proxy (route-table flavors); the
+    # runtime routes.json is the live config, the old ~/.config yaml is the
+    # pre-Go-retirement fallback for a not-yet-migrated machine.
+    "4142": ("vertex", ["~/.local/state/claude-vertex-proxy/routes.json",
+                        "~/.config/claude-vertex-proxy.yaml"]),
+    "4144": ("mlx", "~/.local/state/claude-mlx-proxy/routes.json"),
+    "4145": ("openai", ["~/.local/state/claude-openai-proxy/routes.json",
+                        "~/.config/claude-openai-proxy.yaml"]),
     "4146": ("enmaas", [f"~/.local/state/claude-enmaas-proxy-{UID}-4146/config.json",
                         f"/tmp/claude-enmaas-proxy-{UID}-4146/config.json"]),  # pre-move path until restart
     # 4147 = the codex flavor's own port before the #599 merge; kept so a
@@ -2117,10 +2123,11 @@ MODEL_VENDORS = [
     ("glm", "GLM", r"glm|zai"),
     ("deepseek", "DeepSeek", r"deepseek"),
     ("gemini", "Gemini", r"gemini"),
+    ("qwen", "Qwen", r"qwen"),  # the MLX flavor's local Qwen3-Coder models
 ]
 # Provider side: proxy port -> logo key. "via: transcript" events are copilot-api traffic (see menubar_data).
-PROVIDER_PORTS = {"4141": "github-copilot", "4142": "vertex", "4145": "openai", "4146": "enmaas", "4147": "enmaas", "4148": "enmaas"}
-PROVIDER_LABELS = {"github-copilot": "GitHub Copilot", "vertex": "Vertex AI", "openai": "OpenAI", "enmaas": "EnMaaS",
+PROVIDER_PORTS = {"4141": "github-copilot", "4142": "vertex", "4144": "mlx", "4145": "openai", "4146": "enmaas", "4147": "enmaas", "4148": "enmaas"}
+PROVIDER_LABELS = {"github-copilot": "GitHub Copilot", "vertex": "Vertex AI", "mlx": "MLX (local)", "openai": "OpenAI", "enmaas": "EnMaaS",
                    "anthropic": "Anthropic", "other": "Other"}
 SHARE_WINDOWS = {"15m": 900, "1h": 3600}
 SHARE_METRICS = ("requests", "tokens")
@@ -2795,6 +2802,7 @@ BRANDS = {
     "deepseek": ("deepseek",),
     "glm": ("glm", "zai", "zhipu"),
     "gpt": ("gpt", "openai", "o1", "o3", "o4"),
+    "qwen": ("qwen",),  # the MLX flavor's local Qwen3-Coder models
 }
 def model_brand(model):
     m = str(model or "").lower()

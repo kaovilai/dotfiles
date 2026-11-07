@@ -2,19 +2,34 @@
 
 The stdlib-only Go binary in `scripts/hosted-only-go` is the **only** proxy
 for these launchers: the hosted-only ones (`claude-hosted-only`,
-`codex-hosted-only` and their T3 launchers) and EnMaaS (`claude-enmaas`,
-:4146). The LiteLLM impl is retired — a go toolchain is required, and the old
-`HOSTED_ONLY_PROXY_IMPL` / `CLAUDE_ENMAAS_PROXY_IMPL` / `LLM_PROXY_IMPL` =
-`litellm` escape-hatch knobs now fail loudly. (The openai and vertex launchers
-still run LiteLLM for their own flavors.) EnMaaS needed the Messages <->
-chat/Responses translators first — see "EnMaaS: dialect translation" below.
+`codex-hosted-only` and their T3 launchers), EnMaaS (`claude-enmaas`,
+:4146), and — since the LiteLLM retirement reached them too — the local
+single-upstream flavors `claude-mlx` (:4144), `claude-openai` (:4145) and
+`claude-vertex` (:4142). The LiteLLM impl is retired — a go toolchain is
+required, and the old `HOSTED_ONLY_PROXY_IMPL` / `CLAUDE_ENMAAS_PROXY_IMPL` /
+`LLM_PROXY_IMPL` = `litellm` escape-hatch knobs now fail loudly. EnMaaS
+needed the Messages <-> chat/Responses translators first — see "EnMaaS:
+dialect translation" below.
 
-It serves both current proxies from one binary:
+It serves every current proxy from one binary:
 
 | flavor | port | config source |
 |---|---|---|
 | `claude` / `codex` (hosted-only) | 4148, one shared process (4147 only when `HOSTED_ONLY_CODEX_PROXY_PORT` splits it off) | the merged `config.yaml`: bare groups = anthropic, `#openai` groups = OpenAI-wire |
 | `enmaas` | 4146 | the launcher's generated `config.json`, read as a route table |
+| `mlx` | 4144 | `_claude_mlx_prepare`'s generated `routes.json`: one chat-dialect row pointing at `mlx_lm.server` (:4143); the proxy is the Messages<->chat bridge LiteLLM used to be. `mlx_lm.server` itself still runs via uvx |
+| `openai` | 4145 | `_claude_openai_proxy_write_routes`: wildcard + pinned chat-dialect rows at api.openai.com; the key rides in `HOSTED_ONLY_UPSTREAM_KEY` |
+| `vertex` | 4142 | `_claude_vertex_proxy_write_routes`: anthropic-dialect rows with no api_base (the binary builds the publisher-models URL from `CLOUD_ML_REGION`/`ANTHROPIC_VERTEX_PROJECT_ID`); upstream auth is an ADC access token refreshed in-process (vertex.go), not a static key |
+
+The three single-upstream flavors share `_claude_go_proxy_ensure` (common.zsh):
+the launcher writes the route table into its runtime dir
+(`~/.local/state/claude-<flavor>-proxy/routes.json` — the path the serve
+child names on its command line, which the identity-checked `stop` matches),
+computes the fingerprint (route table + Go source hash + upstream key +
+caller extras, e.g. vertex's project/region/ADC-file hash) and delegates to
+the binary's `ensure`. A leftover LiteLLM listener on the port is retired by
+identity at migration (`_claude_go_proxy_retire_litellm`); anything else
+foreign is refused loudly, as before.
 
 ## Why
 

@@ -56,8 +56,8 @@ func runServe() {
 	configPath := flag.String("config", os.Getenv("HOSTED_ONLY_CONFIG"), "generated LiteLLM config.json (required for enmaas)")
 	flag.Parse()
 
-	if *flavor != "claude" && *flavor != "codex" && *flavor != "enmaas" {
-		fmt.Fprintln(os.Stderr, "hosted-only-go: --flavor must be claude, codex or enmaas")
+	if !routeTableFlavor(*flavor) && *flavor != "claude" && *flavor != "codex" {
+		fmt.Fprintln(os.Stderr, "hosted-only-go: --flavor must be claude, codex, enmaas, mlx, openai or vertex")
 		os.Exit(2)
 	}
 	if *port == "" {
@@ -78,12 +78,16 @@ func runServe() {
 			cfg.Token = routes.token
 		}
 	}
-	if *flavor == "enmaas" && cfg.Routes == nil {
-		fmt.Fprintln(os.Stderr, "hosted-only-go: --config is required for the enmaas flavor")
+	if routeTableFlavor(*flavor) && cfg.Routes == nil {
+		fmt.Fprintf(os.Stderr, "hosted-only-go: --config is required for the %s flavor\n", *flavor)
 		os.Exit(1)
 	}
 	if cfg.APIKey == "" {
-		fmt.Fprintln(os.Stderr, "hosted-only-go: ENMAAS_API_KEY is not set")
+		fmt.Fprintln(os.Stderr, "hosted-only-go: HOSTED_ONLY_UPSTREAM_KEY (enmaas: ENMAAS_API_KEY) is not set")
+		os.Exit(1)
+	}
+	if *flavor == "vertex" && (os.Getenv("CLOUD_ML_REGION") == "" || os.Getenv("ANTHROPIC_VERTEX_PROJECT_ID") == "") {
+		fmt.Fprintln(os.Stderr, "hosted-only-go: CLOUD_ML_REGION and ANTHROPIC_VERTEX_PROJECT_ID are required for the vertex flavor")
 		os.Exit(1)
 	}
 

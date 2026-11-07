@@ -1,16 +1,16 @@
 # ---------------------------------------------------------------------------
-# claude-openai: raw claude binary routed through OpenAI's API via a local
-# LiteLLM proxy -- same reason as claude-vertex/claude-mlx: OpenAI doesn't
-# speak Anthropic's /v1/messages shape, so litellm translates it. API key:
-# $OPENAI_API_KEY, else Codex CLI's ~/.codex/auth.json (passed to the proxy
-# at start; run claude-openai-kill after changing it). Three tiers map independently:
+# claude-openai: raw claude binary routed through OpenAI's API via the shared
+# Go proxy's "openai" flavor (scripts/hosted-only-go, port 4145) -- same
+# reason as claude-mlx: OpenAI doesn't speak Anthropic's /v1/messages shape,
+# so the proxy's chatTranslator translates it. The LiteLLM proxy this used
+# to spawn is retired (same retirement as hosted-only/enmaas/mlx). API key:
+# $OPENAI_API_KEY, else Codex CLI's ~/.codex/auth.json (part of the proxy's
+# fingerprint: a changed key restarts it at the first idle moment). Three
+# tiers map independently:
 #   CLAUDE_OPENAI_FABLE_MODEL / _OPUS_MODEL / _SONNET_MODEL / _HAIKU_MODEL
 # Unset tiers are detected (see _claude_openai_autopick): each tier's variant
 # (CLAUDE_OPENAI_TIER_MAP, default fable=astra opus=sol sonnet=terra,sol
 # haiku=luna) at the newest version the key can see.
-typeset -g CLAUDE_OPENAI_PROXY_LITELLM_VERSION="1.97.0"
-typeset -g CLAUDE_OPENAI_PROXY_FASTAPI_VERSION="0.136.3"
-typeset -g _claude_openai_proxy_config="${XDG_CONFIG_HOME:-$HOME/.config}/claude-openai-proxy.yaml"
 
 # Key lookup, same store as Codex CLI: $OPENAI_API_KEY, else the
 # OPENAI_API_KEY field of ${CODEX_HOME:-~/.codex}/auth.json.
@@ -111,29 +111,22 @@ _claude_openai_autopick() {
           end' 2>/dev/null
 }
 
-_claude_openai_proxy_config_text() {
-    local master_key="$1"; shift
+# _claude_openai_proxy_write_routes <routes.json> <master_key> <model...>:
+# the Go proxy's route table (LiteLLM shape): a wildcard so any model id
+# picked in /model routes to OpenAI (not just the pinned tiers), plus one
+# row per pinned tier, all chat dialect at the OpenAI API root.
+_claude_openai_proxy_write_routes() {
+    local routes="$1" master_key="$2"; shift 2
+    local -a rows=('{"model_name": "*", "litellm_params": {"model": "openai/*", "api_base": "https://api.openai.com/v1"}}')
     local m
+    for m in "$@"; do
+        rows+=("{\"model_name\": \"${m}\", \"litellm_params\": {\"model\": \"openai/${m}\", \"api_base\": \"https://api.openai.com/v1\"}}")
+    done
+    mkdir -p -- "${routes:h}"
     {
-        print -r -- "model_list:"
-        # wildcard so any model id picked in /model routes to OpenAI, not
-        # just the three pinned tiers
-        print -r -- "  - model_name: \"*\""
-        print -r -- "    litellm_params:"
-        print -r -- "      model: openai/*"
-        print -r -- "      api_key: os.environ/OPENAI_API_KEY"
-        for m in "$@"; do
-            print -r -- "  - model_name: ${m}"
-            print -r -- "    litellm_params:"
-            print -r -- "      model: openai/${m}"
-            print -r -- "      api_key: os.environ/OPENAI_API_KEY"
-        done
-        print -r -- "litellm_settings:"
-        print -r -- "  drop_params: true"
-        print -r -- "  master_key: \"${master_key}\""
-        # Per-request usage log for `llm-usage` (module found via PYTHONPATH).
-        print -r -- '  callbacks: ["litellm_usage_log.proxy_handler_instance"]'
-    }
+        print -r -- "{\"model_list\": [${(j:,:)rows}],"
+        print -r -- " \"general_settings\": {\"master_key\": \"${master_key}\"}}"
+    } >| "$routes"
 }
 
 # Hands results back via globals (_cop_*) -- zsh `local` doesn't cross
@@ -144,11 +137,6 @@ _claude_openai_prepare() {
         echo "❌ No OpenAI API key: set OPENAI_API_KEY or run 'codex login --with-api-key' (stored in ${CODEX_HOME:-$HOME/.codex}/auth.json)." >&2
         return 1
     }
-    if ! command -v uv &>/dev/null; then
-        echo "❌ uv not found. Install it with: $(_claude_pkg_install_hint uv 'curl -LsSf https://astral.sh/uv/install.sh | sh')" >&2
-        return 1
-    fi
-
     # Defaults: newest version of each tier's variant in the model list the
     # key can see (see _claude_openai_autopick); CLAUDE_OPENAI_*_MODEL overrides
     # per tier; gpt-5/gpt-5-mini only if the list is unreachable.
@@ -163,38 +151,25 @@ _claude_openai_prepare() {
     local haiku="${CLAUDE_OPENAI_HAIKU_MODEL:-${pick[4]:-gpt-5-mini}}"
     local port="${CLAUDE_OPENAI_PROXY_PORT:-4145}"
     local base="http://127.0.0.1:${port}"
-    local log="${TMPDIR:-/tmp}/claude-openai-proxy-${port}.log"
     local master_key="${CLAUDE_OPENAI_PROXY_TOKEN:-openai-proxy-local}"
+    local runtime="${XDG_STATE_HOME:-$HOME/.local/state}/claude-openai-proxy"
+    local routes="$runtime/routes.json"
 
-    # Hot reload -- see _claude_proxy_sync. A running proxy with no recorded
-    # fingerprint (older version) is restarted (adopt=0).
+    # Route table for the Go proxy (see _claude_openai_proxy_write_routes).
+    # The API key rides in HOSTED_ONLY_UPSTREAM_KEY: it reaches the serve
+    # child as the upstream bearer and is part of the fingerprint, so a
+    # changed key restarts the proxy at the first idle moment -- the same
+    # hot-reload contract _claude_proxy_sync provided. No image prune
+    # (HOSTED_ONLY_IMAGE_BUDGET_BYTES=0): OpenAI has no gateway body cap and
+    # LiteLLM never pruned here.
     local -a models=(${(u)=:-$fable $opus $sonnet $haiku})
-    local cfg fp
-    cfg=$(_claude_openai_proxy_config_text "$master_key" "${models[@]}")
-    fp=$(_claude_proxy_fp "$cfg" "$key" "$CLAUDE_OPENAI_PROXY_LITELLM_VERSION")
-    _claude_proxy_sync claude-openai openai-proxy "${base}/health/liveliness" "$fp" claude-openai-kill 0 || return 1
-
-    if ! curl -sf --max-time 2 "${base}/health/liveliness" -o /dev/null; then
-        print -r -- "$cfg" > "$_claude_openai_proxy_config" || {
-            echo "❌ Failed to write ${_claude_openai_proxy_config}." >&2
-            return 1
-        }
-        echo "Starting claude-openai proxy (litellm ${CLAUDE_OPENAI_PROXY_LITELLM_VERSION}) on ${base} (log: ${log})..." >&2
-        OPENAI_API_KEY="$key" _claude_proxy_start "$log" uv tool run --with "fastapi==${CLAUDE_OPENAI_PROXY_FASTAPI_VERSION}" \
-            --from "litellm[proxy]==${CLAUDE_OPENAI_PROXY_LITELLM_VERSION}" litellm \
-            --config "$_claude_openai_proxy_config" --port "$port" --host 127.0.0.1 || return 1
-        local i
-        for i in {1..60}; do
-            curl -sf --max-time 2 "${base}/health/liveliness" -o /dev/null && break
-            sleep 1
-        done
-        if ! curl -sf --max-time 2 "${base}/health/liveliness" -o /dev/null; then
-            echo "❌ claude-openai proxy not ready on ${base} after 60s." >&2
-            echo "   Check the log: tail -f ${log}" >&2
-            return 1
-        fi
-        _claude_proxy_record openai-proxy "$fp"
-    fi
+    _claude_openai_proxy_write_routes "$routes" "$master_key" "${models[@]}" || {
+        echo "❌ Failed to write ${routes}." >&2
+        return 1
+    }
+    _claude_go_proxy_retire_litellm "$port"
+    HOSTED_ONLY_UPSTREAM_KEY="$key" HOSTED_ONLY_IMAGE_BUDGET_BYTES=0 \
+        _claude_go_proxy_ensure openai "$port" "$routes" "$master_key" || return 1
 
     typeset -g _cop_base="$base" _cop_master_key="$master_key" \
         _cop_fable="$fable" _cop_opus="$opus" _cop_sonnet="$sonnet" _cop_haiku="$haiku"
@@ -232,18 +207,19 @@ claude-openai() {
     _claude_invoke "${reply[@]}" "$@"
 }
 
-# claude-openai-kill: stop the litellm proxy claude-openai started.
+# claude-openai-kill: stop the Go proxy claude-openai started
+# (identity-checked via the binary's stop, which refuses foreign listeners;
+# a leftover LiteLLM listener from before the Go retirement is retired by
+# identity too).
 claude-openai-kill() {
-    local port="${CLAUDE_OPENAI_PROXY_PORT:-4145}" pids
-    pids=("${(f)$(_claude_listen_pids "${port}")}")
-    if [[ -z "${pids[1]}" ]]; then
-        echo "No process listening on port ${port} (claude-openai proxy)."
-        return 0
+    local port="${CLAUDE_OPENAI_PROXY_PORT:-4145}"
+    local runtime="${XDG_STATE_HOME:-$HOME/.local/state}/claude-openai-proxy"
+    local gobin
+    if gobin=$(_hosted_only_go_bin 2>/dev/null); then
+        "$gobin" stop --flavor openai --port "$port" --runtime-dir "$runtime"
+    else
+        echo "claude-openai: Go binary unavailable; stopping the proxy on :${port} by litellm/port match." >&2
     fi
-    echo "Killing claude-openai proxy on port ${port} (pid: ${pids[*]})..."
-    kill "${pids[@]}" 2>/dev/null
-    sleep 1
-    pids=("${(f)$(_claude_listen_pids "${port}")}")
-    [[ -n "${pids[1]}" ]] && kill -9 "${pids[@]}" 2>/dev/null
+    _claude_go_proxy_retire_litellm "$port"
     return 0
 }

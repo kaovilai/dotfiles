@@ -234,19 +234,6 @@ if (( enmaas )); then
     else
         _run npm i -g --prefix ~/.local @openai/codex || warning "Could not install the Codex CLI"
     fi
-    # Download the pinned LiteLLM once now (the openai/vertex proxies still
-    # run it): on a cold uv cache the first proxy boot spends its whole startup
-    # timeout downloading ~110 packages and fails. EnMaaS and hosted-only run
-    # the Go proxy now, which needs no download.
-    typeset lv fv
-    # openai.zsh pins the versions with typeset -g NAME="x.y.z" (no :-default
-    # expansion), so match the quoted form and take the quoted field.
-    lv=$(grep -o 'CLAUDE_OPENAI_PROXY_LITELLM_VERSION="[0-9.]*"' "$root/zsh/functions/claude/providers/openai.zsh" | head -1 | cut -d'"' -f2)
-    fv=$(grep -o 'CLAUDE_OPENAI_PROXY_FASTAPI_VERSION="[0-9.]*"' "$root/zsh/functions/claude/providers/openai.zsh" | head -1 | cut -d'"' -f2)
-    if [[ -n "$lv" && -n "$fv" ]]; then
-        _run uv tool run --with "fastapi==$fv" --from "litellm[proxy]==$lv" litellm --version >/dev/null \
-            || warning "Could not pre-download LiteLLM $lv; the first EnMaaS start may time out once"
-    fi
 fi
 
 # --- launchers --------------------------------------------------------------

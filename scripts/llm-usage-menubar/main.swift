@@ -88,7 +88,7 @@ func shortStamp(_ d: Date) -> String {
 func pct(_ x: Double?) -> String { String(format: "%.0f%%", (x ?? 0) * 100) }
 
 let restartCommands: [Int: String] = [
-    4141: "claude-copilot-restart", 4142: "claude-vertex-restart", 4145: "claude-openai-restart",
+    4141: "claude-copilot-restart", 4142: "claude-vertex-restart", 4144: "claude-mlx-restart", 4145: "claude-openai-restart",
     4146: "claude-enmaas-restart", 4147: "codex-hosted-only-restart", 4148: "claude-hosted-only-restart",
 ]
 
@@ -297,8 +297,10 @@ let logoSpecs: [LogoSpec] = [
     LogoSpec(key: "glm", label: "GLM / Z.ai", bundleIds: [], monogram: "Z", brand: rgb(0x3556E8)),
     LogoSpec(key: "deepseek", label: "DeepSeek", bundleIds: [], monogram: "D", brand: rgb(0x4D6BFE)),
     LogoSpec(key: "gemini", label: "Gemini", bundleIds: ["com.google.GeminiMacOS"], monogram: "✦", brand: rgb(0x5B7FEB)),
+    LogoSpec(key: "qwen", label: "Qwen", bundleIds: [], monogram: "Q", brand: rgb(0x615CED)),
     LogoSpec(key: "github-copilot", label: "GitHub Copilot", bundleIds: ["com.github.githubapp"], monogram: "Co", brand: rgb(0x6E40C9)),
     LogoSpec(key: "vertex", label: "Vertex AI", bundleIds: [], monogram: "V", brand: rgb(0x4285F4)),
+    LogoSpec(key: "mlx", label: "MLX (local)", bundleIds: [], monogram: "M", brand: rgb(0x5E5CE6)),
     LogoSpec(key: "enmaas", label: "EnMaaS", bundleIds: [], monogram: "E", brand: rgb(0xCC2B2B)),
     LogoSpec(key: "other", label: "Other", bundleIds: [], monogram: "•", brand: rgb(0x7A7F87)),
 ]
@@ -645,7 +647,7 @@ func dynamicColor(light: NSColor, dark: NSColor) -> NSColor {
 /// Bar colours per model vendor. Claude/GPT/GLM follow the logo brand colours; DeepSeek and Gemini are moved off their
 /// (blue) brand colours so the three stay apart from GLM at a glance.
 let vendorChartColors: [String: NSColor] = [
-    "claude": rgb(0xD97757), "openai": rgb(0x10A37F), "glm": rgb(0x3556E8), "deepseek": rgb(0x9B5DE5), "gemini": rgb(0x1AA6B7), "other": rgb(0x8E8E93),
+    "claude": rgb(0xD97757), "openai": rgb(0x10A37F), "glm": rgb(0x3556E8), "deepseek": rgb(0x9B5DE5), "gemini": rgb(0x1AA6B7), "qwen": rgb(0x615CED), "other": rgb(0x8E8E93),
 ]
 func vendorColor(_ key: String) -> NSColor { vendorChartColors[key] ?? vendorChartColors["other"]! }
 
@@ -660,6 +662,7 @@ func vendorKey(forModel model: String) -> String {
         ("glm", "glm|zai"),
         ("deepseek", "deepseek"),
         ("gemini", "gemini"),
+        ("qwen", "qwen"),
     ]
     for (key, pattern) in rules where m.range(of: pattern, options: .regularExpression) != nil { return key }
     return "other"
@@ -673,6 +676,7 @@ func providerColor(_ key: String) -> NSColor {
     case "vertex": return rgb(0xE84393)
     case "openai": return rgb(0x10A37F)
     case "anthropic": return rgb(0xC2410C)
+    case "mlx": return rgb(0x5E5CE6)
     default:
         let palette = [rgb(0xF2B01E), rgb(0x00B8D4), rgb(0xA1887F), rgb(0x66BB6A)]
         return palette[Int(key.utf8.reduce(UInt32(7)) { $0 &* 31 &+ UInt32($1) } % UInt32(palette.count))]

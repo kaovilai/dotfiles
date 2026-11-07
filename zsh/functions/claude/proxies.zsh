@@ -8,9 +8,10 @@
 # the client reconnects to the new process. Run it when those sessions are idle.
 #
 #   claude-copilot-restart     copilot-api gateway         :4141
-#   claude-vertex-restart      LiteLLM -> Vertex           :4142
-#   claude-openai-restart      LiteLLM -> OpenAI           :4145
-#   claude-enmaas-restart      LiteLLM -> EnMaaS           :4146
+#   claude-vertex-restart      Go proxy -> Vertex           :4142
+#   claude-mlx-restart         Go proxy -> mlx_lm.server    :4144
+#   claude-openai-restart      Go proxy -> OpenAI           :4145
+#   claude-enmaas-restart      Go proxy -> EnMaaS          :4146
 #   claude-hosted-only-restart hosted-only, Claude flavor  :4148 (= claude-{glm-hybrid,glm-only}-restart)
 #   codex-hosted-only-restart  hosted-only, Codex flavor   :4147 (= codex-{glm-hybrid,glm-only}-restart)
 #   llm-proxy-restart [name ...|all|--list]   several at once; no args or `all`
@@ -326,8 +327,9 @@ _llm_proxy_check_via() {
     print -r -- "${${verdict%% *}:-unknown}"
 }
 _llm_proxy_check_copilot() { _llm_proxy_check_via _CLAUDE_PROXY_SYNC_CHECK claude-copilot --version; }
-_llm_proxy_check_vertex() { _llm_proxy_check_via _CLAUDE_PROXY_SYNC_CHECK _claude_vertex_prepare; }
-_llm_proxy_check_openai() { _llm_proxy_check_via _CLAUDE_PROXY_SYNC_CHECK _claude_openai_prepare; }
+_llm_proxy_check_vertex() { _llm_proxy_check_via CLAUDE_GO_PROXY_CHECK_OUT _claude_vertex_prepare; }
+_llm_proxy_check_mlx() { _llm_proxy_check_via CLAUDE_GO_PROXY_CHECK_OUT _claude_mlx_prepare; }
+_llm_proxy_check_openai() { _llm_proxy_check_via CLAUDE_GO_PROXY_CHECK_OUT _claude_openai_prepare; }
 _llm_proxy_check_glm_claude() { _llm_proxy_check_via HOSTED_ONLY_CHECK_OUT _hosted_only_proxy_ensure claude; }
 _llm_proxy_check_glm_codex() { _llm_proxy_check_via HOSTED_ONLY_CHECK_OUT _hosted_only_proxy_ensure codex; }
 _llm_proxy_check_enmaas() {
@@ -341,15 +343,18 @@ llm-proxy-restart() {
     zmodload zsh/datetime 2>/dev/null
     local -A fn=(
         copilot claude-copilot-restart vertex claude-vertex-restart openai claude-openai-restart
+        mlx claude-mlx-restart
         enmaas claude-enmaas-restart glm-claude claude-hosted-only-restart glm-codex codex-hosted-only-restart)
     local -A chk=(
         copilot _llm_proxy_check_copilot vertex _llm_proxy_check_vertex openai _llm_proxy_check_openai
+        mlx _llm_proxy_check_mlx
         enmaas _llm_proxy_check_enmaas glm-claude _llm_proxy_check_glm_claude glm-codex _llm_proxy_check_glm_codex)
     local -A port=(
         copilot "${COPILOT_API_PORT:-4141}" vertex "${CLAUDE_VERTEX_PROXY_PORT:-4142}"
+        mlx "${CLAUDE_MLX_PROXY_PORT:-4144}"
         openai "${CLAUDE_OPENAI_PROXY_PORT:-4145}" enmaas "$(_claude_enmaas_port 2>/dev/null || print 4146)"
         glm-claude "$(_hosted_only_knob CLAUDE_PROXY_PORT 4148)" glm-codex "$(_hosted_only_knob CODEX_PROXY_PORT 4147)")
-    local -a order=(copilot vertex openai enmaas glm-codex glm-claude) targets
+    local -a order=(copilot vertex mlx openai enmaas glm-codex glm-claude) targets
     if [[ "${1-}" == --list ]]; then
         local n
         for n in $order; do
@@ -479,15 +484,18 @@ _llm_proxy_sync_tables() {
     fn=(
         copilot claude-copilot-restart
         vertex claude-vertex-restart openai claude-openai-restart enmaas claude-enmaas-restart
+        mlx claude-mlx-restart
         glm-claude claude-hosted-only-restart glm-codex codex-hosted-only-restart)
     chk=(
         copilot _llm_proxy_check_copilot
         vertex _llm_proxy_check_vertex openai _llm_proxy_check_openai enmaas _llm_proxy_check_enmaas
+        mlx _llm_proxy_check_mlx
         glm-claude _llm_proxy_check_glm_claude glm-codex _llm_proxy_check_glm_codex)
     local _ho_shared_port="$(_hosted_only_knob CLAUDE_PROXY_PORT 4148)"
     port=(
         copilot "${COPILOT_API_PORT:-4141}"
         vertex "${CLAUDE_VERTEX_PROXY_PORT:-4142}" openai "${CLAUDE_OPENAI_PROXY_PORT:-4145}"
+        mlx "${CLAUDE_MLX_PROXY_PORT:-4144}"
         enmaas "$(_claude_enmaas_port 2>/dev/null || print 4146)"
         glm-claude "$_ho_shared_port" glm-codex "$(_hosted_only_knob CODEX_PROXY_PORT "$_ho_shared_port")")
 }
@@ -497,7 +505,7 @@ _llm_proxy_sync_tables() {
 # scripts/fleet-sync.zsh: a pulled hook or config change reaches a running proxy
 # only when it restarts, and a T3 session that is already running never launches
 # anything, so a stale proxy kept serving the old code. For every proxy
-# (copilot-api, vertex, openai, enmaas, hosted-only codex and claude) that is
+# (copilot-api, vertex, mlx, openai, enmaas, hosted-only codex and claude) that is
 # listening and behind what a launch would start now (the same fingerprint
 # check as `required`; copilot-api's includes a hash of the source bun runs):
 # restart it when no request is in flight. One that is serving a request is not
@@ -519,10 +527,10 @@ llm-proxy-sync() {
     done
     local -A fn chk port
     _llm_proxy_sync_tables
-    local -a order=(copilot vertex openai enmaas glm-codex glm-claude)
+    local -a order=(copilot vertex mlx openai enmaas glm-codex glm-claude)
     # the always-on set: a sync records who was listening, and the next sync
     # restarts a recorded proxy whose listener is gone (crash, OOM kill, a
-    # failed boot). vertex/openai are on demand, so they only get the marker,
+    # failed boot). vertex/mlx/openai are on demand, so they only get the marker,
     # never a restart from it (2026-11-06 audit: a dead proxy was invisible to
     # fleet-sync; nothing supervises the detached processes)
     local -a always_on=(copilot enmaas glm-codex glm-claude)

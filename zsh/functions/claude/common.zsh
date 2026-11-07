@@ -423,6 +423,82 @@ _claude_proxy_record() {
     mkdir -p "${state:h}" && print -r -- "$2" >| "$state"
 }
 
+# --- Go proxy launch path (route-table flavors) -----------------------------
+# _claude_go_proxy_ensure <flavor> <port> <routes.json> <master-key> [fp-extra...]
+# Shared launcher path for the Go binary's route-table flavors (mlx, openai,
+# vertex -- scripts/hosted-only-go, docs/notes/hosted-only-go-proxy.md): the
+# caller has already written the LiteLLM-shaped route table; this folds it
+# (plus the Go source hash, the upstream key and any caller extras like an
+# ADC file hash) into the fingerprint the binary's `ensure` compares, then
+# delegates process management (startup.lock, stale/busy decision,
+# zero-refuse restart, health wait, fingerprint record) to the binary.
+# The runtime dir is the route table's directory: the serve child names it
+# (--runtime-dir/--config) on its command line, which is what the
+# identity-checked `stop` matches.
+#
+# HOSTED_ONLY_UPSTREAM_KEY, set in the environment by the caller (zsh
+# `VAR=x func` prefix form), reaches the serve child as the upstream bearer
+# (mlx/openai) and is part of the fingerprint. Anything else the serve child
+# must see (vertex: CLOUD_ML_REGION, ANTHROPIC_VERTEX_PROJECT_ID,
+# GOOGLE_APPLICATION_CREDENTIALS) the caller exports around this call.
+_claude_go_proxy_ensure() {
+    local flavor="$1" port="$2" routes="$3" master_key="$4"; shift 4
+    local gobin go_hash fp token_fp key="${HOSTED_ONLY_UPSTREAM_KEY-}"
+    gobin=$(_hosted_only_go_bin) || return 1
+    [[ -s "$routes" ]] || { print -ru2 -- "claude-${flavor}: route table ${routes} is missing."; return 1; }
+    go_hash=$(_hosted_only_go_hash) || return 1
+    fp=$( { cat -- "$routes"; print -rn -- $'\x1f'"claude-${flavor}"$'\x1f'"$go_hash"$'\x1f'"$key"$'\x1f'"$*" } \
+        | _claude_sha256) || return 1
+    token_fp=$(print -rn -- "$master_key" | _claude_sha256) || return 1
+    mkdir -p -- "${routes:h}" || return 1
+
+    # Dry run for `llm-proxy-restart required` (the Go path's equivalent of
+    # _hosted_only_proxy_ensure's HOSTED_ONLY_CHECK_OUT): with
+    # CLAUDE_GO_PROXY_CHECK_OUT=<file> the verdict `down`, `fresh` or `stale`
+    # is written there and the function returns 1 so the launcher stops;
+    # nothing is started, stopped or recorded.
+    if [[ -n "${CLAUDE_GO_PROXY_CHECK_OUT-}" ]]; then
+        local chk_fp= chk_token= verdict=down
+        if curl -sf --max-time 2 "http://127.0.0.1:${port}/health/liveliness" -o /dev/null; then
+            read -r chk_fp chk_token < "${routes:h}/fingerprint" 2>/dev/null
+            if [[ "$chk_fp" == "$fp" && ( -z "$chk_token" || "$chk_token" == "$token_fp" ) ]]; then
+                verdict=fresh
+            else
+                verdict=stale
+            fi
+        fi
+        print -r -- "$verdict $fp $token_fp" >| "$CLAUDE_GO_PROXY_CHECK_OUT"
+        return 1
+    fi
+
+    local -a envp=()
+    [[ -n "$key" ]] && envp=("HOSTED_ONLY_UPSTREAM_KEY=$key")
+    env "${envp[@]}" "$gobin" ensure \
+        --flavor "$flavor" --port "$port" --runtime-dir "${routes:h}" \
+        --config "$routes" --fingerprint "$fp" --token-fp "$token_fp"
+}
+
+# _claude_go_proxy_retire_litellm <port>: a LiteLLM listener from before the
+# Go retirement answers the same /health path, so the Go `ensure` would refuse
+# the port as "held by another process". Retire it by identity -- command
+# line names litellm AND this port -- at migration; anything else on the port
+# is left alone for `ensure`/`stop` to refuse loudly.
+_claude_go_proxy_retire_litellm() {
+    local port="$1" pid cmd j
+    for pid in ${(f)"$(lsof -ti "tcp:${port}" -sTCP:LISTEN 2>/dev/null)"}; do
+        cmd="$(ps -o command= -p "$pid" 2>/dev/null)"
+        [[ "$cmd" == *litellm* ]] || continue
+        print -ru2 -- "claude-go-proxy: retiring the pre-retirement litellm listener on :${port} (pid ${pid})."
+        kill "$pid" 2>/dev/null
+        for j in {1..20}; do
+            kill -0 "$pid" 2>/dev/null || break
+            sleep 0.5
+        done
+        kill -0 "$pid" 2>/dev/null && kill -9 "$pid" 2>/dev/null
+    done
+    return 0
+}
+
 # Install-hint helper for the ❌-not-found messages below -- brew is
 # Darwin-only, so a hardcoded "brew install X" is wrong on Linux (e.g.
 # Fedora). Falls back to whatever package manager is actually on PATH;

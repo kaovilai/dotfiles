@@ -13,8 +13,9 @@
   --s1: #2a78d6; --s2: #eb6834; --s3: #1baf7a; --s4: #eda100; --s5: #e87ba4; --s6: #008300; --s7: #6250d6; --s8: #e34948;
   --other: #a9a79f;
   /* brand hues for model families; sequence validated (adjacent CVD >= 8,
-     normal >= 15, contrast >= 3:1) in the order claude, glm, deepseek, gpt */
-  --b-claude: #c15f3c; --b-glm: #0e8fa3; --b-deepseek: #3b57d8; --b-gpt: #0b7a5e;
+     normal >= 15, contrast >= 3:1) in the order claude, glm, deepseek, gpt;
+     qwen (the MLX flavor's local models) appended later as a distinct purple */
+  --b-claude: #c15f3c; --b-glm: #0e8fa3; --b-deepseek: #3b57d8; --b-gpt: #0b7a5e; --b-qwen: #6d28d9;
   --good: #006300; --warn: #8a5a00; --crit: #d03b3b; --reroute: #6250d6;
 }
 @media (prefers-color-scheme: dark) {
@@ -25,7 +26,7 @@
     --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500; --s5: #d55181; --s6: #008300; --s7: #9085e9; --s8: #e66767;
     --other: #6b6a65;
   /* brand hues, dark steps (validated against the dark surface, same order) */
-  --b-claude: #c96f4e; --b-glm: #0b8ea6; --b-deepseek: #6f85f5; --b-gpt: #10925f; --good: #0ca30c; --warn: #fab219; --crit: #ec835a; --reroute: #9085e9;
+  --b-claude: #c96f4e; --b-glm: #0b8ea6; --b-deepseek: #6f85f5; --b-gpt: #10925f; --b-qwen: #8b5cf6; --good: #0ca30c; --warn: #fab219; --crit: #ec835a; --reroute: #9085e9;
   }
 }
 :root[data-theme="dark"] {
@@ -35,7 +36,7 @@
   --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500; --s5: #d55181; --s6: #008300; --s7: #9085e9; --s8: #e66767;
   --other: #6b6a65;
   /* brand hues, dark steps (validated against the dark surface, same order) */
-  --b-claude: #c96f4e; --b-glm: #0b8ea6; --b-deepseek: #6f85f5; --b-gpt: #10925f; --good: #0ca30c; --warn: #fab219; --crit: #ec835a; --reroute: #9085e9;
+  --b-claude: #c96f4e; --b-glm: #0b8ea6; --b-deepseek: #6f85f5; --b-gpt: #10925f; --b-qwen: #8b5cf6; --good: #0ca30c; --warn: #fab219; --crit: #ec835a; --reroute: #9085e9;
 }
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--page); color: var(--ink); font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }

@@ -1296,12 +1296,13 @@ out=$($usage menubar install --dry-run)
 [[ "$($usage menubar uninstall --dry-run)" == *"would run: launchctl bootout"* ]] || fail "uninstall --dry-run"
 [[ "$(LLM_USAGE_MENUBAR_DIR=$tmp/none $usage menubar status)" == *"built:     no"* ]] || fail "menubar status"
 
-# Wiring: the vertex/openai generators still load the usage callback (their
-# proxies keep LiteLLM); hosted-only/EnMaaS run the Go proxy, which writes the
-# JSONL itself.
+# Wiring: every launcher now runs the Go proxy (which writes the JSONL
+# itself); only claude-copilot still drives a LiteLLM-style callback config
+# via _claude_proxy_start's PYTHONPATH.
 [[ -r "$repo/scripts/litellm_usage_log.py" ]] || fail "usage log module missing"
-grep -q litellm_usage_log "$repo/zsh/functions/claude/providers/vertex.zsh" || fail "vertex lacks callback"
-grep -q litellm_usage_log "$repo/zsh/functions/claude/providers/openai.zsh" || fail "openai lacks callback"
+for f in vertex openai mlx; do
+    grep -q "_claude_go_proxy_ensure" "$repo/zsh/functions/claude/providers/$f.zsh" || fail "$f does not launch the Go proxy"
+done
 python3 -m py_compile "$repo/scripts/litellm_usage_log.py" "$usage" || fail "py_compile"
 
 # Restart commands exist for every proxy and the dispatcher rejects unknown names.

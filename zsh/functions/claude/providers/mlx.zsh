@@ -1,10 +1,13 @@
 # ---------------------------------------------------------------------------
 # claude-mlx: raw claude binary, routed through a local MLX model server
-# (mlx-lm's `mlx_lm.server`, Apple Silicon only) via a local LiteLLM proxy --
-# same reason claude-vertex needs one (see its comment above): mlx_lm.server
-# only speaks OpenAI's /v1/chat/completions shape, not Anthropic's /v1/messages,
-# unlike Ollama's server (which speaks Anthropic's shape natively, why
-# claude-ollama above talks to it directly with no proxy in front).
+# (mlx-lm's `mlx_lm.server`, Apple Silicon only) via the shared Go proxy's
+# "mlx" flavor (scripts/hosted-only-go, port 4144) -- same reason
+# claude-openai needs one: mlx_lm.server only speaks OpenAI's
+# /v1/chat/completions shape, not Anthropic's /v1/messages, unlike Ollama's
+# server (which speaks Anthropic's shape natively, why claude-ollama above
+# talks to it directly with no proxy in front). The LiteLLM proxy this used
+# to spawn is retired -- same retirement the hosted-only and enmaas
+# launchers already made (~377 MB and a slow cold start saved).
 #
 # Verified before writing this (uvx --from mlx-lm mlx_lm.server --help, plus
 # reading the installed mlx_lm/server.py): --model takes exactly one model --
@@ -24,12 +27,10 @@
 # override via CLAUDE_MLX_MODEL or persist a different one via
 # claude-mlx-models below.
 #
-# Same litellm/fastapi pins as claude-vertex (BerriAI/litellm#24518 --
-# see its comment above), minus the "google" extra (Vertex-specific).
-typeset -g CLAUDE_MLX_PROXY_LITELLM_VERSION="1.97.0"
-typeset -g CLAUDE_MLX_PROXY_FASTAPI_VERSION="0.136.3"
+# The litellm/fastapi pins this file used to carry (BerriAI/litellm#24518,
+# see claude-vertex's comment above) died with the retired LiteLLM proxy;
+# the Go proxy needs none.
 typeset -g _claude_mlx_model_file="${XDG_CONFIG_HOME:-$HOME/.config}/claude-mlx-model"
-typeset -g _claude_mlx_proxy_config="${XDG_CONFIG_HOME:-$HOME/.config}/claude-mlx-proxy.yaml"
 typeset -g CLAUDE_MLX_DEFAULT_MODEL="mlx-community/Qwen3-Coder-30B-A3B-Instruct-4bit"
 
 # MLX (Apple's ML framework) only runs on Apple Silicon -- gates both
@@ -88,72 +89,52 @@ _claude_mlx_ensure_server() {
     return 1
 }
 
-# Writes the litellm proxy config translating Anthropic's /v1/messages shape
-# (what Claude Code speaks) to mlx_lm.server's OpenAI-compatible
-# /v1/chat/completions -- mirrors _claude_vertex_proxy_write_config's shape,
-# but a single model_name entry is enough here (one shared model, not three
-# independently resolved tiers): claude-mlx() below exports the SAME resolved
-# model id for ANTHROPIC_MODEL/ANTHROPIC_DEFAULT_OPUS_MODEL/
-# ANTHROPIC_DEFAULT_SONNET_MODEL/ANTHROPIC_DEFAULT_HAIKU_MODEL.
-_claude_mlx_proxy_write_config() {
-    local model="$1" mlx_base="$2" master_key="$3"
-    mkdir -p "${_claude_mlx_proxy_config:h}"
-    cat > "$_claude_mlx_proxy_config" <<EOF
-model_list:
-  - model_name: ${model}
-    litellm_params:
-      model: openai/${model}
-      api_base: ${mlx_base}/v1
-      api_key: "mlx-local"
-litellm_settings:
-  master_key: "${master_key}"
-EOF
-}
-
-# Resolves the model, ensures mlx_lm.server + the litellm proxy are both up,
+# Resolves the model, ensures mlx_lm.server + the Go proxy are both up,
 # hands the result back via globals (_cmx_*) -- same zsh `local`-doesn't-
 # cross-function-boundaries reason _claude_vertex_prepare uses _cv_* above.
+#
+# The proxy is the shared Go binary's "mlx" flavor (_claude_go_proxy_ensure,
+# common.zsh): it reads a LiteLLM-shaped route table with ONE entry -- the
+# shared model, openai dialect, mlx_lm.server's /v1 -- and translates
+# Anthropic /v1/messages <-> OpenAI chat with the same chatTranslator the
+# enmaas flavor runs. Port 4144, the master key and the stop command are
+# unchanged from the LiteLLM era. mlx_lm.server itself still runs via uvx
+# (Apple Silicon only, gated by _claude_mlx_supported above) -- only the
+# proxy in front of it changed.
 _claude_mlx_prepare() {
     local model
     model=$(_claude_mlx_resolve_model)
 
-    # Hot reload -- see _claude_proxy_sync. mlx_lm.server can't hot-swap
-    # models, so a changed model (env var or claude-mlx-models) restarts it
-    # together with its proxy (claude-mlx-kill kills both). No credentials
-    # involved. A running pair with no recorded fingerprint is adopted.
-    local mlx_master_key="${CLAUDE_MLX_PROXY_TOKEN:-mlx-proxy-local}"
-    local mfp
-    mfp=$(_claude_proxy_fp "$model" "$mlx_master_key" "$CLAUDE_MLX_PROXY_LITELLM_VERSION")
-    _claude_proxy_sync claude-mlx mlx "$(_claude_mlx_base)/health" "$mfp" claude-mlx-kill 1
-
-    _claude_mlx_ensure_server "$model" || return 1
+    # Staleness check (llm-proxy-restart required, CLAUDE_GO_PROXY_CHECK_OUT):
+    # the proxy half only -- starting mlx_lm.server (possibly a multi-GB model
+    # download) is not part of a check.
+    if [[ -z "${CLAUDE_GO_PROXY_CHECK_OUT-}" ]]; then
+        _claude_mlx_ensure_server "$model" || return 1
+    fi
 
     local port="${CLAUDE_MLX_PROXY_PORT:-4144}"
     local base="http://127.0.0.1:${port}"
-    local log="${TMPDIR:-/tmp}/claude-mlx-proxy-${port}.log"
     local master_key="${CLAUDE_MLX_PROXY_TOKEN:-mlx-proxy-local}"
+    local runtime="${XDG_STATE_HOME:-$HOME/.local/state}/claude-mlx-proxy"
+    local routes="$runtime/routes.json"
 
-    if ! curl -sf --max-time 2 "${base}/health/liveliness" -o /dev/null; then
-        if ! _claude_mlx_proxy_write_config "$model" "$(_claude_mlx_base)" "$master_key"; then
-            echo "❌ Failed to write claude-mlx proxy config to ${_claude_mlx_proxy_config}." >&2
-            return 1
-        fi
-        echo "Starting claude-mlx proxy (litellm ${CLAUDE_MLX_PROXY_LITELLM_VERSION}) on ${base} (log: ${log})..."
-        (uv tool run --with "fastapi==${CLAUDE_MLX_PROXY_FASTAPI_VERSION}" \
-            --from "litellm[proxy]==${CLAUDE_MLX_PROXY_LITELLM_VERSION}" litellm \
-            --config "$_claude_mlx_proxy_config" --port "$port" --host 127.0.0.1 >> "${log}" 2>&1 &)
-        local i
-        for i in {1..60}; do
-            curl -sf --max-time 2 "${base}/health/liveliness" -o /dev/null && break
-            sleep 1
-        done
-        if ! curl -sf --max-time 2 "${base}/health/liveliness" -o /dev/null; then
-            echo "❌ claude-mlx proxy not ready on ${base} after 60s." >&2
-            echo "   Check the log: tail -f ${log}" >&2
-            return 1
-        fi
-    fi
-    _claude_proxy_record mlx "$mfp"
+    # Route table for the Go proxy. A changed model (env var or
+    # claude-mlx-models) changes the table, which the Go ensure restarts on
+    # at the first idle moment -- the same hot-reload contract the
+    # _claude_proxy_sync kill + restart used to provide.
+    mkdir -p "$runtime"
+    {
+        print -r -- '{"model_list": ['
+        print -r -- "  {\"model_name\": \"${model}\", \"litellm_params\": {\"model\": \"openai/${model}\", \"api_base\": \"$(_claude_mlx_base)/v1\"}}"
+        print -r -- "], \"general_settings\": {\"master_key\": \"${master_key}\"}}"
+    } >| "$routes" || { echo "❌ Failed to write ${routes}." >&2; return 1; }
+
+    # mlx_lm.server ignores Authorization, but the Go proxy wants a non-empty
+    # upstream key. No image prune (HOSTED_ONLY_IMAGE_BUDGET_BYTES=0): a
+    # local model has no gateway body cap, and LiteLLM never pruned here.
+    _claude_go_proxy_retire_litellm "$port"
+    HOSTED_ONLY_UPSTREAM_KEY=mlx-local HOSTED_ONLY_IMAGE_BUDGET_BYTES=0 \
+        _claude_go_proxy_ensure mlx "$port" "$routes" "$master_key" || return 1
 
     typeset -g _cmx_base="$base" _cmx_master_key="$master_key" _cmx_model="$model"
 }
@@ -194,31 +175,54 @@ claude-mlx() {
 }
 
 # claude-mlx-kill: stop both local processes claude-mlx starts -- the
-# mlx_lm.server AND the litellm proxy in front of it. Unlike every other
-# *-kill function in this file (one process each), MLX is the only backend
-# needing two, since (unlike Ollama) it has no native Anthropic-compatible
-# endpoint of its own to talk to directly.
+# mlx_lm.server (by port: a uvx python with no identity to match) AND the Go
+# proxy in front of it (identity-checked via the binary's stop, which refuses
+# foreign listeners). Unlike every other *-kill function in this file (one
+# process each), MLX is the only backend needing two, since (unlike Ollama)
+# it has no native Anthropic-compatible endpoint of its own to talk to
+# directly. A leftover LiteLLM listener from before the Go retirement is
+# retired by identity too (litellm on the port).
 claude-mlx-kill() {
-    local -a ports=("${CLAUDE_MLX_PORT:-4143}" "${CLAUDE_MLX_PROXY_PORT:-4144}")
-    local -a labels=("mlx_lm.server" "claude-mlx proxy")
-    local i port label pids
-    for i in {1..2}; do
-        port="${ports[$i]}"
-        label="${labels[$i]}"
-        pids=("${(f)$(_claude_listen_pids "${port}")}")
-        if [[ -z "${pids[1]}" ]]; then
-            echo "No process listening on port ${port} (${label})."
-            continue
-        fi
-        echo "Killing ${label} on port ${port} (pid: ${pids[*]})..."
+    local port="${CLAUDE_MLX_PORT:-4143}" pids
+    pids=("${(f)$(_claude_listen_pids "${port}")}")
+    if [[ -z "${pids[1]}" ]]; then
+        echo "No process listening on port ${port} (mlx_lm.server)."
+    else
+        echo "Killing mlx_lm.server on port ${port} (pid: ${pids[*]})..."
         kill "${pids[@]}" 2>/dev/null
         sleep 1
         pids=("${(f)$(_claude_listen_pids "${port}")}")
-        if [[ -n "${pids[1]}" ]]; then
-            echo "Still alive, sending SIGKILL..."
-            kill -9 "${pids[@]}" 2>/dev/null
-        fi
-    done
+        [[ -n "${pids[1]}" ]] && kill -9 "${pids[@]}" 2>/dev/null
+    fi
+
+    local proxy_port="${CLAUDE_MLX_PROXY_PORT:-4144}"
+    local runtime="${XDG_STATE_HOME:-$HOME/.local/state}/claude-mlx-proxy"
+    local gobin
+    if gobin=$(_hosted_only_go_bin 2>/dev/null); then
+        "$gobin" stop --flavor mlx --port "$proxy_port" --runtime-dir "$runtime"
+    else
+        echo "claude-mlx: Go binary unavailable; stopping the proxy on :${proxy_port} by litellm/port match." >&2
+    fi
+    _claude_go_proxy_retire_litellm "$proxy_port"
+    return 0
+}
+
+# claude-mlx-restart: stop the proxy (not mlx_lm.server -- it survives, the
+# model is unchanged) and bring it back via the normal prepare path. Same
+# shape as claude-vertex-restart/claude-openai-restart (proxies.zsh uses
+# these for the menubar's restart command and llm-proxy-restart).
+claude-mlx-restart() {
+    local port="${CLAUDE_MLX_PROXY_PORT:-4144}"
+    local runtime="${XDG_STATE_HOME:-$HOME/.local/state}/claude-mlx-proxy"
+    local gobin
+    if gobin=$(_hosted_only_go_bin 2>/dev/null); then
+        "$gobin" stop --flavor mlx --port "$port" --runtime-dir "$runtime" >/dev/null
+    fi
+    _claude_go_proxy_retire_litellm "$port"
+    _llm_proxy_wait_down "$port" || return 1
+    print -ru2 -- 'restart: mlx starting'
+    ( _claude_mlx_prepare ) || return 1
+    _llm_proxy_wait_up "$port" mlx
 }
 
 # claude-mlx-models: print (no arg) or persist (arg) the one shared MLX

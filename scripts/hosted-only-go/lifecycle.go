@@ -507,21 +507,25 @@ func ensureOnce(o ensureOpts) (string, error) {
 // refused by an old listener that cannot share the port) fails the wait
 // immediately so the caller can fall back. Routes come from the knobs for the
 // hosted-only flavors (written here, so a watcher restart never pairs a new
-// fingerprint with an old table) and from --config for enmaas.
+// fingerprint with an old table) and from --config for the route-table
+// flavors (enmaas, mlx, openai, vertex).
 func startProxy(o ensureOpts, oldPids []int) (string, error) {
 	cfg := loadConfig(o.flavor, o.port, o.runtimeDir)
 	if cfg.APIKey == "" {
-		return "", errors.New("hosted-only-go: ENMAAS_API_KEY is not set")
+		return "", errors.New("hosted-only-go: HOSTED_ONLY_UPSTREAM_KEY (enmaas: ENMAAS_API_KEY) is not set")
+	}
+	if o.flavor == "vertex" && (os.Getenv("CLOUD_ML_REGION") == "" || os.Getenv("ANTHROPIC_VERTEX_PROJECT_ID") == "") {
+		return "", errors.New("hosted-only-go: CLOUD_ML_REGION and ANTHROPIC_VERTEX_PROJECT_ID are required for the vertex flavor")
 	}
 	routesPath := o.configPath
-	if o.flavor != "enmaas" {
+	if !routeTableFlavor(o.flavor) {
 		routesPath = filepath.Join(o.runtimeDir, "routes.json")
 		if err := writeRoutesFromEnv(cfg, routesPath); err != nil {
 			return "", err
 		}
 	}
-	if o.flavor == "enmaas" && routesPath == "" {
-		return "", errors.New("hosted-only-go: --config is required for the enmaas flavor")
+	if routeTableFlavor(o.flavor) && routesPath == "" {
+		return "", fmt.Errorf("hosted-only-go: --config is required for the %s flavor", o.flavor)
 	}
 	_ = os.Remove(filepath.Join(o.runtimeDir, "fingerprint"))
 
@@ -643,6 +647,12 @@ func defaultPort(flavor string) string {
 		return "4147"
 	case "enmaas":
 		return "4146"
+	case "mlx":
+		return "4144"
+	case "openai":
+		return "4145"
+	case "vertex":
+		return "4142"
 	default:
 		return "4148"
 	}

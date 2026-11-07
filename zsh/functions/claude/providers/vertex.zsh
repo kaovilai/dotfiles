@@ -11,8 +11,8 @@
 # Monitor tool (https://code.claude.com/docs/en/tools-reference#monitor-tool)
 # is unconditionally unavailable whenever CLAUDE_CODE_USE_VERTEX is set — no
 # override flag exists, per the docs. Use this native-ADC path only when you
-# specifically don't want the local litellm proxy dependency (e.g. no `uv`
-# available, or troubleshooting whether an issue is proxy-side) and don't
+# specifically don't want the local Go proxy dependency (e.g. no go toolchain,
+# or troubleshooting whether an issue is proxy-side) and don't
 # need Monitor.
 claude-vertex-native-adc() {
     if [[ -z "$CLOUD_ML_REGION" || -z "$ANTHROPIC_VERTEX_PROJECT_ID" ]]; then
@@ -54,7 +54,8 @@ claude-vertex-dashboard() {
 
 # ---------------------------------------------------------------------------
 # claude-vertex: raw claude binary, routed through Google Vertex AI's native
-# Claude models via a local LiteLLM proxy, instead of Claude Code's built-in
+# Claude models via the shared Go proxy's "vertex" flavor
+# (scripts/hosted-only-go, vertex.go), instead of Claude Code's built-in
 # CLAUDE_CODE_USE_VERTEX integration (see claude-vertex-native-adc() above).
 # This is the DEFAULT vertex path — pick this unless you have a specific
 # reason to use the native-ADC one instead.
@@ -62,36 +63,30 @@ claude-vertex-dashboard() {
 # Why this exists: Claude Code's Monitor tool
 # (https://code.claude.com/docs/en/tools-reference#monitor-tool) is
 # unconditionally unavailable whenever CLAUDE_CODE_USE_VERTEX is set (also
-# Bedrock, MS Foundry) — there is no override flag, per the docs. LiteLLM's
-# proxy speaks Anthropic's own /v1/messages shape on the client side while
-# translating to Vertex's native streamRawPredict shape upstream, so from
-# Claude Code's perspective this looks like a direct-API-shaped backend
+# Bedrock, MS Foundry) — there is no override flag, per the docs. The proxy
+# speaks Anthropic's own /v1/messages shape on the client side while routing
+# to Vertex's native rawPredict/streamRawPredict endpoint upstream (same
+# shape — no translation, only ADC bearer auth and the per-model URL), so
+# from Claude Code's perspective this looks like a direct-API-shaped backend
 # (ANTHROPIC_BASE_URL/ANTHROPIC_AUTH_TOKEN, same as claude-copilot()) and
 # Monitor stays enabled.
 #
 # Vetted alternative considered and rejected: 1rgs/claude-code-proxy. Its
 # README's "USE_VERTEX_AUTH" mode only maps to Gemini models via Vertex, not
 # Anthropic/Claude models — it has no path to Claude-on-Vertex at all, so it
-# can't do this job. LiteLLM does (vertex_ai/claude-* model routing).
+# can't do this job.
 #
-# Pinned to litellm==1.97.0, NOT "latest": PyPI releases 1.82.7/1.82.8
-# shipped credential-stealing malware (BerriAI/litellm#24518). 1.97.0 is
-# well past that and the current stable release as of this writing — bump
-# deliberately, don't float.
+# History: this used to run LiteLLM (vertex_ai/claude-* model routing) —
+# pinned to litellm==1.97.0 because PyPI releases 1.82.7/1.82.8 shipped
+# credential-stealing malware (BerriAI/litellm#24518) — plus fastapi
+# pinned under it (its unbounded fastapi>=0.136.3 spec resolved fastapi
+# versions that had removed private symbols litellm's proxy imports,
+# crashing the server at startup). The Go retirement deleted that whole
+# dependency tree; the LiteLLM-era caveats below (beta headers dropped,
+# thinking-vs-max_tokens, cost-log crashes) do not apply to the Go path,
+# which forwards anthropic-beta headers verbatim.
 #
-# ALSO pinned: fastapi==0.136.3 (litellm's own declared minimum for the
-# proxy extra). Verified by actually running this exact command: litellm
-# 1.97.0's fastapi dependency spec is `fastapi<1.0,>=0.136.3` — unbounded
-# above — so an unpinned install resolves today's newest fastapi (0.141.1),
-# which has removed the private `fastapi.dependencies.utils.get_flat_dependant`
-# that litellm's proxy imports internally, crashing the server on startup
-# with `ImportError: cannot import name 'get_flat_dependant'` before falling
-# through to a second, more confusing `ModuleNotFoundError: No module named
-# 'proxy_server'`. Confirmed fastapi 0.136.3 through at least 0.140.x still
-# has this symbol; only pin it away from "latest", don't remove the pin.
-#
-# Requires: uv (runs litellm via `uv tool run --from`, with fastapi pinned
-# via `--with`, so no separate venv management is needed), gcloud ADC
+# Requires: a go toolchain (the shared proxy binary), gcloud ADC
 # (`gcloud auth application-default login`), and CLOUD_ML_REGION /
 # ANTHROPIC_VERTEX_PROJECT_ID already exported (same vars claude-vertex()
 # requires above).
@@ -124,48 +119,32 @@ claude-vertex-dashboard() {
 # models). If a future model alias 404s, check the Vertex AI Model Garden
 # console for that project/region and override via ANTHROPIC_MODEL etc.
 # before calling this function.
+# The litellm/fastapi pins below died with the retired LiteLLM proxy (the
+# shared Go binary serves this flavor now); kept only for the historical
+# pin-rationale comments above (BerriAI/litellm#24518 malware releases).
 typeset -g CLAUDE_VERTEX_PROXY_LITELLM_VERSION="1.97.0"
-typeset -g CLAUDE_VERTEX_PROXY_FASTAPI_VERSION="0.136.3"
 typeset -g _claude_vertex_proxy_config="${XDG_CONFIG_HOME:-$HOME/.config}/claude-vertex-proxy.yaml"
 
-_claude_vertex_proxy_write_config() {
-    local master_key="$1"
-    shift
-    # $@ = alternating model_name/backend_model pairs
-    mkdir -p "${_claude_vertex_proxy_config:h}"
+# _claude_vertex_proxy_write_routes <routes.json> <master_key> <name> <backend>...:
+# the Go proxy's vertex-flavor route table (LiteLLM shape): anthropic-dialect
+# rows with NO api_base -- the Go binary builds the publisher-models URL from
+# CLOUD_ML_REGION + ANTHROPIC_VERTEX_PROJECT_ID (vertex.go) -- plus a "*"
+# wildcard row so any Claude id picked in /model routes to Vertex (the exact
+# model_name rows below still win; $@ = alternating model_name/backend pairs).
+_claude_vertex_proxy_write_routes() {
+    local routes="$1" master_key="$2"; shift 2
+    local -a rows=('{"model_name": "*", "litellm_params": {"model": "anthropic/*"}}')
+    local model_name backend_model
+    while (( $# >= 2 )); do
+        model_name="$1" backend_model="$2"
+        shift 2
+        rows+=("{\"model_name\": \"${model_name}\", \"litellm_params\": {\"model\": \"anthropic/${backend_model}\"}}")
+    done
+    mkdir -p -- "${routes:h}"
     {
-        echo "model_list:"
-        # wildcard so any Claude id picked in /model routes to Vertex, not just
-        # the pinned tiers (exact model_name entries below still win)
-        cat <<EOF
-  - model_name: "claude-*"
-    litellm_params:
-      model: vertex_ai/claude-*
-      vertex_ai_project: "${ANTHROPIC_VERTEX_PROJECT_ID}"
-      vertex_ai_location: "${CLOUD_ML_REGION}"
-EOF
-        while (( $# >= 2 )); do
-            local model_name="$1" backend_model="$2"
-            shift 2
-            # vertex_ai_project/vertex_ai_location, NOT vertex_project/
-            # vertex_location -- those latter two are the field names for
-            # litellm's generic Gemini vertex_ai/ route; the Anthropic
-            # partner-model route
-            # (https://docs.litellm.ai/docs/providers/vertex_partner)
-            # documents this different pair for claude-on-vertex specifically.
-            cat <<EOF
-  - model_name: ${model_name}
-    litellm_params:
-      model: vertex_ai/${backend_model}
-      vertex_ai_project: "${ANTHROPIC_VERTEX_PROJECT_ID}"
-      vertex_ai_location: "${CLOUD_ML_REGION}"
-EOF
-        done
-        echo "litellm_settings:"
-        echo "  master_key: \"${master_key}\""
-        # Per-request usage log for `llm-usage` (module found via PYTHONPATH).
-        echo '  callbacks: ["litellm_usage_log.proxy_handler_instance"]'
-    } >| "$_claude_vertex_proxy_config"
+        print -r -- "{\"model_list\": [${(j:,:)rows}],"
+        print -r -- " \"general_settings\": {\"master_key\": \"${master_key}\"}}"
+    } >| "$routes"
 }
 
 # ---------------------------------------------------------------------------
@@ -384,15 +363,12 @@ _claude_vertex_prepare() {
         echo "❌ CLOUD_ML_REGION and ANTHROPIC_VERTEX_PROJECT_ID must be exported to use Vertex AI." >&2
         return 1
     fi
-    if ! command -v uv &>/dev/null; then
-        echo "❌ uv not found. Install it with: $(_claude_pkg_install_hint uv 'curl -LsSf https://astral.sh/uv/install.sh | sh')" >&2
-        return 1
-    fi
 
     local port="${CLAUDE_VERTEX_PROXY_PORT:-4142}"
     local base="http://127.0.0.1:${port}"
-    local log="${TMPDIR:-/tmp}/claude-vertex-proxy-${port}.log"
     local master_key="${CLAUDE_VERTEX_PROXY_TOKEN:-vertex-proxy-local}"
+    local runtime="${XDG_STATE_HOME:-$HOME/.local/state}/claude-vertex-proxy"
+    local routes="$runtime/routes.json"
 
     # Auto-pick the newest AVAILABLE (org-policy-unrestricted) model per
     # tier when the caller hasn't explicitly pinned it -- see the
@@ -463,37 +439,31 @@ _claude_vertex_prepare() {
         "${haiku_stripped}"          "${haiku_stripped}"
         "claude-haiku-4-5-20251001"  "${haiku_stripped}"
     )
-    # Hot reload -- see _claude_proxy_sync. Credentials come from the
-    # Application Default Credentials file (gcloud auth application-default
-    # login), so its contents are part of the fingerprint. A running proxy
-    # with no recorded fingerprint is adopted, not restarted.
-    local vfp
-    vfp=$(_claude_proxy_fp wildcard-v1 "${vproxy_models[@]}" "$ANTHROPIC_VERTEX_PROJECT_ID" "$CLOUD_ML_REGION" \
-        "$CLAUDE_VERTEX_PROXY_LITELLM_VERSION" "$master_key" \
-        "$(_claude_file_hash "${GOOGLE_APPLICATION_CREDENTIALS:-$HOME/.config/gcloud/application_default_credentials.json}")")
-    _claude_proxy_sync claude-vertex vertex-proxy "${base}/health/liveliness" "$vfp" claude-vertex-kill 1 || return 1
-
-    if ! curl -sf --max-time 2 "${base}/health/liveliness" -o /dev/null; then
-        _claude_vertex_proxy_write_config "$master_key" "${vproxy_models[@]}"
-        echo "Starting claude-vertex proxy (litellm ${CLAUDE_VERTEX_PROXY_LITELLM_VERSION}) on ${base} (log: ${log})..." >&2
-        # "google" extra pulls google-cloud-aiplatform -- without it litellm
-        # fails at request time with "Google Cloud SDK not found", since
-        # "proxy" alone doesn't include it (confirmed by testing).
-        _claude_proxy_start "$log" uv tool run --with "fastapi==${CLAUDE_VERTEX_PROXY_FASTAPI_VERSION}" \
-            --from "litellm[proxy,google]==${CLAUDE_VERTEX_PROXY_LITELLM_VERSION}" litellm \
-            --config "$_claude_vertex_proxy_config" --port "$port" --host 127.0.0.1 || return 1
-        local i
-        for i in {1..60}; do
-            curl -sf --max-time 2 "${base}/health/liveliness" -o /dev/null && break
-            sleep 1
-        done
-        if ! curl -sf --max-time 2 "${base}/health/liveliness" -o /dev/null; then
-            echo "❌ claude-vertex proxy not ready on ${base} after 60s." >&2
-            echo "   Check the log: tail -f ${log}" >&2
-            return 1
-        fi
-        _claude_proxy_record vertex-proxy "$vfp"
-    fi
+    # The proxy is the shared Go binary's "vertex" flavor
+    # (_claude_go_proxy_ensure, common.zsh): no dialect translation (Vertex's
+    # anthropic-partner endpoint speaks Messages natively) -- the Go side
+    # (vertex.go) only adds ADC bearer auth and the per-model
+    # :rawPredict/:streamRawPredict URL. No more google-cloud-aiplatform
+    # python dependency, no ~377MB LiteLLM process.
+    #
+    # Hot reload: project, region and the ADC file hash ride in the
+    # fingerprint (a gcloud re-login restarts the proxy at the first idle
+    # moment). The serve child reads CLOUD_ML_REGION /
+    # ANTHROPIC_VERTEX_PROJECT_ID (and GOOGLE_APPLICATION_CREDENTIALS when
+    # set) for its per-request token refresh and URL, so they are exported
+    # around the ensure call.
+    _claude_vertex_proxy_write_routes "$routes" "$master_key" "${vproxy_models[@]}" || {
+        echo "❌ Failed to write ${routes}." >&2
+        return 1
+    }
+    _claude_go_proxy_retire_litellm "$port"
+    (
+        export CLOUD_ML_REGION ANTHROPIC_VERTEX_PROJECT_ID HOSTED_ONLY_UPSTREAM_KEY=vertex-adc
+        [[ -n "${GOOGLE_APPLICATION_CREDENTIALS-}" ]] && export GOOGLE_APPLICATION_CREDENTIALS
+        _claude_go_proxy_ensure vertex "$port" "$routes" "$master_key" \
+            "$ANTHROPIC_VERTEX_PROJECT_ID" "$CLOUD_ML_REGION" \
+            "$(_claude_file_hash "${GOOGLE_APPLICATION_CREDENTIALS:-$HOME/.config/gcloud/application_default_credentials.json}")"
+    ) || return 1
 
     # Hand the resolved proxy/model config back to the caller (claude-vertex
     # / omni-claude-vertex) as globals -- zsh `local` doesn't cross function
@@ -517,11 +487,15 @@ claude-vertex() {
         export ANTHROPIC_DEFAULT_HAIKU_MODEL="${_cv_haiku_model}"
         # SDK disables tool search by default for any non-first-party
         # ANTHROPIC_BASE_URL (this local proxy included). Verified litellm
-        # 1.97.0's vertex_ai anthropic-partner transformation.py has
+        # 1.97.0's vertex_ai anthropic-partner transformation.py had
         # first-class support: is_tool_search_used() detects deferred
         # tools and adds the required anthropic-beta header itself, plus
         # _expand_tool_references() to unpack tool_reference blocks in
-        # responses. Safe to force back on.
+        # responses. The Go proxy's vertex flavor carries that over:
+        # hasToolSearchTool() detects the tool_search tool types and
+        # addBetaHeader() merges "tool-search-tool-2025-10-19" upstream
+        # (vertex.go; the exact token and tool types taken from that same
+        # litellm source). Safe to force back on.
         export ENABLE_TOOL_SEARCH=true
         # Pinned tiers only: Model Garden's catalog listing is often denied by
         # org policy, so there is no reliable "all models" list on Vertex (any
@@ -559,23 +533,20 @@ omni-claude-vertex() {
 # path moved to claude-vertex-native-adc().
 alias claude-vertex-proxy='claude-vertex'
 
-# claude-vertex-kill: stop the detached litellm proxy started by
-# claude-vertex(). Mirrors claude-copilot-kill/claude-ollama-kill.
+# claude-vertex-kill: stop the Go proxy started by claude-vertex()
+# (identity-checked via the binary's stop, which refuses foreign listeners;
+# a leftover LiteLLM listener from before the Go retirement is retired by
+# identity too).
 claude-vertex-kill() {
     local port="${CLAUDE_VERTEX_PROXY_PORT:-4142}"
-    local -a pids
-    pids=("${(f)$(_claude_listen_pids "${port}")}")
-    if [[ -z "${pids[1]}" ]]; then
-        echo "No process listening on port ${port}."
-        return 1
+    local runtime="${XDG_STATE_HOME:-$HOME/.local/state}/claude-vertex-proxy"
+    local gobin
+    if gobin=$(_hosted_only_go_bin 2>/dev/null); then
+        "$gobin" stop --flavor vertex --port "$port" --runtime-dir "$runtime"
+    else
+        echo "claude-vertex: Go binary unavailable; stopping the proxy on :${port} by litellm/port match." >&2
     fi
-    echo "Killing claude-vertex proxy on port ${port} (pid: ${pids[*]})..."
-    kill "${pids[@]}" 2>/dev/null
-    sleep 1
-    pids=("${(f)$(_claude_listen_pids "${port}")}")
-    if [[ -n "${pids[1]}" ]]; then
-        echo "Still alive, sending SIGKILL..."
-        kill -9 "${pids[@]}" 2>/dev/null
-    fi
+    _claude_go_proxy_retire_litellm "$port"
+    return 0
 }
 alias claude-vertex-proxy-kill='claude-vertex-kill'

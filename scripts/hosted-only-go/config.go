@@ -21,6 +21,10 @@ type config struct {
 
 	BaseURL string // gateway root, no trailing slash and no /v1 suffix
 	APIKey  string
+	// Vertex is set for the "vertex" flavor: upstream auth is an ADC access
+	// token (vertex.go) and the request path is built per model
+	// (vertexPath), not from the deployment dialect.
+	Vertex bool
 
 	VisionFallback bool
 	FallbackOn     bool
@@ -143,11 +147,25 @@ func coalesceKnob() float64 {
 	return v
 }
 
-func dialectSuffixFor(flavor string) string {
-	if flavor == "enmaas" {
-		return knob("DIALECT_SUFFIX", "")
+// routeTableFlavor reports whether the flavor serves from a launcher-generated
+// route table passed via --config (LiteLLM-shaped model_list) instead of the
+// knob-derived hosted-only table the binary writes itself.
+func routeTableFlavor(flavor string) bool {
+	switch flavor {
+	case "enmaas", "mlx", "openai", "vertex":
+		return true
 	}
-	return knob("DIALECT_SUFFIX", "#openai")
+	return false
+}
+
+func dialectSuffixFor(flavor string) string {
+	// Only the merged hosted-only config carries "#openai" siblings; the
+	// single-dialect route-table flavors (enmaas, mlx, openai, vertex) have
+	// bare model_name entries only.
+	if flavor == "claude" || flavor == "codex" {
+		return knob("DIALECT_SUFFIX", "#openai")
+	}
+	return knob("DIALECT_SUFFIX", "")
 }
 
 func loadConfig(flavor, port, runtimeDir string) *config {
@@ -157,6 +175,19 @@ func loadConfig(flavor, port, runtimeDir string) *config {
 	}
 	base = strings.TrimRight(base, "/")
 	base = strings.TrimSuffix(base, "/v1")
+	// The vertex flavor's deployment root is the publisher-models tree, not
+	// the EnMaaS gateway; route entries leave api_base empty for it.
+	if flavor == "vertex" {
+		base = vertexBaseURL()
+	}
+	// Route-table flavors other than enmaas (mlx, openai) carry their own
+	// upstream key via HOSTED_ONLY_UPSTREAM_KEY; enmaas keeps ENMAAS_API_KEY.
+	// The vertex flavor never uses cfg.APIKey upstream (ADC instead) but the
+	// serve startup check wants it non-empty.
+	apiKey := os.Getenv("ENMAAS_API_KEY")
+	if v := strings.TrimSpace(os.Getenv("HOSTED_ONLY_UPSTREAM_KEY")); v != "" {
+		apiKey = v
+	}
 
 	aliases := map[string]struct{}{}
 	for _, a := range strings.Split(knob("ALIAS_MODELS", ""), ",") {
@@ -192,7 +223,8 @@ func loadConfig(flavor, port, runtimeDir string) *config {
 		DeepSeek:             knob("DEEPSEEK_MODEL", "rits/deepseek-ai/DeepSeek-V4.1-Flash-1017"),
 		Aliases:              aliases,
 		BaseURL:              base,
-		APIKey:               os.Getenv("ENMAAS_API_KEY"),
+		APIKey:               apiKey,
+		Vertex:               flavor == "vertex",
 		VisionFallback:       boolKnob("VISION_FALLBACK", true),
 		FallbackOn:           boolKnob("FALLBACK", true),
 		LimitRewrite:         boolKnob("LIMIT_REWRITE", true),

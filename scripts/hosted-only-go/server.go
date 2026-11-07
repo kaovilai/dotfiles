@@ -44,6 +44,12 @@ type app struct {
 	// 2026-11-07): later Messages requests for them go straight to the Responses
 	// translator instead of paying a failed chat call first.
 	responsesOnly sync.Map // upstream model id -> true
+
+	// vertex flavor: the cached ADC access token and its expiry (vertex.go).
+	// Guarded by vxMu; empty token means "draw a fresh one".
+	vxMu     sync.Mutex
+	vxToken  string
+	vxExpiry time.Time
 }
 
 func (a *app) noteQuota(model string, reset time.Time) {
@@ -268,6 +274,11 @@ func (a *app) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		a.rejectModel(w, r, data, requested, started, model)
 		return
 	}
+	// Vertex flavor: the partner endpoint's body constraints (no "model"
+	// field, the Haiku effort gate) -- applied before outBody is marshaled.
+	if a.cfg.Vertex && sanitizeVertexBody(data, upstreamModel) {
+		changed = true
+	}
 	served = upstreamModel
 
 	// The shim loop runs on the client's own dialect; a bridged deployment
@@ -301,6 +312,19 @@ func (a *app) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	stream := asBool(data["stream"]) || strings.Contains(r.Header.Get("Accept"), "text/event-stream")
 
+	// Vertex flavor: the model id is part of the upstream path and streaming
+	// uses the :streamRawPredict sibling, so the deployment dialect's static
+	// path (built for a gateway that ignores it) is replaced here, once the
+	// stream flag is known. Tool search additionally needs the tool-search
+	// beta header -- the client does not send it itself, LiteLLM's partner
+	// route added it the same way.
+	if a.cfg.Vertex {
+		upstreamPath = vertexPath(upstreamModel, stream)
+		if hasToolSearchTool(data) {
+			addBetaHeader(r, "tool-search-tool-2025-10-19")
+		}
+	}
+
 	// Shim path: buffered rounds against the upstream, executed searches
 	// against Parallel, terminal round returned to the client (SSE-synthesized
 	// when it asked to stream, with the native search trail prepended).
@@ -310,6 +334,13 @@ func (a *app) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resp, transportErr := a.upstream(r, outBody, upstreamBase, upstreamPath, stream)
+	// Vertex: an ADC access token can die between requests; drop the cached
+	// one and retry once with a fresh token instead of failing the turn.
+	if transportErr == nil && a.cfg.Vertex && resp.StatusCode == http.StatusUnauthorized {
+		resp.Body.Close()
+		a.vertexInvalidate()
+		resp, transportErr = a.upstream(r, outBody, upstreamBase, upstreamPath, stream)
+	}
 	usedFallback := false
 	fallbackReason := ""
 	if fallback != "" && a.shouldFailover(resp, transportErr) && a.fallbackServable(fallback, r.URL.Path) {
@@ -579,18 +610,31 @@ func (a *app) upstream(r *http.Request, body []byte, base, path string, stream b
 	} else if stream {
 		req.Header.Set("Accept", "text/event-stream")
 	}
-	if isAnthropicPath(path) {
+	if a.cfg.Vertex {
+		// Partner-model endpoint: ADC bearer + the Vertex version header;
+		// anthropic-beta (prompt caching etc.) is forwarded like the raw
+		// Anthropic path does.
+		tok, terr := a.vertexToken(r.Context())
+		if terr != nil {
+			return nil, terr
+		}
+		req.Header.Set("Authorization", "Bearer "+tok)
+		req.Header.Set("anthropic-version", "vertex-2023-10-16")
+		if beta := r.Header.Get("anthropic-beta"); beta != "" {
+			req.Header.Set("anthropic-beta", beta)
+		}
+	} else if isAnthropicPath(path) {
 		req.Header.Set("x-api-key", a.cfg.APIKey)
 		version := r.Header.Get("anthropic-version")
 		if version == "" {
 			version = "2023-06-01"
 		}
 		req.Header.Set("anthropic-version", version)
+		if beta := r.Header.Get("anthropic-beta"); beta != "" {
+			req.Header.Set("anthropic-beta", beta)
+		}
 	} else {
 		req.Header.Set("Authorization", "Bearer "+a.cfg.APIKey)
-	}
-	if beta := r.Header.Get("anthropic-beta"); beta != "" && isAnthropicPath(path) {
-		req.Header.Set("anthropic-beta", beta)
 	}
 	return a.client.Do(req)
 }
