@@ -36,8 +36,8 @@ Non-goals:
 
 ## Why SSH pull (decision)
 
-The fleet is already fully meshed for SSH: tailscale MagicDNS (spectrex360,
-glkvm, kvm-8b48, …), LAN IPs, and corp netbird. fleet-sync keeps every
+The fleet is already fully meshed for SSH: tailscale MagicDNS names, LAN
+IPs, and corp netbird. fleet-sync keeps every
 machine's dotfiles checkout current. So the aggregation machine can, at any
 moment, run a read-only command on any peer and get exactly the data it needs.
 
@@ -56,7 +56,7 @@ local state, not committed.
 ## Architecture
 
 ```
- peer machine (spectrex360, glkvm, …)                this machine (aggregator)
+ peer machine (any configured host)                this machine (aggregator)
  ────────────────────────────────────                ──────────────────────────────
  events-*.jsonl  ← proxies (as today)                 load_proxy / load_auto (today)
  inflight-*.json                                          │
@@ -82,7 +82,7 @@ Three pieces:
    checkout — i.e. nothing new to deploy.
 
 2. **Local: `llm-usage fleet refresh`** — the puller. For each configured host,
-   concurrently (ThreadPoolExecutor, 5 s hard timeout per host):
+   concurrently (ThreadPoolExecutor, 10 s hard timeout per host):
    `ssh -o ControlMaster=auto -o ControlPath=$STATE/fleet/cm-%r@%h:%p -o
    ControlPersist=15m -o BatchMode=yes -o ConnectTimeout=3 <target> '<dotfiles>/scripts/llm-usage export --since <T>'`
    and append the result to `$STATE/fleet/<host>/events-YYYY-MM.jsonl`.
@@ -111,9 +111,11 @@ Three pieces:
 
 ### Event identity (dedup on ingest)
 
-Today's events have no unique id. `export` synthesizes one:
-`sha1(host | t | port | served | requested | in | out | cache_read)` — every
-field an append-only writer emits per request. On ingest the puller drops ids
+Today's events have no unique id. `export` synthesizes an `eid` field:
+`sha1(t | port | served | requested | in | out | cache_read)` — every field an
+append-only writer emits per request, plus the transcript message id when
+there is one. The host is not part of the hash (it is stamped at ingest
+instead, from the config name). On ingest the puller drops ids
 already present in the host's current month file (kept as a small in-memory
 set of the last N ids + a tail-scan of the file). Collisions beyond the
 overlap window are practically impossible (same second + same token counts).
@@ -136,9 +138,9 @@ env-overridable per the repo's existing pattern:
 ```jsonc
 {
   "hosts": [
-    {"name": "spectre", "ssh": "spectrex360.tail16f91.ts.net"},
-    {"name": "glkvm",   "ssh": "glkvm", "dir": "~/git/dotfiles"},
-    {"name": "kvm",     "ssh": "kvm-8b48", "dir": "~/git/dotfiles"}
+    {"name": "laptop", "ssh": "laptop.example.ts.net"},
+    {"name": "server", "ssh": "server", "dir": "~/git/dotfiles"},
+    {"name": "devbox", "ssh": "devbox.local", "dir": "~/git/dotfiles"}
   ]
 }
 ```
@@ -179,7 +181,7 @@ Additive keys, existing consumers keep working:
 ```jsonc
 {"fleet": {
    "enabled": true,
-   "hosts": [ {"name": "spectre", "state": "up" | "stale" | "down",
+   "hosts": [ {"name": "server", "state": "up" | "stale" | "down",
                "last_ok_s": 42, "last_event_s": 12,
                "m15": {…}, "h1": {…}, "inflight": {…}} ],
    "stale_after_s": 180

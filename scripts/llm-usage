@@ -30,6 +30,7 @@ import math
 import os
 import plistlib
 import re
+import shlex
 import shutil
 import socket
 import statistics
@@ -643,10 +644,22 @@ def _fleet_export_argv(entry, since, inflight=False):
     if entry.get("local_dir"):
         argv = [sys.executable, script, "export", "--since", str(since)] + ([flags] if flags else [])
         return argv, {"LLM_USAGE_DIR": os.path.expanduser(entry["local_dir"])}
-    cmd = " ".join([f"{os.path.expanduser(entry.get('dir') or '~/git/dotfiles')}/scripts/llm-usage", "export",
-                    "--since", str(since)] + ([flags] if flags else []))
+    script_path = (entry.get("dir") or "~/git/dotfiles").rstrip("/") + "/scripts/llm-usage"
+    # a leading ~/ must reach the peer's shell unexpanded (its home differs from
+    # ours); the rest of the path is quoted so spaces survive the remote shell
+    remote = "~/" + shlex.quote(script_path[2:]) if script_path.startswith("~/") else shlex.quote(script_path)
+    cmd = " ".join([remote, "export", "--since", str(since)] + ([flags] if flags else []))
+    # ControlMaster socket path must stay short: a deep STATE dir (long tmp paths
+    # in tests, long usernames) blows past the ~104-char unix socket limit, and
+    # tempfile.gettempdir() on macOS is a long /var/folders path — so literal /tmp.
+    # %C = hash of the connection parameters, so one socket per (user, host, port).
+    cdir = f"/tmp/llm-usage-fleet-{UID}"
+    try:
+        os.makedirs(cdir, mode=0o700, exist_ok=True)
+    except OSError:
+        cdir = os.path.join(STATE, "fleet")
     return ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=3",
-            "-o", "ControlMaster=auto", "-o", "ControlPath=" + os.path.join(STATE, "fleet", "cm-%r@%h-%p"),
+            "-o", "ControlMaster=auto", "-o", f"ControlPath={cdir}/cm-%C",
             "-o", "ControlPersist=15m", "--", entry["ssh"], cmd], None
 
 
@@ -698,9 +711,10 @@ def fleet_pull_one(name, entry, force=False, ttl=FLEET_TTL):
         return {"name": name, "skipped": "fresh"}
     started = now
     try:
-        since = max(st.get("last_event_t", 0), now - FLEET_FIRST_SYNC) - 2  # 2s overlap, deduped by eid
+        since = (st.get("last_event_t") or (now - FLEET_FIRST_SYNC)) - 2  # resume from last event, 2s overlap deduped by eid
         meta, events, flights = fleet_pull(name, entry, since, inflight=True)
         snap = {"t": time.time(), "requests": flights}  # always rewrite: a peer with no in-flight
+        os.makedirs(fleet_dir(name), mode=0o700, exist_ok=True)  # first pull: the host dir does not exist yet
         tmp = os.path.join(fleet_dir(name), "inflight.json.tmp")  # requests must not keep the old ones
         with open(tmp, "w") as handle:
             json.dump(snap, handle)
@@ -779,7 +793,11 @@ def fleet_kick(ttl=FLEET_TTL):
     kick = os.path.join(STATE, "fleet", "kick")
     try:
         os.makedirs(os.path.dirname(kick), mode=0o700, exist_ok=True)
-        if now - os.path.getmtime(kick) < ttl - 5:
+        try:
+            last_kick = os.path.getmtime(kick)
+        except OSError:
+            last_kick = 0  # no kick file yet: treat as long ago, do not strand the first refresh
+        if now - last_kick < ttl - 5:
             return
         with open(kick, "a"):
             os.utime(kick)
@@ -1149,8 +1167,8 @@ def fmt_wait(seconds):
 def event_line(ev):
     when = datetime.fromtimestamp(ev["t"]).strftime("%H:%M:%S")
     host = ""
-    if fleet_hosts() and ev.get("host"):  # fleet view: which machine served it
-        host = f"{ev['host']:<9} "
+    if fleet_hosts():  # fleet view: which machine served it (local rows say "local", like the peers' names)
+        host = f"{host_of(ev):<9} "
     arrow = route_label(ev)
     if ev.get("requested") and not is_reroute(ev):
         arrow = strip_model(ev["served"])
