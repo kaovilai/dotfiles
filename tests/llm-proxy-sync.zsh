@@ -195,6 +195,27 @@ mkdir -p "$XDG_STATE_HOME/llm-proxy-sync"; print -r -- 59005 > "$XDG_STATE_HOME/
 sync --dry-run
 (( rc == 0 && ${#restarted} == 0 )) && [[ "$out" == *"was up last sync, listener gone; would restart it"* ]] || fail "dry-run restarted a dead proxy: rc=$rc out=$out"
 
+# 13. one restart per port: with the #599 shared port (both hosted-only flavors
+# on :59003) a stale listener gets ONE watcher / ONE restart from the first
+# target; the second flavor is reported as covered, never armed alongside it
+# (two watchers on one port retire each other's fresh proxy mid-swap). The env
+# prefix scopes the shared port to these sync calls only.
+reset; listening=(59003 1)
+stub_verdict=(glm-codex "stale: hooks" glm-claude "stale: hooks"); serving=(59003 1)
+HOSTED_ONLY_CODEX_PROXY_PORT=59003 sync
+(( rc == 0 )) && [[ "${watch_started[*]}" == glm-codex && ${#restarted} -eq 0 ]] || fail "shared port armed more than one watcher: started=$watch_started restarted=$restarted"
+[[ "$out" == *"glm-claude (:59003) shares :59003 with the target handled above; covered by its restart"* ]] || fail "covered flavor not reported: $out"
+reset; listening=(59003 1)
+stub_verdict=(glm-codex "stale: hooks" glm-claude "stale: hooks")
+HOSTED_ONLY_CODEX_PROXY_PORT=59003 sync
+(( rc == 0 )) && [[ "${restarted[*]}" == glm-codex ]] || fail "shared port restarted twice: restarted=$restarted"
+[[ "$out" == *"covered by its restart"* ]] || fail "covered flavor not reported when idle: $out"
+# --quiet stays silent about the covered flavor too
+reset; listening=(59003 1)
+stub_verdict=(glm-codex "stale: hooks" glm-claude "stale: hooks")
+HOSTED_ONLY_CODEX_PROXY_PORT=59003 sync --quiet
+[[ "$out" == *"glm-claude"* ]] && fail "--quiet reported the covered flavor: $out"
+
 # --- llm-proxy-watch (the detached watcher) ---------------------------------
 
 # W1. busy for a while, then idle: restarted at the first idle moment (two quiet
