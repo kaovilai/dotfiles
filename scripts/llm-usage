@@ -2222,8 +2222,10 @@ def menubar_data(now=None, up_ports=None, share_window="15m", share_metric="requ
         if port == "4141":
             evs, source = extra, "transcript"
         mine = [f for f in flights if f["port"] == port and not f.get("host")]  # this machine's, not a peer's
-        name = PROXIES.get(port, (f":{port}", None))[0]
-        row = {"port": int(port) if port.isdigit() else port, "name": name, "state": "up" if up[port] else "down", "source": source,
+        name, config = PROXIES.get(port, (f":{port}", None))
+        _, logging_on = config_models(config)  # up-but-NOT-logging: pre-callback code, traffic missing from the views
+        row = {"port": int(port) if port.isdigit() else port, "name": name, "state": "up" if up[port] else "down",
+               "logging": logging_on, "source": source,
                "expected": port in seen_week or (port == "4141" and bool(extra)),
                "last_seen_s": int(now - seen_week[port]) if port in seen_week else None,
                "inflight": ({"count": len(mine), "oldest_s": max((f["seconds"] for f in mine), default=0)} if port in reporting else None),

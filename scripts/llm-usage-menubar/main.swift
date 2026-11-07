@@ -1641,7 +1641,8 @@ final class MonitorView: NSView {
             let ry = rect.minY + CGFloat(dotRows.count - 1 - i) * rowH
             for p in row {
                 let up = p["state"].str == "up"
-                (up ? NSColor.systemGreen : NSColor.systemRed).setFill()
+                let notLogging = up && p["logging"].exists && !p["logging"].bool  // pre-callback code: up, but its traffic is missing
+                (notLogging ? NSColor.systemYellow : up ? NSColor.systemGreen : NSColor.systemRed).setFill()
                 NSBezierPath(ovalIn: NSRect(x: x, y: ry + 4, width: 5, height: 5)).fill()
                 let label = dotLabel(p)
                 drawStr(label, in: NSRect(x: x + 7, y: ry, width: textWidth(label, tinyFont) + 2, height: rowH), font: tinyFont, color: .secondaryLabelColor)
@@ -1930,6 +1931,7 @@ final class Builder {
         let src = p["source"].str == "transcript" ? " (transcript)" : ""
         let label = name == ":\(port)" ? name : "\(name) :\(port)"
         var line = "\(glyph) \(label)  \(up ? "up" : (expected ? "DOWN" : "off"))"
+        if up, p["logging"].exists, !p["logging"].bool { line += " NOT LOGGING (restart: llm-proxy-restart)" }
         line += "  \(m15["requests"].int ?? 0)/15m \(h1["requests"].int ?? 0)/1h\(errs(h1))\(src)"
         if let fl = p["inflight"].exists ? p["inflight"]["count"].int : nil, fl > 0 { line += "  ⏳\(fl)" }
         let item = info(line, dim: !up && !expected, mono: true)

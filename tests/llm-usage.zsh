@@ -356,6 +356,7 @@ def proxy(d, port): return next(p for p in d["proxies"] if p["port"] == port)
 # normal
 d = run("normal", [ev(30), ev(60), ev(120, port="4147"), err(200, 500)])
 assert d["version"] == 2 and d["throttled"] is None and not d["spike"]["active"] and not d["any_down"], d
+assert all(p.get("logging") is None or isinstance(p["logging"], bool) for p in d["proxies"]), d["proxies"]
 assert proxy(d, 4148)["m15"]["requests"] == 3 and proxy(d, 4148)["m15"]["errors"]["5xx"] == 1, proxy(d, 4148)
 assert proxy(d, 4148)["state"] == "up" and proxy(d, 4142)["state"] == "down" and not proxy(d, 4142)["expected"]
 assert d["totals"]["m15"]["requests"] == 4 and d["top_models"][0] == {"model": "glm-5.3", "requests": 4}, d["top_models"]
