@@ -678,6 +678,45 @@ out = agg_run("summary", "--since", "1h", "--host", "peerA", "--json")
 assert sum(r["n"] for r in json.loads(out)) == 2, out
 assert "peerA" in agg_run("status") and "fleet" in agg_run("status")
 assert "peerA" in agg_run("fleet", "hosts")
+# pre-deployment history: usage that predates this feature shipping on the peer still
+# backfills — the proxy log's months drive the walk, and copilot-era transcript usage
+# rides the same chunks (a local_dir entry naming its own claude_dirs stands in for the
+# peer's transcript root)
+oldpeer = tempfile.mkdtemp(dir=tmp)
+oldclaude = tempfile.mkdtemp(dir=tmp)
+os.makedirs(f"{oldclaude}/proj")
+d100, d80 = now - dt.timedelta(days=100), now - dt.timedelta(days=80)
+with open(f"{oldpeer}/events-{d100:%Y-%m}.jsonl", "w") as h:
+    h.write(json.dumps(ev(100 * 86400)) + "\n")      # proxy log predating everything
+with open(f"{oldpeer}/events-{now:%Y-%m}.jsonl", "w") as h:
+    h.write(json.dumps(ev(300)) + "\n")               # this week's traffic
+tpath = f"{oldclaude}/proj/old.jsonl"
+with open(tpath, "w") as h:                           # copilot-era transcript usage, 80d ago
+    h.write(json.dumps({"type": "assistant", "timestamp": ts(80 * 86400), "uuid": "ou0", "sessionId": "os",
+                        "message": {"id": "om0", "model": SON, "usage": {"input_tokens": 7, "output_tokens": 6, "cache_read_input_tokens": 70}}}) + "\n")
+os.utime(tpath, (d80.timestamp(), d80.timestamp()))   # an old session file: mtime matches its age
+cfg2 = tempfile.mkdtemp(dir=tmp)
+with open(f"{cfg2}/fleet.json", "w") as h:
+    json.dump({"hosts": [{"name": "oldpeer", "local_dir": oldpeer, "claude_dirs": oldclaude}]}, h)
+agg2 = tempfile.mkdtemp(dir=tmp)
+fenv2 = {"LLM_USAGE_CONFIG_DIR": cfg2, "LLM_USAGE_FLEET": ""}  # empty: not off, hosts come from the config file
+for _ in range(12):  # first sync + one 30d chunk per refresh until the oldest month is covered
+    res = subprocess.run([sys.executable, usage, "fleet", "refresh", "--force"], capture_output=True, text=True, timeout=120,
+                         env={**os.environ, "LLM_USAGE_DIR": agg2, **fenv2})
+    assert res.returncode == 0, res.stderr
+    st = json.load(open(f"{agg2}/fleet/oldpeer/status.json"))
+    if st.get("backfilled"):
+        break
+assert st["backfilled"], st
+rows = [json.loads(r) for p in sorted(glob.glob(f"{agg2}/fleet/oldpeer/events-*.jsonl")) for r in open(p)]
+assert len(rows) == 3, rows  # 100d proxy + 80d transcript + this week
+old_ts = next(r for r in rows if r.get("id") == "om0")
+assert old_ts["port"] == "4141" and old_ts["via"] == "transcript" and old_ts["host"] == "oldpeer", old_ts
+assert any(r["t"] < now.timestamp() - 99 * 86400 for r in rows), "the 100d-old proxy event must be pulled"
+out = subprocess.run([sys.executable, usage, "summary", "--since", "all", "--by", "host", "--json"], capture_output=True, text=True,
+                     timeout=60, env={**os.environ, "LLM_USAGE_DIR": agg2, **fenv2})
+assert {r["key"]["host"]: r["n"] for r in json.loads(out.stdout)} == {"oldpeer": 3}, out.stdout
+
 # menubar-data: fleet-wide totals, per-host block, peer throttle + in-flight, host-tagged last_error
 d = run("fleet", [ev(30), err(50, 500)], state=agg, extra_env=fenv)
 fb = d["fleet"]

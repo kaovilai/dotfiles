@@ -542,8 +542,10 @@ def fleet_hosts():
     "dir"?}]}; LLM_USAGE_FLEET="off" disables, "name=ssh-target,..." (or
     "name=local:/path/to/state" for tests and second local state dirs)
     adds/overrides by name. A peer named "local" is rejected: it collides with
-    this machine's own host label. Machine-local on purpose: the repo is
-    public, hostnames are not."""
+    this machine's own host label. A config-file local_dir entry may also set
+    "claude_dirs": the peer's own transcript root, so tests (and a copied peer
+    state) export its transcript history too. Machine-local on purpose: the
+    repo is public, hostnames are not."""
     if os.environ.get("LLM_USAGE_FLEET", "").strip().lower() == "off":
         return []
     hosts = {}
@@ -800,11 +802,13 @@ def fleet_pull(name, entry, since, inflight=False, until=None, modified_since=No
     env = dict(os.environ)
     if env_override:
         # local: is a test seam / second-state-dir transport: no transcript
-        # merge (those dirs belong to this machine, not the "peer")
+        # merge by default (those dirs belong to this machine, not the "peer")
+        # — unless the entry names its own claude_dirs (config-file entries only)
         empty = os.path.join(fleet_dir(name), ".empty-dirs")
         os.makedirs(empty, exist_ok=True)
         env.update(env_override)
-        env["LLM_USAGE_CLAUDE_DIRS"] = env["LLM_USAGE_CODEX_DIRS"] = empty
+        env["LLM_USAGE_CLAUDE_DIRS"] = os.path.expanduser(entry.get("claude_dirs") or empty)
+        env["LLM_USAGE_CODEX_DIRS"] = empty
     try:
         os.makedirs(os.path.join(STATE, "fleet"), mode=0o700, exist_ok=True)
         res = subprocess.run(argv, capture_output=True, text=True, timeout=FLEET_SSH_TIMEOUT, env=env)
