@@ -86,7 +86,8 @@ Three pieces:
    checkout — i.e. nothing new to deploy.
 
 2. **Local: `llm-usage fleet refresh`** — the puller. For each configured host,
-   concurrently (ThreadPoolExecutor, 10 s hard timeout per host):
+   concurrently (ThreadPoolExecutor, 30 s hard timeout per export — first syncs
+   stream a full 7d payload and can exceed 10 s on slower peers):
    `ssh -o ControlMaster=auto -o ControlPath=/tmp/llm-usage-fleet-<uid>/cm-%C -o
    ControlPersist=15m -o BatchMode=yes -o ConnectTimeout=3 <target> '<dotfiles>/scripts/llm-usage export --since <T>'`
    and store the result in `$STATE/fleet/<host>/events-YYYY-MM.jsonl`. The

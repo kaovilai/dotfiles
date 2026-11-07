@@ -529,7 +529,9 @@ def load(since, source, host=None):
 # docs/notes/fleet-usage-streaming.md.
 
 FLEET_TTL = 25                 # s: a host pulled this recently is skipped
-FLEET_SSH_TIMEOUT = 10         # s: per-host hard timeout (connect + export)
+FLEET_SSH_TIMEOUT = 30         # s: per-export hard timeout. First syncs stream a full 7d
+# payload and can run well past 10s on slower peers (measured 6.5s for the bare
+# export on a WSL peer, plus transfer); steady-state pulls stay in low seconds
 FLEET_FIRST_SYNC = 7 * 86400   # first pull covers the last 7 days
 FLEET_BACKFILL_CHUNK = 30 * 86400  # older history walks back 30d per refresh
 FLEET_STALE_AFTER = 180        # s: last successful pull older than this = stale
