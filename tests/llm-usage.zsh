@@ -1112,6 +1112,12 @@ if [[ -x /usr/bin/swiftc ]] || command -v swiftc >/dev/null; then
     "$mb" --window-png "$tmp/w-fleet-hover-bars.png" --layout vertical --graph bars --hover host:peerA --data-file "$mbjson/fleet.json" >/dev/null || fail "window-png fleet host-hover bars"
     "$mb" --window-png "$tmp/w-fleet-hz-only.png" --layout vertical --graph bars --hover host:peerA --data-file "$tmp/fleet-hostzero.json" >/dev/null || fail "window-png fleet host-zero bars-only"
     cmp -s "$tmp/w-fleet-hz-only.png" "$tmp/w-fleet-hover-bars.png" && fail "host overlay must draw in bars-only mode (zeroed series must differ)"
+    # a host hover that can filter nothing (tokens metric, fleet data stripped) must
+    # not change the render at all — not the data, not the share rows, not the
+    # error/throttle chart chrome
+    "$mb" --window-png "$tmp/w-fleet-tok-plain.png" --layout vertical --window-metric tokens --data-file "$tmp/fleet-stripped.json" >/dev/null || fail "window-png fleet tokens plain"
+    "$mb" --window-png "$tmp/w-fleet-tok-hover.png" --layout vertical --window-metric tokens --hover host:peerA --data-file "$tmp/fleet-stripped.json" >/dev/null || fail "window-png fleet tokens host-hover"
+    cmp -s "$tmp/w-fleet-tok-hover.png" "$tmp/w-fleet-tok-plain.png" || fail "host hover without a host series must not change the render"
     # the compact fleet line (horizontal window's short stats column) carries the
     # first host's hover target: same zeroed-series payload, hovering the row's own
     # host vs a name that matches nothing — the only difference is the row highlight

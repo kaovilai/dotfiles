@@ -998,13 +998,19 @@ final class MonitorView: NSView {
         }
     }
 
+    /// A host hover only filters the requests chart — on other metrics there is no
+    /// host series, so every graph/share-row hover effect (dimming, chart chrome,
+    /// overlays) treats it as no hover. The fleet row's own highlight still uses
+    /// `hover` directly: it is row-local mouse feedback, not a graph filter.
+    private var effectiveHover: HoverTarget? {
+        if case .host = hover, metric != .requests { return nil }
+        return hover
+    }
+
     /// 1 for the hovered series, dimmed for everything else, unchanged when nothing is hovered.
-    /// Host hover only filters the requests chart — on other metrics there is no host series
-    /// to emphasize, so leave the graph at full alpha instead of dimming it into nothing.
     private func hoverAlpha(_ target: HoverTarget) -> CGFloat {
-        guard let hover else { return 1 }
-        if case .host = hover, metric != .requests { return 1 }
-        return hover == target ? 1 : 0.12
+        guard let h = effectiveHover else { return 1 }
+        return h == target ? 1 : 0.12
     }
 
     /// Headless PNG renders pin a hover target: "vendor:<key>", "provider:<key>" or "host:<name>".
@@ -1463,7 +1469,7 @@ final class MonitorView: NSView {
             m == .tokens ? (i < model.tps.count ? model.tps[i] : 0) : Double(model.totalsPerMinute()[i])
         }
         let start = model.start ?? now.addingTimeInterval(-3600)
-        let chrome: CGFloat = hover == nil ? 1 : 0.22
+        let chrome: CGFloat = effectiveHover == nil ? 1 : 0.22
 
         // throttle washes sit under the bars so the data stays readable; lanes and edges go on top afterwards
         for sp in spans {
@@ -1812,10 +1818,10 @@ final class MonitorView: NSView {
         hoverRects.append((r, target))
         ctx.saveGState()
         defer { ctx.restoreGState() }
-        if hover == target {
+        if effectiveHover == target {
             NSColor.labelColor.withAlphaComponent(0.07).setFill()
             NSBezierPath(roundedRect: r.insetBy(dx: -3, dy: 0.5), xRadius: 3, yRadius: 3).fill()
-        } else if hover != nil {
+        } else if effectiveHover != nil {
             ctx.setAlpha(0.22)
         }
         var x = r.minX
