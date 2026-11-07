@@ -667,7 +667,12 @@ func (a *app) classifierServable(model, path string) bool {
 // path. Not servable means no fallback: the original failure is returned.
 func (a *app) fallbackServable(fallback, path string) bool {
 	if a.cfg.Routes == nil {
-		return true
+		// The hosted-only flavors' cost guard: only the hosted models and
+		// their aliases may be reached with the gateway credentials. The pair
+		// picker only ever produces those, but the classifier rewrite's
+		// previous primary is whatever the client asked for — a disallowed
+		// model must not become reachable through the failover.
+		return a.cfg.allowedModel(fallback)
 	}
 	if !a.cfg.Routes.known(fallback, path) {
 		return false

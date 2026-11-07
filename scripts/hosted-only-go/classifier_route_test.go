@@ -640,3 +640,32 @@ func TestClassifierRouteNonRitsPrimaryGetsThinkingOff(t *testing.T) {
 		t.Fatalf("a non-rits primary must still get thinking switched off: %s", body)
 	}
 }
+
+// The hosted-only cost guard must hold through the failover: a marker-bearing
+// request for a DISALLOWED model is rewritten onto the allowed target, but a
+// retryable target failure must not fail over back to the disallowed model
+// with the gateway credentials.
+func TestClassifierFailoverCannotReachDisallowedModels(t *testing.T) {
+	h := classifierHarness(t, "")
+	ds := h.app.cfg.DeepSeek
+	h.app.cfg.Routes = nil // hosted-only flavor: the allowlist is the guard
+	h.app.cfg.ClassifierRouteModel = ds
+	h.app.cfg.FallbackOn = true
+	h.failModel = ds
+	const disallowed = "gpt-4o"
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages",
+		strings.NewReader(`{"model":"`+disallowed+`","max_tokens":16,"system":"`+classifierSystem+`","messages":[{"role":"user","content":"hi"}]}`))
+	req.Header.Set("x-api-key", h.app.cfg.Token)
+	req.Header.Set("content-type", "application/json")
+	rec := httptest.NewRecorder()
+	h.app.ServeHTTP(rec, req)
+	if rec.Code == 200 {
+		t.Fatalf("the failing target must surface its failure: %d", rec.Code)
+	}
+	if h.count(disallowed) != 0 {
+		t.Fatalf("a disallowed model must not be reachable through the failover: %s called %d times", disallowed, h.count(disallowed))
+	}
+	if h.count(ds) != 1 {
+		t.Fatalf("the target must have been tried: ds=%d", h.count(ds))
+	}
+}
