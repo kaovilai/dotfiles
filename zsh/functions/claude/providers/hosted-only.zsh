@@ -12,7 +12,7 @@
 # (claude-sonnet-5-5 / claude-opus-5-5 ids are refused there) and sends it to
 # the same ANTHROPIC_BASE_URL as the main model. Hosted-only access (e.g. over
 # the monthly EnMaaS budget) cannot reach Claude/GPT through EnMaaS, so all
-# models go through the local "claude" hosted-only LiteLLM proxy
+# models go through the local "claude" hosted-only Go proxy
 # (scripts/hosted-only-proxy.zsh, port 4148): GLM and DeepSeek -> anthropic/
 # Messages on the EnMaaS root (same as claude-enmaas).
 # The proxy's hook cuts reasoning on requests without a thinking field (GLM 5.3

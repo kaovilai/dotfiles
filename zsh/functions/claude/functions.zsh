@@ -92,8 +92,9 @@ merge-claude-settings() {
 }
 # llm-usage: which providers/models your LLM traffic really hits (requested vs
 # served, tokens, latency, 1M-context use, errors). Reads the per-request log
-# the LiteLLM proxies write (scripts/litellm_usage_log.py) and falls back to
-# Claude Code/Codex transcripts. `llm-usage status` shows which proxies log.
+# the local LLM proxies write (the Go binary itself, vertex/openai via
+# scripts/litellm_usage_log.py) and falls back to Claude Code/Codex transcripts.
+# `llm-usage status` shows which proxies log.
 llm-usage() {
     python3 "${${(%):-%x}:A:h:h:h:h}/scripts/llm-usage" "$@"
 }

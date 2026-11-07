@@ -31,7 +31,7 @@ up_head() { git -C "$tmp/up-$1.git" rev-parse main; }
 
 mkrepo dot; mkrepo cfg; mkrepo capi
 export HOME="$tmp/home" XDG_STATE_HOME="$tmp/state" COPILOT_API_PORT=59997
-# The LiteLLM proxies fleet-sync may restart: point them at ports nothing uses so a
+# The LLM proxies fleet-sync may restart: point them at ports nothing uses so a
 # developer's real :4146/:4147/:4148 proxies are never looked at, let alone restarted.
 export CLAUDE_VERTEX_PROXY_PORT=59991 CLAUDE_OPENAI_PROXY_PORT=59992 CLAUDE_ENMAAS_PROXY_PORT=59993
 export HOSTED_ONLY_CODEX_PROXY_PORT=59994 HOSTED_ONLY_CLAUDE_PROXY_PORT=59995
@@ -198,11 +198,11 @@ run || fail "post-restart run rc=$rc: $out"
 # the spawned gateway shows its resolved interpreter in ps, so match the script path
 pkill -f "$GW_STUB" 2>/dev/null || true; sleep 0.5; wait $gw 2>/dev/null || true
 
-# 10. LiteLLM proxies: the step is wired in and --help documents it; with nothing
+# 10. LLM proxies: the step is wired in and --help documents it; with nothing
 # listening on the (isolated) proxy ports it is silent and changes nothing
 [[ "$(<"$repo/scripts/fleet-sync.zsh")" == *'llm-proxy-sync $args'* ]] || fail "proxy sync step not wired into fleet-sync"
 run --help || fail "--help rc=$rc"
-[[ "$out" == *"LiteLLM proxies"* && "$out" == *"restarted when idle"* ]] || fail "--help does not describe the proxy step: $out"
+[[ "$out" == *"LLM proxies"* && "$out" == *"restarted when idle"* ]] || fail "--help does not describe the proxy step: $out"
 # the case-9 gateway left a fresh up-marker; a recorded always-on proxy whose
 # listener is gone is restarted (audit: a dead proxy was invisible before)
 run || fail "run with a fresh up-marker rc=$rc: $out"
