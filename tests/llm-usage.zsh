@@ -796,6 +796,21 @@ assert not scripted, "every scripted pull must have been consumed"
 assert st["backfilled"] and st["backfill_empty"] == 2, st
 rows = host_lines("p3")
 assert len(rows) == 1 and rows[0]["eid"] == mod.event_eid(old40), rows
+
+# control socket dir: a predictable /tmp path is trusted only when provably ours
+# (real dir, owned by us, no group/other bits); a planted or loosened dir falls back to STATE
+import stat as stat_mod
+cmroot = os.path.join(tmp, "cmtest")
+os.makedirs(cmroot, exist_ok=True)
+cmdir = os.path.join(cmroot, "llm-usage-fleet-%d" % os.getuid())
+os.makedirs(cmdir, mode=0o700, exist_ok=True)
+os.chmod(cmdir, 0o755)
+assert mod._fleet_control_dir(cmroot) == os.path.join(mod.STATE, "fleet"), "loosened dir must not be trusted"
+os.chmod(cmdir, 0o700)
+assert mod._fleet_control_dir(cmroot) == cmdir
+os.rmdir(cmdir)
+os.symlink(os.path.join(tmp, "cmtest-elsewhere"), cmdir)
+assert mod._fleet_control_dir(cmroot) == os.path.join(mod.STATE, "fleet"), "symlinked dir must not be trusted"
 PY
 
 # Swift helper: compiles, and --dump-menu renders every scenario without a GUI.

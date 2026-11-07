@@ -34,6 +34,7 @@ import shlex
 import shutil
 import socket
 import statistics
+import stat as stat_mod
 import subprocess
 import sys
 import tempfile
@@ -685,6 +686,26 @@ def _rewrite_month(path, lines):
         pass
 
 
+def _fleet_control_dir(tmp="/tmp"):
+    """Directory for the ssh ControlMaster sockets. /tmp is preferred for its
+    short path (a deep STATE dir blows the ~104-char unix socket limit), but a
+    predictable path in shared space must not be trusted: another local user can
+    pre-create it and plant a mux socket at cm-<hash>, which ssh would treat as
+    the master (CodeQL flagged exactly this). Only a directory that provably
+    exists, is a real dir (not a symlink), is owned by us and carries no
+    group/other bits is used; anything else falls back to the private STATE
+    dir. `tmp` is a parameter so tests can point it somewhere disposable."""
+    cdir = os.path.join(tmp, "llm-usage-fleet-%d" % UID)
+    try:
+        os.makedirs(cdir, mode=0o700, exist_ok=True)
+        st = os.lstat(cdir)
+        if stat_mod.S_ISDIR(st.st_mode) and st.st_uid == os.getuid() and not st.st_mode & 0o077:
+            return cdir
+    except OSError:
+        pass
+    return os.path.join(STATE, "fleet")
+
+
 def _fleet_export_argv(entry, since, inflight=False):
     """Command whose stdout is the peer's export (ssh, or a local subprocess for
     tests / a second state dir)."""
@@ -700,16 +721,14 @@ def _fleet_export_argv(entry, since, inflight=False):
     cmd = " ".join([remote, "export", "--since", str(since)] + ([flags] if flags else []))
     # ControlMaster socket path must stay short: a deep STATE dir (long tmp paths
     # in tests, long usernames) blows past the ~104-char unix socket limit, and
-    # tempfile.gettempdir() on macOS is a long /var/folders path — so literal /tmp.
-    # %C = hash of the connection parameters, so one socket per (user, host, port).
-    cdir = f"/tmp/llm-usage-fleet-{UID}"
-    try:
-        os.makedirs(cdir, mode=0o700, exist_ok=True)
-    except OSError:
-        cdir = os.path.join(STATE, "fleet")
-    return ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=3",
-            "-o", "ControlMaster=auto", "-o", f"ControlPath={cdir}/cm-%C",
-            "-o", "ControlPersist=15m", "--", entry["ssh"], cmd], None
+    # tempfile.gettempdir() on macOS is a long /var/folders path — so /tmp,
+    # validated by _fleet_control_dir. %C = hash of the connection parameters,
+    # so one socket per (user, host, port). If even the fallback is too long,
+    # drop multiplexing entirely: a fresh connection per pull beats a hard failure.
+    cdir = _fleet_control_dir()
+    mux = [] if len(os.path.join(cdir, "cm-" + "0" * 40)) > 104 else \
+        ["-o", "ControlMaster=auto", "-o", f"ControlPath={cdir}/cm-%C", "-o", "ControlPersist=15m"]
+    return ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=3", *mux, "--", entry["ssh"], cmd], None
 
 
 def fleet_pull(name, entry, since, inflight=False):
