@@ -2960,8 +2960,8 @@ def _serve_replace_stale():
     except (OSError, ValueError):
         return
     pid = _serve_pid_alive(doc)
-    if not pid:
-        return
+    if not pid or pid == os.getpid():
+        return  # dead, or ourselves: the code watchdog re-execs through here
     try:
         stale = float(doc.get("code_mtime") or 0) != os.path.getmtime(os.path.realpath(__file__))
     except OSError:
