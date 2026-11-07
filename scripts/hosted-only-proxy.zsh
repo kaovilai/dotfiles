@@ -283,7 +283,7 @@ _hosted_only_proxy_fp() {
     # Every knob _hosted_only_go_env forwards is a fingerprint input: one left
     # out (IMAGE_TOKENS, IMAGE_CACHE_DIR, SEARCH_NUDGE) would let a running
     # proxy serve the old value as "fresh".
-    local knobs="$(_hosted_only_knob OUTAGE_COALESCE_SECONDS 5) $_hop_vision_fallback $_hop_limit_rewrite $_hop_limit_retry $_hop_client_retry $_hop_fallback $_hop_aliases $_hop_request_timeout $_hop_image_budget $_hop_image_cache_days $_hop_dialect $dns_host ${ENMAAS_DNS_DOH_URLS:-} $(_hosted_only_knob IMAGE_TOKENS 2500) $(_hosted_only_knob IMAGE_CACHE_DIR '') $(_hosted_only_knob SEARCH_NUDGE 1) $(_hosted_only_knob SEARCH_SHIM 0) $(_hosted_only_knob SEARCH_DAILY_CAP 500) $(_hosted_only_knob PARALLEL_BASE https://api.parallel.ai) $(_hosted_only_knob PARALLEL_PLATFORM https://platform.parallel.ai)"
+    local knobs="$(_hosted_only_knob OUTAGE_COALESCE_SECONDS 5) $_hop_vision_fallback $_hop_limit_rewrite $_hop_limit_retry $_hop_client_retry $_hop_fallback $_hop_aliases $_hop_request_timeout $_hop_image_budget $_hop_image_cache_days $_hop_dialect $dns_host ${ENMAAS_DNS_DOH_URLS:-} $(_hosted_only_knob IMAGE_TOKENS 2500) $(_hosted_only_knob IMAGE_CACHE_DIR '') $(_hosted_only_knob SEARCH_NUDGE 1) $(_hosted_only_knob SEARCH_SHIM 0) $(_hosted_only_knob SEARCH_DAILY_CAP 500) $(_hosted_only_knob PARALLEL_BASE https://api.parallel.ai) $(_hosted_only_knob PARALLEL_PLATFORM https://platform.parallel.ai) $(_hosted_only_knob CLASSIFIER_ROUTE_MODEL '')"
     local fp token_fp
     fp=$(print -rn -- "$config"$'\x1f'"$hooks_hash"$'\x1f'"$ENMAAS_API_KEY"$'\x1f'"$knobs" \
         | shasum -a 256 | cut -d' ' -f1) || return 1
@@ -343,6 +343,7 @@ _hosted_only_go_env() {
         "HOSTED_ONLY_PARALLEL_STATE=$(_hosted_only_knob PARALLEL_STATE '')"
         "HOSTED_ONLY_PARALLEL_MCP=$(_hosted_only_knob PARALLEL_MCP https://mcp.parallel.ai/mcp)"
         "HOSTED_ONLY_PARALLEL_ACCOUNT=$(_hosted_only_knob PARALLEL_ACCOUNT https://api.parallel.ai/account)"
+        "HOSTED_ONLY_CLASSIFIER_ROUTE_MODEL=$(_hosted_only_knob CLASSIFIER_ROUTE_MODEL '')"
         "HOSTED_ONLY_DIALECT_SUFFIX=$_hop_dialect"
         "ENMAAS_DNS_FALLBACK_HOSTS=$_hop_dns_host"
     )

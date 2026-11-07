@@ -306,6 +306,57 @@ Not done, because the model is not online and the right numbers are not known ye
   A per-model in-flight limit in the proxy would shape that, but needs a measured
   queue behaviour first.
 - **Streamed reasoning as thinking blocks**, for the signature reason above.
+## Routing the auto-mode classifier to a fast model
+
+The proxy already labels Claude Code's auto-mode classifier calls in the usage
+log (`role: classifier`, by the "security monitor for autonomous AI coding
+agents" system marker). They are a large share of all traffic (3012 of 10692
+events, 2026-11) and the shape where latency dominates quality: tool-free,
+a few hundred input tokens, ~10 output tokens, non-streaming — 1.7-3.2 s each
+on GLM. That is exactly the workload a block-diffusion "System-1" model
+(DiffusionGemma-class, or the Decision/d3 models that top the Jev Decision
+Index) serves best: high per-request throughput, short outputs.
+
+`HOSTED_ONLY_CLASSIFIER_ROUTE_MODEL=<id>` pins those calls to `<id>`:
+
+- Detection is the existing marker, read from the SYSTEM field only (the usage
+  label scans the wider head; a routing decision must not key on user message
+  content, or pasted text could opt a request into the fast model) —
+  deterministic and free, unlike an embedding classifier. vLLM's
+  semantic router (vllm-sr.ai) calls this signal-driven routing; its learned
+  router earns its cost only when the signal is not already known, which here
+  it is.
+- The rewrite happens before route resolution and only when `<id>` has its own
+  deployment on that endpoint — an EXPLICIT route entry in the EnMaaS flavor
+  (the launcher always adds a wildcard chat route, which would make any typo'd
+  or undeployed id look servable), an allowed model or alias in the hosted-only
+  flavors — so a bad id cannot break auto mode: the request stays on the model
+  the client picked.
+- The usage event stays attributable: `requested` is what the client picked,
+  `served` is the fast model, `role` stays `classifier`.
+- A Messages classifier call to a chat-dialect fast model goes through the
+  translation, `thinking: disabled` in the payload mapped to
+  `enable_thinking: false` for vLLM `rits/` ids (the chat-template switch) —
+  the classifier wants a verdict, not reasoning.
+- If the fast model fails retryably, the call fails over to the PREVIOUS
+  primary (the model that was serving classifiers before the knob), never to
+  the fast model again — under the opt-outs the pair picker honors (request
+  `fallbacks`, failover disabled, an active quota on either side). A
+  chat-dialect previous primary learned as Responses-only is retried over
+  /v1/responses, like the primary path.
+- The output clamp re-runs against the rewritten target's window: a classifier
+  moved onto the hosted pair from an unclamped third model is measured against
+  the pair's window.
+- Codex needs no rewrite: its reviewer is wired by config
+  (`auto_review_model_override`, HOSTED_ONLY_REVIEW_MODEL), so pointing that
+  knob at the fast model routes it.
+
+Default is empty (off). When a System-1 model lands on the gateway, add its id
+to the route table and set the knob; nothing else changes. A non-exported
+`.zshrc` assignment works for both launchers: the hosted-only one forwards it
+(`_hosted_only_go_env`), and the EnMaaS hook env exports it for the controller
+(which reads `os.environ` and hashes `HOSTED_ONLY_*` into its knob digest, so a
+change restarts an idle EnMaaS proxy too).
 
 ## Tests
 
