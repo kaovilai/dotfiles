@@ -70,6 +70,12 @@ func rewriteRequestMode(cfg *config, path string, data map[string]any, plan *shi
 		if !searchNotePresent(data) && injectSearchNote(cfg, path, data) {
 			changed = true
 		}
+	} else if plan != nil && plan.Mode == "shim" && cfg.SearchNudge && !shimNotePresent(data) {
+		// The strip note says search is unavailable; with the shim active the
+		// opposite is true and the model must know to use the tool.
+		if injectShimNote(path, data) {
+			changed = true
+		}
 	}
 
 	if _, hasMessages := data["messages"]; hasMessages && data["input"] == nil && data["thinking"] == nil {
@@ -389,6 +395,78 @@ func stripWebSearchTools(data map[string]any) bool {
 }
 
 const searchNoteMarker = "[web-search-unavailable]"
+
+// shimNoteMarker: the positive counterpart of searchNoteMarker, injected while
+// the web-search shim serves the tool. degradeShimToStrip removes it before
+// the unavailable note lands, so the model never sees both.
+const shimNoteMarker = "[web-search-shim]"
+
+func shimNoteText() string {
+	return shimNoteMarker + " This model can search the web: the web_search tool is served by the local proxy. " +
+		"Call it with a query whenever the task needs current information (news, releases, versions, prices, events) " +
+		"or the user asks to look something up; report findings with their URLs."
+}
+
+func shimNotePresent(data map[string]any) bool {
+	b, _ := json.Marshal(data)
+	return strings.Contains(string(b), shimNoteMarker)
+}
+
+func injectShimNote(path string, data map[string]any) bool {
+	if _, ok := data["system"]; ok || strings.Contains(path, "messages") {
+		return addToSystem(data, shimNoteText())
+	}
+	if _, ok := data["input"]; ok {
+		if addToResponsesInput(data, shimNoteText()) {
+			return true
+		}
+	}
+	return addToInstructions(data, shimNoteText())
+}
+
+// removeShimNote drops the shim note from every place injectShimNote can put
+// it, so a degrade to the strip path leaves no contradictory instruction.
+func removeShimNote(data map[string]any) {
+	switch system := data["system"].(type) {
+	case []any:
+		kept := make([]any, 0, len(system))
+		for _, block := range system {
+			if m := asMap(block); m != nil && strings.Contains(asString(m["text"]), shimNoteMarker) {
+				continue
+			}
+			kept = append(kept, block)
+		}
+		if len(kept) == 0 {
+			delete(data, "system")
+		} else if len(kept) != len(system) {
+			data["system"] = kept
+		}
+	case string:
+		if strings.Contains(system, shimNoteMarker) {
+			delete(data, "system")
+		}
+	}
+	if input, ok := data["input"].([]any); ok {
+		kept := make([]any, 0, len(input))
+		for _, item := range input {
+			if m := asMap(item); m != nil && asString(m["role"]) == "developer" &&
+				strings.Contains(string(marshal(m["content"])), shimNoteMarker) {
+				continue
+			}
+			kept = append(kept, item)
+		}
+		if len(kept) != len(input) {
+			data["input"] = kept
+		}
+	}
+	if instructions, ok := data["instructions"].(string); ok && strings.Contains(instructions, shimNoteMarker) {
+		cut := strings.Index(instructions, shimNoteMarker)
+		data["instructions"] = strings.TrimSpace(strings.TrimRight(instructions[:cut], "\n"))
+		if data["instructions"] == "" {
+			delete(data, "instructions")
+		}
+	}
+}
 
 func searchNoteText(cfg *config) string {
 	where := "a search-capable model or provider (for example T3 delegate_task)"

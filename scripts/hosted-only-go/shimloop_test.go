@@ -188,6 +188,11 @@ func TestShimLoopAnthropicSearchThenAnswer(t *testing.T) {
 	if len(blocks) != 1 || asString(asMap(blocks[0])["tool_use_id"]) != "tu_1" {
 		t.Fatalf("tool result blocks = %#v", blocks)
 	}
+	// a missing type field is a 400 at the gateway (live 2026-11-07 soak:
+	// "body.messages.2.content.0.type: Field required")
+	if asString(asMap(blocks[0])["type"]) != "tool_result" {
+		t.Fatalf("tool result block needs its type: %#v", blocks[0])
+	}
 	if !strings.Contains(asString(asMap(blocks[0])["content"]), "https://r.example/1") {
 		t.Fatalf("tool result missing evidence: %#v", blocks[0])
 	}

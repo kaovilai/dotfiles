@@ -375,6 +375,7 @@ func degradeShimToStrip(cfg *config, path string, data map[string]any) {
 			}
 		}
 	}
+	removeShimNote(data)
 	if cfg.SearchNudge && !searchNotePresent(data) {
 		injectSearchNote(cfg, path, data)
 	}

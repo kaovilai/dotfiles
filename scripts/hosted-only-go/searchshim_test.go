@@ -190,11 +190,15 @@ func TestRewriteRequestModeShimSkipsStrip(t *testing.T) {
 	if plan == nil {
 		t.Fatal("plan is nil")
 	}
+	plan.Mode = "shim" // engageShim sets this after the rewrite decision
 	if _, err, _ := rewriteRequestMode(cfg, "/v1/messages", data, plan); err != nil {
 		t.Fatal(err)
 	}
 	if searchNotePresent(data) {
 		t.Fatal("shim mode must not inject the strip note")
+	}
+	if !shimNotePresent(data) {
+		t.Fatal("shim mode must tell the model to use the web_search tool")
 	}
 	// control: no plan -> strip + note (today's behavior)
 	data2 := shimTestData()
@@ -220,6 +224,9 @@ func TestRewriteRequestModeNativePassthrough(t *testing.T) {
 	if searchNotePresent(data) {
 		t.Fatal("native verdict must not inject the note")
 	}
+	if shimNotePresent(data) {
+		t.Fatal("native verdict needs no shim note either")
+	}
 }
 
 func TestDegradeShimToStrip(t *testing.T) {
@@ -230,7 +237,18 @@ func TestDegradeShimToStrip(t *testing.T) {
 	if plan == nil {
 		t.Fatal("plan is nil")
 	}
+	plan.Mode = "shim"
+	// the active shim had told the model it can search
+	if _, err, _ := rewriteRequestMode(cfg, "/v1/messages", data, plan); err != nil {
+		t.Fatal(err)
+	}
+	if !shimNotePresent(data) {
+		t.Fatal("precondition: the shim note must be present")
+	}
 	degradeShimToStrip(cfg, "/v1/messages", data)
+	if shimNotePresent(data) {
+		t.Fatal("degrade must remove the shim note: search is unavailable now")
+	}
 	for _, tool := range asList(data["tools"]) {
 		if asString(asMap(tool)["name"]) == "web_search" {
 			t.Fatal("degrade must remove the shim's function tool")

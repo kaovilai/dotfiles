@@ -144,6 +144,7 @@ func appendSearchRound(dialect string, data map[string]any, round map[string]any
 		var toolResults []any
 		for _, rec := range recs {
 			toolResults = append(toolResults, map[string]any{
+				"type":        "tool_result",
 				"tool_use_id": rec.call.ID,
 				"content":     recordResultText(rec),
 			})
