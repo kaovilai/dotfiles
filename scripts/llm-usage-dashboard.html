@@ -39,7 +39,7 @@
 }
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--page); color: var(--ink); font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
-main { max-width: 1280px; margin: 0 auto; padding: 20px 20px 48px; }
+main { max-width: 1600px; margin: 0 auto; padding: 20px 20px 48px; }
 h1 { font-size: 18px; margin: 0; font-weight: 600; }
 h2 { font-size: 14px; margin: 0; font-weight: 600; }
 .sub { color: var(--ink-2); font-size: 12px; }
@@ -64,6 +64,7 @@ label.chk { color: var(--ink-2); display: inline-flex; gap: 6px; align-items: ce
 .pill b { color: var(--ink); font-weight: 600; }
 .pill .ok { color: var(--good); } .pill .warn { color: var(--warn); } .pill .off { color: var(--muted); }
 .banner { border: 1px solid var(--border); border-left: 3px solid var(--warn); background: var(--surface); border-radius: 8px; padding: 8px 12px; margin-bottom: 14px; color: var(--ink-2); font-size: 13px; }
+.banner.strong { border-left-color: var(--crit); color: var(--ink); font-weight: 500; }
 .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin-bottom: 14px; }
 .tile { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px; }
 .tile .l { color: var(--ink-2); font-size: 12px; }
@@ -72,7 +73,7 @@ label.chk { color: var(--ink-2); display: inline-flex; gap: 6px; align-items: ce
 .grid { display: grid; grid-template-columns: repeat(12, 1fr); gap: 14px; }
 .card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px 12px; min-width: 0; grid-column: span 12; transition: opacity .15s; }
 .card.half { grid-column: span 6; }
-@media (max-width: 900px) { .card.half { grid-column: span 12; } }
+@media (max-width: 1100px) { .card.half { grid-column: span 12; } }
 .card-h { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; margin-bottom: 8px; flex-wrap: wrap; }
 .card-h .tools { display: flex; gap: 8px; align-items: center; }
 .linkish { background: none; border: 0; color: var(--ink-2); font: inherit; font-size: 12px; cursor: pointer; padding: 2px 4px; text-decoration: underline dotted; }
@@ -83,11 +84,23 @@ svg text { fill: var(--muted); font-size: 11px; font-family: inherit; }
 .chart svg { display: block; width: 100%; overflow: visible; }
 .empty { color: var(--muted); padding: 28px 8px; text-align: center; }
 table { border-collapse: collapse; width: 100%; font-size: 12.5px; }
-th { text-align: left; color: var(--ink-2); font-weight: 600; border-bottom: 1px solid var(--axis); padding: 5px 8px; white-space: nowrap; }
+th { text-align: left; color: var(--ink-2); font-weight: 600; border-bottom: 1px solid var(--axis); padding: 5px 8px; white-space: nowrap; position: sticky; top: 0; background: var(--surface); z-index: 1; }
 td { padding: 5px 8px; border-bottom: 1px solid var(--grid); white-space: nowrap; }
 th.r, td.r { text-align: right; font-variant-numeric: tabular-nums; }
 tbody tr:hover td { background: var(--wash); }
-.scroll { overflow-x: auto; }
+/* tall tables scroll inside their card with the header pinned, instead of
+   stretching the page to five digits of pixels */
+.scroll { overflow: auto; max-height: 480px; }
+td.clamp { white-space: normal; max-width: 460px; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; word-break: break-word; }
+.legend { display: flex; flex-wrap: wrap; gap: 4px 14px; margin-top: 8px; font-size: 12px; color: var(--ink-2); }
+.legend .li { display: inline-flex; align-items: center; gap: 6px; }
+details.chipsbox { margin-bottom: 14px; }
+details.chipsbox summary { cursor: pointer; color: var(--ink-2); font-size: 12px; user-select: none; list-style: none; display: inline-flex; align-items: center; gap: 6px; }
+details.chipsbox summary::before { content: "▸"; transition: transform .12s; }
+details.chipsbox[open] summary::before { transform: rotate(90deg); }
+details.chipsbox summary .count { color: var(--ink); font-weight: 600; }
+.seg.mini button { padding: 3px 9px; font-size: 12px; }
+.seg.mini button[aria-pressed="true"]::before { content: ""; }
 .tag { display: inline-flex; gap: 4px; align-items: center; border-radius: 6px; padding: 0 7px; font-size: 11.5px; font-weight: 600; border: 1px solid currentColor; }
 .tag.re { color: var(--reroute); } .tag.d { color: var(--muted); font-weight: 400; } .tag.bad { color: var(--crit); }
 .sw { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 6px; vertical-align: -1px; }
@@ -132,7 +145,10 @@ tbody tr:hover td { background: var(--wash); }
     <button class="btn" id="theme" type="button" aria-label="Toggle theme">Theme: auto</button>
   </div>
 
-  <div class="chips" id="chips" aria-label="Models (click to hide or show)"></div>
+  <details class="chipsbox" id="chipsbox">
+    <summary>Models <span class="count" id="chips-count"></span> <span class="sub">click to hide or show</span></summary>
+    <div class="chips" id="chips" aria-label="Models (click to hide or show)"></div>
+  </details>
   <div class="status" id="status"></div>
   <div id="banner"></div>
   <div class="kpis" id="kpis"></div>
@@ -142,26 +158,26 @@ tbody tr:hover td { background: var(--wash); }
       <div class="card-h"><h2 id="t-time">Traffic over time</h2>
         <div class="tools">
           <div class="seg" id="metric" role="group" aria-label="Metric"></div>
-          <button class="linkish" data-table="time" aria-pressed="false">Table</button>
+          <div class="seg mini" data-tableseg="time" role="group" aria-label="View"><button type="button" data-v="chart" aria-pressed="true">Chart</button><button type="button" data-v="table" aria-pressed="false">Table</button></div>
         </div></div>
       <div class="chart" id="ch-time"></div><div class="scroll" id="tb-time" hidden></div>
     </section>
 
     <section class="card half" id="c-share">
       <div class="card-h"><h2>Model share <span class="sub">requests</span></h2>
-        <div class="tools"><button class="linkish" data-table="share" aria-pressed="false">Table</button></div></div>
+        <div class="tools"><div class="seg mini" data-tableseg="share" role="group" aria-label="View"><button type="button" data-v="chart" aria-pressed="true">Chart</button><button type="button" data-v="table" aria-pressed="false">Table</button></div></div></div>
       <div class="bars" id="ch-share"></div><div class="scroll" id="tb-share" hidden></div>
     </section>
 
     <section class="card half" id="c-ctx">
       <div class="card-h"><h2>Context size per request <span class="sub">&gt;200k means a 1M-window model</span></h2>
-        <div class="tools"><button class="linkish" data-table="ctx" aria-pressed="false">Table</button></div></div>
+        <div class="tools"><div class="seg mini" data-tableseg="ctx" role="group" aria-label="View"><button type="button" data-v="chart" aria-pressed="true">Chart</button><button type="button" data-v="table" aria-pressed="false">Table</button></div></div></div>
       <div class="chart" id="ch-ctx"></div><div class="scroll" id="tb-ctx" hidden></div>
     </section>
 
-    <section class="card half" id="c-lat">
+    <section class="card" id="c-lat">
       <div class="card-h"><h2>Latency p50 <span class="sub">per model, proxy log only</span></h2>
-        <div class="tools"><button class="linkish" data-table="lat" aria-pressed="false">Table</button></div></div>
+        <div class="tools"><div class="seg mini" data-tableseg="lat" role="group" aria-label="View"><button type="button" data-v="chart" aria-pressed="true">Chart</button><button type="button" data-v="table" aria-pressed="false">Table</button></div></div></div>
       <div class="chart" id="ch-lat"></div><div class="scroll" id="tb-lat" hidden></div>
     </section>
 
@@ -186,6 +202,11 @@ tbody tr:hover td { background: var(--wash); }
       <div class="scroll" id="tb-err"></div>
     </section>
 
+    <section class="card" id="c-recent">
+      <div class="card-h"><h2>Recent requests</h2></div>
+      <div class="scroll" id="tb-recent"></div>
+    </section>
+
     <section class="card" id="c-routes">
       <div class="card-h"><h2>Routes <span class="sub">requested → served; reroutes are flagged</span></h2></div>
       <div class="scroll" id="tb-routes"></div>
@@ -199,11 +220,6 @@ tbody tr:hover td { background: var(--wash); }
     <section class="card" id="c-clients">
       <div class="card-h"><h2>Proxy / client / role</h2></div>
       <div class="scroll" id="tb-clients"></div>
-    </section>
-
-    <section class="card" id="c-recent">
-      <div class="card-h"><h2>Recent requests</h2></div>
-      <div class="scroll" id="tb-recent"></div>
     </section>
   </div>
 </main>
@@ -411,8 +427,12 @@ function shareBars(host) {
   host.replaceChildren();
   const rows = D.model_table;
   if (!rows.length) { host.append(html("div", { class: "empty" }, "No data in this range.")); return; }
+  // cap the list so this card stops dictating its sibling's height; the table
+  // view below the chart holds every model
+  const CAP = 10;
+  const shown = expanded.has("ch-share") ? rows : rows.slice(0, CAP);
   const max = Math.max(...rows.map((r) => r.n));
-  for (const r of rows) {
+  for (const r of shown) {
     const bar = html("div", { class: "bar", style: { width: `${Math.max(1, (r.n / max) * 100)}%`, background: colorOf(r.model), maxWidth: "calc(100% - 64px)" } });
     const track = html("div", { class: "track", tabindex: 0 }, bar, html("span", { class: "val" }, human(r.n)));
     const tipRows = [
@@ -426,20 +446,42 @@ function shareBars(host) {
     track.addEventListener("pointerleave", hideTip); track.addEventListener("blur", hideTip);
     host.append(html("div", { class: "row" }, html("div", { class: "name", title: r.model }, r.model), track));
   }
+  if (rows.length > CAP) host.append(html("button", {
+    class: "linkish", type: "button",
+    onclick: () => { expanded.has("ch-share") ? expanded.delete("ch-share") : expanded.add("ch-share"); renderCharts(); }
+  }, expanded.has("ch-share") ? `Show top ${CAP}` : `+ ${rows.length - CAP} more models (show all)`));
 }
 
 /* ---------- tables ---------- */
-function table(host, headers, rows, aligns) {
+const num = (n) => n == null ? "-" : typeof n === "number" ? n.toLocaleString() : n;
+const expanded = new Set(); // table hosts the user expanded past the cap (by element id)
+
+function table(host, headers, rows, aligns, opts) {
+  const cap = (opts && opts.cap) || 15;
+  const id = host.id;
+  const all = expanded.has(id);
+  const shown = all ? rows : rows.slice(0, cap);
   const t = html("table", {}, html("thead", {}, html("tr", {}, headers.map((h, i) => html("th", { class: aligns && aligns[i] === "r" ? "r" : "" }, h)))),
-    html("tbody", {}, rows.map((r) => html("tr", {}, r.map((c, i) => html("td", { class: aligns && aligns[i] === "r" ? "r" : "" }, c))))));
-  host.replaceChildren(rows.length ? t : html("div", { class: "empty" }, "Nothing here."));
+    html("tbody", {}, shown.map((r) => html("tr", {}, r.map((c, i) => {
+      const cls = (aligns && aligns[i] === "r" ? "r " : "") + (opts && opts.clamp === i ? "clamp" : "");
+      const cell = html("td", { class: cls.trim() || null }, c);
+      if (opts && opts.clamp === i) cell.title = c; // full text on hover
+      return cell;
+    })))));
+  host.replaceChildren();
+  if (!rows.length) { host.append(html("div", { class: "empty" }, "Nothing here.")); return; }
+  host.append(t);
+  if (rows.length > cap) host.append(html("button", {
+    class: "linkish", type: "button",
+    onclick: () => { all ? expanded.delete(id) : expanded.add(id); renderTables(); }
+  }, all ? `Show top ${cap} of ${num(rows.length)}` : `Show all ${num(rows.length)} rows`));
 }
 const sw = (m, tint) => html("span", {}, html("span", { class: "sw", style: { background: tint || colorOf(m) } }), m);
 
 function renderTables() {
   table(document.getElementById("tb-models"),
     ["Model", "Reqs", "Err", "429", "5xx", "Err%", "In", "Out", "Cache", "Hit", "Ctx max", ">200k", "p50", "p95", "tok/s", "Cost"],
-    D.model_table.map((r) => [sw(r.model, colorOf(r.model)), r.n, r.err || "-", r.e429 || "-", r.e5xx || "-", r.err ? pctf(r.err_rate) : "-", human(r.in), human(r.out), human(r.cread), pctf(r.hit), human(r.ctxmax), r.long || "-", ms(r.p50), ms(r.p95), r.tps ? Math.round(r.tps) : "-", r.cost ? "$" + r.cost.toFixed(2) : "-"]),
+    D.model_table.map((r) => [sw(r.model, colorOf(r.model)), num(r.n), r.err ? num(r.err) : "-", r.e429 ? num(r.e429) : "-", r.e5xx ? num(r.e5xx) : "-", r.err ? pctf(r.err_rate) : "-", human(r.in), human(r.out), human(r.cread), pctf(r.hit), human(r.ctxmax), r.long ? num(r.long) : "-", ms(r.p50), ms(r.p95), r.tps ? Math.round(r.tps) : "-", r.cost ? "$" + r.cost.toFixed(2) : "-"]),
     ["l", "r", "r", "r", "r", "r", "r", "r", "r", "r", "r", "r", "r", "r", "r", "r"]);
 
   // alias = Claude name served by GLM/DeepSeek, vision = glm→deepseek image fallback, fallback = router retry.
@@ -455,15 +497,15 @@ function renderTables() {
   else table(rt, ["Proxy", "Requested", "", "Served", "Upstream", "Kind", "Reqs", "Err", "In", "Out", "p50"],
     routes.map((r) => [r.proxy, r.requested, "→", r.served, r.upstream,
       kindTag(r),
-      r.n, r.err || "-", human(r.in), human(r.out), ms(r.p50)]),
+      num(r.n), r.err ? num(r.err) : "-", human(r.in), human(r.out), ms(r.p50)]),
     ["l", "l", "l", "l", "l", "l", "r", "r", "r", "r", "r"]);
 
   table(document.getElementById("tb-clients"), ["Proxy", "Client", "Role", "Reqs", "Err", "In", "Out", "Cache", "p50", "p95"],
-    D.clients.map((r) => [r.proxy, r.client, r.role, r.n, r.err || "-", human(r.in), human(r.out), human(r.cread), ms(r.p50), ms(r.p95)]),
+    D.clients.map((r) => [r.proxy, r.client, r.role, num(r.n), r.err ? num(r.err) : "-", human(r.in), human(r.out), human(r.cread), ms(r.p50), ms(r.p95)]),
     ["l", "l", "l", "r", "r", "r", "r", "r", "r", "r"]);
 
   table(document.getElementById("tb-err"), ["Count", "Status", "Kind", "Error"],
-    D.errors.map((e) => [e.count, html("span", { class: "tag bad" }, e.status), e.kind, e.error]), ["r", "l", "l", "l"]);
+    D.errors.map((e) => [num(e.count), html("span", { class: "tag bad" }, e.status), e.kind, e.error]), ["r", "l", "l", "l"], { clamp: 3 });
 
   const sp = document.getElementById("tb-spikes");
   if (D.spikes.length) table(sp, ["Spike from", "To", "Errors", "429", "5xx", "Other", "Peak / bucket"],
@@ -476,7 +518,7 @@ function renderTables() {
       const route = r.rerouted ? html("span", {}, r.requested, " ", html("span", { class: "tag re" }, "⇄"), " ", r.served) : r.served;
       return [new Date(r.t * 1000).toLocaleTimeString(), r.proxy, r.client || "?", route,
         r.ok ? "ok" : html("span", { class: "tag bad" }, "✕ error"), human(r.ctx), human(r.out), ms(r.ms), notes];
-    }), ["l", "l", "l", "l", "l", "r", "r", "r", "l"]);
+    }), ["l", "l", "l", "l", "l", "r", "r", "r", "l"], { cap: 20 });
 }
 
 /* ---------- top-level render ---------- */
@@ -495,6 +537,8 @@ function renderChips() {
   const box = document.getElementById("chips");
   box.replaceChildren(html("span", { class: "lead" }, "Models"));
   const names = D.chips;
+  const hidden = names.filter((m) => st.hide.has(m)).length;
+  document.getElementById("chips-count").textContent = `${names.length - hidden}/${names.length} shown`;
   for (const m of names) {
     box.append(html("button", { class: "chip", type: "button", "aria-pressed": String(!st.hide.has(m)), onclick: () => { st.hide.has(m) ? st.hide.delete(m) : st.hide.add(m); persist(); load(); } },
       html("i", { style: { background: colorOf(m) } }), m));
@@ -514,7 +558,6 @@ function renderKpis() {
   tile("Rerouted", k.n ? pctf(k.reroutes / k.n) : "-", k.reroutes ? `${k.reroutes} requests served by another model` : "none (or no proxy log)");
   tile("1M-context requests", String(k.long), `context > 200k · largest ${human(k.ctxmax)}`);
   if (k.classifier) tile("Classifier calls", String(k.classifier), "auto-mode safety checks");
-  if (k.cost) tile("Cost", "$" + k.cost.toFixed(2), "per LiteLLM pricing");
 }
 
 function errorCharts() {
@@ -556,13 +599,25 @@ function renderCharts() {
   else columns(ctxHost, { n: D.ctx_bins.length, models, val: (m, i) => D.ctx_hist[m][i], fmt: (v) => String(Math.round(v)), yfmt: (v) => String(Math.round(v)),
     integer: true, height: 220, xlabel: (i) => D.ctx_bins[i], xtitle: (i) => `Context ${D.ctx_bins[i]}` });
 
-  dots(document.getElementById("ch-ttft"), { n, models: models.filter((m) => D.series[m].ttft.some((v) => v != null)), val: (m) => D.series[m].ttft,
+  // dot charts: top 6 models by request volume (28 indistinguishable palette
+  // slots cannot carry a series; the chips above filter to any set you want),
+  // with a named legend so the colors are never a guess
+  const volume = new Map(D.model_table.map((r) => [r.model, r.n]));
+  const pick = (key) => models.filter((m) => D.series[m][key].some((v) => v != null))
+    .sort((a, b) => (volume.get(b) || 0) - (volume.get(a) || 0)).slice(0, 6);
+  const ttftPick = pick("ttft"), latPick = pick("p50");
+
+  dots(document.getElementById("ch-ttft"), { n, models: ttftPick, val: (m) => D.series[m].ttft,
     fmt: ms, yfmt: ms, height: 220, xlabel: (i) => xFormat(D.buckets[i]), xtitle: (i) => fullTime(D.buckets[i]),
     empty: "No TTFT data. It comes from the LiteLLM proxy log (first token timing)." });
 
-  dots(document.getElementById("ch-lat"), { n, models: models.filter((m) => D.series[m].p50.some((v) => v != null)), val: (m) => D.series[m].p50,
+  dots(document.getElementById("ch-lat"), { n, models: latPick, val: (m) => D.series[m].p50,
     fmt: ms, yfmt: ms, height: 220, xlabel: (i) => xFormat(D.buckets[i]), xtitle: (i) => fullTime(D.buckets[i]),
     empty: "No latency data. Transcripts carry none; it comes from the LiteLLM proxy log." });
+  document.getElementById("ch-ttft").append(html("div", { class: "legend" },
+    ttftPick.map((m) => html("span", { class: "li" }, html("span", { class: "sw", style: { background: colorOf(m) } }), m))));
+  document.getElementById("ch-lat").append(html("div", { class: "legend" },
+    latPick.map((m) => html("span", { class: "li" }, html("span", { class: "sw", style: { background: colorOf(m) } }), m))));
 
   shareBars(document.getElementById("ch-share"));
 
@@ -578,11 +633,15 @@ function renderCharts() {
 
 function render() {
   if (!D) return;
-  document.getElementById("meta").textContent = `${D.events.toLocaleString()} events · source: ${D.source} · bucket ${D.bucket >= 3600 ? D.bucket / 3600 + "h" : D.bucket / 60 + "m"} · updated ${new Date().toLocaleTimeString()}`;
+  // cost lives in the header, not an eighth KPI tile (7 tiles fill the row; an
+  // eighth wrapped alone). Annotated: the sum only covers priced models, so a
+  // low figure next to huge token counts is not silently "cheap".
+  document.getElementById("meta").textContent = `${D.events.toLocaleString()} events · source: ${D.source} · bucket ${D.bucket >= 3600 ? D.bucket / 3600 + "h" : D.bucket / 60 + "m"} · updated ${new Date().toLocaleTimeString()}`
+    + (D.kpi && D.kpi.cost ? ` · $${D.kpi.cost.toFixed(2)} (priced models only)` : "");
   const banner = document.getElementById("banner");
   banner.replaceChildren();
-  if (D.source.startsWith("transcripts")) banner.append(html("div", { class: "banner" }, "Showing Claude Code / Codex transcripts: only the answering model, no requested → served routing, no latency. Restart the LiteLLM proxies marked “not logging” below (llm-proxy-restart) to capture those."));
-  else if (D.source.startsWith("merged")) banner.append(html("div", { class: "banner" }, "Mixed data: " + D.source.replace(/^merged \(|\)$/g, "") + ". Transcript rows have no routing or latency."));
+  if (D.source.startsWith("transcripts")) banner.append(html("div", { class: "banner strong" }, "Showing Claude Code / Codex transcripts: only the answering model, no requested → served routing, no latency. Restart the LiteLLM proxies marked “not logging” below (llm-proxy-restart) to capture those."));
+  else if (D.source.startsWith("merged")) banner.append(html("div", { class: "banner strong" }, "Mixed data: " + D.source.replace(/^merged \(|\)$/g, "") + ". Transcript rows have no routing or latency."));
   const notUp = (D.hosts || []).filter(h => h.name !== "local" && h.state !== "up");
   if (notUp.length) {
     const stale = notUp.filter(h => h.last_ok_s != null);
@@ -670,13 +729,19 @@ function buildControls() {
     syncControls();
     if (D) renderCharts();
   });
-  for (const b of document.querySelectorAll("[data-table]")) {
-    b.addEventListener("click", () => {
-      const key = b.dataset.table, box = document.getElementById("tb-" + key);
-      box.hidden = !box.hidden;
-      b.setAttribute("aria-pressed", String(!box.hidden));
-      if (!box.hidden && tables[key]) tables[key]();
-    });
+  // per-card Chart | Table view switch (segmented, like the range control —
+  // a lone checkbox reads as a setting, not a view)
+  for (const seg of document.querySelectorAll("[data-tableseg]")) {
+    const key = seg.dataset.tableseg, box = document.getElementById("tb-" + key), chart = document.getElementById("ch-" + key);
+    for (const b of seg.querySelectorAll("button")) {
+      b.addEventListener("click", () => {
+        const showTable = b.dataset.v === "table";
+        box.hidden = !showTable;
+        if (chart) chart.style.display = showTable ? "none" : "";
+        for (const other of seg.querySelectorAll("button")) other.setAttribute("aria-pressed", String(other === b));
+        if (showTable && tables[key]) tables[key]();
+      });
+    }
   }
 }
 function syncControls() {
