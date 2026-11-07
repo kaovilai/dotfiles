@@ -999,8 +999,11 @@ final class MonitorView: NSView {
     }
 
     /// 1 for the hovered series, dimmed for everything else, unchanged when nothing is hovered.
+    /// Host hover only filters the requests chart — on other metrics there is no host series
+    /// to emphasize, so leave the graph at full alpha instead of dimming it into nothing.
     private func hoverAlpha(_ target: HoverTarget) -> CGFloat {
         guard let hover else { return 1 }
+        if case .host = hover, metric != .requests { return 1 }
         return hover == target ? 1 : 0.12
     }
 
@@ -1593,16 +1596,20 @@ final class MonitorView: NSView {
             line.lineCapStyle = .round
             line.lineJoinStyle = .round
             var last: NSPoint?
-            for (i, v) in vals.enumerated() where v > 0 {
+            for (i, v) in vals.enumerated() {
+                guard v > 0 else { last = nil; continue }  // break the line at empty minutes
                 let p = NSPoint(x: rect.minX + slot * (CGFloat(i) + 0.5), y: rect.minY + CGFloat(v) * scale)
                 if let l = last { line.move(to: l); line.line(to: p) } else { line.move(to: p) }
                 last = p
             }
             hostColor.setStroke()
             line.stroke()
-            if let l = last {
-                hostColor.setFill()
-                NSBezierPath(ovalIn: NSRect(x: l.x - 2.5, y: l.y - 2.5, width: 5, height: 5)).fill()
+            // a dot per active minute so isolated one-off requests stay visible
+            hostColor.setFill()
+            for (i, v) in vals.enumerated() where v > 0 {
+                let x = rect.minX + slot * (CGFloat(i) + 0.5)
+                let y = rect.minY + CGFloat(v) * scale
+                NSBezierPath(ovalIn: NSRect(x: x - 2.5, y: y - 2.5, width: 5, height: 5)).fill()
             }
         }
     }
