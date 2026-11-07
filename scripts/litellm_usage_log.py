@@ -174,7 +174,6 @@ def _iso(value):
 
 RESET_AFTER_RE = re.compile(r"\[429\]: .*\(reset after (?:(\d+)h ?)?(?:(\d+)m ?)?(?:(\d+)s)?\)", re.S)
 QUOTA_RE = re.compile(r"token budget exhausted|monthly token budget", re.I)
-FALLBACK_CODE_RE = re.compile(r"\b([45]\d\d)\b")
 
 
 def _status(exc):
@@ -222,32 +221,35 @@ def _fallback_reason(previous, hooks):
     """Why the first attempt fell back, for llm-usage's redirect reasons.
 
     LiteLLM's retry breadcrumbs (metadata.previous_models, see Router.log_retry)
-    carry the failed call's exception_type/exception_string. Classify them the
-    way error_fields classifies final failures: rate-limit / quota / outage-<code>.
+    carry the failed call's exception_type/exception_string and a copy of its
+    kwargs. Classify by the exception class name and any structured status
+    code first — never by scraping digits out of the message ("timeout after
+    500 seconds" is not an HTTP 500), and never assume the kwargs still hold
+    the live exception object.
     """
     for entry in previous or []:
         if not isinstance(entry, dict):
             continue
-        exc = entry.get("exception")
+        exc_type = str(entry.get("exception_type") or "")
         text = str(entry.get("exception_string") or "")
+        exc = entry.get("exception")
         code = _status(exc) if exc is not None else None
-        if code is None:
-            match = FALLBACK_CODE_RE.search(text)
-            code = int(match.group(1)) if match else None
-        if code == 429 or (hooks is not None and _is_limit(hooks, exc)):
+        lowered = exc_type.lower()
+        if code == 429 or "ratelimit" in lowered or (hooks is not None and _is_limit(hooks, exc)):
             return "rate-limit"
-        if hooks is not None and _is_outage(hooks, exc):
-            return "outage"
-        if code == 402:
+        if code == 402 or "quota" in lowered or "budget" in lowered:
             return "quota"
-        if code is not None and code >= 500:
+        if "timeout" in lowered or "timeout" in text.lower():
+            return "timeout"
+        if "connection" in lowered or (hooks is not None and _is_outage(hooks, exc)):
+            return "outage"
+        if code is not None and 500 <= code < 600:
             return f"outage-{code}"
         if code is not None:
             return str(code)
-        lowered = f"{entry.get('exception_type') or ''} {text}".lower()
-        if "timeout" in lowered:
-            return "timeout"
-        return str(entry.get("exception_type") or "unknown").lower()
+        if "internalserver" in lowered or "serviceunavailable" in lowered or "overloaded" in lowered:
+            return "outage"
+        return (exc_type or "unknown").lower()
     return None
 
 
