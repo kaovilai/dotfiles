@@ -2417,14 +2417,20 @@ def menubar_data(now=None, up_ports=None, share_window="15m", share_metric="requ
         hflights = [f for f in f_flights if f.get("host") == name]
         # per-minute requests for the last hour, same 60-bucket window as the
         # main series: what the floating window draws when a host row is hovered
-        # (the chart dims to that host's traffic). Errors ride a parallel array.
+        # (the chart dims to that host's traffic). Errors ride a parallel array,
+        # and tps gives the tokens chart the same filter (completion tok/s,
+        # rounded like the main series).
         hseries = [0] * 60
         herrors = [0] * 60
+        htps = [0.0] * 60
         for e in evs:
             if e["t"] >= now - MB_HOUR:
                 i = int((e["t"] - minute0) // 60)
                 if 0 <= i < 60:
                     hseries[i] += 1
+                    out = e.get("out") or 0
+                    if out:
+                        htps[i] += out
                     if not e.get("ok", True):
                         herrors[i] += 1
         hosts_block["hosts"].append({
@@ -2434,7 +2440,7 @@ def menubar_data(now=None, up_ports=None, share_window="15m", share_metric="requ
             "backfilled": bool(st.get("backfilled")),
             "last_error": st.get("last_error"),
             "m15": counts(evs, MB_RECENT), "h1": counts(evs, MB_HOUR),
-            "series": hseries, "errors": herrors,
+            "series": hseries, "errors": herrors, "tps": [round(v / 60, 2) for v in htps],
             "inflight": {"count": len(hflights), "oldest_s": max((f["seconds"] for f in hflights), default=0)},
         })
     if not hosts_block["hosts"]:

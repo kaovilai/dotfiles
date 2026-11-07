@@ -218,8 +218,10 @@ host `local` and is always `up`.
 - **Floating window**: a compact fleet strip — per-host one line
   (name · sparkline of the hour · reqs · errors) above or beside the existing
   provider panel; hovering a host row filters the traffic graph to that host's
-  per-minute series (`--hover host:<name>`, the same plumbing as
-  `--hover vendor:` — implemented).
+  per-minute series — the requests chart's counts and the tokens chart's tok/s,
+  the stacked view's tokens panel included (`--hover host:<name>`, the same
+  plumbing as `--hover vendor:` — implemented). Latency/ttft carry no per-host
+  series, so a host hover changes nothing there.
 - The helper's existing 30 s `poll()` is the trigger cadence: `menubar-data`
   fires the lock-guarded async refresh, then reads the cache — the UI path
   never blocks on ssh.
