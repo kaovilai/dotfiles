@@ -503,9 +503,11 @@ _llm_proxy_sync_tables() {
 # restart it when no request is in flight. One that is serving a request is not
 # cut off: a detached watcher (llm-proxy-watch) waits for the first idle moment
 # and restarts it then, however long that takes up to its deadline, so the
-# change lands without anyone coming back to it. Returns 1 when a restart did
-# not bring the proxy back or a watcher could not start, 2 on a bad option; a
-# proxy that cannot be checked is reported and left running.
+# change lands without anyone coming back to it. One restart per port: targets
+# that resolve to the same listener (the hosted-only flavors share one proxy
+# since #599) are handled by the first of them alone. Returns 1 when a restart
+# did not bring the proxy back or a watcher could not start, 2 on a bad option;
+# a proxy that cannot be checked is reported and left running.
 llm-proxy-sync() {
     local dry=0 quiet=0 a
     for a in "$@"; do
@@ -527,8 +529,35 @@ llm-proxy-sync() {
     local dir; dir=$(_llm_proxy_watch_dir)
     mkdir -p "$dir" || return 1
     local t verdict why rc=0
+    # Port -> 1 once a target this run handled that listener. The hosted-only
+    # flavors share one proxy since #599, so glm-codex and glm-claude usually
+    # resolve to the same port: the first target's restart or watcher already
+    # covers the listener, and a second one must not be armed — two concurrent
+    # forced swaps on one port retire each other's freshly-started proxy
+    # mid-swap and refuse requests arriving in the crossfire (2026-11-07
+    # ECONNREFUSED on a T3 run).
+    local -A covered
     for t in $order; do
         if [[ -n "$(_claude_listen_pids "${port[$t]}")" ]]; then
+            if (( $+covered[${port[$t]}] )); then
+                # The listener is up, so its recovery marker must still be
+                # refreshed: a later sync — or the flavors split onto separate
+                # ports again — relies on up-<t> to restart a proxy it
+                # remembers as always-on.
+                print -r -- "${port[$t]}" >| "$dir/up-$t"
+                # A watcher the skipped flavor still has waiting (armed before
+                # the ports were shared, or by an older sync) bakes the
+                # fingerprint it was started with and would restart the shared
+                # proxy to that stale config after the target above made it
+                # current: stop it — the target above owns the port.
+                if _llm_proxy_watch_alive "$t" && _llm_proxy_watch_kill "$t"; then
+                    _llm_proxy_watch_log "$t" "stopped: the port is handled by another target this sync"
+                    (( quiet )) || print -ru2 -- "== $t (:${port[$t]}) stale watcher stopped; the target handled above owns the port"
+                fi
+                (( quiet )) || print -ru2 -- "== $t (:${port[$t]}) shares :${port[$t]} with the target handled above; covered by its restart"
+                continue
+            fi
+            covered[${port[$t]}]=1
             print -r -- "${port[$t]}" >| "$dir/up-$t"   # non-empty: the port it was listening on
         elif [[ -s "$dir/up-$t" ]] && (( $(_llm_proxy_now) - $(_llm_marker_mtime "$dir/up-$t") <= 90000 )); then
             # marker fresh (<= 25 h: the hourly sync rewrites it while up, so a
@@ -628,6 +657,18 @@ _llm_proxy_watch_alive() {
     args="$(ps -p "$pid" -o args= 2>/dev/null)"
     [[ "$pid" == <-> ]] && kill -0 "$pid" 2>/dev/null \
         && [[ "$args" == *llm-proxy-watch* || "$args" == *hosted-only-proxy*watch* ]]
+}
+
+# _llm_proxy_watch_kill <name>: TERM the watcher recorded for <name>, under the
+# same identity check as _llm_proxy_watch_alive (a recycled pid is never
+# signalled). Returns 0 when a watcher was signalled.
+_llm_proxy_watch_kill() {
+    local pid args file="$(_llm_proxy_watch_dir)/watch-$1.pid"
+    [[ -r "$file" ]] || return 1
+    pid=$(<"$file")
+    args="$(ps -p "$pid" -o args= 2>/dev/null)"
+    [[ "$pid" == <-> ]] && [[ "$args" == *llm-proxy-watch* || "$args" == *hosted-only-proxy*watch* ]] \
+        && kill "$pid" 2>/dev/null
 }
 
 # _llm_proxy_watch_log <name> <message...>: timestamped line in the watcher log,
