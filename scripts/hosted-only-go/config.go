@@ -57,6 +57,18 @@ type config struct {
 	// sessions on this search-less upstream (T3_WEB_SEARCH_MCP, e.g. "parallel").
 	SearchMCP string
 
+	// Web-search shim (docs/notes/web-search-shim.md): HOSTED_ONLY_SEARCH_SHIM
+	// emulates the hosted web_search server tool proxy-side against the
+	// Parallel Search API for verdict-*ignored* models. Off by default until
+	// soaked; participating in the knob/fingerprint restart machinery.
+	SearchShim       bool
+	SearchVerdicts   string // verdict cache file (model+gateway -> verdict, TTL'd)
+	SearchDailyCap   int    // proxy-side daily ceiling on executed searches
+	ParallelBase     string
+	ParallelKey      string // env PARALLEL_API_KEY (auth ladder tier 1)
+	ParallelState    string // OAuth-minted key + budget counter state dir
+	ParallelPlatform string // OAuth device-flow base (platform.parallel.ai)
+
 	// Routes is set for the enmaas flavor: the launcher's generated LiteLLM
 	// config.json, read as a model -> deployment table.
 	Routes *routeTable
@@ -167,41 +179,62 @@ func loadConfig(flavor, port, runtimeDir string) *config {
 	}
 
 	return &config{
-		Flavor:         flavor,
-		Port:           port,
-		RuntimeDir:     runtimeDir,
-		Token:          knob("PROXY_TOKEN", "hosted-only-local"),
-		GLM:            knob("GLM_MODEL", "rits/zai-org/glm-5-3"),
-		DeepSeek:       knob("DEEPSEEK_MODEL", "rits/deepseek-ai/DeepSeek-V4.1-Flash-1017"),
-		Aliases:        aliases,
-		BaseURL:        base,
-		APIKey:         os.Getenv("ENMAAS_API_KEY"),
-		VisionFallback: boolKnob("VISION_FALLBACK", true),
-		FallbackOn:     boolKnob("FALLBACK", true),
-		LimitRewrite:   boolKnob("LIMIT_REWRITE", true),
-		OutageRewrite:  boolKnob("OUTAGE_REWRITE", true),
-		SearchNudge:    boolKnob("SEARCH_NUDGE", true),
-		MaxModelLen:    intKnob("MAX_MODEL_LEN", 1048576, 1024),
-		OutputReserve:  intKnob("OUTPUT_RESERVE", 512, 0),
-		MinOutput:      intKnob("MIN_OUTPUT", 16000, 1),
-		BytesPerToken:  floatKnob("BYTES_PER_TOKEN", 3),
-		ImageBudget:    intKnob("IMAGE_BUDGET_BYTES", 2500000, 0),
-		ImageTokens:    intKnob("IMAGE_TOKENS", 2500, 1),
-		ImageCacheDays: intKnob("IMAGE_CACHE_DAYS", 1, 0),
-		ImageCacheDir:  imageCacheDir(),
-		AttachmentsDir: os.Getenv("HOME") + "/.t3/userdata/attachments",
-		DefaultRetry:   intKnob("RATE_LIMIT_DEFAULT_RETRY_SECONDS", 60, 1),
-		ClientRetryMax: intKnob("CLIENT_RETRY_MAX_SECONDS", 60, 0),
-		OutageBase:     intKnob("OUTAGE_RETRY_SECONDS", 60, 1),
-		OutageMax:      intKnob("OUTAGE_RETRY_MAX_SECONDS", 600, 1),
-		OutageState:    strings.TrimSpace(knob("OUTAGE_STATE", "")),
-		OutageCoalesce: coalesceKnob(),
-		RequestTimeout: time.Duration(intKnob("REQUEST_TIMEOUT", 300, 1)) * time.Second,
-		QuotaTZ:        tz,
-		UsageDir:       usageDir,
-		SearchDelegate: strings.TrimSpace(os.Getenv("T3_WEB_SEARCH_DELEGATE")),
-		SearchMCP:      strings.TrimSpace(os.Getenv("T3_WEB_SEARCH_MCP")),
+		Flavor:           flavor,
+		Port:             port,
+		RuntimeDir:       runtimeDir,
+		Token:            knob("PROXY_TOKEN", "hosted-only-local"),
+		GLM:              knob("GLM_MODEL", "rits/zai-org/glm-5-3"),
+		DeepSeek:         knob("DEEPSEEK_MODEL", "rits/deepseek-ai/DeepSeek-V4.1-Flash-1017"),
+		Aliases:          aliases,
+		BaseURL:          base,
+		APIKey:           os.Getenv("ENMAAS_API_KEY"),
+		VisionFallback:   boolKnob("VISION_FALLBACK", true),
+		FallbackOn:       boolKnob("FALLBACK", true),
+		LimitRewrite:     boolKnob("LIMIT_REWRITE", true),
+		OutageRewrite:    boolKnob("OUTAGE_REWRITE", true),
+		SearchNudge:      boolKnob("SEARCH_NUDGE", true),
+		MaxModelLen:      intKnob("MAX_MODEL_LEN", 1048576, 1024),
+		OutputReserve:    intKnob("OUTPUT_RESERVE", 512, 0),
+		MinOutput:        intKnob("MIN_OUTPUT", 16000, 1),
+		BytesPerToken:    floatKnob("BYTES_PER_TOKEN", 3),
+		ImageBudget:      intKnob("IMAGE_BUDGET_BYTES", 2500000, 0),
+		ImageTokens:      intKnob("IMAGE_TOKENS", 2500, 1),
+		ImageCacheDays:   intKnob("IMAGE_CACHE_DAYS", 1, 0),
+		ImageCacheDir:    imageCacheDir(),
+		AttachmentsDir:   os.Getenv("HOME") + "/.t3/userdata/attachments",
+		DefaultRetry:     intKnob("RATE_LIMIT_DEFAULT_RETRY_SECONDS", 60, 1),
+		ClientRetryMax:   intKnob("CLIENT_RETRY_MAX_SECONDS", 60, 0),
+		OutageBase:       intKnob("OUTAGE_RETRY_SECONDS", 60, 1),
+		OutageMax:        intKnob("OUTAGE_RETRY_MAX_SECONDS", 600, 1),
+		OutageState:      strings.TrimSpace(knob("OUTAGE_STATE", "")),
+		OutageCoalesce:   coalesceKnob(),
+		RequestTimeout:   time.Duration(intKnob("REQUEST_TIMEOUT", 300, 1)) * time.Second,
+		QuotaTZ:          tz,
+		UsageDir:         usageDir,
+		SearchDelegate:   strings.TrimSpace(os.Getenv("T3_WEB_SEARCH_DELEGATE")),
+		SearchMCP:        strings.TrimSpace(os.Getenv("T3_WEB_SEARCH_MCP")),
+		SearchShim:       boolKnob("SEARCH_SHIM", false),
+		SearchVerdicts:   strings.TrimSpace(knob("SEARCH_VERDICTS", "")),
+		SearchDailyCap:   intKnob("SEARCH_DAILY_CAP", 500, 0),
+		ParallelBase:     strings.TrimRight(knob("PARALLEL_BASE", "https://api.parallel.ai"), "/"),
+		ParallelKey:      strings.TrimSpace(os.Getenv("PARALLEL_API_KEY")),
+		ParallelState:    strings.TrimSpace(knob("PARALLEL_STATE", runtimeDir)),
+		ParallelPlatform: strings.TrimRight(knob("PARALLEL_PLATFORM", "https://platform.parallel.ai"), "/"),
 	}
+}
+
+// stateDir is where the shim keeps its verdict cache, OAuth-minted Parallel
+// key, and daily budget counter: the proxy runtime dir when the launcher gave
+// one, else XDG state.
+func (c *config) shimStateDir() string {
+	if c.ParallelState != "" {
+		return c.ParallelState
+	}
+	state := os.Getenv("XDG_STATE_HOME")
+	if state == "" {
+		state = os.Getenv("HOME") + "/.local/state"
+	}
+	return state + "/hosted-only-shim"
 }
 
 // isGLM reports whether the served model id is GLM or an alias served by GLM.

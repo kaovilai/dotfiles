@@ -1,6 +1,9 @@
 # Web search shim — detect the silent ignore, emulate hosted `web_search`
 
-Design note. Status: designed 2026-11-06, not implemented. Tracking issue links here.
+Design note. Status: implemented 2026-11-06 in the Go proxy
+(`scripts/hosted-only-go/{searchshim,parallel,shimloop}.go`), behind
+`HOSTED_ONLY_SEARCH_SHIM` (off by default until soaked). Tracking issue links
+here.
 
 ## Problem
 

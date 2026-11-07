@@ -8,10 +8,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"math"
 	"net"
 	"net/http"
 	"net/url"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -24,6 +26,11 @@ type app struct {
 	usage   *usageLog
 	outages *outageTracker
 	seq     atomic.Uint64
+
+	// web-search shim (docs/notes/web-search-shim.md): verdict cache and the
+	// Parallel Search client behind the auth ladder.
+	verdicts *verdictStore
+	parallel *parallelClient
 
 	// quotaUntil is the reset of the last monthly-quota answer per model id.
 	// Quota is account-wide (token quota AND USD budget gate the same EnMaaS
@@ -68,11 +75,17 @@ func newApp(cfg *config) *app {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.ForceAttemptHTTP2 = true
 	transport.DialContext = dohDialContext(&net.Dialer{Timeout: 30 * time.Second}, newDoHResolver())
+	verdictPath := cfg.SearchVerdicts
+	if verdictPath == "" {
+		verdictPath = filepath.Join(cfg.shimStateDir(), "search-verdicts.json")
+	}
 	return &app{
-		cfg:     cfg,
-		client:  &http.Client{Timeout: cfg.RequestTimeout, Transport: transport},
-		usage:   newUsageLog(cfg.UsageDir, cfg.Port),
-		outages: newOutageTracker(cfg.OutageState, cfg.OutageBase, cfg.OutageMax, time.Duration(cfg.OutageCoalesce*float64(time.Second))),
+		cfg:      cfg,
+		client:   &http.Client{Timeout: cfg.RequestTimeout, Transport: transport},
+		usage:    newUsageLog(cfg.UsageDir, cfg.Port),
+		outages:  newOutageTracker(cfg.OutageState, cfg.OutageBase, cfg.OutageMax, time.Duration(cfg.OutageCoalesce*float64(time.Second))),
+		verdicts: newVerdictStore(verdictPath),
+		parallel: newParallelClient(cfg, log.Printf),
 	}
 }
 
@@ -123,7 +136,19 @@ func (a *app) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	a.usage.start(requestID, served, requested)
 	defer a.usage.end(requestID)
 
-	fallback, reqErr, changed := rewriteRequest(a.cfg, r.URL.Path, data)
+	// Web-search shim: decide before the rewrites (the strip would remove the
+	// hosted tool the shim needs). The canary piggybacks here — the first real
+	// request carrying a hosted search tool for a verdict-less model is held
+	// for one extra round trip while the forced-choice probe classifies the
+	// upstream. The canary is built fresh, so it bypasses the proxy's own
+	// strip/rewrite and measures the gateway, not our rewrite; it is not
+	// written to the usage log.
+	plan := a.engageShim(r, r.URL.Path, data)
+
+	fallback, reqErr, changed := rewriteRequestMode(a.cfg, r.URL.Path, data, plan)
+	if plan != nil {
+		changed = true // the rewrite (or passthrough) always differs from verbatim
+	}
 	if reqErr != nil {
 		a.writeRequestError(w, r.URL.Path, reqErr)
 		a.usage.write(a.event(r, data, requested, served, started, usageInfo{}, false, reqErr.Status, 0, reqErr.Message, false, 0, "", false, 0, false, true, "", 0))
@@ -181,6 +206,19 @@ func (a *app) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	served = upstreamModel
 
+	// The shim loop runs on the client's own dialect; a bridged deployment
+	// (translator) cannot host it. Degrade to today's strip + note.
+	if plan != nil && plan.Mode == "shim" && tr != nil {
+		degradeShimToStrip(a.cfg, r.URL.Path, data)
+		plan = nil
+		changed = true
+	}
+	// Failover mid-loop is not supported: the verdict and the buffered rounds
+	// belong to the primary model. The shim holds the turn.
+	if plan != nil && plan.Mode == "shim" {
+		fallback = ""
+	}
+
 	// Forward the original bytes when nothing changed: the enmaas path is
 	// mostly pass-through, and re-marshaling a 1M-token prompt is pure CPU.
 	outBody := body
@@ -198,6 +236,15 @@ func (a *app) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	stream := asBool(data["stream"]) || strings.Contains(r.Header.Get("Accept"), "text/event-stream")
+
+	// Shim path: buffered rounds against the upstream, executed searches
+	// against Parallel, terminal round returned to the client (SSE-synthesized
+	// when it asked to stream, with the native search trail prepended).
+	if plan != nil && plan.Mode == "shim" && tr == nil {
+		a.serveShim(w, r, plan, data, outBody, upstreamBase, upstreamPath, stream, requested, served, started)
+		return
+	}
+
 	resp, transportErr := a.upstream(r, outBody, upstreamBase, upstreamPath, stream)
 	usedFallback := false
 	if fallback != "" && a.shouldFailover(resp, transportErr) && a.fallbackServable(fallback, r.URL.Path) {
