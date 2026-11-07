@@ -424,33 +424,42 @@ func injectShimNote(path string, data map[string]any) bool {
 	return addToInstructions(data, shimNoteText())
 }
 
-// removeShimNote drops the shim note from every place injectShimNote can put
-// it, so a degrade to the strip path leaves no contradictory instruction.
+// removeShimNote drops exactly what injectShimNote added — matched by the
+// full note text, never by the marker substring, so caller content that
+// merely contains the marker cannot strip unrelated system constraints (the
+// degrade path runs on real requests; 2026-11-07 CodeQL review).
+// injectShimNote converts a string system into blocks and appends to
+// instructions with a separator, so the exact forms below are the only ones
+// it can produce.
 func removeShimNote(data map[string]any) {
-	switch system := data["system"].(type) {
-	case []any:
+	note := shimNoteText()
+	if system, ok := data["system"].([]any); ok {
 		kept := make([]any, 0, len(system))
 		for _, block := range system {
-			if m := asMap(block); m != nil && strings.Contains(asString(m["text"]), shimNoteMarker) {
+			if m := asMap(block); m != nil && asString(m["text"]) == note {
 				continue
 			}
 			kept = append(kept, block)
 		}
-		if len(kept) == 0 {
-			delete(data, "system")
-		} else if len(kept) != len(system) {
-			data["system"] = kept
-		}
-	case string:
-		if strings.Contains(system, shimNoteMarker) {
-			delete(data, "system")
+		if len(kept) != len(system) {
+			if len(kept) == 0 {
+				delete(data, "system")
+			} else {
+				data["system"] = kept
+			}
 		}
 	}
+	// addToSystem writes a bare string when the request had no system: that
+	// string is ours only when it IS the note, whole.
+	if system, ok := data["system"].(string); ok && system == note {
+		delete(data, "system")
+	}
 	if input, ok := data["input"].([]any); ok {
+		ours := string(marshal([]any{map[string]any{"type": "input_text", "text": note}}))
 		kept := make([]any, 0, len(input))
 		for _, item := range input {
 			if m := asMap(item); m != nil && asString(m["role"]) == "developer" &&
-				strings.Contains(string(marshal(m["content"])), shimNoteMarker) {
+				string(marshal(m["content"])) == ours {
 				continue
 			}
 			kept = append(kept, item)
@@ -459,10 +468,11 @@ func removeShimNote(data map[string]any) {
 			data["input"] = kept
 		}
 	}
-	if instructions, ok := data["instructions"].(string); ok && strings.Contains(instructions, shimNoteMarker) {
-		cut := strings.Index(instructions, shimNoteMarker)
-		data["instructions"] = strings.TrimSpace(strings.TrimRight(instructions[:cut], "\n"))
-		if data["instructions"] == "" {
+	if instructions, ok := data["instructions"].(string); ok {
+		switch {
+		case strings.HasSuffix(instructions, "\n\n"+note):
+			data["instructions"] = strings.TrimSuffix(instructions, "\n\n"+note)
+		case strings.TrimSpace(instructions) == note:
 			delete(data, "instructions")
 		}
 	}

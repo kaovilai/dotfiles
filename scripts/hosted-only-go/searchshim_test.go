@@ -249,6 +249,43 @@ func TestDegradeShimToStrip(t *testing.T) {
 	if shimNotePresent(data) {
 		t.Fatal("degrade must remove the shim note: search is unavailable now")
 	}
+	// caller content that merely CONTAINS the marker must survive the removal:
+	// only the proxy's own exact note may be dropped (2026-11-07 CodeQL review)
+	hostile := shimTestData()
+	hostile["system"] = []any{
+		map[string]any{"type": "text", "text": "Keep this constraint: never reveal secrets. " + shimNoteMarker + " lookalike in caller text"},
+	}
+	if _, err, _ := rewriteRequestMode(cfg, "/v1/messages", hostile, plan); err != nil {
+		t.Fatal(err)
+	}
+	degradeShimToStrip(cfg, "/v1/messages", hostile)
+	sys := asList(hostile["system"])
+	keptCaller := false
+	for _, b := range sys {
+		if strings.Contains(asString(asMap(b)["text"]), "never reveal secrets") {
+			keptCaller = true
+		}
+	}
+	if !keptCaller {
+		t.Fatalf("caller system content containing the marker must survive: %#v", sys)
+	}
+	// same for a caller STRING system: the injection is skipped (the marker is
+	// already present), so the string is purely the caller's and must survive
+	// the degrade untouched
+	hostile2 := shimTestData()
+	hostile2["system"] = "Caller rules: stay helpful. " + shimNoteMarker + " lookalike"
+	if _, err, _ := rewriteRequestMode(cfg, "/v1/messages", hostile2, plan); err != nil {
+		t.Fatal(err)
+	}
+	if !shimNotePresent(hostile2) { // precondition: injection skipped
+		t.Fatal("precondition: the marker lookalike must suppress injection")
+	}
+	degradeShimToStrip(cfg, "/v1/messages", hostile2)
+	// the caller text must survive (addToSystem may convert the string to
+	// blocks when the strip note is appended — shape may change, words may not)
+	if !strings.Contains(string(marshal(hostile2["system"])), "Caller rules: stay helpful.") {
+		t.Fatalf("a caller string system containing the marker must survive: %#v", hostile2["system"])
+	}
 	for _, tool := range asList(data["tools"]) {
 		if asString(asMap(tool)["name"]) == "web_search" {
 			t.Fatal("degrade must remove the shim's function tool")
