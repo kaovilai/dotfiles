@@ -251,8 +251,11 @@ def save_transcript_cache(kind):
             if k != kind:
                 continue
             kept = [e for e in events if e.get("t", 0) >= cutoff]
-            if kept or not events:
+            if len(kept) == len(events) or not events:
                 files[path] = (mtime, size, ino, kept)
+            # a truncated entry (mixed old+recent events) is NOT stored: the next
+            # process re-parses the file whole, so an export asking past the
+            # window (fleet backfill) still sees the old events
         os.makedirs(STATE, mode=0o700, exist_ok=True)
         tmp = _transcript_cache_path(kind) + ".tmp"
         with open(tmp, "wb") as handle:
@@ -416,18 +419,24 @@ def transcript_paths(kind, roots, ttl=20.0):
     return paths
 
 
-def load_transcripts(kind, env, default, parser, since):
+def load_transcripts(kind, env, default, parser, since, modified_since=0.0):
     roots = [os.path.expanduser(p) for p in os.environ.get(env, default).split(":")]
     load_transcript_cache(kind)
     events, seen = [], set()
     for path in transcript_paths(kind, roots):
         try:
-            if os.path.getmtime(path) < since:
+            mtime = os.path.getmtime(path)
+            # A file modified since the last pull re-exports ALL of its events: a
+            # transcript revision (a streamed message whose usage grew) keeps its old
+            # timestamp, which the `since` filter would otherwise hide forever.
+            # modified_since=0 (every caller but fleet pulls) disables this.
+            fresh = modified_since > 0 and mtime >= modified_since
+            if mtime < since and not fresh:
                 continue
         except OSError:
             continue
         for e in parse_cached(kind, path, parser):
-            if e["t"] < since:
+            if e["t"] < since and not fresh:
                 continue
             if "id" in e:  # resumed sessions copy history into new files
                 if e["id"] in seen:
@@ -438,12 +447,12 @@ def load_transcripts(kind, env, default, parser, since):
     return events
 
 
-def load_claude(since):
-    return load_transcripts("claude", "LLM_USAGE_CLAUDE_DIRS", "~/.claude/projects", parse_claude_file, since)
+def load_claude(since, modified_since=0.0):
+    return load_transcripts("claude", "LLM_USAGE_CLAUDE_DIRS", "~/.claude/projects", parse_claude_file, since, modified_since)
 
 
-def load_codex(since):
-    return load_transcripts("codex", "LLM_USAGE_CODEX_DIRS", "~/.codex/sessions", parse_codex_file, since)
+def load_codex(since, modified_since=0.0):
+    return load_transcripts("codex", "LLM_USAGE_CODEX_DIRS", "~/.codex/sessions", parse_codex_file, since, modified_since)
 
 
 def merge_transcripts(proxy_all, transcripts, since):
@@ -454,16 +463,18 @@ def merge_transcripts(proxy_all, transcripts, since):
     return [e for e in proxy_all if e["t"] >= since] + extra, first
 
 
-def load_auto(since):
+def load_auto(since, modified_since=0.0):
     """Proxy log where it exists; transcripts fill the rest.
 
     Transcripts cover history from before the proxies logged, and any model the
     proxy log has never seen (traffic through a proxy that is not logging yet,
     e.g. copilot-api). Transcript calls for models the proxy log does cover are
-    dropped after logging began, so nothing is counted twice.
+    dropped after logging began, so nothing is counted twice. `modified_since`
+    (fleet pulls) additionally re-exports every event of a transcript file that
+    changed since then, so revisions with old timestamps are not missed.
     """
     proxy_all = load_proxy(0)
-    transcripts = load_claude(since) + load_codex(since)
+    transcripts = load_claude(since, modified_since) + load_codex(since, modified_since)
     if not proxy_all:
         return transcripts, "transcripts (no proxy events yet; run `llm-usage status`)"
     events, first = merge_transcripts(proxy_all, transcripts, since)
@@ -522,11 +533,13 @@ def host_of(ev):
 
 def fleet_hosts():
     """[(name, entry)] of peers to pull. ~/.config/llm-usage/fleet.json (or
-    $LLM_USAGE_CONFIG_DIR/llm-usage/fleet.json; see scripts/fleet.json.example)
-    lists {"hosts": [{"name", "ssh", "dir"?}]}; LLM_USAGE_FLEET="off" disables,
-    "name=ssh-target,..." (or "name=local:/path/to/state" for tests and second
-    local state dirs) adds/overrides by name. Machine-local on purpose: the
-    repo is public, hostnames are not."""
+    $LLM_USAGE_CONFIG_DIR/fleet.json — directly in that dir, no llm-usage
+    subdir; see scripts/fleet.json.example) lists {"hosts": [{"name", "ssh",
+    "dir"?}]}; LLM_USAGE_FLEET="off" disables, "name=ssh-target,..." (or
+    "name=local:/path/to/state" for tests and second local state dirs)
+    adds/overrides by name. A peer named "local" is rejected: it collides with
+    this machine's own host label. Machine-local on purpose: the repo is
+    public, hostnames are not."""
     if os.environ.get("LLM_USAGE_FLEET", "").strip().lower() == "off":
         return []
     hosts = {}
@@ -545,6 +558,7 @@ def fleet_hosts():
         name, target = (x.strip() for x in pair.split("=", 1))
         if name:
             hosts[name] = {"name": name, "local_dir": target[6:]} if target.startswith("local:") else {"name": name, "ssh": target}
+    hosts.pop(FLEET_LOCAL, None)  # a peer named "local" would merge with this machine's events
     return sorted(hosts.items())
 
 
@@ -628,8 +642,11 @@ def fleet_ingest(name, events):
 
     A same-eid line with different content is a revision (a streamed transcript
     message whose usage grew on the peer): it replaces the stored line instead
-    of appending, so one request is never counted twice. Returns the number of
-    lines written or replaced."""
+    of appending, so one request is never counted twice. A revision whose new
+    timestamp crossed a UTC month boundary is relocated from the old month file.
+    Raises OSError when a write fails, so the caller does not advance its
+    watermark past events that were never stored. Returns the number of lines
+    written or replaced."""
     written = 0
     months = {}
     for ev in sorted(events, key=lambda e: e["t"]):
@@ -656,17 +673,39 @@ def fleet_ingest(name, events):
                 _rewrite_month(state["path"], new_lines)
                 written += 1
             continue
+        if ev.get("id"):  # transcript identity: the old copy may live in a neighbouring month
+            _fleet_relocate_eid(name, month, eid)
         state["eids"][eid] = line
         if state["lines"] is not None:
             state["lines"].append(line)
-        try:
-            os.makedirs(fleet_dir(name), mode=0o700, exist_ok=True)
-            with open(state["path"], "a") as handle:
-                handle.write(line + "\n")
-            written += 1
-        except OSError:
-            return written
+        os.makedirs(fleet_dir(name), mode=0o700, exist_ok=True)
+        with open(state["path"], "a") as handle:
+            handle.write(line + "\n")
+        written += 1
     return written
+
+
+def _fleet_relocate_eid(name, month, eid):
+    """Remove an eid from the months adjacent to `month` (a revision that crossed
+    a UTC month boundary lands next door, since a message's streamed copies span
+    at most a month edge). Adjacent-only keeps the scan bounded to two files."""
+    for other in _neighbor_months(month):
+        path = os.path.join(fleet_dir(name), "events-%s.jsonl" % other)
+        try:
+            with open(path, errors="replace") as handle:
+                lines = handle.read().splitlines()
+        except OSError:
+            continue
+        if any(_line_eid(l) == eid for l in lines):
+            _rewrite_month(path, [l for l in lines if _line_eid(l) != eid])
+
+
+def _neighbor_months(month):
+    y, m = int(month[:4]), int(month[5:7])
+    out = []
+    for yy, mm in ((y - (m == 1), m - 1 or 12), (y + (m == 12), m % 12 + 1)):
+        out.append("%04d-%02d" % (yy, mm))
+    return out
 
 
 def _line_eid(line):
@@ -677,13 +716,10 @@ def _line_eid(line):
 
 
 def _rewrite_month(path, lines):
-    try:
-        tmp = path + ".tmp"
-        with open(tmp, "w") as handle:
-            handle.write("\n".join(lines) + ("\n" if lines else ""))
-        os.replace(tmp, path)
-    except OSError:
-        pass
+    tmp = path + ".tmp"
+    with open(tmp, "w") as handle:
+        handle.write("\n".join(lines) + ("\n" if lines else ""))
+    os.replace(tmp, path)  # failures propagate: the caller must not advance past unwritten events
 
 
 def _fleet_control_dir(tmp="/tmp"):
@@ -706,19 +742,25 @@ def _fleet_control_dir(tmp="/tmp"):
     return os.path.join(STATE, "fleet")
 
 
-def _fleet_export_argv(entry, since, inflight=False):
+def _fleet_export_argv(entry, since, inflight=False, until=None, modified_since=None):
     """Command whose stdout is the peer's export (ssh, or a local subprocess for
     tests / a second state dir)."""
     script = os.path.realpath(__file__)
-    flags = "--inflight" if inflight else ""
+    flags = []
+    if inflight:
+        flags.append("--inflight")
+    if until is not None:
+        flags += ["--until", str(until)]  # bounds a backfill chunk's transfer to the chunk itself
+    if modified_since:
+        flags += ["--modified-since", str(modified_since)]  # re-export revised transcript files
     if entry.get("local_dir"):
-        argv = [sys.executable, script, "export", "--since", str(since)] + ([flags] if flags else [])
+        argv = [sys.executable, script, "export", "--since", str(since)] + flags
         return argv, {"LLM_USAGE_DIR": os.path.expanduser(entry["local_dir"])}
     script_path = (entry.get("dir") or "~/git/dotfiles").rstrip("/") + "/scripts/llm-usage"
     # a leading ~/ must reach the peer's shell unexpanded (its home differs from
     # ours); the rest of the path is quoted so spaces survive the remote shell
     remote = "~/" + shlex.quote(script_path[2:]) if script_path.startswith("~/") else shlex.quote(script_path)
-    cmd = " ".join([remote, "export", "--since", str(since)] + ([flags] if flags else []))
+    cmd = " ".join([remote, "export", "--since", str(since)] + flags)
     # ControlMaster socket path must stay short: a deep STATE dir (long tmp paths
     # in tests, long usernames) blows past the ~104-char unix socket limit, and
     # tempfile.gettempdir() on macOS is a long /var/folders path — so /tmp,
@@ -731,10 +773,10 @@ def _fleet_export_argv(entry, since, inflight=False):
     return ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=3", *mux, "--", entry["ssh"], cmd], None
 
 
-def fleet_pull(name, entry, since, inflight=False):
+def fleet_pull(name, entry, since, inflight=False, until=None, modified_since=None):
     """One peer export. Returns (meta, events, in-flight requests); raises
     OSError on any transport failure (caller records it in status.json)."""
-    argv, env_override = _fleet_export_argv(entry, since, inflight=inflight)
+    argv, env_override = _fleet_export_argv(entry, since, inflight=inflight, until=until, modified_since=modified_since)
     env = dict(os.environ)
     if env_override:
         # local: is a test seam / second-state-dir transport: no transcript
@@ -780,7 +822,10 @@ def fleet_pull_one(name, entry, force=False, ttl=FLEET_TTL):
     started = now
     try:
         since = (st.get("last_event_t") or (now - FLEET_FIRST_SYNC)) - 2  # resume from last event, 2s overlap deduped by eid
-        meta, events, flights = fleet_pull(name, entry, since, inflight=True)
+        # A transcript file that changed since the last pull re-exports all its events:
+        # a revision keeps its old timestamp, which the `since` window would hide.
+        modified_since = max(0.0, (st.get("last_ok") or 0.0) - 60)
+        meta, events, flights = fleet_pull(name, entry, since, inflight=True, modified_since=modified_since)
         snap = {"t": time.time(), "requests": flights}  # always rewrite: a peer with no in-flight
         os.makedirs(fleet_dir(name), mode=0o700, exist_ok=True)  # first pull: the host dir does not exist yet
         tmp = os.path.join(fleet_dir(name), "inflight.json.tmp")  # requests must not keep the old ones
@@ -788,18 +833,22 @@ def fleet_pull_one(name, entry, force=False, ttl=FLEET_TTL):
             json.dump(snap, handle)
         os.replace(tmp, os.path.join(fleet_dir(name), "inflight.json"))
         new_events = [e for e in events if e["t"] >= since]
-        written = fleet_ingest(name, new_events)
+        written = fleet_ingest(name, new_events)  # raises OSError when a write fails: no watermark advance
         # The watermark tracks only events actually ingested: the backfill export
         # below also returns events newer than its chunk (already ingested, or
         # arriving between the two pulls — those must stay pending, not advance
         # the resume point past themselves).
         last_event_t = max([st.get("last_event_t", 0)] + [e["t"] for e in new_events])
         # Backfill: first sync is the last 7 days; walk older history back in
-        # 30d chunks until the peer's oldest events month is covered ("months"
-        # in the export meta — proxy log only, so a transcript-heavy peer also
-        # stops after two empty chunks; that is a documented bound, see
-        # docs/notes/fleet-usage-streaming.md), one chunk per refresh so a big
-        # history trickles in without ever blocking the incremental pull.
+        # 30d chunks, bounded by --until so a peer with months of history never
+        # re-transfers it all per chunk. Stop when the chunk is empty AND the
+        # cursor is below the peer's oldest proxy month (the export meta's
+        # "months"; chunks below it can still carry transcript history, so the
+        # walk only ends on an empty chunk there too). A peer with no proxy
+        # months at all (transcript-only) stops after two empty chunks — a
+        # documented bound, see docs/notes/fleet-usage-streaming.md. A backfill
+        # failure (e.g. a timed-out chunk) is recorded but never fails the
+        # refresh: the incremental pull succeeded, the chunk retries next time.
         cursor = st.get("backfill_cursor", now - FLEET_FIRST_SYNC)
         backfilled = bool(st.get("backfilled"))
         empty = st.get("backfill_empty", 0)
@@ -808,22 +857,26 @@ def fleet_pull_one(name, entry, force=False, ttl=FLEET_TTL):
         if months:
             y, m = min(months).split("-")
             oldest = datetime(int(y), int(m), 1, tzinfo=timezone.utc).timestamp()
+        backfill_note = None
         if not backfilled:
-            lo = max(oldest or 0.0, cursor - FLEET_BACKFILL_CHUNK)
-            _, older, _ = fleet_pull(name, entry, lo)
-            # ingest the whole response, not just the chunk window: an event with an
-            # old timestamp that appeared after the incremental pull (a transcript
-            # revision) is below the watermark and would otherwise never be pulled
-            written += fleet_ingest(name, older)
-            chunk = [e for e in older if lo <= e["t"] < cursor]
-            last_event_t = max(last_event_t, max((e["t"] for e in older), default=0))
-            cursor = lo
-            empty = 0 if chunk else empty + 1
-            if (empty >= 1 and oldest is not None and cursor <= oldest) or empty >= 2:
-                backfilled = True
+            try:
+                lo = cursor - FLEET_BACKFILL_CHUNK
+                _, older, _ = fleet_pull(name, entry, lo, until=cursor)
+                written += fleet_ingest(name, older)
+                chunk = [e for e in older if lo <= e["t"] < cursor]
+                last_event_t = max(last_event_t, max((e["t"] for e in older), default=0))
+                cursor = lo
+                empty = 0 if chunk else empty + 1
+                if oldest is not None:
+                    backfilled = empty >= 1 and cursor <= oldest
+                else:
+                    backfilled = empty >= 2
+            except OSError as err:
+                backfill_note = f"backfill: {err}"
         out = {"name": name, "ok": True, "new_events": written, "host": meta.get("host"),
-               "backfilled": backfilled, "pull_ms": int((time.time() - started) * 1000)}
-        fleet_write_status(name, last_ok=time.time(), last_error=None, last_event_t=last_event_t,
+               "backfilled": backfilled, "backfill_error": backfill_note,
+               "pull_ms": int((time.time() - started) * 1000)}
+        fleet_write_status(name, last_ok=time.time(), last_error=backfill_note, last_event_t=last_event_t,
                            backfill_cursor=cursor, backfilled=backfilled, backfill_empty=empty,
                            months=months, host=meta.get("host"))
         return out
@@ -1277,9 +1330,10 @@ def cmd_tail(args):
         key = lambda e: (e["t"], e.get("start"), e.get("served"), e.get("out"), host_of(e))  # host too: an identical peer event is not a repeat of a local one
         events = [e for e in load_proxy(since) if key(e) not in seen]
         if args.fleet:
-            # stream peers too: each tick first pulls what is due (TTL-guarded,
-            # so a warm sshControl connection costs ~nothing), then prints deltas
-            fleet_refresh(ttl=FLEET_TTL)
+            # stream peers too: kick the TTL-guarded background refresh instead of
+            # pulling inline — a slow or unreachable peer must never hold up the
+            # local stream — then read the cached deltas
+            fleet_kick()
             events += [e for e in load_fleet(since) if key(e) not in seen]
         events.sort(key=lambda e: e["t"])
         return events
@@ -1494,7 +1548,9 @@ def cmd_export(args):
     {"inflight": true, ...} records. Same merge as the CLI (load_auto), so the
     copilot-api transcript fill arrives pre-attributed to :4141."""
     since = parse_since(args.since)
-    events, _ = load_auto(since)
+    events, _ = load_auto(since, modified_since=args.modified_since)
+    if args.until:  # bounds a backfill chunk's transfer to the chunk itself
+        events = [e for e in events if e["t"] < args.until]
     months = sorted({os.path.basename(p)[7:-6] for p in glob.glob(os.path.join(STATE, "events-*.jsonl"))})
     meta = {"_export": 1, "host": LOCAL_HOST, "t": time.time(), "events": len(events), "months": months}
     print(json.dumps(meta, separators=(",", ":")))
@@ -2649,6 +2705,19 @@ def row_json(r, keys):
     return {**dict(zip(keys, r["key"])), **{k: v for k, v in r.items() if k != "key"}}
 
 
+def fleet_host_states(now):
+    """[{name, state, last_ok_s}] of this machine + every configured peer, from
+    the pull state alone (no event scan): the dashboard dropdown and banners
+    need freshness, not counts."""
+    rows = [{"name": FLEET_LOCAL, "state": "up", "last_ok_s": 0}]
+    for name, _ in fleet_hosts():
+        st = fleet_status(name)
+        last_ok = st.get("last_ok")
+        state = "up" if last_ok and now - last_ok < FLEET_STALE_AFTER else ("stale" if last_ok else "down")
+        rows.append({"name": name, "state": state, "last_ok_s": int(now - last_ok) if last_ok else None})
+    return rows
+
+
 def dashboard_data(since_text, source, hide, host=None):
     now = time.time()
     since = parse_since(since_text)
@@ -2731,7 +2800,7 @@ def dashboard_data(since_text, source, hide, host=None):
 
     return {
         "now": now, "since": since, "bucket": size, "source": used, "events": len(events),
-        "host": host or "all", "hosts": [FLEET_LOCAL] + [n for n, _ in fleet_hosts()],
+        "host": host or "all", "hosts": fleet_host_states(now),
         "buckets": buckets, "models": order, "chips": [m for m in order if m != "Other"], "colors": {**colors, "Other": 0},
         "brands": {m: model_brand(m) for m in order if model_brand(m)}, "series": series,
         "ctx_bins": [name for _, name in CTX_BINS], "ctx_hist": ctx_hist,
@@ -2879,6 +2948,8 @@ def main():
 
     p = sub.add_parser("export", help="this machine's merged events as JSONL on stdout (what a peer's `fleet refresh` pulls)")
     p.add_argument("--since", default="all", help="how far back (default %(default)s)")
+    p.add_argument("--until", type=float, default=None, help="epoch upper bound (backfill chunks pass one)")
+    p.add_argument("--modified-since", type=float, default=0.0, help="epoch: also re-export every event of a transcript file modified since then")
     p.add_argument("--inflight", action="store_true", help="append live in-flight requests as {\"inflight\": true} records")
     p.set_defaults(fn=cmd_export)
 

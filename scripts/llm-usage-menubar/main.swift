@@ -1663,29 +1663,6 @@ final class MonitorView: NSView {
             }
         }
 
-        // Fleet: one row per pulled peer (dot = up/stale/down); vertical layout
-        // only, where the stats panel has the room for it
-        let fhosts = d["fleet"]["enabled"].bool ? (d["fleet"]["hosts"].arr ?? []) : []
-        if !fhosts.isEmpty, layout == .vertical, rowsLeft >= min(fhosts.count, 3) + 1, let r = next() {
-            drawStr("Fleet · 15m", in: r, font: tinyFont, color: .secondaryLabelColor)
-            for h in fhosts.prefix(rowsLeft) {
-                guard let row = next() else { break }
-                let state = h["state"].str ?? "down"
-                let dot: NSColor = state == "up" ? .systemGreen : (state == "stale" ? .systemYellow : .tertiaryLabelColor)
-                dot.setFill()
-                NSBezierPath(ovalIn: NSRect(x: row.minX, y: row.minY + 4, width: 5, height: 5)).fill()
-                let name = h["name"].str ?? "?"
-                drawStr(state == "stale" ? "\(name) (stale)" : name,
-                        in: NSRect(x: row.minX + 8, y: row.minY, width: row.width * 0.6, height: row.height),
-                        color: state == "down" ? .tertiaryLabelColor : .labelColor)
-                let e = h["m15"]["errors"]
-                let errs = (e["429"].int ?? 0) + (e["5xx"].int ?? 0) + (e["other"].int ?? 0)
-                let inflight = h["inflight"]["count"].int ?? 0
-                let value = "\(h["m15"]["requests"].int ?? 0) req" + (errs > 0 ? " · \(errs) err" : "") + (inflight > 0 ? " · ⏳\(inflight)" : "")
-                drawStr(value, in: row, font: tinyFont, color: errs > 0 ? NSColor.systemRed : .secondaryLabelColor, align: .right)
-            }
-        }
-
         let models = shareEntries(d["share"]["models"]), providers = shareEntries(d["share"]["providers"])
         // Three different metrics share this panel; the headers must say which is
         // which or the % rows and the history graph read as one contradictory number:
@@ -1713,6 +1690,29 @@ final class MonitorView: NSView {
             for e in providers.prefix(min(rowsLeft, layout == .vertical ? 3 : 2)) {
                 guard let r = next() else { break }
                 drawShareRow(ctx, r, e, marker: graphMode == .bars ? nil : .line(providerColor(e.key)), circle: false, hover: .provider(e.key))
+            }
+        }
+        // Fleet: pulled peers (dot = up/stale/down), after the share rows — a long
+        // host list must not crowd Models/Providers out — and capped at two
+        let fhosts = d["fleet"]["enabled"].bool ? (d["fleet"]["hosts"].arr ?? []) : []
+        let fleetShow = fhosts.prefix(2)
+        if !fleetShow.isEmpty, layout == .vertical, rowsLeft >= fleetShow.count + 1, let r = next() {
+            drawStr("Fleet · 15m", in: r, font: tinyFont, color: .secondaryLabelColor)
+            for h in fleetShow {
+                guard let row = next() else { break }
+                let state = h["state"].str ?? "down"
+                let dot: NSColor = state == "up" ? .systemGreen : (state == "stale" ? .systemYellow : .tertiaryLabelColor)
+                dot.setFill()
+                NSBezierPath(ovalIn: NSRect(x: row.minX, y: row.minY + 4, width: 5, height: 5)).fill()
+                let name = h["name"].str ?? "?"
+                drawStr(state == "stale" ? "\(name) (stale)" : name,
+                        in: NSRect(x: row.minX + 8, y: row.minY, width: row.width * 0.6, height: row.height),
+                        color: state == "down" ? .tertiaryLabelColor : .labelColor)
+                let e = h["m15"]["errors"]
+                let errs = (e["429"].int ?? 0) + (e["5xx"].int ?? 0) + (e["other"].int ?? 0)
+                let inflight = h["inflight"]["count"].int ?? 0
+                let value = "\(h["m15"]["requests"].int ?? 0) req" + (errs > 0 ? " · \(errs) err" : "") + (inflight > 0 ? " · ⏳\(inflight)" : "")
+                drawStr(value, in: row, font: tinyFont, color: errs > 0 ? NSColor.systemRed : .secondaryLabelColor, align: .right)
             }
         }
         if let note = d["throttle_notes"]["github-copilot"].str, spans.allSatisfy({ $0.provider != "github-copilot" }), rowsLeft >= 1,
@@ -1984,7 +1984,7 @@ final class Builder {
             sub.addItem(info("in flight: \(h["inflight"]["count"].int ?? 0), oldest \(longDuration(h["inflight"]["oldest_s"].int ?? 0))", dim: true))
         }
         if let err = h["last_error"].str { sub.addItem(info("last pull error: \(err)", dim: true)) }
-        if !h["backfilled"].bool { sub.addItem(info("history backfill in progress (30d per refresh)", dim: true)) }
+        if !h["backfilled"].bool, h["last_ok_s"].int != nil { sub.addItem(info("history backfill in progress (30d per refresh)", dim: true)) }
         sub.addItem(.separator())
         sub.addItem(action("Copy host name (\(name))", #selector(AppController.copyText(_:)), represented: name))
         item.submenu = sub

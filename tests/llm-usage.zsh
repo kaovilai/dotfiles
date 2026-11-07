@@ -182,9 +182,9 @@ assert any(r["rerouted"] and r["requested"] == "claude-sonnet-5-5" and r["served
 assert d["kpi"]["long"] == 1 and d["kpi"]["classifier"] == 1 and d["kpi"]["err"] == 1
 assert "glm-5.3" in d["chips"] and d["brands"].get("glm-5.3") == "glm"
 assert get("since=1h&source=proxy&hide=glm-5.3")["events"] == 1
-# host filter: local only, an unknown host is empty, the payload lists the machines
+# host filter: local only, an unknown host is empty, the payload lists the machines with pull state
 assert get("since=1h&source=proxy&host=local")["events"] == 4 and get("since=1h&source=proxy&host=nosuchhost")["events"] == 0, d["events"]
-assert get("since=1h&source=proxy")["hosts"] == ["local"] and get("since=1h&source=proxy")["host"] == "all"
+assert get("since=1h&source=proxy")["hosts"] == [{"name": "local", "state": "up", "last_ok_s": 0}] and get("since=1h&source=proxy")["host"] == "all"
 html = urllib.request.urlopen(f"http://127.0.0.1:{port}/").read()
 assert b"llm-usage" in html and b"ch-errtime" in html and b"ch-errmodel" in html
 assert sum(d["err_series"]["oth"]) == 1 and sum(d["err_series"]["5xx"]) == 0, d["err_series"]
@@ -624,7 +624,9 @@ with open(f"{peer}/events-{old_month}.jsonl", "w") as h:                 # histo
 with open(f"{peer}/inflight-4148-777.json", "w") as h:                   # a live in-flight request on the peer
     json.dump({"pid": os.getpid(), "port": "4148", "requests": {"r1": {"t": _time.time() - 7, "model": GLM, "requested": GLM}}}, h)
 agg = tempfile.mkdtemp(dir=tmp)
-fenv = {"LLM_USAGE_FLEET": f"peerA=local:{peer}"}
+# an empty config dir: LLM_USAGE_FLEET adds peerA, it must not also pull in the
+# developer's own ~/.config/llm-usage/fleet.json ssh peers
+fenv = {"LLM_USAGE_FLEET": f"peerA=local:{peer}", "LLM_USAGE_CONFIG_DIR": tempfile.mkdtemp(dir=tmp)}
 def agg_run(*cli, **kw):
     res = subprocess.run([sys.executable, usage, *cli], capture_output=True, text=True, timeout=120,
                          env={**os.environ, "LLM_USAGE_DIR": agg, **fenv, **(kw.get("extra_env") or {})})
@@ -696,6 +698,8 @@ assert sum(r["n"] for r in json.loads(agg_run("summary", "--since", "1h", "--sou
 # a peer with no config: fleet disabled, nothing changes
 d = run("no-fleet", [ev(30)])
 assert d["fleet"] == {"enabled": False} and d["totals"]["m15"]["requests"] == 1, d.get("fleet")
+# same events without the fleet config: the window render must differ (fleet rows drawn)
+run("fleet-nofleet", [ev(30), err(50, 500)])
 
 # in-flight tracking in the proxy logger (stub litellm so it runs without the proxy venv)
 state = tempfile.mkdtemp(dir=tmp)
@@ -734,10 +738,11 @@ PY
 # fleet pull state machine: scripted exports against the module (watermark, eid identity,
 # revision replace, backfill stop) — deterministic, no subprocess timing
 python3 - "$usage" "$tmp" <<'PY' || fail "fleet state machine"
-import importlib.machinery, importlib.util, glob, json, os, sys, time
+import importlib.machinery, importlib.util, glob, json, os, sys, tempfile, time
 usage, tmp = sys.argv[1:3]
 os.environ["LLM_USAGE_DIR"] = os.path.join(tmp, "fsm")
 os.environ["LLM_USAGE_FLEET"] = "p1=local:/nonexistent"  # transport unused: fleet_pull is scripted below
+os.environ["LLM_USAGE_CONFIG_DIR"] = tempfile.mkdtemp(dir=tmp)  # never the developer's own fleet config
 os.environ["LLM_USAGE_CLAUDE_DIRS"] = os.environ["LLM_USAGE_CODEX_DIRS"] = os.path.join(tmp, "no-claude")
 sys.argv = ["llm-usage"]
 spec = importlib.util.spec_from_loader("llu", importlib.machinery.SourceFileLoader("llu", usage))
@@ -758,7 +763,9 @@ def host_lines(host):
 # eid identity: `start` (ms precision, both writers emit it) separates same-second requests;
 # a transcript message `id` is the identity and must not depend on token counts (usage grows while streaming)
 a, b = ev(now), ev(now)
-assert mod.event_eid(a) == mod.event_eid(ev(now)) and mod.event_eid(a) != {**b, "start": mod.iso_utc(now - 0.4)} and mod.event_eid(a) != mod.event_eid({**b, "out": 3})
+assert mod.event_eid(a) == mod.event_eid(ev(now)), "identical events share an eid"
+assert mod.event_eid({**a, "start": a["start"].replace("Z", ".100Z")}) != mod.event_eid({**b, "start": b["start"].replace("Z", ".200Z")}), "distinct start times must differ"
+assert mod.event_eid(a) != mod.event_eid({**b, "out": 3}), "distinct token counts must differ"
 m4 = {"t": now - 50, "id": "m0", "source": "claude", "port": "4141", "via": "transcript", "served": "sonnet", "ok": True, "in": 10, "out": 4}
 assert mod.event_eid(m4) == mod.event_eid({**m4, "out": 8}), "message id is the identity"
 # a revision replaces the stored line instead of double-counting the request
@@ -766,23 +773,32 @@ mod.fleet_ingest("p2", [m4])
 mod.fleet_ingest("p2", [{**m4, "out": 8}])
 rows = host_lines("p2")
 assert len(rows) == 1 and rows[0]["out"] == 8 and rows[0]["host"] == "p2", rows
+# a revision whose timestamp crossed a UTC month boundary relocates the old row
+month_start = mod.datetime.now(mod.timezone.utc).replace(day=1, hour=0, minute=0, second=0, microsecond=0).timestamp()
+early = {"t": month_start + 5, "id": "m1", "source": "claude", "port": "4141", "served": "sonnet", "ok": True, "in": 1, "out": 1}
+late = {**early, "t": month_start - 5, "out": 2}  # re-finalized just before the boundary
+mod.fleet_ingest("p2", [early])
+mod.fleet_ingest("p2", [late])
+m1rows = [r for r in host_lines("p2") if r["id"] == "m1"]
+assert len(m1rows) == 1 and m1rows[0]["out"] == 2, m1rows
 
-# watermark + late arrivals: the backfill export also returns events outside its chunk
-# window; everything it returns must be ingested (an old-timestamped event arriving
-# between the two pulls is below the watermark and would otherwise never be pulled)
+# watermark + bounded backfill: the backfill chunk is bounded by --until (a peer with
+# months of history never re-transfers it all), and the watermark only tracks
+# events actually ingested
 scripted = []
-mod.fleet_pull = lambda name, entry, since, inflight=False: scripted.pop(0)
+mod.fleet_pull = lambda name, entry, since, inflight=False, until=None, modified_since=None: scripted.pop(0)
 meta = {"_export": 1, "host": "p1h", "months": [month]}
-A, B = ev(now - 100), ev(now - 6 * 86400)
-scripted += [(meta, [A], []), (meta, [B, A], [])]  # incremental, then a backfill chunk whose response also carries B (>= cursor)
+A, B = ev(now - 100), ev(now - 10)
+scripted += [(meta, [A], []), (meta, [], [])]  # incremental pulls A; the backfill chunk (until=cursor) is empty and below the oldest month
 mod.fleet_pull_one("p1", {"name": "p1", "local_dir": "/x"}, force=True)
 st = mod.fleet_status("p1")
 assert st["last_event_t"] == A["t"], (st, "watermark must track ingested events only")
+assert st["backfilled"], st
+assert len(host_lines("p1")) == 1
+scripted.append((meta, [B, A], []))  # next incremental picks B up; the dedup keeps A single
+mod.fleet_pull_one("p1", {"name": "p1", "local_dir": "/x"}, force=True)
 rows = host_lines("p1")
 assert len(rows) == 2 and {r["eid"] for r in rows} == {mod.event_eid(A), mod.event_eid(B)}, rows
-scripted.append((meta, [B, A], []))  # re-pull of the same window: dedup, no duplicates
-mod.fleet_pull_one("p1", {"name": "p1", "local_dir": "/x"}, force=True)
-assert len(host_lines("p1")) == 2
 
 # backfill stop: a peer with no proxy months (transcript-heavy) walks back until two empty
 # chunks, instead of declaring itself done on the first refresh
@@ -796,6 +812,21 @@ assert not scripted, "every scripted pull must have been consumed"
 assert st["backfilled"] and st["backfill_empty"] == 2, st
 rows = host_lines("p3")
 assert len(rows) == 1 and rows[0]["eid"] == mod.event_eid(old40), rows
+
+# the months hint beats the gap: a peer whose proxy months go back far walks through
+# an empty stretch instead of stopping after two empty chunks (only a peer with no
+# months at all stops on the empty-chunk bound)
+aug = mod.datetime.fromtimestamp(now - 120 * 86400, mod.timezone.utc).strftime("%Y-%m")
+meta_g = {"_export": 1, "host": "p4h", "months": sorted({aug, month})}
+old120 = ev(now - 120 * 86400)
+for i in range(10):
+    scripted += [(meta_g, [], []), (meta_g, [old120] if i >= 2 else [], [])]
+    mod.fleet_pull_one("p4", {"name": "p4", "local_dir": "/x"}, force=True)
+    if mod.fleet_status("p4").get("backfilled"):
+        break
+st = mod.fleet_status("p4")
+assert st["backfilled"], st
+assert any(r["eid"] == mod.event_eid(old120) for r in host_lines("p4")), "the event behind the gap must be pulled"
 
 # control socket dir: a predictable /tmp path is trusted only when provably ours
 # (real dir, owned by us, no group/other bits); a planted or loosened dir falls back to STATE
@@ -829,6 +860,10 @@ if [[ -x /usr/bin/swiftc ]] || command -v swiftc >/dev/null; then
     [[ "$dump" == *"FLEET (15m / 1h)"* && "$dump" == *"● peerA  up  2/15m 2/1h 429:1"* ]] || fail "fleet section: $dump"
     [[ "$dump" == *"last pulled"* && "$dump" == *"Copy host name (peerA)"* ]] || fail "fleet submenu: $dump"
     [[ "$(dump_of normal)" != *"FLEET ("* ]] || fail "no fleet config must not render a fleet section"
+    # the vertical floating window actually draws the fleet rows (not just tolerates the data)
+    "$mb" --window-png "$tmp/w-fleet-on.png" --layout vertical --data-file "$mbjson/fleet.json" >/dev/null || fail "window-png fleet vertical"
+    "$mb" --window-png "$tmp/w-fleet-off.png" --layout vertical --data-file "$mbjson/fleet-nofleet.json" >/dev/null || fail "window-png fleet-nofleet vertical"
+    cmp -s "$tmp/w-fleet-on.png" "$tmp/w-fleet-off.png" && fail "fleet rows must change the vertical window render"
     [[ "$dump" == *"[chart] requests/min"* && "$dump" == *"[chart] by model"* && "$dump" == *"[chart] by proxy"* ]] || fail "charts missing: $dump"
     [[ "$(dump_of normal --no-charts)" != *"[chart]"* && "$(dump_of normal --no-charts)" == *"Top models (1h): glm-5.3"* ]] || fail "--no-charts"
     [[ "$dump" == *"Open dashboard"* && "$dump" == *"Open logs folder"* && "$dump" == *"Refresh now"* && "$dump" == *"Copy status"* && "$dump" == *"Copy last error"* && "$dump" == *Quit* ]] || fail "actions missing"

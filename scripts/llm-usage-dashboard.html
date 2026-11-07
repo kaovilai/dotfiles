@@ -583,6 +583,9 @@ function render() {
   banner.replaceChildren();
   if (D.source.startsWith("transcripts")) banner.append(html("div", { class: "banner" }, "Showing Claude Code / Codex transcripts: only the answering model, no requested → served routing, no latency. Restart the LiteLLM proxies marked “not logging” below (llm-proxy-restart) to capture those."));
   else if (D.source.startsWith("merged")) banner.append(html("div", { class: "banner" }, "Mixed data: " + D.source.replace(/^merged \(|\)$/g, "") + ". Transcript rows have no routing or latency."));
+  const staleHosts = (D.hosts || []).filter(h => h.name !== "local" && h.state !== "up");
+  if (staleHosts.length)
+    banner.append(html("div", { class: "banner" }, "Fleet: " + staleHosts.map(h => `${h.name} ${h.state}${h.last_ok_s != null ? ` (last pulled ${Math.max(1, Math.round(h.last_ok_s / 60))}m ago)` : ""}`).join(", ") + " — showing the last pulled snapshot."));
   renderStatus(); renderChips(); renderKpis(); renderCharts(); renderTables();
 }
 
@@ -606,13 +609,16 @@ function restore() {
    the dropdown only when the set changes so an open menu is not reset mid-poll */
 function syncHostOptions(data) {
   const sel = document.getElementById("host");
-  const hosts = data.hosts || ["local"];
-  const sig = hosts.join(",");
+  const hosts = data.hosts || [{ name: "local", state: "up" }];
+  const names = hosts.map(h => h.name);
+  if (st.host !== "all" && !names.includes(st.host)) { st.host = "all"; persist(); load(); return; }
+  const sig = hosts.map(h => h.name + ":" + h.state).join(",");
   if (sel.dataset.sig === sig) { sel.value = st.host; return; }
   sel.dataset.sig = sig;
   sel.textContent = "";
   sel.append(html("option", { value: "all" }, "all machines"));
-  for (const h of hosts) sel.append(html("option", { value: h }, h === "local" ? "local (this machine)" : h));
+  for (const h of hosts)
+    sel.append(html("option", { value: h.name }, h.name === "local" ? "local (this machine)" : h.name + (h.state !== "up" ? ` (${h.state})` : "")));
   sel.value = st.host;
 }
 
