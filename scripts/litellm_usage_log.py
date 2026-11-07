@@ -15,7 +15,9 @@ LiteLLM actually called), upstream host, token counts, latency, status.
 
 Failures also record `upstream_status` (what the provider answered, e.g. 429
 from EnMaaS), `status` (what the client sees), `rewritten`, `retry_after`
-(seconds) and `error_type`. Rewritten 429s add `reset_at` (epoch s),
+(seconds) and `error_type`. A request served by its fallback records
+`fallback_reason` (why the primary attempt was abandoned: rate-limit,
+outage-500, timeout, ...). Rewritten 429s add `reset_at` (epoch s),
 `reset_source` (which upstream header/body field, or which estimate rule, set
 it) and, only when upstream sends limit data the hooks do not parse, `drift`;
 see docs/notes/enmaas-reset-forward-compat.md. Callback order matters: LiteLLM runs the logging
@@ -172,6 +174,7 @@ def _iso(value):
 
 RESET_AFTER_RE = re.compile(r"\[429\]: .*\(reset after (?:(\d+)h ?)?(?:(\d+)m ?)?(?:(\d+)s)?\)", re.S)
 QUOTA_RE = re.compile(r"token budget exhausted|monthly token budget", re.I)
+FALLBACK_CODE_RE = re.compile(r"\b([45]\d\d)\b")
 
 
 def _status(exc):
@@ -213,6 +216,39 @@ def _is_outage(hooks, exc):
         return bool(check and check(exc))
     except Exception:
         return False
+
+
+def _fallback_reason(previous, hooks):
+    """Why the first attempt fell back, for llm-usage's redirect reasons.
+
+    LiteLLM's retry breadcrumbs (metadata.previous_models, see Router.log_retry)
+    carry the failed call's exception_type/exception_string. Classify them the
+    way error_fields classifies final failures: rate-limit / quota / outage-<code>.
+    """
+    for entry in previous or []:
+        if not isinstance(entry, dict):
+            continue
+        exc = entry.get("exception")
+        text = str(entry.get("exception_string") or "")
+        code = _status(exc) if exc is not None else None
+        if code is None:
+            match = FALLBACK_CODE_RE.search(text)
+            code = int(match.group(1)) if match else None
+        if code == 429 or (hooks is not None and _is_limit(hooks, exc)):
+            return "rate-limit"
+        if hooks is not None and _is_outage(hooks, exc):
+            return "outage"
+        if code == 402:
+            return "quota"
+        if code is not None and code >= 500:
+            return f"outage-{code}"
+        if code is not None:
+            return str(code)
+        lowered = f"{entry.get('exception_type') or ''} {text}".lower()
+        if "timeout" in lowered:
+            return "timeout"
+        return str(entry.get("exception_type") or "unknown").lower()
+    return None
 
 
 def error_fields(kwargs, slo):
@@ -352,6 +388,10 @@ def build_event(kwargs, response_obj, start_time, end_time, ok):
         event["status"] = 200
     else:
         event.update(error_fields(kwargs, slo))
+    if previous:
+        reason = _fallback_reason(previous, _hooks_module())
+        if reason:
+            event["fallback_reason"] = reason
     return {k: v for k, v in event.items() if v is not None}
 
 

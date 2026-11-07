@@ -11,7 +11,7 @@ import (
 // flushes each event and records the same usage/latency event streamResponse
 // does). Status 200 was already decided by the caller (errors are answered
 // before streaming starts).
-func (a *app) streamTranslated(w http.ResponseWriter, resp *http.Response, tr translator, path string, data map[string]any, requested, served string, started time.Time, usedFallback bool, userAgent string) {
+func (a *app) streamTranslated(w http.ResponseWriter, resp *http.Response, tr translator, path string, data map[string]any, requested, served string, started time.Time, usedFallback bool, fallbackReason string, userAgent string) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.WriteHeader(http.StatusOK)
@@ -59,5 +59,5 @@ func (a *app) streamTranslated(w http.ResponseWriter, resp *http.Response, tr tr
 	if ok {
 		a.outages.success(served)
 	}
-	a.usage.write(a.buildEvent(path, data, requested, served, started, info, ok, status, 0, errText, false, 0, "", false, 0, usedFallback, true, served, firstChunk, userAgent))
+	a.usage.write(a.buildEvent(path, data, requested, served, started, info, ok, status, 0, errText, false, 0, "", false, 0, usedFallback, fallbackReason, true, served, firstChunk, userAgent))
 }

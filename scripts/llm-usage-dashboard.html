@@ -484,7 +484,7 @@ function renderTables() {
     D.model_table.map((r) => [sw(r.model, colorOf(r.model)), num(r.n), r.err ? num(r.err) : "-", r.e429 ? num(r.e429) : "-", r.e5xx ? num(r.e5xx) : "-", r.err ? pctf(r.err_rate) : "-", human(r.in), human(r.out), human(r.cread), pctf(r.hit), human(r.ctxmax), r.long ? num(r.long) : "-", ms(r.p50), ms(r.p95), r.tps ? Math.round(r.tps) : "-", r.cost ? "$" + r.cost.toFixed(2) : "-"]),
     ["l", "r", "r", "r", "r", "r", "r", "r", "r", "r", "r", "r", "r", "r", "r", "r"]);
 
-  // alias = Claude name served by GLM/DeepSeek, vision = glm→deepseek image fallback, fallback = router retry.
+  // alias = Claude name served by GLM/DeepSeek, vision = glm→deepseek image fallback, fallback:why = router retry (why = outage-500/rate-limit/…).
   // Older servers send no `kinds`; fall back to the plain rerouted/direct tag.
   const kindTag = (r) => {
     const kinds = Object.entries(r.kinds || {});

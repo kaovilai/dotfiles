@@ -2140,7 +2140,7 @@ final class Builder {
             var kinds: [String: Int] = [:]
             for r in rr { kinds[r["kind"].str ?? "?", default: 0] += r["count"].int ?? 0 }
             add(info(kinds.sorted { $0.value > $1.value }.map { "\($0.key) \($0.value)" }.joined(separator: " · ") +
-                     "  (alias = Claude name served by GLM/DeepSeek, vision = glm→deepseek, fallback = router retry)", dim: true))
+                     "  (alias = Claude name served by GLM/DeepSeek, vision = glm→deepseek, fallback:why = router retry, why = outage-500/rate-limit/…)", dim: true))
             for r in rr.prefix(6) {
                 add(info("\(r["from"].str ?? "?")→\(r["to"].str ?? "?") ×\(r["count"].int ?? 0) \(r["kind"].str ?? "")  [\(r["proxy"].str ?? "?")]", mono: true))
             }

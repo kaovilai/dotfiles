@@ -2010,12 +2010,15 @@ def reroute_kind(ev):
 
     alias     a Claude name (sonnet, T3's claude-sonnet-5-5, the classifier tier) served by GLM/DeepSeek
     vision    glm requested, deepseek served (image input fallback)
-    fallback  the router retried on another deployment after a failed first attempt
+    fallback  the router retried on another deployment after a failed first attempt;
+              with a fallback_reason on the event (proxies that classify the primary
+              failure), the reason rides along: fallback:outage-500, fallback:rate-limit
     other     any other requested != served
     """
     req, srv = ev.get("requested"), ev.get("served")
     if ev.get("fallback"):
-        return "fallback"
+        reason = ev.get("fallback_reason")
+        return f"fallback:{reason}" if reason else "fallback"
     if not req or family(req) == family(srv):
         return None
     if family(req) == "glm" and family(srv) == "deepseek":

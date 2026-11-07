@@ -430,6 +430,9 @@ d = run("reroute-vision", [ev(60, served=DS), ev(30)])
 assert [(r["from"], r["to"], r["kind"], r["count"]) for r in d["reroutes"]] == [("glm-5.3", "deepseek-v4.1-flash", "vision", 1)], d["reroutes"]
 d = run("reroute-fallback", [ev(60, fallback=True), ev(30, served=SON, requested=SON, fallback=True), ev(20)])
 assert {r["kind"] for r in d["reroutes"]} == {"fallback"} and sum(r["count"] for r in d["reroutes"]) == 2, d["reroutes"]
+# fallback_reason rides along as the redirect's reason (outage/500, rate-limit, ...)
+d = run("reroute-fallback-reason", [ev(60, fallback=True, fallback_reason="outage-500"), ev(45, fallback=True, fallback_reason="outage-500"), ev(30, fallback=True, fallback_reason="rate-limit")])
+assert {(r["kind"], r["count"]) for r in d["reroutes"]} == {("fallback:outage-500", 2), ("fallback:rate-limit", 1)}, d["reroutes"]
 d = run("reroute-none", [ev(60), ev(30, port="4147", requested="gpt-6-luna", served="gpt-6-luna")])
 assert d["reroutes"] == [] and d["reroutes_15m"] == 0
 assert d["by_proxy"][0]["models"], d["by_proxy"]
@@ -1109,6 +1112,9 @@ if [[ -x /usr/bin/swiftc ]] || command -v swiftc >/dev/null; then
     [[ "$dump" == *"sonnet→glm-5.3 ×2 alias"* && "$dump" == *"sonnet→deepseek-v4.1-flash ×1 alias"* ]] || fail "alias rows: $dump"
     [[ "$(dump_of reroute-vision)" == *"glm-5.3→deepseek-v4.1-flash ×1 vision"* ]] || fail "vision row"
     [[ "$(dump_of reroute-fallback)" == *"fallback 2"* ]] || fail "fallback row"
+    dump=$(dump_of reroute-fallback-reason)
+    [[ "$dump" == *"fallback:outage-500 2 · fallback:rate-limit 1"* ]] || fail "reason kinds summary: $dump"
+    [[ "$dump" == *"×2 fallback:outage-500"* ]] || fail "reason route row: $dump"
     dump=$(dump_of copilot-quota)
     [[ "$dump" == *"COPILOT-API (:4141) · TRANSCRIPT-DERIVED"* && "$dump" == *"premium: 120/300 left (40%)"* && "$dump" == *"resets 2026-11-01"* && "$dump" == *"in flight: n/a"* ]] || fail "copilot section: $dump"
     [[ "$(dump_of copilot-unlimited)" == *"premium: unlimited · 301.6k credits used"* ]] || fail "copilot unlimited row"

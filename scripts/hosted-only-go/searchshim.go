@@ -394,12 +394,12 @@ func (a *app) serveShim(w http.ResponseWriter, r *http.Request, plan *shimPlan, 
 	if res.upstreamE != nil {
 		msg := "upstream request failed: " + res.upstreamE.Error()
 		a.writeDialectError(w, path, http.StatusBadGateway, msg, "")
-		a.usage.write(a.event(r, data, requested, served, started, info, false, http.StatusBadGateway, 0, msg, false, 0, "", false, 0, false, stream, responseModel, 0))
+		a.usage.write(a.event(r, data, requested, served, started, info, false, http.StatusBadGateway, 0, msg, false, 0, "", false, 0, false, "", stream, responseModel, 0))
 		return
 	}
 	if res.status >= 400 {
 		a.writeRaw(w, res.status, res.headers, res.terminal)
-		a.usage.write(a.event(r, data, requested, served, started, info, false, res.status, res.status, truncate(string(res.terminal), 300), false, 0, "", false, 0, false, stream, responseModel, 0))
+		a.usage.write(a.event(r, data, requested, served, started, info, false, res.status, res.status, truncate(string(res.terminal), 300), false, 0, "", false, 0, false, "", stream, responseModel, 0))
 		return
 	}
 	if res.status < 400 {
@@ -414,12 +414,12 @@ func (a *app) serveShim(w http.ResponseWriter, r *http.Request, plan *shimPlan, 
 		if f, ok := w.(http.Flusher); ok {
 			f.Flush()
 		}
-		a.usage.write(a.event(r, data, requested, served, started, info, true, http.StatusOK, 0, "", false, 0, "", false, 0, false, true, responseModel, 0))
+		a.usage.write(a.event(r, data, requested, served, started, info, true, http.StatusOK, 0, "", false, 0, "", false, 0, false, "", true, responseModel, 0))
 		return
 	}
 	body := terminalWithRecords(plan.Dialect, res.terminal, res.records)
 	a.writeRaw(w, res.status, res.headers, body)
-	a.usage.write(a.event(r, data, requested, served, started, info, true, http.StatusOK, 0, "", false, 0, "", false, 0, false, false, responseModel, 0))
+	a.usage.write(a.event(r, data, requested, served, started, info, true, http.StatusOK, 0, "", false, 0, "", false, 0, false, "", false, responseModel, 0))
 }
 
 // terminalWithRecords prepends the accumulated native search records to the

@@ -669,3 +669,27 @@ func TestClassifierFailoverCannotReachDisallowedModels(t *testing.T) {
 		t.Fatalf("the target must have been tried: ds=%d", h.count(ds))
 	}
 }
+
+// A failover event records WHY the primary was abandoned: fallback_reason
+// (rate-limit, outage-503, ...) is what llm-usage surfaces as the redirect's
+// reason in the floating window. The stub's 503 must classify as outage-503.
+func TestFailoverRecordsFallbackReason(t *testing.T) {
+	h := classifierHarness(t, "")
+	glm, ds := h.app.cfg.GLM, h.app.cfg.DeepSeek
+	h.app.cfg.FallbackOn = true
+	h.failModel = glm
+	classifierRequest(t, h, glm)
+	if h.count(glm) != 1 || h.count(ds) != 1 {
+		t.Fatalf("expected one primary attempt and one fallback: glm=%d ds=%d", h.count(glm), h.count(ds))
+	}
+	ev := lastUsageEvent(t)
+	if ev["fallback"] != true {
+		t.Fatalf("the event must be flagged as a fallback: %v", ev)
+	}
+	if ev["fallback_reason"] != "outage-503" {
+		t.Fatalf("the 503 primary must record outage-503, got %v", ev["fallback_reason"])
+	}
+	if ev["served"] != ds {
+		t.Fatalf("the fallback model must be the served one: %v", ev["served"])
+	}
+}
