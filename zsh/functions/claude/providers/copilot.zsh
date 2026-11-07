@@ -74,8 +74,10 @@ _claude_copilot_code_hash() {
         for f in "${missing[@]}"; do sig+="missing $f"$'\n'; done
         cache="${XDG_STATE_HOME:-$HOME/.local/state}/claude-copilot-code-hash.cache"
         [[ -r "$cache" ]] && { cached=$(<"$cache"); } 2>/dev/null
-        if [[ "${cached%%$'\n'*}" == "$sig" ]]; then
-            print -r -- "${cached#*$'\n'}"
+        # cache layout: "<sig lines...>\n<hash>"; sig ends with a newline of
+        # its own, so stripping the final "\n<hash>" leaves exactly $sig
+        if [[ -n "${cached:-}" && "${cached%$'\n'*}" == "$sig" ]]; then
+            print -r -- "${cached##*$'\n'}"
             return 0
         fi
     fi
