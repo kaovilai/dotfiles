@@ -1785,10 +1785,18 @@ final class MonitorView: NSView {
             }
         } else if !fleetShow.isEmpty, let r = next(), let first = fleetShow.first {
             // one line instead of the section: first host + how many others there are
+            let fname = first["name"].str ?? "?"
+            // the compact line stands in for the section, so it carries the first
+            // host's hover target — hovering it filters the graph in small windows too
+            hoverRects.append((r, .host(fname)))
+            if hover == .host(fname) {
+                NSColor.labelColor.withAlphaComponent(0.07).setFill()
+                r.fill()
+            }
             let e = first["m15"]["errors"]
             let errs = (e["429"].int ?? 0) + (e["5xx"].int ?? 0) + (e["other"].int ?? 0)
             let others = fhosts.count > 1 ? " · +\(fhosts.count - 1) host\(fhosts.count == 2 ? "" : "s")" : ""
-            drawStr("Fleet · \(first["name"].str ?? "?") \(first["m15"]["requests"].int ?? 0) req" + (errs > 0 ? " · \(errs) err" : "") + others,
+            drawStr("Fleet · \(fname) \(first["m15"]["requests"].int ?? 0) req" + (errs > 0 ? " · \(errs) err" : "") + others,
                     in: r, font: tinyFont, color: errs > 0 ? NSColor.systemRed : .tertiaryLabelColor)
         }
         if let note = d["throttle_notes"]["github-copilot"].str, spans.allSatisfy({ $0.provider != "github-copilot" }), rowsLeft >= 1,

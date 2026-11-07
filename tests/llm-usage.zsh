@@ -1107,6 +1107,12 @@ if [[ -x /usr/bin/swiftc ]] || command -v swiftc >/dev/null; then
     cmp -s "$tmp/w-fleet-hz-bars.png" "$tmp/w-fleet-hover.png" && fail "host overlay must draw in bars mode (zeroed series must differ)"
     "$mb" --window-png "$tmp/w-fleet-hz-lines.png" --layout vertical --graph lines --hover host:peerA --data-file "$tmp/fleet-hostzero.json" >/dev/null || fail "window-png fleet host-zero lines"
     cmp -s "$tmp/w-fleet-hz-lines.png" "$tmp/w-fleet-hover2.png" && fail "host overlay must draw in lines mode (zeroed series must differ)"
+    # the compact fleet line (horizontal window's short stats column) carries the
+    # first host's hover target: same zeroed-series payload, hovering the row's own
+    # host vs a name that matches nothing — the only difference is the row highlight
+    "$mb" --window-png "$tmp/w-fleet-cz-on.png" --layout horizontal --hover host:peerA --data-file "$tmp/fleet-hostzero.json" >/dev/null || fail "window-png compact host-hover"
+    "$mb" --window-png "$tmp/w-fleet-cz-off.png" --layout horizontal --hover host:zzz --data-file "$tmp/fleet-hostzero.json" >/dev/null || fail "window-png compact host-hover control"
+    cmp -s "$tmp/w-fleet-cz-on.png" "$tmp/w-fleet-cz-off.png" && fail "compact fleet row must highlight under its host hover"
     [[ "$dump" == *"[chart] requests/min"* && "$dump" == *"[chart] by model"* && "$dump" == *"[chart] by proxy"* ]] || fail "charts missing: $dump"
     [[ "$(dump_of normal --no-charts)" != *"[chart]"* && "$(dump_of normal --no-charts)" == *"Top models (1h): glm-5.3"* ]] || fail "--no-charts"
     [[ "$dump" == *"Open dashboard"* && "$dump" == *"Open logs folder"* && "$dump" == *"Refresh now"* && "$dump" == *"Copy status"* && "$dump" == *"Copy last error"* && "$dump" == *Quit* ]] || fail "actions missing"
