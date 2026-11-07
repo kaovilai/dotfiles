@@ -24,13 +24,17 @@ Stdlib only; no state besides the logs.
 import bisect
 import argparse
 import glob
+import hashlib
 import json
 import math
 import os
 import plistlib
 import re
+import shlex
 import shutil
+import socket
 import statistics
+import stat as stat_mod
 import subprocess
 import sys
 import tempfile
@@ -42,6 +46,9 @@ from datetime import datetime, timedelta, timezone
 STATE = os.environ.get("LLM_USAGE_DIR") or os.path.join(
     os.environ.get("XDG_STATE_HOME") or os.path.expanduser("~/.local/state"), "llm-usage")
 UID = os.getuid()
+# Short hostname of this machine: the `host` tag on local events and the label
+# the fleet views use for them (LLM_USAGE_HOST overrides, e.g. inside a container).
+LOCAL_HOST = (os.environ.get("LLM_USAGE_HOST") or socket.gethostname() or "local").split(".")[0]
 LONG_CTX = 200_000
 
 # port -> (name, config path or None). LLM_USAGE_PORT_NAMES="4150=foo,4151=bar" adds/overrides names.
@@ -138,6 +145,8 @@ def parse_since(text):
         return 0.0
     if text == "today":
         return datetime.now().replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
+    if text is not None and re.fullmatch(r"\d+(?:\.\d+)?", text.strip()):  # bare epoch (fleet pulls pass one)
+        return float(text)
     match = re.fullmatch(r"(\d+)\s*([smhdw])", text)
     if match:
         unit = {"s": 1, "m": 60, "h": 3600, "d": 86400, "w": 604800}[match.group(2)]
@@ -156,10 +165,12 @@ def parse_proxy_file(handle, path):
         except ValueError:
             continue
         ts = parse_ts(ev.get("ts"))
+        if ts is None and isinstance(ev.get("t"), (int, float)):
+            ts = float(ev["t"])  # fleet export lines carry epoch `t` instead of `ts`
         if ts is None:
             continue
         ev["t"] = ts
-        ev["source"] = "proxy"
+        ev.setdefault("source", "proxy")  # pulled export lines keep their origin (claude/codex/proxy)
         events.append(ev)
     return events
 
@@ -198,7 +209,8 @@ def load_proxy(since):
 
 
 _FILE_CACHE = {}  # (kind, path) -> (mtime, size, events); warm in `serve`, persisted for one-shot polls
-_TRANSCRIPT_CACHE_VERSION = 3  # 3: proxy entries carry (mtime, size, inode, offset-cut events)
+_TRANSCRIPT_CACHE_VERSION = 4  # 4: truncated entries are no longer stored (old pickles with them are
+# discarded, so mixed old+recent transcript files re-parse whole and fleet backfills see their old events)
 _TRANSCRIPT_CACHE_LOADED = set()
 _TRANSCRIPT_CACHE_DIRTY = set()
 CACHE_FILES = False
@@ -240,8 +252,15 @@ def save_transcript_cache(kind):
             if k != kind:
                 continue
             kept = [e for e in events if e.get("t", 0) >= cutoff]
-            if kept or not events:
+            if kind == "proxy":
+                # append-only logs: the whole file is the truth, and load_proxy(0)/load_fleet(0)
+                # read all of it — pruning these entries made every poll re-parse old months
+                files[path] = (mtime, size, ino, events)
+            elif len(kept) == len(events) or not events:
                 files[path] = (mtime, size, ino, kept)
+            # a truncated transcript entry (mixed old+recent events) is NOT stored: the next
+            # process re-parses the file whole, so an export asking past the
+            # window (fleet backfill) still sees the old events
         os.makedirs(STATE, mode=0o700, exist_ok=True)
         tmp = _transcript_cache_path(kind) + ".tmp"
         with open(tmp, "wb") as handle:
@@ -405,18 +424,24 @@ def transcript_paths(kind, roots, ttl=20.0):
     return paths
 
 
-def load_transcripts(kind, env, default, parser, since):
+def load_transcripts(kind, env, default, parser, since, modified_since=0.0):
     roots = [os.path.expanduser(p) for p in os.environ.get(env, default).split(":")]
     load_transcript_cache(kind)
     events, seen = [], set()
     for path in transcript_paths(kind, roots):
         try:
-            if os.path.getmtime(path) < since:
+            mtime = os.path.getmtime(path)
+            # A file modified since the last pull re-exports ALL of its events: a
+            # transcript revision (a streamed message whose usage grew) keeps its old
+            # timestamp, which the `since` filter would otherwise hide forever.
+            # modified_since=0 (every caller but fleet pulls) disables this.
+            fresh = modified_since > 0 and mtime >= modified_since
+            if mtime < since and not fresh:
                 continue
         except OSError:
             continue
         for e in parse_cached(kind, path, parser):
-            if e["t"] < since:
+            if e["t"] < since and not fresh:
                 continue
             if "id" in e:  # resumed sessions copy history into new files
                 if e["id"] in seen:
@@ -427,12 +452,12 @@ def load_transcripts(kind, env, default, parser, since):
     return events
 
 
-def load_claude(since):
-    return load_transcripts("claude", "LLM_USAGE_CLAUDE_DIRS", "~/.claude/projects", parse_claude_file, since)
+def load_claude(since, modified_since=0.0):
+    return load_transcripts("claude", "LLM_USAGE_CLAUDE_DIRS", "~/.claude/projects", parse_claude_file, since, modified_since)
 
 
-def load_codex(since):
-    return load_transcripts("codex", "LLM_USAGE_CODEX_DIRS", "~/.codex/sessions", parse_codex_file, since)
+def load_codex(since, modified_since=0.0):
+    return load_transcripts("codex", "LLM_USAGE_CODEX_DIRS", "~/.codex/sessions", parse_codex_file, since, modified_since)
 
 
 def merge_transcripts(proxy_all, transcripts, since):
@@ -443,16 +468,18 @@ def merge_transcripts(proxy_all, transcripts, since):
     return [e for e in proxy_all if e["t"] >= since] + extra, first
 
 
-def load_auto(since):
+def load_auto(since, modified_since=0.0):
     """Proxy log where it exists; transcripts fill the rest.
 
     Transcripts cover history from before the proxies logged, and any model the
     proxy log has never seen (traffic through a proxy that is not logging yet,
     e.g. copilot-api). Transcript calls for models the proxy log does cover are
-    dropped after logging began, so nothing is counted twice.
+    dropped after logging began, so nothing is counted twice. `modified_since`
+    (fleet pulls) additionally re-exports every event of a transcript file that
+    changed since then, so revisions with old timestamps are not missed.
     """
     proxy_all = load_proxy(0)
-    transcripts = load_claude(since) + load_codex(since)
+    transcripts = load_claude(since, modified_since) + load_codex(since, modified_since)
     if not proxy_all:
         return transcripts, "transcripts (no proxy events yet; run `llm-usage status`)"
     events, first = merge_transcripts(proxy_all, transcripts, since)
@@ -460,18 +487,549 @@ def load_auto(since):
     return events, f"merged (proxy log since {when}; transcripts for earlier history and models not in the proxy log)"
 
 
-def load(since, source):
+def load(since, source, host=None):
     if source == "auto":
-        return load_auto(since)
-    if source == "all":
-        return load_proxy(since) + load_claude(since) + load_codex(since), "proxy+claude+codex"
+        events, used = load_auto(since)
+    elif source == "all":
+        events, used = load_proxy(since) + load_claude(since) + load_codex(since), "proxy+claude+codex"
+    else:
+        events, used = [], source
+        for name in source.split(","):
+            loader = {"proxy": load_proxy, "claude": load_claude, "codex": load_codex}.get(name)
+            if loader is None:
+                sys.exit(f"llm-usage: unknown source {name!r} (proxy, claude, codex, auto, all)")
+            events += loader(since)
+    # Fleet peers' events are pulled copies of what `llm-usage export` merged on
+    # each machine, so they need no transcript fill here (see load_fleet). A
+    # --source filter applies to them the same way as to local events (the
+    # export lines keep their origin).
+    if fleet_hosts():
+        fleet = load_fleet(since)
+        # CLI/dashboard views label transcript rows by their client, like local ones
+        # (port "transcript" -> claude/codex in --by proxy); only menubar_data, which
+        # reads load_fleet directly, wants the copilot-api :4141 attribution
+        fleet = [{**e, "port": "transcript"} if e.get("via") == "transcript" else e for e in fleet]
+        if source not in ("auto", "all"):
+            wanted = set(source.split(","))
+            fleet = [e for e in fleet if e.get("source", "proxy") in wanted]
+        events = events + fleet
+        used = f"{used} + fleet"
+    if host and host != "all":  # "all" reads as no filter, like the dashboard's dropdown value
+        want = FLEET_LOCAL if host == "local" else host
+        events = [e for e in events if host_of(e) == want]
+    return events, used
+
+
+# --------------------------------------------------------------------------- fleet
+# The same proxies run on every machine in the fleet, each writing its own
+# events-*.jsonl. The machine you sit on pulls the others' merged events over
+# read-only ssh (`llm-usage export` on the peer) and caches them under
+# STATE/fleet/<name>/. Nothing pushes and nothing listens: an unreachable peer
+# keeps its last snapshot, marked stale. Design + decisions:
+# docs/notes/fleet-usage-streaming.md.
+
+FLEET_TTL = 25                 # s: a host pulled this recently is skipped
+FLEET_SSH_TIMEOUT = 10         # s: per-host hard timeout (connect + export)
+FLEET_FIRST_SYNC = 7 * 86400   # first pull covers the last 7 days
+FLEET_BACKFILL_CHUNK = 30 * 86400  # older history walks back 30d per refresh
+FLEET_STALE_AFTER = 180        # s: last successful pull older than this = stale
+FLEET_BACKOFF = 300            # s: after a failed pull, the automatic kick waits this long
+# before retrying that host (airplane mode / a tailscale reauth must not wake a
+# spawn per poll); a manual `llm-usage fleet refresh` always tries
+FLEET_LOCAL = "local"          # --host value for this machine
+
+
+def host_of(ev):
+    return ev.get("host") or FLEET_LOCAL
+
+
+def fleet_hosts():
+    """[(name, entry)] of peers to pull. ~/.config/llm-usage/fleet.json (or
+    $LLM_USAGE_CONFIG_DIR/fleet.json — directly in that dir, no llm-usage
+    subdir; see scripts/fleet.json.example) lists {"hosts": [{"name", "ssh",
+    "dir"?}]}; LLM_USAGE_FLEET="off" disables, "name=ssh-target,..." (or
+    "name=local:/path/to/state" for tests and second local state dirs)
+    adds/overrides by name. A peer named "local" is rejected: it collides with
+    this machine's own host label. A config-file local_dir entry may also set
+    "claude_dirs": the peer's own transcript root, so tests (and a copied peer
+    state) export its transcript history too. Machine-local on purpose: the
+    repo is public, hostnames are not."""
+    if os.environ.get("LLM_USAGE_FLEET", "").strip().lower() == "off":
+        return []
+    hosts = {}
+    path = os.path.join(os.environ.get("LLM_USAGE_CONFIG_DIR") or os.path.expanduser("~/.config/llm-usage"), "fleet.json")
+    try:
+        with open(path) as handle:
+            doc = json.load(handle)
+        for h in doc.get("hosts") or []:
+            if isinstance(h, dict) and str(h.get("name") or "").strip() and (h.get("ssh") or h.get("local_dir")):
+                hosts[str(h["name"]).strip()] = h
+    except (OSError, ValueError, TypeError):
+        pass
+    for pair in filter(None, os.environ.get("LLM_USAGE_FLEET", "").split(",")):
+        if "=" not in pair:
+            continue
+        name, target = (x.strip() for x in pair.split("=", 1))
+        if not name or not target or target == "local:":  # "peer=" would KeyError cmd_fleet hosts and fail every ssh
+            continue
+        hosts[name] = {"name": name, "local_dir": target[6:]} if target.startswith("local:") else {"name": name, "ssh": target}
+    hosts.pop(FLEET_LOCAL, None)  # a peer named "local" would merge with this machine's events
+    hosts.pop("all", None)  # and "all" collides with the dashboard's fleet-wide host filter value
+    return sorted(hosts.items())
+
+
+def fleet_dir(name):
+    return os.path.join(STATE, "fleet", name)
+
+
+def fleet_status(name):
+    try:
+        with open(os.path.join(fleet_dir(name), "status.json")) as handle:
+            doc = json.load(handle)
+        return doc if isinstance(doc, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def fleet_write_status(name, **fields):
+    doc = {**fleet_status(name), **fields}
+    try:
+        os.makedirs(fleet_dir(name), mode=0o700, exist_ok=True)
+        tmp = os.path.join(fleet_dir(name), "status.json.tmp")
+        with open(tmp, "w") as handle:
+            json.dump(doc, handle)
+        os.replace(tmp, os.path.join(fleet_dir(name), "status.json"))
+    except OSError:
+        pass
+
+
+def load_fleet(since):
+    """Pulled peer events: same schema as the local log plus host + eid, already
+    merge-corrected on the peer by `export`. A request is served by exactly one
+    machine's loopback proxy, so hosts are disjoint and this is a concatenation.
+    Reuses the proxy parse cache: the files are append-only JSONL too."""
+    load_transcript_cache("proxy")
     events = []
-    for name in source.split(","):
-        loader = {"proxy": load_proxy, "claude": load_claude, "codex": load_codex}.get(name)
-        if loader is None:
-            sys.exit(f"llm-usage: unknown source {name!r} (proxy, claude, codex, auto, all)")
-        events += loader(since)
-    return events, source
+    for name, _ in fleet_hosts():
+        for path in sorted(glob.glob(os.path.join(fleet_dir(name), "events-*.jsonl"))):
+            for e in parse_cached("proxy", path, parse_proxy_file):
+                if e["t"] >= since and not is_endpoint_probe(e):
+                    e.setdefault("host", name)
+                    events.append(e)
+    save_transcript_cache("proxy")
+    return events
+
+
+def event_eid(ev):
+    """Stable per-request identity for pull dedup. Transcript events carry a
+    message `id`: their usage grows while a reply streams, so the eid must NOT
+    depend on token counts (a revision replaces the stored line, see
+    fleet_ingest). Proxy events have no id; both writers emit `start` with
+    millisecond precision, which separates same-second requests — two requests
+    collide only when they start in the same millisecond with identical fields.
+    """
+    if ev.get("id"):
+        return "m:" + hashlib.sha1(str(ev["id"]).encode("utf-8", "replace")).hexdigest()[:16]
+    ident = "|".join([str(round(float(ev.get("t") or 0), 3))] +
+                     [str(ev.get(k)) for k in ("start", "port", "served", "requested", "in", "out", "cache_read")])
+    return hashlib.sha1(ident.encode("utf-8", "replace")).hexdigest()[:16]
+
+
+def _fleet_month_eids(path):
+    """{eid: raw line} already ingested in one peer month file (full scan; only
+    the months a pull touches are read, and the live month is a few MB at most)."""
+    out = {}
+    try:
+        with open(path, errors="replace") as handle:
+            for line in handle:
+                try:
+                    eid = json.loads(line).get("eid")
+                except ValueError:
+                    continue
+                if eid:
+                    out[eid] = line.rstrip("\n")
+    except OSError:
+        pass
+    return out
+
+
+def fleet_ingest(name, events):
+    """Store pulled events in fleet/<name>/events-YYYY-MM.jsonl, deduped by eid.
+
+    A same-eid line with different content is a revision (a streamed transcript
+    message whose usage grew on the peer): it replaces the stored line instead
+    of appending, so one request is never counted twice. A revision whose new
+    timestamp crossed a UTC month boundary is relocated from the old month file.
+    Raises OSError when a write fails, so the caller does not advance its
+    watermark past events that were never stored. Returns the number of lines
+    written or replaced."""
+    written = 0
+    months = {}
+    neighbors = {}  # month -> neighbour-month scan, read+indexed once per batch (not per event)
+    for ev in sorted(events, key=lambda e: e["t"]):
+        ev["host"] = name  # the configured name wins over the peer's self-reported hostname
+        month = datetime.fromtimestamp(ev["t"], timezone.utc).strftime("%Y-%m")
+        if month not in months:
+            path = os.path.join(fleet_dir(name), "events-%s.jsonl" % month)
+            months[month] = {"path": path, "eids": _fleet_month_eids(path), "lines": None}
+        state = months[month]
+        eid = ev.get("eid") or event_eid(ev)
+        ev["eid"] = eid  # stamped into the stored line: the next pull's dedup scan reads it back
+        line = json.dumps(ev, separators=(",", ":"), default=str)
+        if eid in state["eids"]:
+            if state["eids"][eid] != line:  # revision: replace in place, do not double-count
+                if state["lines"] is None:
+                    try:
+                        with open(state["path"], errors="replace") as handle:
+                            state["lines"] = handle.read().splitlines()
+                    except OSError:
+                        state["lines"] = []
+                state["lines"] = [line if _line_eid(l) == eid else l for l in state["lines"]]
+                state["eids"][eid] = line
+                _rewrite_month(state["path"], state["lines"])
+                written += 1
+            continue
+        if ev.get("id"):  # transcript identity: the old copy may live in a neighbouring month
+            for other in _neighbor_months(month):
+                if other in months:  # also a target month this batch: its state is current
+                    ostate = months[other]
+                    if eid in ostate["eids"]:
+                        if ostate["lines"] is None:
+                            try:
+                                with open(ostate["path"], errors="replace") as handle:
+                                    ostate["lines"] = handle.read().splitlines()
+                            except OSError:
+                                ostate["lines"] = []
+                        ostate["lines"] = [l for l in ostate["lines"] if _line_eid(l) != eid]
+                        ostate["eids"].pop(eid, None)
+                        _rewrite_month(ostate["path"], ostate["lines"])
+                        written += 1
+                    continue
+                nb = neighbors.get(other)
+                if nb is None:
+                    path = os.path.join(fleet_dir(name), "events-%s.jsonl" % other)
+                    try:
+                        with open(path, errors="replace") as handle:
+                            lines = handle.read().splitlines()
+                    except OSError:
+                        lines = None
+                    nb = neighbors[other] = {"path": path, "lines": lines,
+                                             "eids": {_line_eid(l) for l in lines} if lines else set(),
+                                             "removed": set()}
+                if nb["lines"] is not None and eid in nb["eids"] and eid not in nb["removed"]:
+                    nb["removed"].add(eid)
+        state["eids"][eid] = line
+        if state["lines"] is not None:
+            state["lines"].append(line)
+        os.makedirs(fleet_dir(name), mode=0o700, exist_ok=True)
+        with open(state["path"], "a") as handle:
+            handle.write(line + "\n")
+        written += 1
+    for nb in neighbors.values():  # neighbour removals are applied once, not per event
+        if nb["removed"]:
+            # re-read the file: the same batch may have appended to this month after
+            # the neighbour snapshot was taken, and the rewrite must not drop those rows
+            try:
+                with open(nb["path"], errors="replace") as handle:
+                    lines = handle.read().splitlines()
+            except OSError:
+                lines = nb["lines"] or []
+            _rewrite_month(nb["path"], [l for l in lines if _line_eid(l) not in nb["removed"]])
+            written += 1
+    return written
+
+
+def _neighbor_months(month):
+    y, m = int(month[:4]), int(month[5:7])
+    out = []
+    for yy, mm in ((y - (m == 1), m - 1 or 12), (y + (m == 12), m % 12 + 1)):
+        out.append("%04d-%02d" % (yy, mm))
+    return out
+
+
+def _line_eid(line):
+    try:
+        return json.loads(line).get("eid")
+    except ValueError:
+        return None
+
+
+def _rewrite_month(path, lines):
+    tmp = path + ".tmp"
+    with open(tmp, "w") as handle:
+        handle.write("\n".join(lines) + ("\n" if lines else ""))
+    os.replace(tmp, path)  # failures propagate: the caller must not advance past unwritten events
+
+
+def _fleet_control_dir(tmp="/tmp"):
+    """Directory for the ssh ControlMaster sockets. /tmp is preferred for its
+    short path (a deep STATE dir blows the ~104-char unix socket limit), but a
+    predictable path in shared space must not be trusted: another local user can
+    pre-create it and plant a mux socket at cm-<hash>, which ssh would treat as
+    the master (CodeQL flagged exactly this). Only a directory that provably
+    exists, is a real dir (not a symlink), is owned by us and carries no
+    group/other bits is used; anything else falls back to the private STATE
+    dir. `tmp` is a parameter so tests can point it somewhere disposable."""
+    cdir = os.path.join(tmp, "llm-usage-fleet-%d" % UID)
+    try:
+        os.makedirs(cdir, mode=0o700, exist_ok=True)
+        st = os.lstat(cdir)
+        if stat_mod.S_ISDIR(st.st_mode) and st.st_uid == os.getuid() and not st.st_mode & 0o077:
+            return cdir
+    except OSError:
+        pass
+    return os.path.join(STATE, "fleet")
+
+
+def _fleet_export_argv(entry, since, inflight=False, until=None, modified_since=None):
+    """Command whose stdout is the peer's export (ssh, or a local subprocess for
+    tests / a second state dir)."""
+    script = os.path.realpath(__file__)
+    flags = []
+    if inflight:
+        flags.append("--inflight")
+    if until is not None:
+        flags += ["--until", str(until)]  # bounds a backfill chunk's transfer to the chunk itself
+    if modified_since:
+        flags += ["--modified-since", str(modified_since)]  # re-export revised transcript files
+    if entry.get("local_dir"):
+        argv = [sys.executable, script, "export", "--since", str(since)] + flags
+        return argv, {"LLM_USAGE_DIR": os.path.expanduser(entry["local_dir"])}
+    script_path = (entry.get("dir") or "~/git/dotfiles").rstrip("/") + "/scripts/llm-usage"
+    # a leading ~/ must reach the peer's shell unexpanded (its home differs from
+    # ours); the rest of the path is quoted so spaces survive the remote shell
+    remote = "~/" + shlex.quote(script_path[2:]) if script_path.startswith("~/") else shlex.quote(script_path)
+    cmd = " ".join([remote, "export", "--since", str(since)] + flags)
+    # ControlMaster socket path must stay short: a deep STATE dir (long tmp paths
+    # in tests, long usernames) blows past the ~104-char unix socket limit, and
+    # tempfile.gettempdir() on macOS is a long /var/folders path — so /tmp,
+    # validated by _fleet_control_dir. %C = hash of the connection parameters,
+    # so one socket per (user, host, port). If even the fallback is too long,
+    # drop multiplexing entirely: a fresh connection per pull beats a hard failure.
+    cdir = _fleet_control_dir()
+    mux = [] if len(os.path.join(cdir, "cm-" + "0" * 40)) > 104 else \
+        ["-o", "ControlMaster=auto", "-o", f"ControlPath={cdir}/cm-%C", "-o", "ControlPersist=15m"]
+    return ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=3", *mux, "--", entry["ssh"], cmd], None
+
+
+def fleet_pull(name, entry, since, inflight=False, until=None, modified_since=None):
+    """One peer export. Returns (meta, events, in-flight requests); raises
+    OSError on any transport failure (caller records it in status.json)."""
+    argv, env_override = _fleet_export_argv(entry, since, inflight=inflight, until=until, modified_since=modified_since)
+    env = dict(os.environ)
+    if env_override:
+        # local: is a test seam / second-state-dir transport: no transcript
+        # merge by default (those dirs belong to this machine, not the "peer")
+        # — unless the entry names its own claude_dirs (config-file entries only)
+        empty = os.path.join(fleet_dir(name), ".empty-dirs")
+        os.makedirs(empty, exist_ok=True)
+        env.update(env_override)
+        env["LLM_USAGE_CLAUDE_DIRS"] = os.path.expanduser(entry.get("claude_dirs") or empty)
+        env["LLM_USAGE_CODEX_DIRS"] = empty
+    try:
+        os.makedirs(os.path.join(STATE, "fleet"), mode=0o700, exist_ok=True)
+        res = subprocess.run(argv, capture_output=True, text=True, timeout=FLEET_SSH_TIMEOUT, env=env)
+    except subprocess.TimeoutExpired as err:
+        raise OSError(f"timeout after {FLEET_SSH_TIMEOUT}s") from err
+    except OSError as err:
+        raise OSError(str(err)) from err
+    if res.returncode != 0:
+        raise OSError((res.stderr.strip() or f"exit {res.returncode}").splitlines()[-1][:200])
+    meta, events, flights = {}, [], []
+    for line in res.stdout.splitlines():
+        try:
+            rec = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(rec, dict):
+            continue
+        if rec.get("_export"):
+            meta = rec
+        elif rec.get("inflight"):
+            flights.append(rec)
+        elif rec.get("t") is not None:
+            events.append(rec)
+    if not meta:
+        raise OSError("no export meta line (peer runs an older llm-usage?)")
+    return meta, events, flights
+
+
+def fleet_pull_one(name, entry, force=False, ttl=FLEET_TTL):
+    """Incremental pull + one backfill step for one host. Returns a status dict."""
+    now = time.time()
+    st = fleet_status(name)
+    if not force and st.get("last_ok") and now - st["last_ok"] < ttl:
+        return {"name": name, "skipped": "fresh"}
+    started = now
+    try:
+        since = (st.get("last_event_t") or (now - FLEET_FIRST_SYNC)) - 2  # resume from last event, 2s overlap deduped by eid
+        # A transcript file that changed since the last pull re-exports all its events:
+        # a revision keeps its old timestamp, which the `since` window would hide. The
+        # cutoff is the PEER's export time from that pull (meta t), not our last_ok —
+        # file mtimes are peer-clock values, and the two clocks can skew apart.
+        modified_since = max(0.0, (float(st.get("peer_t") or 0) - 60))
+        meta, events, flights = fleet_pull(name, entry, since, inflight=True, modified_since=modified_since)
+        snap = {"t": time.time(), "requests": flights}  # always rewrite: a peer with no in-flight
+        os.makedirs(fleet_dir(name), mode=0o700, exist_ok=True)  # first pull: the host dir does not exist yet
+        tmp = os.path.join(fleet_dir(name), "inflight.json.tmp")  # requests must not keep the old ones
+        with open(tmp, "w") as handle:
+            json.dump(snap, handle)
+        os.replace(tmp, os.path.join(fleet_dir(name), "inflight.json"))
+        new_events = events  # the export window IS the ingest set: `since` events plus the
+        # modified-since revisions (old timestamps); eid dedup absorbs the re-sent overlap
+        written = fleet_ingest(name, new_events)  # raises OSError when a write fails: no watermark advance
+        # The watermark tracks only events actually ingested; a revision's old timestamp
+        # cannot move it backwards (max with the stored value).
+        last_event_t = max([st.get("last_event_t", 0)] + [e["t"] for e in new_events])
+        # Backfill: first sync is the last 7 days; walk older history back in
+        # 30d chunks, bounded by --until so a peer with months of history never
+        # re-transfers it all per chunk. Stop when the chunk is empty AND the
+        # cursor is below the peer's oldest proxy month (the export meta's
+        # "months"; chunks below it can still carry transcript history, so the
+        # walk only ends on an empty chunk there too). A peer with no proxy
+        # months at all (transcript-only) stops after two empty chunks — a
+        # documented bound, see docs/notes/fleet-usage-streaming.md. A backfill
+        # failure (e.g. a timed-out chunk) is recorded but never fails the
+        # refresh: the incremental pull succeeded, the chunk retries next time.
+        cursor = st.get("backfill_cursor", now - FLEET_FIRST_SYNC)
+        backfilled = bool(st.get("backfilled"))
+        empty = st.get("backfill_empty", 0)
+        months = meta.get("months") or []
+        oldest = None
+        if months:
+            y, m = min(months).split("-")
+            oldest = datetime(int(y), int(m), 1, tzinfo=timezone.utc).timestamp()
+        if backfilled and oldest is not None and cursor > oldest:
+            # the peer now advertises older history than we walked (an older events
+            # month appeared, or the saved state predates the months-aware stop
+            # rule): a persisted backfilled flag must not pin the walk shut
+            backfilled = False
+        backfill_note = None
+        if not backfilled:
+            try:
+                lo = cursor - FLEET_BACKFILL_CHUNK
+                _, older, _ = fleet_pull(name, entry, lo, until=cursor)
+                written += fleet_ingest(name, older)
+                chunk = [e for e in older if lo <= e["t"] < cursor]
+                last_event_t = max(last_event_t, max((e["t"] for e in older), default=0))
+                cursor = lo
+                empty = 0 if chunk else empty + 1
+                if oldest is not None:
+                    backfilled = empty >= 1 and cursor <= oldest
+                else:
+                    backfilled = empty >= 2
+            except OSError as err:
+                backfill_note = f"backfill: {err}"
+        out = {"name": name, "ok": True, "new_events": written, "host": meta.get("host"),
+               "backfilled": backfilled, "backfill_error": backfill_note,
+               "pull_ms": int((time.time() - started) * 1000)}
+        fleet_write_status(name, last_ok=time.time(), last_error=backfill_note, last_event_t=last_event_t,
+                           backfill_cursor=cursor, backfilled=backfilled, backfill_empty=empty,
+                           months=months, host=meta.get("host"), peer_t=meta.get("t"))
+        return out
+    except OSError as err:
+        fleet_write_status(name, last_error=str(err), last_fail=time.time())
+        return {"name": name, "ok": False, "error": str(err)}
+
+
+def fleet_refresh(force=False, only=None, ttl=FLEET_TTL, auto=False):
+    """Pull every configured host concurrently. One refresh at a time (flock on
+    STATE/fleet/refresh.lock): callers that lose the race return immediately.
+    `auto` (the kick-spawned path) applies _fleet_due per host, so a failed
+    peer is retried once per backoff window even when another host keeps the
+    refreshes coming; a manual refresh always tries every non-fresh host."""
+    import fcntl
+    hosts = [(n, e) for n, e in fleet_hosts() if not only or n == only]
+    if auto and not force:
+        now = time.time()
+        hosts = [(n, e) for n, e in hosts if _fleet_due(n, now, ttl)]
+    if not hosts:
+        return []
+    try:
+        os.makedirs(os.path.join(STATE, "fleet"), mode=0o700, exist_ok=True)
+        lock = open(os.path.join(STATE, "fleet", "refresh.lock"), "w")
+    except OSError:
+        return []
+    try:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            return [{"skipped": "refresh already running"}]
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=max(1, len(hosts))) as pool:
+            return list(pool.map(lambda ne: fleet_pull_one(ne[0], ne[1], force=force, ttl=ttl), hosts))
+    finally:
+        lock.close()
+
+
+def _fleet_due(name, now, ttl=FLEET_TTL):
+    """Is this host due for an AUTOMATIC kick? A fresh success says no; so does a
+    recent failure (backoff — a peer unreachable for hours gets one attempt per
+    FLEET_BACKOFF, not one per poll). A success NEWER than the last failure is
+    back to the ordinary TTL cadence: an old last_fail must not keep a healthy
+    peer stale. Manual `fleet refresh` bypasses this."""
+    st = fleet_status(name)
+    last_ok = st.get("last_ok") or 0
+    if now - last_ok < ttl:
+        return False
+    last_fail = st.get("last_fail") or 0
+    if last_fail < last_ok:
+        return True
+    return now - last_fail >= FLEET_BACKOFF
+
+
+def fleet_kick(ttl=FLEET_TTL):
+    """Spawn a detached `fleet refresh` when a real (ssh) host is due and none
+    ran recently. The menubar poll calls this every 30 s: the UI reads the cache
+    and never blocks on ssh. No-op without ssh hosts, so local: tests and
+    plain CLI runs never fork."""
+    if os.environ.get("LLM_USAGE_FLEET_REFRESH", "").strip().lower() == "off":
+        return
+    hosts = fleet_hosts()
+    if not any(e.get("ssh") for _, e in hosts):
+        return
+    now = time.time()
+    if not any(_fleet_due(n, now, ttl) for n, _ in hosts):
+        return
+    kick = os.path.join(STATE, "fleet", "kick")
+    try:
+        os.makedirs(os.path.dirname(kick), mode=0o700, exist_ok=True)
+        try:
+            last_kick = os.path.getmtime(kick)
+        except OSError:
+            last_kick = 0  # no kick file yet: treat as long ago, do not strand the first refresh
+        if now - last_kick < ttl - 5:
+            return
+        with open(kick, "a"):
+            os.utime(kick)
+        subprocess.Popen([sys.executable, os.path.realpath(__file__), "fleet", "refresh", "--auto"],
+                         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                         start_new_session=True)
+    except OSError:
+        pass
+
+
+def read_fleet_inflight(now):
+    """In-flight requests of each peer, from the snapshot its last pull saved.
+    A snapshot older than 2 stale windows is a gone-quiet peer, not stuck
+    requests: drop it. Ages are recomputed from the request's own t (clamped:
+    clock skew between machines must not go negative)."""
+    entries = []
+    for name, _ in fleet_hosts():
+        try:
+            with open(os.path.join(fleet_dir(name), "inflight.json")) as handle:
+                doc = json.load(handle)
+        except (OSError, ValueError):
+            continue
+        if now - float(doc.get("t") or 0) > 2 * FLEET_TTL + FLEET_SSH_TIMEOUT:
+            continue  # the peer's requests finished long ago (pulls failing): drop the ghost bars, not 6 min later
+        for req in doc.get("requests") or []:
+            if not isinstance(req, dict):
+                continue
+            entries.append({"port": str(req.get("port") or ""), "id": "%s:%s" % (name, req.get("id")),
+                            "model": strip_model(req.get("model")), "host": name,
+                            "seconds": max(0, int(now - float(req.get("t") or doc.get("t") or now)))})
+    return entries
 
 
 # --------------------------------------------------------------------------- aggregation
@@ -611,6 +1169,7 @@ KEYS = {
     "dialect": lambda e: e.get("call_type") or "-",
     "status": lambda e: "ok" if e.get("ok", True) else "error",
     "source": lambda e: e.get("source", "?"),
+    "host": host_of,
     "day": lambda e: datetime.fromtimestamp(e["t"]).strftime("%Y-%m-%d"),
     "hour": lambda e: datetime.fromtimestamp(e["t"]).strftime("%m-%d %H:00"),
     "ctx": lambda e: ">200k (1M)" if ctx_of(e) > LONG_CTX else "<=200k",
@@ -755,7 +1314,7 @@ def error_spark_line(events, label="errors"):
 # --------------------------------------------------------------------------- commands
 
 def cmd_summary(args):
-    events, used = load(parse_since(args.since), args.source)
+    events, used = load(parse_since(args.since), args.source, getattr(args, "host", None))
     by = [b.strip() for b in args.by.split(",")]
     for b in by:
         if b not in KEYS:
@@ -777,7 +1336,7 @@ def cmd_summary(args):
 
 
 def cmd_routes(args):
-    events, used = load(parse_since(args.since), args.source)
+    events, used = load(parse_since(args.since), args.source, getattr(args, "host", None))
     events = [e for e in events if e.get("requested")]
     print(color(f"llm-usage routes  since {args.since}  source: {used}", "2"))
     if not events:
@@ -808,6 +1367,9 @@ def fmt_wait(seconds):
 
 def event_line(ev):
     when = datetime.fromtimestamp(ev["t"]).strftime("%H:%M:%S")
+    host = ""
+    if fleet_hosts():  # fleet view: which machine served it (local rows say "local", like the peers' names)
+        host = f"{host_of(ev):<9} "
     arrow = route_label(ev)
     if ev.get("requested") and not is_reroute(ev):
         arrow = strip_model(ev["served"])
@@ -825,8 +1387,19 @@ def event_line(ev):
         extra.append(f"reset {fmt_wait(ev['retry_after'])}")
     if ev.get("error"):
         extra.append(ev["error"][:80].replace("\n", " "))
-    return (f"{when} {proxy_name(ev):<18} {ev.get('client', '?'):<11} {arrow:<28} {status} "
+    return (f"{when} {host}{proxy_name(ev):<18} {ev.get('client', '?'):<11} {arrow:<28} {status} "
             f"ctx {human(ctx_of(ev)):>6} out {human(ev.get('out', 0)):>5} {ms(ev.get('ms')):>7}  {' '.join(extra)}").rstrip()
+
+
+def tail_key(e):
+    """Identity for `tail -f` repeat suppression. Pulled lines carry a stable eid:
+    a transcript revision replaces the stored line under the same eid while its
+    token counts grow, which the content tuple would misread as a new request.
+    Local events have no eid; their tuple keeps host so an identical peer event
+    is not a repeat of a local one."""
+    if e.get("eid"):
+        return ("eid", e["eid"])
+    return (e["t"], e.get("start"), e.get("served"), e.get("out"), host_of(e))
 
 
 def cmd_tail(args):
@@ -834,7 +1407,14 @@ def cmd_tail(args):
     since = time.time() - 3600 if args.follow else parse_since(args.since)
 
     def fresh():
-        events = [e for e in load_proxy(since) if (e["t"], e.get("start"), e.get("served"), e.get("out")) not in seen]
+        key = tail_key
+        events = [e for e in load_proxy(since) if key(e) not in seen]
+        if args.fleet:
+            # stream peers too: kick the TTL-guarded background refresh instead of
+            # pulling inline — a slow or unreachable peer must never hold up the
+            # local stream — then read the cached deltas
+            fleet_kick()
+            events += [e for e in load_fleet(since) if key(e) not in seen]
         events.sort(key=lambda e: e["t"])
         return events
 
@@ -842,7 +1422,7 @@ def cmd_tail(args):
     for ev in events[-args.n:]:
         print(event_line(ev))
     for ev in events:
-        seen.add((ev["t"], ev.get("start"), ev.get("served"), ev.get("out")))
+        seen.add(tail_key(ev))
     if not args.follow:
         if not events:
             print("no proxy events (restart proxies with the usage callback: llm-usage status)")
@@ -851,7 +1431,7 @@ def cmd_tail(args):
         while True:
             time.sleep(1)
             for ev in fresh():
-                seen.add((ev["t"], ev.get("start"), ev.get("served"), ev.get("out")))
+                seen.add(tail_key(ev))
                 print(event_line(ev), flush=True)
     except KeyboardInterrupt:
         pass
@@ -897,7 +1477,7 @@ def print_drift(events):
 
 
 def cmd_errors(args):
-    events, used = load(parse_since(args.since), args.source)
+    events, used = load(parse_since(args.since), args.source, getattr(args, "host", None))
     bad = sorted((e for e in events if not e.get("ok", True)), key=lambda e: e["t"])
     print(color(f"llm-usage errors  since {args.since}  source: {used}  events: {len(events)}  failed: {len(bad)}", "2"))
     if args.spikes:
@@ -1015,6 +1595,83 @@ def cmd_status(args):
     files = sorted(glob.glob(os.path.join(STATE, "events-*.jsonl")))
     size = sum(os.path.getsize(f) for f in files)
     print(color(f"\nlog dir {STATE}: {len(files)} file(s), {human(size)}B, {len(events)} events in last 7d", "2"))
+    hosts = fleet_hosts()
+    if hosts:
+        fleet_events = load_fleet(time.time() - 7 * 86400)
+        now = time.time()
+        frows = []
+        for name, entry in hosts:
+            st = fleet_status(name)
+            evs = [e for e in fleet_events if host_of(e) == name]
+            last_ok = st.get("last_ok")
+            if last_ok and now - last_ok < FLEET_STALE_AFTER:
+                state = color("up", "32")
+            elif evs or st.get("last_ok"):
+                state = color("stale", "33")
+            else:
+                state = color("down", "2")
+            errs = sum(1 for e in evs if not e.get("ok", True))
+            frows.append([name, entry.get("ssh") or entry.get("local_dir"), state,
+                          f"{int(now - last_ok)}s ago" if last_ok else "never",
+                          (f"{int(now - max(e['t'] for e in evs))}s ago" if evs else "-"),
+                          len(evs), errs or "-", st.get("last_error") or "-"])
+        print(color("\nfleet (pulled peers; config: ~/.config/llm-usage/fleet.json)", "2"))
+        print(render(["HOST", "TARGET", "STATE", "LAST SYNC", "LAST EVENT", "REQS 7D", "ERR 7D", "LAST ERROR"], frows))
+        print(color("first sync covers 7d, then history backfills 30d per refresh; pull: llm-usage fleet refresh", "2"))
+
+
+def cmd_export(args):
+    """This machine's merged events as JSONL on stdout for a peer's
+    `llm-usage fleet refresh`: a {"_export": 1, ...} meta line first (host,
+    event months present), then one event per line (each carrying host + eid,
+    the dedup identity), then --inflight adds the live in-flight requests as
+    {"inflight": true, ...} records. Same merge as the CLI (load_auto), so the
+    copilot-api transcript fill arrives pre-attributed to :4141."""
+    since = parse_since(args.since)
+    events, _ = load_auto(since, modified_since=args.modified_since)
+    if args.until:  # bounds a backfill chunk's transfer to the chunk itself
+        events = [e for e in events if e["t"] < args.until]
+    months = sorted({os.path.basename(p)[7:-6] for p in glob.glob(os.path.join(STATE, "events-*.jsonl"))})
+    meta = {"_export": 1, "host": LOCAL_HOST, "t": time.time(), "events": len(events), "months": months}
+    print(json.dumps(meta, separators=(",", ":")))
+    for ev in sorted(events, key=lambda e: e["t"]):
+        if ev.get("port") == "transcript":  # the copilot-api attribution convention (menubar_data)
+            ev["port"], ev["via"] = "4141", "transcript"
+        ev["host"] = LOCAL_HOST
+        ev.setdefault("eid", event_eid(ev))
+        print(json.dumps(ev, separators=(",", ":"), default=str))
+    if args.inflight:
+        now = time.time()
+        flights, _ = read_inflight(now)
+        for f in flights:
+            print(json.dumps({"inflight": True, "host": LOCAL_HOST, "t": now - f["seconds"],
+                              "port": f["port"], "id": f["id"], "model": f["model"]},
+                             separators=(",", ":")))
+
+
+def cmd_fleet(args):
+    if args.action == "hosts":
+        hosts = fleet_hosts()
+        if not hosts:
+            print("no fleet hosts (config: ~/.config/llm-usage/fleet.json, env LLM_USAGE_FLEET; see scripts/fleet.json.example)")
+            return
+        for name, entry in hosts:
+            kind = "ssh " + entry["ssh"] if entry.get("ssh") else "local " + entry["local_dir"]
+            st = fleet_status(name)
+            print(f"{name:<12} {kind:<28} last_ok {st.get('last_ok') or '-'}  events through {st.get('last_event_t') or '-'}"
+                  + (f"  backfilled" if st.get("backfilled") else ""))
+        return
+    if args.action == "status":
+        cmd_status(argparse.Namespace())
+        return
+    for r in fleet_refresh(force=args.force, only=args.host, auto=args.auto):
+        if r.get("skipped"):
+            print(f"{r.get('name', '?')}: skipped ({r['skipped']})")
+        elif r.get("ok"):
+            backfill = "" if r.get("backfilled", True) else ", backfilling"
+            print(f"{r['name']}: +{r['new_events']} events ({r['pull_ms']}ms){backfill}")
+        else:
+            print(color(f"{r['name']}: {r['error']}", "31"))
 
 
 def cmd_top(args):
@@ -1078,18 +1735,18 @@ def throttle_of(ev):
 
 
 def active_throttle(events, now):
-    """The 429 whose reset is furthest in the future, or None. A later success on the same proxy+model proves it is not blocked."""
+    """The 429 whose reset is furthest in the future, or None. A later success on the same host+proxy+model proves it is not blocked."""
     ok_after = {}
     for ev in events:
         if ev.get("ok", True):
-            key = (str(ev.get("port")), strip_model(ev.get("served")))
+            key = (host_of(ev), str(ev.get("port")), strip_model(ev.get("served")))
             ok_after[key] = max(ok_after.get(key, 0), ev["t"])
     best = None
     for ev in events:
         if err_class(ev) != "429":
             continue
         reset, kind, basis = throttle_of(ev)
-        key = (str(ev.get("port")), strip_model(ev.get("served")))
+        key = (host_of(ev), str(ev.get("port")), strip_model(ev.get("served")))
         if reset <= now or ok_after.get(key, 0) > ev["t"]:
             continue
         if best is None or reset > best[0]:
@@ -1098,6 +1755,7 @@ def active_throttle(events, now):
         return None
     reset, kind, basis, ev = best
     return {"proxy": proxy_name(ev), "port": str(ev.get("port")), "model": strip_model(ev.get("served")), "kind": kind,
+            "host": ev.get("host"),
             "at": iso_utc(ev["t"]), "reset_at": iso_utc(reset), "seconds_left": int(math.ceil(reset - now)),
             "estimate": reset_estimated(ev), "estimated": reset_estimated(ev), "reset_source": ev.get("reset_source") or None, "basis": basis}
 
@@ -1249,7 +1907,7 @@ def throttle_spans(events, now, window=MB_HOUR):
     ok_times = defaultdict(list)
     for ev in events:
         if ev.get("ok", True):
-            ok_times[(event_provider(ev, overrides)[0], strip_model(ev.get("served")))].append(ev["t"])
+            ok_times[(host_of(ev), event_provider(ev, overrides)[0], strip_model(ev.get("served")))].append(ev["t"])
     for times in ok_times.values():
         times.sort()
     raw = []
@@ -1259,7 +1917,7 @@ def throttle_spans(events, now, window=MB_HOUR):
         pkey, plabel = event_provider(ev, overrides)
         reset, kind, basis = throttle_of(ev)
         end, est = reset, reset_estimated(ev)
-        times = ok_times[(pkey, strip_model(ev.get("served")))]
+        times = ok_times[(host_of(ev), pkey, strip_model(ev.get("served")))]
         i = bisect.bisect_right(times, ev["t"])
         if i < len(times) and times[i] < end:
             end, est = times[i], False
@@ -1506,12 +2164,20 @@ def menubar_data(now=None, up_ports=None, share_window="15m", share_metric="requ
     """One compact JSON document for the menubar helper (and anything else that wants a status line)."""
     now = now or time.time()
     month = datetime.fromtimestamp(now, timezone.utc).replace(day=1, hour=0, minute=0, second=0, microsecond=0).timestamp()
+    fleet_kick()  # detached refresh of the ssh peers, never blocking this poll
     proxy_all = load_proxy(0)
     events = sorted((e for e in proxy_all if e["t"] >= min(now - MB_WEEK, month)), key=lambda e: e["t"])  # month start keeps an earlier quota 429 visible
     # Only the named proxies (PROXIES, plus LLM_USAGE_PORT_NAMES): throwaway test proxies on ad-hoc ports must
     # not raise down / throttled / spike alarms in the menubar.
     events = [e for e in events if str(e.get("port")) in PROXIES]
+    # Fleet peers: pulled copies of each machine's merged events (disjoint from
+    # ours — a request is served by one machine's proxy). Totals, series, share
+    # and per-model/per-proxy tables become fleet-wide; the per-proxy rows below
+    # stay this-machine-only (a peer's traffic must not make a local proxy look
+    # active/expected) and the per-host rollup lives in the "fleet" block.
+    f_events = [e for e in load_fleet(0) if e["t"] >= min(now - MB_WEEK, month) and str(e.get("port")) in PROXIES]
     recent = [e for e in events if e["t"] >= now - MB_HOUR]
+    f_recent = [e for e in f_events if e["t"] >= now - MB_HOUR]
     # Same merge as `serve`: transcript calls for models the proxy log never saw (copilot-api has no callback).
     transcripts = load_claude(now - MB_HOUR) + load_codex(now - MB_HOUR)
     if proxy_all:
@@ -1530,6 +2196,9 @@ def menubar_data(now=None, up_ports=None, share_window="15m", share_metric="requ
     else:
         up = {p: p in up_ports for p in ports}
     flights, reporting = read_inflight(now)
+    f_flights = read_fleet_inflight(now)
+    flights = flights + f_flights  # fleet in-flight ages come from each request's own t
+    inflight_available = bool(reporting) or bool(f_flights)  # this machine or any peer reports
 
     def counts(evs, window):
         sel = [e for e in evs if e["t"] >= now - window]
@@ -1548,7 +2217,7 @@ def menubar_data(now=None, up_ports=None, share_window="15m", share_metric="requ
         source = "proxy-log"
         if port == "4141":
             evs, source = extra, "transcript"
-        mine = [f for f in flights if f["port"] == port]
+        mine = [f for f in flights if f["port"] == port and not f.get("host")]  # this machine's, not a peer's
         name = PROXIES.get(port, (f":{port}", None))[0]
         row = {"port": int(port) if port.isdigit() else port, "name": name, "state": "up" if up[port] else "down", "source": source,
                "expected": port in seen_week or (port == "4141" and bool(extra)),
@@ -1557,6 +2226,10 @@ def menubar_data(now=None, up_ports=None, share_window="15m", share_metric="requ
                "m15": counts(evs, MB_RECENT), "h1": counts(evs, MB_HOUR)}
         proxies.append(row)
 
+    # From here on the windows are fleet-wide: this machine + pulled peers,
+    # time-ordered so "last error" means the newest, not whichever host listed last.
+    week = sorted(events + f_events, key=lambda e: e["t"])
+    recent = recent + f_recent
     buckets = error_buckets(recent, 60)
     windows, _ = spike_windows(buckets, 60)
     live = [w for w in windows if w["end"] >= now - 600]  # a flagged minute in the last 10 minutes
@@ -1655,12 +2328,12 @@ def menubar_data(now=None, up_ports=None, share_window="15m", share_metric="requ
                                          "latency": [med(lat_prov[k][i]) if k in lat_prov else 0 for i in range(60)],
                                          "ttft": [med(ttft_prov[k][i]) if k in ttft_prov else 0 for i in range(60)]}
                                         for k, v in sorted(by_provider.items(), key=lambda kv: -sum(kv[1]))]}
-    last_bad = [e for e in events if not e.get("ok", True)]
+    last_bad = [e for e in week if not e.get("ok", True)]
     last = last_bad[-1] if last_bad else None
     mine_inflight = [f for f in flights]
     oldest = max(mine_inflight, key=lambda f: f["seconds"], default=None)
     by_flight = Counter(f["model"] for f in flights)
-    cop_flights = [f for f in flights if f["port"] == "4141"]
+    cop_flights = [f for f in flights if f["port"] == "4141" and not f.get("host")]
 
     copilot_up = up.get("4141", False)
     quota, quota_note = copilot_quota(now) if copilot_up else (None, "copilot-api (:4141) is down")
@@ -1671,7 +2344,7 @@ def menubar_data(now=None, up_ports=None, share_window="15m", share_metric="requ
     seen_models = {strip_model(e.get("served")) for e in proxy_all}
     cop_thr = [e for e in load_claude_throttles(now - 6 * 3600)
                if not e.get("routed") and e.get("served") and (first_t is None or e["t"] < first_t or strip_model(e["served"]) not in seen_models)]
-    spans = throttle_spans(events + extra + cop_thr, now)
+    spans = throttle_spans(week + extra + cop_thr, now)
     premium_reset = parse_reset(quota.get("reset_date")) if quota else None
     if premium_reset and premium_reset > now:  # a 402 seen in a transcript lasts until GitHub's quota reset
         for sp in spans:
@@ -1686,10 +2359,37 @@ def menubar_data(now=None, up_ports=None, share_window="15m", share_metric="requ
                                    ("" if quota else f", and its quota is unavailable ({quota_note})"))
     elif any(sp["provider"] == "github-copilot" and sp["source"] == "transcript" for sp in spans):
         notes["github-copilot"] = "Copilot throttle spans are transcript-derived (Claude Code API-error entries), not logged by copilot-api"
+    throttled = active_throttle(week, now)
+    if throttled and throttled.get("host") not in (None, FLEET_LOCAL):
+        throttled["proxy"] = f"{throttled['proxy']}@{throttled['host']}"  # a peer's 429, not this machine's proxy
+    hosts_block = {"enabled": True, "local": FLEET_LOCAL, "stale_after_s": FLEET_STALE_AFTER, "hosts": []}
+    for name, entry in fleet_hosts():
+        st = fleet_status(name)
+        last_ok = st.get("last_ok")
+        evs = [e for e in f_events if host_of(e) == name]
+        if last_ok and now - last_ok < FLEET_STALE_AFTER:
+            state = "up"
+        elif evs or last_ok:
+            state = "stale"  # unreachable: keep showing the last snapshot, dimmed
+        else:
+            state = "down"
+        hflights = [f for f in f_flights if f.get("host") == name]
+        hosts_block["hosts"].append({
+            "name": name, "state": state, "target": entry.get("ssh") or entry.get("local_dir"),
+            "last_ok_s": int(now - last_ok) if last_ok else None,
+            "last_event_s": int(now - max(e["t"] for e in evs)) if evs else None,
+            "backfilled": bool(st.get("backfilled")),
+            "last_error": st.get("last_error"),
+            "m15": counts(evs, MB_RECENT), "h1": counts(evs, MB_HOUR),
+            "inflight": {"count": len(hflights), "oldest_s": max((f["seconds"] for f in hflights), default=0)},
+        })
+    if not hosts_block["hosts"]:
+        hosts_block = {"enabled": False}
     return {
         "version": 2, "generated_at": iso_utc(now), "log_dir": STATE,
         "dashboard_port": int(os.environ.get("LLM_USAGE_PORT", "4150")),
         "proxies": proxies,
+        "fleet": hosts_block,
         "any_down": any(p["state"] == "down" and p["expected"] for p in proxies),
         "totals": {w: {k: v for k, v in counts(recent + extra, win).items() if k != "tokens"}
                    for w, win in (("m15", MB_RECENT), ("h1", MB_HOUR))},  # proxy logs + copilot (transcript-derived)
@@ -1701,15 +2401,15 @@ def menubar_data(now=None, up_ports=None, share_window="15m", share_metric="requ
                     "p95": pct([e["ms"] for e in hour if e.get("ms") is not None], 95),
                     "ttft_p50": pct([e["ttft_ms"] for e in hour if e.get("ttft_ms") is not None], 50),
                     "ttft_p95": pct([e["ttft_ms"] for e in hour if e.get("ttft_ms") is not None], 95)},
-        "throttled": active_throttle(events, now), "spike": spike,
-        "inflight": {"available": bool(reporting), "count": len(flights), "oldest_s": oldest["seconds"] if oldest else 0,
+        "throttled": throttled, "spike": spike,
+        "inflight": {"available": inflight_available, "count": len(flights), "oldest_s": oldest["seconds"] if oldest else 0,
                      "requests": [{"id": f["id"], "proxy": PROXIES.get(f["port"], (f":{f['port']}", None))[0],
-                                   "model": f["model"], "seconds": f["seconds"]}
+                                   "model": f["model"], "seconds": f["seconds"], "host": f.get("host")}
                                   for f in sorted(flights, key=lambda f: -f["seconds"])[:16]],
                      "oldest": ({"proxy": PROXIES.get(oldest["port"], (f":{oldest['port']}", None))[0], "model": oldest["model"],
                                  "seconds": oldest["seconds"]} if oldest else None),
                      "by_model": dict(by_flight.most_common()),
-                     "note": None if reporting else "no proxy reports in-flight yet (restart proxies with the updated usage callback: llm-proxy-restart)"},
+                     "note": None if inflight_available else "no proxy reports in-flight yet (restart proxies with the updated usage callback: llm-proxy-restart)"},
         "by_model": [{"model": m, "vendor": model_vendor(m)[0], "requests": v["requests"], "share": round(v["requests"] / total, 3), "reroutes": v["reroutes"],
                       "sources": sorted(v["sources"])} for m, v in sorted(by_model.items(), key=lambda x: -x[1]["requests"])[:8]],
         "by_proxy": [{"proxy": n, "provider": v["provider"], "requests": v["requests"], "source": "transcript" if n == "copilot-api" else "proxy-log",
@@ -1720,7 +2420,7 @@ def menubar_data(now=None, up_ports=None, share_window="15m", share_metric="requ
         "series": {"bucket_s": 60, "start": iso_utc(minute0), **series},
         "series_by_provider": series_by_provider,
         "throttle_spans": span_rows, "throttle_notes": notes,
-        "drift": collect_drift(events, now),
+        "drift": collect_drift(week, now),
         "reroutes_15m": sum(v["count_15m"] for v in reroutes.values()),
         "share": traffic_share(hour, now, share_window, share_metric),
         "copilot": {"state": "up" if copilot_up else "down", "source": "transcript",
@@ -1733,7 +2433,9 @@ def menubar_data(now=None, up_ports=None, share_window="15m", share_metric="requ
                     "quota": quota, "quota_note": quota_note},
         "top_models": [{"model": m["model"], "requests": m["requests"]} for m in sorted(
             ({"model": k, "requests": v["requests"]} for k, v in by_model.items()), key=lambda x: -x["requests"])[:5]],
-        "last_error": ({"at": iso_utc(last["t"]), "ago_s": int(now - last["t"]), "proxy": proxy_name(last), "model": strip_model(last.get("served")),
+        "last_error": ({"at": iso_utc(last["t"]), "ago_s": int(now - last["t"]),
+                        "proxy": proxy_name(last) + (f"@{last['host']}" if last.get("host") else ""),
+                        "model": strip_model(last.get("served")),
                         "status": err_status_label(last), "kind": err_kind(last),
                         "message": " ".join((last.get("error") or last.get("error_type") or "").split())[:160]} if last else None),
     }
@@ -1802,7 +2504,7 @@ def mb_build(force=False):
 def mb_env():
     env = {"LLM_USAGE_BIN": os.path.realpath(__file__),
            "PATH": "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:" + os.path.expanduser("~/.local/bin")}
-    for key in ("LLM_USAGE_DIR", "LLM_USAGE_PORT", "LLM_USAGE_PORT_NAMES", "LLM_USAGE_PROVIDER_MAP", "LLM_USAGE_CONFIG_DIR", "LLM_USAGE_MENUBAR_DIR"):
+    for key in ("LLM_USAGE_DIR", "LLM_USAGE_PORT", "LLM_USAGE_PORT_NAMES", "LLM_USAGE_PROVIDER_MAP", "LLM_USAGE_CONFIG_DIR", "LLM_USAGE_MENUBAR_DIR", "LLM_USAGE_FLEET", "LLM_USAGE_FLEET_REFRESH", "LLM_USAGE_HOST"):
         if os.environ.get(key):
             env[key] = os.environ[key]
     return env
@@ -2083,10 +2785,24 @@ def row_json(r, keys):
     return {**dict(zip(keys, r["key"])), **{k: v for k, v in r.items() if k != "key"}}
 
 
-def dashboard_data(since_text, source, hide):
+def fleet_host_states(now):
+    """[{name, state, last_ok_s}] of this machine + every configured peer, from
+    the pull state alone (no event scan): the dashboard dropdown and banners
+    need freshness, not counts."""
+    rows = [{"name": FLEET_LOCAL, "state": "up", "last_ok_s": 0}]
+    for name, _ in fleet_hosts():
+        st = fleet_status(name)
+        last_ok = st.get("last_ok")
+        state = "up" if last_ok and now - last_ok < FLEET_STALE_AFTER else ("stale" if last_ok else "down")
+        rows.append({"name": name, "state": state, "last_ok_s": int(now - last_ok) if last_ok else None})
+    return rows
+
+
+def dashboard_data(since_text, source, hide, host=None):
     now = time.time()
     since = parse_since(since_text)
-    events, used = load(since, source)
+    fleet_kick()  # the dashboard is often the only thing running: it must refresh the peers too
+    events, used = load(since, source, host)
     volume = defaultdict(int)
     for ev in events:
         volume[strip_model(ev.get("served"))] += 1
@@ -2164,6 +2880,7 @@ def dashboard_data(since_text, source, hide):
 
     return {
         "now": now, "since": since, "bucket": size, "source": used, "events": len(events),
+        "host": host or "all", "hosts": fleet_host_states(now),
         "buckets": buckets, "models": order, "chips": [m for m in order if m != "Other"], "colors": {**colors, "Other": 0},
         "brands": {m: model_brand(m) for m in order if model_brand(m)}, "series": series,
         "ctx_bins": [name for _, name in CTX_BINS], "ctx_hist": ctx_hist,
@@ -2253,13 +2970,14 @@ def cmd_serve(args):
                 q = parse_qs(url.query)
                 since = (q.get("since") or ["24h"])[0]
                 source = (q.get("source") or ["auto"])[0]
+                host = (q.get("host") or [None])[0] or None
                 hide = tuple(sorted(filter(None, (q.get("hide") or [""])[0].split(","))))
-                key = (since, source, hide)
+                key = (since, source, hide, host)
                 try:
                     with lock:
                         hit = cache.get(key)
                         if not hit or time.time() - hit[0] > args.cache:
-                            hit = (time.time(), json.dumps(dashboard_data(since, source, set(hide)), separators=(",", ":"), default=str).encode())
+                            hit = (time.time(), json.dumps(dashboard_data(since, source, set(hide), host), separators=(",", ":"), default=str).encode())
                             cache[key] = hit
                             for k in [k for k, v in cache.items() if time.time() - v[0] > 60]:
                                 del cache[k]
@@ -2289,6 +3007,7 @@ def main():
     def common(p, since="24h", source="auto"):
         p.add_argument("--since", default=since, help="30m, 24h, 7d, today, all, or ISO time (default %(default)s)")
         p.add_argument("--source", default=source, help="auto|proxy|claude|codex|all or comma list (default %(default)s)")
+        p.add_argument("--host", default=None, help="only this machine: local or a fleet host name (default: all, incl. pulled peers)")
 
     p = sub.add_parser("summary", help="usage table grouped by --by (default model)")
     common(p)
@@ -2302,9 +3021,24 @@ def main():
 
     p = sub.add_parser("tail", help="recent requests; -f to follow live")
     p.add_argument("-f", "--follow", action="store_true")
+    p.add_argument("--fleet", action="store_true", help="follow pulled fleet peers too (refreshes them each TTL, prints their events with a host column)")
     p.add_argument("-n", type=int, default=20)
     p.add_argument("--since", default="24h")
     p.set_defaults(fn=cmd_tail)
+
+    p = sub.add_parser("export", help="this machine's merged events as JSONL on stdout (what a peer's `fleet refresh` pulls)")
+    p.add_argument("--since", default="all", help="how far back (default %(default)s)")
+    p.add_argument("--until", type=float, default=None, help="epoch upper bound (backfill chunks pass one)")
+    p.add_argument("--modified-since", type=float, default=0.0, help="epoch: also re-export every event of a transcript file modified since then")
+    p.add_argument("--inflight", action="store_true", help="append live in-flight requests as {\"inflight\": true} records")
+    p.set_defaults(fn=cmd_export)
+
+    p = sub.add_parser("fleet", help="pulled fleet peers: refresh over ssh, list hosts")
+    p.add_argument("action", nargs="?", default="refresh", choices=["refresh", "status", "hosts"], help="refresh (default) | status | hosts")
+    p.add_argument("--force", action="store_true", help="refresh even hosts pulled within the TTL")
+    p.add_argument("--auto", action="store_true", help=argparse.SUPPRESS)  # kick-spawned: apply the per-host failure backoff
+    p.add_argument("--host", help="refresh only this host")
+    p.set_defaults(fn=cmd_fleet)
 
     p = sub.add_parser("errors", help="failed requests grouped by status + message; --spikes for error bursts")
     common(p, source="proxy")

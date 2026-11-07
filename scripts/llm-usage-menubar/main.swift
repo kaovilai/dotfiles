@@ -1692,6 +1692,34 @@ final class MonitorView: NSView {
                 drawShareRow(ctx, r, e, marker: graphMode == .bars ? nil : .line(providerColor(e.key)), circle: false, hover: .provider(e.key))
             }
         }
+        // Fleet: pulled peers (dot = up/stale/down), after the share rows — a long
+        // host list must not crowd Models/Providers out — and capped at two
+        let fhosts = d["fleet"]["enabled"].bool ? (d["fleet"]["hosts"].arr ?? []) : []
+        let fleetShow = fhosts.prefix(2)
+        if !fleetShow.isEmpty, layout == .vertical, rowsLeft >= fleetShow.count + 1, let r = next() {
+            // "+N more" in the header: the menu holds the full host list, the window must say when it truncated one
+            drawStr("Fleet · 15m" + (fhosts.count > fleetShow.count ? " · +\(fhosts.count - fleetShow.count) more" : ""),
+                    in: r, font: tinyFont, color: .secondaryLabelColor)
+            for h in fleetShow {
+                guard let row = next() else { break }
+                let state = h["state"].str ?? "down"
+                let dot: NSColor = state == "up" ? .systemGreen : (state == "stale" ? .systemYellow : .tertiaryLabelColor)
+                dot.setFill()
+                NSBezierPath(ovalIn: NSRect(x: row.minX, y: row.minY + 4, width: 5, height: 5)).fill()
+                let name = h["name"].str ?? "?"
+                drawStr(state == "stale" ? "\(name) (stale)" : name,
+                        in: NSRect(x: row.minX + 8, y: row.minY, width: row.width * 0.6, height: row.height),
+                        color: state == "down" ? .tertiaryLabelColor : .labelColor)
+                let e = h["m15"]["errors"]
+                let errs = (e["429"].int ?? 0) + (e["5xx"].int ?? 0) + (e["other"].int ?? 0)
+                let inflight = h["inflight"]["count"].int ?? 0
+                let value = "\(h["m15"]["requests"].int ?? 0) req" + (errs > 0 ? " · \(errs) err" : "") + (inflight > 0 ? " · ⏳\(inflight)" : "")
+                drawStr(value, in: row, font: tinyFont, color: errs > 0 ? NSColor.systemRed : .secondaryLabelColor, align: .right)
+            }
+        } else if !fleetShow.isEmpty, layout == .vertical, rowsLeft >= 1, let r = next() {
+            // no room for the section: say the hosts exist, the menu holds them
+            drawStr("Fleet · \(fhosts.count) host\(fhosts.count == 1 ? "" : "s") · see menu", in: r, font: tinyFont, color: .tertiaryLabelColor)
+        }
         if let note = d["throttle_notes"]["github-copilot"].str, spans.allSatisfy({ $0.provider != "github-copilot" }), rowsLeft >= 1,
            providers.contains(where: { $0.key == "github-copilot" }), layout == .vertical, let r = next() {
             drawStr("Copilot: no throttle data", in: r, font: tinyFont, color: .tertiaryLabelColor)
@@ -1932,6 +1960,42 @@ final class Builder {
         return item
     }
 
+    func hostItem(_ h: J) -> NSMenuItem {
+        let name = h["name"].str ?? "?"
+        let state = h["state"].str ?? "down"
+        let m15 = h["m15"], h1 = h["h1"]
+        func errs(_ c: J) -> String {
+            let e = c["errors"]
+            let parts = [("429", e["429"].int ?? 0), ("5xx", e["5xx"].int ?? 0), ("oth", e["other"].int ?? 0)].filter { $0.1 > 0 }
+            return parts.isEmpty ? "" : " " + parts.map { "\($0.0):\($0.1)" }.joined(separator: " ")
+        }
+        let glyph = state == "up" ? "●" : (state == "stale" ? "◐" : "○")
+        var line = "\(glyph) \(name)  \(state)  \(m15["requests"].int ?? 0)/15m \(h1["requests"].int ?? 0)/1h\(errs(h1))"
+        if let fl = h["inflight"]["count"].int, fl > 0 { line += "  ⏳\(fl)" }
+        let item = info(line, dim: state == "down", mono: true)
+        item.isEnabled = true  // a submenu parent must be enabled to open
+        item.attributedTitle = NSAttributedString(string: line, attributes: [
+            .font: NSFont.monospacedSystemFont(ofSize: 12, weight: .regular),
+            .foregroundColor: state == "down" ? NSColor.secondaryLabelColor : NSColor.labelColor,
+        ])
+        let sub = NSMenu()
+        sub.autoenablesItems = false
+        sub.addItem(info("\(name)  \(state)" + (state == "stale" ? " (unreachable; showing the last pulled snapshot)" : ""), mono: false))
+        if let seen = h["last_event_s"].int { sub.addItem(info("last logged request \(longDuration(seen)) ago", dim: true)) }
+        if let ok = h["last_ok_s"].int { sub.addItem(info("last pulled \(longDuration(ok)) ago", dim: true)) }
+        sub.addItem(info("15m: \(m15["requests"].int ?? 0) req, error rate \(pct(m15["error_rate"].dbl))\(errs(m15))", dim: true))
+        sub.addItem(info("1h:  \(h1["requests"].int ?? 0) req, error rate \(pct(h1["error_rate"].dbl))\(errs(h1))", dim: true))
+        if (h["inflight"]["count"].int ?? 0) > 0 {
+            sub.addItem(info("in flight: \(h["inflight"]["count"].int ?? 0), oldest \(longDuration(h["inflight"]["oldest_s"].int ?? 0))", dim: true))
+        }
+        if let err = h["last_error"].str { sub.addItem(info("last pull error: \(err)", dim: true)) }
+        if !h["backfilled"].bool, h["last_ok_s"].int != nil { sub.addItem(info("history backfill in progress (30d per refresh)", dim: true)) }
+        sub.addItem(.separator())
+        sub.addItem(action("Copy host name (\(name))", #selector(AppController.copyText(_:)), represented: name))
+        item.submenu = sub
+        return item
+    }
+
     func build(_ c: MenuContext) -> (NSMenu, [String]) {
         let menu = NSMenu()
         menu.autoenablesItems = false
@@ -2015,6 +2079,13 @@ final class Builder {
         // Proxies
         menu.addItem(.separator()); add(header("PROXIES (15m / 1h)"))
         for p in d["proxies"].arr { add(proxyItem(p)) }
+
+        // Fleet peers: usage pulled from the other machines (ssh, read-only)
+        let fleetHosts = d["fleet"]["enabled"].bool ? (d["fleet"]["hosts"].arr ?? []) : []
+        if !fleetHosts.isEmpty {
+            menu.addItem(.separator()); add(header("FLEET (15m / 1h)"))
+            for h in fleetHosts { add(hostItem(h)) }
+        }
 
         // Traffic share (what the status item image draws)
         let share = d["share"]
@@ -2330,8 +2401,20 @@ final class AppController: NSObject, NSMenuDelegate, NSWindowDelegate {
                 }
             }
         }
-        flights.sort { $0.age > $1.age }  // oldest first: bars stack upward above it
-        monitorView.flights = flights.prefix(16).map { Flight(id: $0.id, model: $0.model, seconds: $0.age) }
+        // candidates: local requests plus the peer requests from the last payload (a
+        // peer's own files are not readable here). Sort fleet-wide by age, then keep
+        // the OLDEST 16 — capping the local list first would let 16 young locals
+        // hide an older peer from the bars.
+        var candidates = flights
+        if let d = data, let generated = parseISO(d["generated_at"].str) {
+            let drift = max(0, now.timeIntervalSince(generated))
+            for row in d["inflight"]["requests"].arr where row["host"].str != nil {
+                guard let id = row["id"].str else { continue }
+                candidates.append((max(0, (row["seconds"].dbl ?? 0) + drift), id, row["model"].str ?? ""))
+            }
+        }
+        candidates.sort { $0.age > $1.age }  // oldest first: bars stack upward above it
+        monitorView.flights = candidates.prefix(16).map { Flight(id: $0.id, model: $0.model, seconds: $0.age) }
     }
 
     func context() -> MenuContext {

@@ -11,6 +11,7 @@ systemd user timer). **Turn** = one T3 run, which spawns a fresh client process.
 |---|---|
 | `scripts/llm-usage` (CLI) | immediately — every invocation is a fresh process |
 | `scripts/llm-usage` dashboard (`serve`) code | next `serve` restart (the running server keeps its code and caches) |
+| `~/.config/llm-usage/fleet.json` (fleet peers) | next poll / `llm-usage fleet refresh` — the config is read fresh each time; a removed host's cached events under `~/.local/state/llm-usage/fleet/` stop being shown but stay on disk until deleted |
 | `scripts/llm-usage-menubar/main.swift` | `llm-usage menubar build` (or `menubar install`) then `launchctl kickstart -k gui/$UID/com.kaovilai.llm-usage-menubar` — rebuild alone leaves the old process running |
 | Claude/Codex launcher logic: `zsh/functions/claude/providers/*`, `scripts/claude-provider.py`, `scripts/claude-provider-prepare.zsh`, `scripts/codex-provider.zsh` | next client launch = **next turn**; a new terminal `claude`/`codex` session; T3 version probes pick it up on their next probe |
 | Claude settings knobs written via `--settings` (models, `CLAUDE_CODE_*`) | next turn. The bridge also exports them into the client's environment, so knobs that are read at startup win too |

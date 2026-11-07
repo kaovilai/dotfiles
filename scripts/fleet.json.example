@@ -1,0 +1,8 @@
+{
+  "_readme": "Copy to ~/.config/llm-usage/fleet.json (or $LLM_USAGE_CONFIG_DIR/fleet.json - directly in that dir, no llm-usage subdir) on the machine that should see the others' usage. Machine-local on purpose: the dotfiles repo is public, hostnames are not. Any machine can be the aggregator - each pulls the others, nothing is pushed. `ssh` is anything ~/.ssh/config resolves (tailscale MagicDNS name, LAN IP, alias); `dir` is that peer's dotfiles checkout (default ~/git/dotfiles, fleet-sync keeps it current). LLM_USAGE_FLEET=off disables; LLM_USAGE_FLEET=name=target,name2=target2 overrides per name; name=local:/path/to/state reads a second state dir in-process (tests). A peer named \"local\" is rejected (it collides with this machine's own label). First pull covers the last 7 days, then history backfills 30d per refresh until the peer's oldest events month is covered. Pull: llm-usage fleet refresh; state of the pulls: llm-usage status. Design: docs/notes/fleet-usage-streaming.md.",
+  "hosts": [
+    {"name": "laptop", "ssh": "laptop.example.ts.net"},
+    {"name": "server", "ssh": "server", "dir": "~/git/dotfiles"},
+    {"name": "devbox", "ssh": "devbox.local", "dir": "~/git/dotfiles"}
+  ]
+}
