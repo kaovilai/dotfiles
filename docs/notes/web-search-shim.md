@@ -12,10 +12,9 @@ it cannot search (evidence in `docs/notes/deepseek-v41-flash-vs-glm.md`). The
 Anthropic server-tool shape 400s outright (`input_schema` required). GPT models
 keep native hosted search and are never touched.
 
-Current mitigation (#602 checklist item, landed in #611): both proxy impls
-strip the tools (`strip_web_search_tools` in `scripts/hosted_only_hooks.py`,
-`drop_web_search` in `scripts/enmaas_proxy_hooks.py`, `stripWebSearchTools` in
-`scripts/hosted-only-go/rewrite.go`), the launchers register the free anonymous
+Current mitigation (#602 checklist item, landed in #611): the Go proxy — the
+only impl since the LiteLLM retirement (#617) — strips the tools
+(`stripWebSearchTools`, `scripts/hosted-only-go/rewrite.go`), the launchers register the free anonymous
 Parallel MCP per session (`HOSTED_ONLY_SEARCH_MCP_URL` /
 `ENMAAS_SEARCH_MCP_URL`), and an in-band `[web-search-unavailable]` note points
 the model at `mcp__parallel__web_search` / `mcp__parallel__web_fetch`.
@@ -34,10 +33,13 @@ Per-request detection is impossible: "tool was offered, no call came back" is
 indistinguishable from the model choosing not to search. Use a forced-choice
 canary instead:
 
-- Sent through the proxy itself (so it observes gateway + vLLM behavior, not
-  just the model), with the hosted `web_search` tool present and
-  `tool_choice: {"type": "tool", "name": "web_search"}` forced — the shape
-  already exercised by `tests/hosted-only-proxy.zsh`.
+- Sent through the proxy process (so it observes gateway + vLLM behavior, not
+  just the model) with the hosted `web_search` tool present and
+  `tool_choice: {"type": "tool", "name": "web_search"}` forced — but **marked
+  and exempted from the proxy's own strip/rewrite/note and fallback paths**,
+  otherwise the canary measures our rewrite, not the upstream. (The forced
+  choice survives to the upstream because the canary bypasses the strip; the
+  ordinary path frees it, which is exactly why the canary cannot ride along.)
 - Verdicts:
   - response contains a search call item → **native** → passthrough, no strip;
   - 200 with no call item, or a 400 naming the tool → **ignored** → strip + shim;
@@ -49,10 +51,11 @@ canary instead:
 - Scheduling: piggyback — hold the first real request that carries a
   web_search tool for a verdict-less model, run the canary, then forward the
   real request rewritten per verdict. One extra round trip once per model; no
-  startup probe, no cron. Mark the canary (header or model tag) so
-  `litellm_usage_log` filters it from `llm-usage`.
-- `HOSTED_PREFIXES = ("rits/",)` stays as the prior / fail-closed default so
-  the no-probe path needs no verdict.
+  startup probe, no cron. Mark the canary (header or model tag) so the usage
+  log (`scripts/hosted-only-go/usage.go`, the events JSONL behind `llm-usage`)
+  filters it out.
+- `cfg.isRits` (`scripts/hosted-only-go/config.go`) stays as the prior /
+  fail-closed default so the no-probe path needs no verdict.
 
 ## Part 2 — The shim
 
@@ -61,9 +64,17 @@ real search; clients that speak the native protocol cannot tell the difference.
 
 1. **Request side** (where the strip sits today): when the verdict is
    *ignored*, rewrite `{"type": "web_search..."}` tools into a regular
-   function tool named `web_search` with a `{query, allowed_domains?,
-   max_uses?}` schema. GLM/DeepSeek handle ordinary function calling fine; only
-   the server-tool shape is dropped by vLLM.
+   function tool named `web_search` exposing **only `{query}`**. GLM/DeepSeek
+   handle ordinary function calling fine; only the server-tool shape is
+   dropped by vLLM. `allowed_domains` and `max_uses` are caller-set fields on
+   the hosted tool definition, not model arguments — the proxy reads them off
+   the original tool at rewrite time and enforces them itself
+   (`allowed_domains` → Parallel `source_policy.include_domains`,
+   `max_uses` → the loop cap). A forced `tool_choice` naming `web_search` is
+   **preserved**, not freed: the rewritten tool keeps the name, so a caller's
+   explicit requirement to search survives the rewrite. (Freeing the choice
+   stays correct only for the pure strip path, where the named tool no longer
+   exists.)
 2. **Response side** (new): when the upstream emits a `tool_use` for
    `web_search`, the proxy executes the search itself, maps results into the
    native block shape per dialect (Anthropic: `server_tool_use` +
@@ -79,12 +90,18 @@ real search; clients that speak the native protocol cannot tell the difference.
 4. **Secrets**: `PARALLEL_API_KEY` lives only in the proxy env next to
    `ENMAAS_API_KEY` (same rule: only the proxy holds upstream keys, clients
    get the local token).
-5. **Impl order**: Go first — it owns the request path (#610) and can buffer
-   intermediate rounds and stream the final one; the LiteLLM hook surface
-   makes a response-side loop awkward, and LiteLLM is headed for retirement
-   (#602). Knob: `HOSTED_ONLY_SEARCH_SHIM` (off by default until soaked),
-   participating in the existing knob/fingerprint restart machinery.
-6. **Note interaction**: while the shim is active, the in-band note must change
+5. **Impl**: Go-only — it has been the only impl since the LiteLLM retirement
+   (#617) and already owns the full request path (#610), so it can buffer
+   intermediate rounds and stream the final one. Knob:
+   `HOSTED_ONLY_SEARCH_SHIM` (off by default until soaked), participating in
+   the existing knob/fingerprint restart machinery.
+6. **Codex catalog**: `scripts/codex-provider.zsh` currently pins
+   `supports_search_tool=false` + `tool_mode: direct` for these models
+   (lines ~129/~228). With the shim on, the generated catalog must flip
+   `supports_search_tool` for shim-enabled models so Codex offers its global
+   `web_search` and the proxy serves it — otherwise Codex never sends the
+   tool and the shim is dead code on that path.
+7. **Note interaction**: while the shim is active, the in-band note must change
    text — "use the web_search tool" instead of "route to
    `mcp__parallel__web_search`" — or the model gets contradictory
    instructions. The MCP registration stays: harness-level `web_fetch` for
@@ -132,9 +149,13 @@ Authorization: Bearer $PARALLEL_API_KEY
 
 - Canary: forced-choice probe returns *ignored* against a stub upstream that
   200s without a call item, *native* against one that emits it, *unknown* on
-  garbage; verdict cached and re-read; fail-closed strip when no verdict.
-- Shim: request rewrite turns `web_search_20250305` into the function tool and
-  frees a forced `tool_choice` naming it; response loop maps Parallel results
+  garbage; verdict cached and re-read; fail-closed strip when no verdict; the
+  canary provably bypasses the strip/rewrite (a stub upstream still receives
+  the hosted tool shape and the forced choice).
+- Shim: request rewrite turns `web_search_20250305` into the function tool,
+  keeps a forced `tool_choice` naming it, and carries `allowed_domains` /
+  `max_uses` from the original tool definition into the proxy's own
+  enforcement; response loop maps Parallel results
   to both dialects' block shapes; loop capped at `max_uses`; Parallel timeout →
   `is_error` tool result and the turn still completes; shim off →
   byte-identical behavior to today.
@@ -147,5 +168,5 @@ Authorization: Bearer $PARALLEL_API_KEY
 
 - Extract-backed `web_fetch` tool (phase 2).
 - Any change to GPT models' native web search.
-- Harness-level changes beyond the note-text switch (the
-  `nudge-web-search-via-luna.sh` policy stays).
+- Harness-level changes beyond the note-text switch and the Codex catalog
+  flip (the `nudge-web-search-via-luna.sh` policy stays).
