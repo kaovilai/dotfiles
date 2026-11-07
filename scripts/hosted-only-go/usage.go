@@ -151,12 +151,14 @@ func (u *usageLog) write(event map[string]any) {
 	u.mu.Lock()
 	defer u.mu.Unlock()
 	_ = os.MkdirAll(u.dir, 0o700)
-	// ts passed isoMonthPrefix above, so the filename is exactly events-YYYY-MM.jsonl;
-	// CodeQL's taint through map[string]any can't see that guard (the event map
-	// carries request-derived values under other keys), hence the suppression
-	// on the OpenFile line the path-injection alert anchors to.
-	path := filepath.Join(u.dir, "events-"+ts[:7]+".jsonl")
-	file, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0o600) // codeql[go/path-injection]
+	// Rebuild the month from the parsed numbers after the shape check: the
+	// filename never carries a string taken from the event map, so the
+	// analyzer sees ints, not tainted text (the map holds request-derived
+	// values under other keys and CodeQL cannot tell the keys apart).
+	year, _ := strconv.Atoi(ts[:4])
+	month, _ := strconv.Atoi(ts[5:7])
+	path := filepath.Join(u.dir, fmt.Sprintf("events-%04d-%02d.jsonl", year, month))
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0o600)
 	if err != nil {
 		return
 	}
