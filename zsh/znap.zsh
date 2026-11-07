@@ -62,6 +62,16 @@ zstyle ':autocomplete:*' min-input 2
   done
 }
 
+# zsh-autocomplete's Completions dir must be on fpath BEFORE compinit runs
+# (znap's ..znap.compinit-hook fires at the first precmd, i.e. before the
+# deferred source below). Otherwise the dump is built without the plugin's
+# #autoload helpers; autocomplete then sees an up-to-date dump, skips its own
+# compinit, and history completion breaks with
+# "command not found: _autocomplete__history_lines". Prepending here keeps the
+# dump correct while the heavy widget setup stays deferred.
+[[ -d $HOME/.zsh-snap/marlonrichert/zsh-autocomplete/Completions ]] &&
+    fpath=($HOME/.zsh-snap/marlonrichert/zsh-autocomplete/Completions $fpath)
+
 # -- Deferred plugins (turbo-style) --
 # zsh-syntax-highlighting and zsh-autocomplete are the heaviest startup cost
 # after the prompt itself (zprof: ~40% of startup), and neither is needed
@@ -72,18 +82,25 @@ zstyle ':autocomplete:*' min-input 2
 _zsh_deferred_plugins() {
   zle -F $_ZSH_DEFER_FD 2>/dev/null   # unregister the fd
   exec {_ZSH_DEFER_FD}>&-             # close the pipe
+  # Capture ^R as the user (or the rest of .zshrc) left it, so a custom
+  # binding survives; the default restores native reverse-i-search after
+  # zsh-autocomplete rebinds ^R to its async completion-menu toggle.
+  local -a _ctrl_r=(${(z)"$(bindkey '^R')"})
   znap source zsh-users/zsh-syntax-highlighting
   znap source marlonrichert/zsh-autocomplete
-  # zsh-autocomplete rebinds ^R to its own async completion-menu toggle instead
-  # of real incremental search, and that async path can silently fail to produce
-  # matches. Restore native reverse-i-search so Ctrl+R reliably works.
-  bindkey '^R' .history-incremental-search-backward
+  (( $#_ctrl_r >= 2 )) && bindkey '^R' $_ctrl_r[2]
 }
 if [[ -o interactive ]]; then
   # /dev/null is permanently readable (EOF counts), so zle fires the handler
   # the first time it goes idle — right after the first prompt draws. No fork
   # needed (a process-substitution pipe works too but costs a fork, which
   # measurably slows first-prompt on this setup).
+  # Re-sourcing .zshrc before zle resumes would overwrite _ZSH_DEFER_FD and
+  # leak the previous fd + registration; clean any pending one up first.
+  if [[ -n ${_ZSH_DEFER_FD-} ]]; then
+    zle -F $_ZSH_DEFER_FD 2>/dev/null
+    exec {_ZSH_DEFER_FD}>&- 2>/dev/null
+  fi
   exec {_ZSH_DEFER_FD}< /dev/null
   zle -F $_ZSH_DEFER_FD _zsh_deferred_plugins
 else
