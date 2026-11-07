@@ -1540,6 +1540,25 @@ def config_models(path):
     return sorted(set(names)), logging_on
 
 
+def proxy_logging_on(port, config):
+    """True when the listener provably writes the usage log. The Go proxy
+    (hosted-only-go, the hosted-only/enmaas default since #614) logs natively;
+    the LiteLLM callback-string config check alone false-alarms on it, telling
+    every Go-flavored proxy to restart. Falls back to the config check when the
+    listener cannot be inspected (tests, a LiteLLM impl)."""
+    if config_models(config)[1]:
+        return True  # the config declares the LiteLLM callback: no need to inspect the listener
+    pid = listener_pid(port)
+    if pid:  # config says no callback — but the Go proxy logs natively without one
+        try:
+            out = subprocess.run(["ps", "-p", str(pid), "-o", "command="], capture_output=True, text=True, timeout=2).stdout
+            if "hosted-only-go" in out:
+                return True
+        except Exception:
+            pass
+    return False
+
+
 def status_rows():
     events = load_proxy(time.time() - 7 * 86400)
     last_seen, counts = {}, defaultdict(int)
@@ -1553,7 +1572,8 @@ def status_rows():
     rows = []
     for port, (name, config) in sorted(PROXIES.items()):
         up = probe(port)
-        models, logging_on = config_models(config)
+        models, _ = config_models(config)
+        logging_on = proxy_logging_on(port, config)
         if name == "copilot-api":
             code = "not-litellm" if up else "down"
         elif not up:
@@ -2223,7 +2243,7 @@ def menubar_data(now=None, up_ports=None, share_window="15m", share_metric="requ
             evs, source = extra, "transcript"
         mine = [f for f in flights if f["port"] == port and not f.get("host")]  # this machine's, not a peer's
         name, config = PROXIES.get(port, (f":{port}", None))
-        _, logging_on = config_models(config)  # up-but-NOT-logging: pre-callback code, traffic missing from the views
+        logging_on = proxy_logging_on(port, config) if up[port] else None  # up-but-NOT-logging: traffic missing from the views
         row = {"port": int(port) if port.isdigit() else port, "name": name, "state": "up" if up[port] else "down",
                "logging": logging_on, "source": source,
                "expected": port in seen_week or (port == "4141" and bool(extra)),
