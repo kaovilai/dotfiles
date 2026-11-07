@@ -529,9 +529,9 @@ def load(since, source, host=None):
 # docs/notes/fleet-usage-streaming.md.
 
 FLEET_TTL = 25                 # s: a host pulled this recently is skipped
-FLEET_SSH_TIMEOUT = 30         # s: per-export hard timeout. First syncs stream a full 7d
-# payload and can run well past 10s on slower peers (measured 6.5s for the bare
-# export on a WSL peer, plus transfer); steady-state pulls stay in low seconds
+FLEET_SSH_TIMEOUT = 60         # s: per-export hard timeout. First syncs stream a full
+# 7d payload (a relayed tailscale peer moved 12MB in 20s with compression, 5min
+# without); steady-state pulls stay in low seconds
 FLEET_FIRST_SYNC = 7 * 86400   # first pull covers the last 7 days
 FLEET_BACKFILL_CHUNK = 30 * 86400  # older history walks back 30d per refresh
 FLEET_STALE_AFTER = 180        # s: last successful pull older than this = stale
@@ -811,7 +811,9 @@ def _fleet_export_argv(entry, since, inflight=False, until=None, modified_since=
     cdir = _fleet_control_dir()
     mux = [] if len(os.path.join(cdir, "cm-" + "0" * 40)) > 104 else \
         ["-o", "ControlMaster=auto", "-o", f"ControlPath={cdir}/cm-%C", "-o", "ControlPersist=15m"]
-    return ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=3", *mux, "--", entry["ssh"], cmd], None
+    # Compression: the JSONL payload shrinks ~16:1, which is the difference between
+    # 20s and 5min for a first sync over a relayed tailscale path
+    return ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=3", "-o", "Compression=yes", *mux, "--", entry["ssh"], cmd], None
 
 
 def fleet_pull(name, entry, since, inflight=False, until=None, modified_since=None):
