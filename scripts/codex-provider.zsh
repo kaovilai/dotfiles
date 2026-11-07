@@ -116,17 +116,22 @@ if [[ "$backend" == enmaas ]]; then
     token=$(jq -er '.token' <<< "$service") && port=$(jq -er '.port' <<< "$service") \
         && glm_id=$(jq -er '.glm' <<< "$service") && ds_id=$(jq -er '.deepseek' <<< "$service") || exit 1
     typeset review="${CODEX_ENMAAS_REVIEW_MODEL:-$ds_id}"
+    # With the proxy's web-search shim on (HOSTED_ONLY_SEARCH_SHIM), the
+    # hosted web_search tool works again: Codex must offer it, or the shim is
+    # dead code on this path (docs/notes/web-search-shim.md item 8).
+    typeset -i shim="${HOSTED_ONLY_SEARCH_SHIM:-0}"
     typeset catalog_dir="${XDG_STATE_HOME:-$HOME/.local/state}/codex-enmaas"
     typeset catalog="$catalog_dir/models.json" version shape
     mkdir -p "$catalog_dir" && chmod 700 "$catalog_dir" || exit 1
     version=$("$native" --version 2>/dev/null) || version=unknown
-    shape="$version|shape1|$glm_id|$ds_id|$review"
+    shape="$version|shape1|$glm_id|$ds_id|$review|$shim"
     if [[ ! -s "$catalog" || "$(<"$catalog.version" 2>/dev/null)" != "$shape" ]]; then
-        "$native" debug models --bundled 2>/dev/null | jq --arg glm "$glm_id" --arg ds "$ds_id" --arg review "$review" '
+        "$native" debug models --bundled 2>/dev/null | jq --arg glm "$glm_id" --arg ds "$ds_id" --arg review "$review" \
+            --argjson shim "$shim" '
             ([.models[] | select(.slug == "gpt-5.5")] + [.models[] | select(.visibility == "list")]
                 | first // error("no bundled model to clone")) as $base
             | def hosted: .auto_review_model_override = $review | .tool_mode = "direct"
-                | .supports_search_tool = false | .upgrade = null;
+                | .supports_search_tool = ($shim == 1) | .upgrade = null;
             {models: ([.models[] | select(.slug != $glm and .slug != $ds)] + [
                 ($base | hosted | .slug = $glm | .display_name = "GLM 5.3" | .priority = 13
                     | .input_modalities = ["text"] | .context_window = 1048576 | .max_context_window = 1048576),
@@ -211,21 +216,25 @@ typeset main="${HOSTED_ONLY_MODEL:-$_hop_glm}"
 # compacts at its own share of THIS number; the proxy hook then trims max_tokens
 # or answers a compaction-hint 400 near the real 1,048,576 edge. Change them together.
 typeset -i glm_ctx="${HOSTED_ONLY_GLM_CONTEXT:-1000000}" ds_ctx="${HOSTED_ONLY_DEEPSEEK_CONTEXT:-1000000}"
+# Web-search shim (docs/notes/web-search-shim.md item 8): when the proxy's
+# HOSTED_ONLY_SEARCH_SHIM is on, Codex offers its global web_search and the
+# proxy serves it; otherwise it stays disabled per-model.
+typeset -i shim="${HOSTED_ONLY_SEARCH_SHIM:-0}"
 if [[ "$reviewer" != "$_hop_glm" && "$reviewer" != "$ds" ]]; then
     print -ru2 -- "codex-provider: HOSTED_ONLY_REVIEW_MODEL must be $_hop_glm or $ds (the proxy routes only those)."
     exit 1
 fi
 typeset catalog="$_hop_runtime/hosted-only-models.json" version shape
 version=$("$native" --version 2>/dev/null) || version=unknown
-shape="$version|shape2|$_hop_glm|$ds|$reviewer|$glm_ctx|$ds_ctx"
+shape="$version|shape2|$_hop_glm|$ds|$reviewer|$glm_ctx|$ds_ctx|$shim"
 if [[ ! -s "$catalog" || "$(<"$catalog.version" 2>/dev/null)" != "$shape" ]]; then
     "$native" debug models --bundled 2>/dev/null | jq --arg glm "$_hop_glm" --arg ds "$ds" \
-        --arg review "$reviewer" --argjson gctx "$glm_ctx" --argjson dctx "$ds_ctx" '
+        --arg review "$reviewer" --argjson gctx "$glm_ctx" --argjson dctx "$ds_ctx" --argjson shim "$shim" '
         [.models[] | select(.slug == "gpt-5.5")] + [.models[] | select(.visibility == "list")]
         | first // error("no bundled model to clone")
         | . as $base
         | def common: .auto_review_model_override = $review | .tool_mode = "direct"
-            | .supports_search_tool = false | .upgrade = null;
+            | .supports_search_tool = ($shim == 1) | .upgrade = null;
         {models: [
             ($base | common | .slug = $glm | .display_name = "GLM 5.3" | .priority = 13
                 | .input_modalities = ["text"]
@@ -258,7 +267,7 @@ typeset -a wiring=(
     -c 'model_providers.glmonly.wire_api="responses"'
     -c model_providers.glmonly.requires_openai_auth=false
     -c "model_catalog_json=\"$catalog\""
-    -c 'web_search="disabled"'
+    -c "web_search=\"$(( shim ? 'enabled' : 'disabled' ))\""
 )
 [[ -n "$search_mcp_url" ]] && wiring+=(-c "mcp_servers.parallel.url=\"$search_mcp_url\"")
 wiring+=(-c "model=\"$main\"")

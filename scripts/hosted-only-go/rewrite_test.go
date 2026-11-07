@@ -25,6 +25,7 @@ func testConfig() *config {
 		OutageMax:      600,
 		RequestTimeout: 300 * time.Second,
 		QuotaTZ:        time.UTC,
+		SearchDailyCap: 500,
 	}
 }
 

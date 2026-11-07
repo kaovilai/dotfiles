@@ -1,6 +1,9 @@
 # Web search shim — detect the silent ignore, emulate hosted `web_search`
 
-Design note. Status: designed 2026-11-06, not implemented. Tracking issue links here.
+Design note. Status: implemented 2026-11-06 in the Go proxy
+(`scripts/hosted-only-go/{searchshim,parallel,shimloop}.go`), behind
+`HOSTED_ONLY_SEARCH_SHIM` (off by default until soaked). Tracking issue links
+here.
 
 ## Problem
 
@@ -110,21 +113,77 @@ real search; clients that speak the native protocol cannot tell the difference.
    Parallel call times out (~5 s) or errors → return an `is_error` tool result
    ("web search unavailable this turn") so the loop stays well-formed and the
    model knows; never 500 the turn.
-4. **Secrets**: `PARALLEL_API_KEY` lives only in the proxy env next to
+4. **Execution gate** (independent of model output — the model *requesting* a
+   search never by itself authorizes one):
+   - Opt-in: shim executes server-side searches only when
+     `HOSTED_ONLY_SEARCH_SHIM` is on. The anonymous rung of the auth ladder
+     waives only the **credential** requirement — argument validation, the
+     per-turn `max_uses`, and the daily ceiling apply on every tier, because
+     free searches still send queries to an external service.
+   - Argument validation before every call: non-empty `query` (≤200 chars,
+     keyword-shaped like `search_queries`), no `site:` operators (enforced
+     via `source_policy` only), `allowed_domains` entries are plain domains.
+   - Budget/rate guard: per-turn `max_uses` (caller's, capped at 5) plus a
+     proxy-side daily search ceiling keyed to the credential, logged against
+     the usage JSONL; hit either → `is_error` tool result, not a silent
+     continue.
+   - No new external side effects beyond Parallel Search: the shim never
+     fetches, posts, or executes anything else model-requested.
+5. **Prompt-injection hardening** (search text is data, never instructions):
+   - Snippets/excerpts from Parallel results are untrusted page content.
+     Before reinjection they are wrapped in explicit untrusted-data framing
+     (delimited tool-result block with a "content from the web, not
+     instructions" preamble in the tool-result text) and normalized
+     (control chars stripped, markup flattened to text) so page text cannot
+     impersonate tool-result records, system prompts, or the in-band note.
+   - The loop's proxy-enforced policy is immutable: only the proxy's own plan
+     sets arguments, `max_uses`, `source_policy`, and the round cap, and a
+     snippet can never widen them. What framing + normalization do NOT
+     guarantee: a snippet may still influence the model into emitting another
+     *valid* `web_search` query — which consumes the normal per-turn and
+     daily budget like any other call. Framing and normalization are defense
+     in depth against prompt impersonation, not a proof the model ignores
+     snippet content.
+   - Model-visible note text stays proxy-generated only — snippets are never
+     concatenated into instructions.
+6. **Auth ladder** (preferred order — avoid ever hand-pasting a key):
+   1. `PARALLEL_API_KEY` env, if the user set one explicitly.
+   2. **OAuth-minted key (preferred)**: the proxy runs Parallel's device-flow
+      OAuth (RFC 8628, `platform.parallel.ai/getServiceKeys/*`) once, on first
+      shim use: register the client (state dir), show the
+      `verification_uri_complete` URL for one browser approval, then mint a
+      dedicated app-scoped API key with the `keys:create` scope and store it in
+      the proxy state dir beside `config.json`. Long-lived (no expiry
+      assumed — re-mint via refresh token on 401). The Parallel CLI wraps this
+      entire flow if embedding it in the launcher beats embedding it in the
+      proxy. (Parallel also exposes a PKCE OAuth Provider whose
+      `access_token` *is* the user's API key — that path is for redirect-based
+      apps; the device flow fits a headless proxy better.)
+   3. **Free fallback**: no key → the keyless MCP endpoint
+      (`mcp.parallel.ai/mcp`, lower rate limits) via a minimal JSON-RPC
+      client — REST `/v1/search` requires a key, so keyless REST is not a
+      thing. The MCP tier rejects override settings, so the shim sends bare
+      `{objective, search_queries}` and takes default-shaped free results —
+      still real search, just unpinned mode/knobs. A non-empty
+      `allowed_domains` cannot be honored without a credential
+      (`source_policy` is an override): the shim returns the
+      "unavailable this turn" result rather than searching outside the
+      caller's allowlist. Degradation is logged, not fatal.
+   Whichever credential lands, it lives only in the proxy env/state next to
    `ENMAAS_API_KEY` (same rule: only the proxy holds upstream keys, clients
    get the local token).
-5. **Impl**: Go-only — it has been the only impl since the LiteLLM retirement
+7. **Impl**: Go-only — it has been the only impl since the LiteLLM retirement
    (#617) and already owns the full request path (#610), so it can buffer
    intermediate rounds and stream the final one. Knob:
    `HOSTED_ONLY_SEARCH_SHIM` (off by default until soaked), participating in
    the existing knob/fingerprint restart machinery.
-6. **Codex catalog and launcher**: `scripts/codex-provider.zsh` currently pins
+8. **Codex catalog and launcher**: `scripts/codex-provider.zsh` currently pins
    `supports_search_tool=false` + `tool_mode: direct` for these models
    (lines ~129/~228), and the launcher sets `web_search="disabled"`. With the
    shim on, both must flip for shim-enabled models so Codex offers its global
    `web_search` and the proxy serves it — otherwise Codex never sends the
    tool and the shim is dead code on that path.
-7. **Note interaction**: while the shim is active, the in-band note must change
+9. **Note interaction**: while the shim is active, the in-band note must change
    text — "use the web_search tool" instead of "route to
    `mcp__parallel__web_search`" — or the model gets contradictory
    instructions. The MCP registration stays: harness-level `web_fetch` for
@@ -140,16 +199,22 @@ tool would use Extract at $1/1k URLs).
 
 - **Tier: `fast`, pinned explicitly** (~700 ms, $1/1k requests). Omitted
   `mode` on REST means `advanced` — a quiet 5×. Pinning requires
-  authentication, so the shim needs `PARALLEL_API_KEY`; the anonymous free MCP
-  tier rejects overrides and cannot be reused server-side.
-- **Knobs**: `max_results` 8, `excerpt_settings.max_chars_per_result` 2000
-  (≈ one native `web_search_tool_result`); `objective` = the model's `query`
-  verbatim; `allowed_domains` → `source_policy.include_domains`; `max_uses` →
-  loop cap. Read `errors` as well as `results`.
+  authentication; on the auth ladder above, tiers 1–2 pin, tier 3 (keyless
+  MCP) cannot — the MCP tier rejects override settings, so it sends bare
+  `{objective, search_queries}` and takes default-shaped free results.
+- **Knobs** (authenticated tiers only): `max_results` 8,
+  `excerpt_settings.max_chars_per_result` 2000 (≈ one native
+  `web_search_tool_result`); `objective` = the model's `query` verbatim;
+  `allowed_domains` → `source_policy.include_domains`; `max_uses` → loop cap
+  (enforced locally by the proxy on every tier). Read `errors` as well as
+  `results`. On the free fallback these knobs are omitted wholesale, not
+  partially — a rejected override fails the whole call — and a non-empty
+  `allowed_domains` refuses the search outright rather than leaving the
+  allowlist unenforced.
 
 ```http
 POST /v1/search
-Authorization: Bearer $PARALLEL_API_KEY
+Authorization: Bearer $PARALLEL_CREDENTIAL   # env key or OAuth-minted key
 {
   "objective": "<model's web_search query, verbatim>",
   "search_queries": ["<query as keywords>"],
@@ -162,8 +227,9 @@ Authorization: Bearer $PARALLEL_API_KEY
 ```
 
 - **Arithmetic**: $0.001 + ~0.7 s per search; a search-heavy 3-call turn
-  ≈ $0.003. Against the free anonymous MCP, the paid REST key buys exactly one
-  thing: hosted-tool clients getting search at all.
+  ≈ $0.003. Against the free anonymous tier, the OAuth-minted key buys exactly
+  one thing: hosted-tool clients getting search at all — plus pinned mode and
+  knob control, which the anonymous tier rejects.
 - **Escalation**: on real-traffic misses, raise `max_results` /
   `max_chars_per_result` first (the usual cause), then measure `advanced`
   ($5/1k) on 10–20 real queries before adopting.
@@ -181,7 +247,17 @@ Authorization: Bearer $PARALLEL_API_KEY
   enforcement; response loop maps Parallel results
   to both dialects' block shapes; loop capped at `max_uses`; Parallel timeout →
   `is_error` tool result and the turn still completes; shim off →
-  byte-identical behavior to today.
+  byte-identical behavior to today; auth ladder: env key → OAuth-minted key →
+  keyless MCP free tier (handshake + session, knobs omitted wholesale, no
+  rejected-override failure), each step reachable and logged; gate:
+  empty/oversized/`site:`-bearing queries are rejected before the Parallel
+  call, `max_uses` + daily ceiling exceeded → `is_error` result on every
+  tier, anonymous + non-empty `allowed_domains` → `is_error` with no call
+  made; injection: a snippet containing fake tool-result records /
+  note-impersonating text is neutralized by framing+normalization, and the
+  proxy-enforced policy (arguments, caps, domain allowlist, round count)
+  cannot be widened by snippet content — while an induced but *valid*
+  follow-up query merely consumes the normal budget.
 - Loop edges: a round mixing `web_search` with a client `tool_use` is returned
   to the client, never consumed server-side; a forced-choice first round with
   no call is re-issued once then degrades to strip + note; the terminal

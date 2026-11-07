@@ -20,6 +20,13 @@ type requestError struct {
 // (empty for none), a requestError when the request must be refused, and
 // whether the body changed (so an untouched request can be forwarded verbatim).
 func rewriteRequest(cfg *config, path string, data map[string]any) (fallback string, reqErr *requestError, changed bool) {
+	return rewriteRequestMode(cfg, path, data, nil)
+}
+
+// rewriteRequestMode is rewriteRequest with the web-search shim engagement:
+// a shim plan suppresses the strip (mode native passes the hosted tool
+// through; mode shim already rewrote it into a function tool in engageShim).
+func rewriteRequestMode(cfg *config, path string, data map[string]any, plan *shimPlan) (fallback string, reqErr *requestError, changed bool) {
 	// Image budget prune runs first, for every model and endpoint (the gateway's
 	// body cap applies to all of them), before any other rewrite.
 	if pruneImages(cfg, data) > 0 {
@@ -58,7 +65,7 @@ func rewriteRequest(cfg *config, path string, data map[string]any) (fallback str
 		}
 	}
 
-	if cfg.SearchNudge && stripWebSearchTools(data) {
+	if plan == nil && cfg.SearchNudge && stripWebSearchTools(data) {
 		changed = true
 		if !searchNotePresent(data) && injectSearchNote(cfg, path, data) {
 			changed = true
