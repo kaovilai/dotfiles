@@ -64,10 +64,17 @@ claude-copilot() {
     [[ -z "$plugins" && -r "$monitor" ]] && plugins="[\"$monitor\"]"
     local cfp
     cfp=$(_claude_proxy_fp "$(_claude_file_hash "${capi_data}/github_token" "${capi_data}/config.json" "$monitor")" "$(_claude_copilot_code_hash "$repo_dir")" "$port" "$plugins" "$monitor_dir")
-    _claude_proxy_sync claude-copilot copilot-api "${base}/v1/models" "$cfp" claude-copilot-kill 1 || return 1
+    # The zero-gap swap (proxies.zsh claude-copilot-restart) retires the old
+    # gateway itself; this launch must not restart or kill anything on its own.
+    if [[ -z "${_CLAUDE_COPILOT_FORCE_START-}" ]]; then
+        _claude_proxy_sync claude-copilot copilot-api "${base}/v1/models" "$cfp" claude-copilot-kill 1 || return 1
+    fi
 
-    # Start the gateway if nothing is serving yet
-    if ! curl -sf --max-time 2 "${base}/v1/models" -o /dev/null; then
+    # Start the gateway if nothing is serving yet. _CLAUDE_COPILOT_FORCE_START
+    # (the zero-gap restart swap in proxies.zsh) starts a replacement ALONGSIDE
+    # the still-serving old process: both listeners bind SO_REUSEPORT (the fork's
+    # serve options), so this start never refuses a connection.
+    if [[ -n "${_CLAUDE_COPILOT_FORCE_START-}" ]] || ! curl -sf --max-time 2 "${base}/v1/models" -o /dev/null; then
         local -a runner
         local have_checkout=0 bun_bin=${commands[bun]-}
         [[ -d "$repo_dir/.git" ]] && have_checkout=1

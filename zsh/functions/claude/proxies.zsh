@@ -170,13 +170,68 @@ _llm_proxy_wait_up() {
 }
 
 claude-copilot-restart() {
-    claude-copilot-kill >/dev/null
-    _llm_proxy_wait_down "${COPILOT_API_PORT:-4141}" || return 1
-    # claude-copilot exports into the calling shell, so run it in a subshell;
-    # starting the gateway happens before `claude --version` runs.
-    print -ru2 -- 'restart: copilot starting'
-    ( _CLAUDE_COPILOT_RESTART_ONLY=1 claude-copilot --version >/dev/null ) || return 1
-    _llm_proxy_wait_up "${COPILOT_API_PORT:-4141}" copilot
+    local port="${COPILOT_API_PORT:-4141}" pid i
+    local -a old_pids all_pids new_pids remain
+    old_pids=($(_claude_listen_pids "$port"))
+    # capability check: the gateway's source binds SO_REUSEPORT (the fork's
+    # serve options) — bun runs the TS directly, so the checkout IS the runtime
+    local swap=0
+    if (( ${#old_pids} )) && grep -q "reusePort" \
+        "${COPILOT_API_DIR:-$HOME/git/copilot-api}/src/start.ts" 2>/dev/null; then
+        swap=1
+    fi
+    if (( ! swap )); then
+        # nothing to swap against, or the checkout predates SO_REUSEPORT:
+        # the original stop-then-start path
+        (( ${#old_pids} )) && claude-copilot-kill >/dev/null
+        _llm_proxy_wait_down "$port" || return 1
+        print -ru2 -- 'restart: copilot starting'
+        ( _CLAUDE_COPILOT_RESTART_ONLY=1 claude-copilot --version >/dev/null ) || return 1
+        _llm_proxy_wait_up "$port" copilot
+        return $?
+    fi
+    # Zero-gap swap: start the replacement ALONGSIDE the still-serving old
+    # gateway — both listeners bind SO_REUSEPORT (kaovilai/copilot-api dev),
+    # and the kernel keeps routing new connections to the old listener until
+    # it closes. Once the new pid holds the port, SIGTERM the old ones: they
+    # stop accepting, drain their in-flight requests (capped), and exit. A
+    # request arriving mid-restart is never refused and none is cut.
+    print -ru2 -- "restart: copilot starting alongside :$port (zero-gap swap)"
+    ( _CLAUDE_COPILOT_RESTART_ONLY=1 _CLAUDE_COPILOT_FORCE_START=1 claude-copilot --version >/dev/null ) || return 1
+    for i in {1..30}; do
+        all_pids=($(_claude_listen_pids "$port"))
+        new_pids=()
+        for pid in "${all_pids[@]}"; do
+            [[ " ${old_pids[*]} " == *" $pid "* ]] || new_pids+=("$pid")
+        done
+        (( ${#new_pids} )) && break
+        sleep 0.5
+    done
+    if (( ${#new_pids} == 0 )); then
+        # the overlap start did not take (the running gateway predates
+        # SO_REUSEPORT and holds the port exclusively) — stop-then-start once
+        print -ru2 -- 'restart: overlap start did not take; stopping the old gateway first'
+        claude-copilot-kill >/dev/null
+        _llm_proxy_wait_down "$port" || return 1
+        ( _CLAUDE_COPILOT_RESTART_ONLY=1 claude-copilot --version >/dev/null ) || return 1
+        _llm_proxy_wait_up "$port" copilot
+        return $?
+    fi
+    curl -sf --max-time 2 "http://127.0.0.1:${port}/v1/models" -o /dev/null || true  # sanity: the port serves
+    for pid in "${old_pids[@]}"; do
+        kill "$pid" 2>/dev/null  # SIGTERM: stop accepting, drain in-flight, exit
+    done
+    for i in {1..60}; do
+        all_pids=($(_claude_listen_pids "$port"))
+        remain=()
+        for pid in "${all_pids[@]}"; do
+            [[ " ${old_pids[*]} " == *" $pid "* ]] && remain+=("$pid")
+        done
+        (( ${#remain} == 0 )) && break  # retired (drained) or only new pids left
+        sleep 0.5  # an old pid still listening is draining long requests
+    done
+    _llm_proxy_wait_up "$port" copilot
+    print -ru2 -- "restart: copilot up on :$port (zero-gap swap)"
 }
 
 claude-vertex-restart() {
