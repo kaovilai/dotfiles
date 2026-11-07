@@ -319,10 +319,13 @@ func (a *app) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		// the client still gets this answer.
 		var primaryText string
 		if resp != nil && resp.Body != nil {
+			// Cap what is stored for classification, but keep the unread
+			// remainder streamable: re-attaching only the read prefix would cut
+			// a larger body short if fallback preparation fails and the client
+			// still gets the original answer.
 			body, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
-			resp.Body.Close()
-			resp.Body = io.NopCloser(bytes.NewReader(body))
 			primaryText = string(body)
+			resp.Body = readCloser{io.MultiReader(bytes.NewReader(body), resp.Body), resp.Body}
 		}
 		fallbackReason = failoverReason(resp, primaryText, transportErr)
 		// Prepare the fallback request BEFORE giving up the primary answer: a
@@ -607,6 +610,13 @@ func joinURL(base, path string) string {
 	return base + path
 }
 
+// readCloser joins a re-read prefix with the unread rest of a response body:
+// the failover classifier peeks at the primary answer without consuming it.
+type readCloser struct {
+	io.Reader
+	io.Closer
+}
+
 func (a *app) shouldFailover(resp *http.Response, err error) bool {
 	if err != nil {
 		return true
@@ -630,7 +640,7 @@ func failoverReason(resp *http.Response, text string, err error) string {
 	if status == 429 || status == 402 || isLimitError(status, normalizeHeaders(resp.Header), text) {
 		// A 429 carrying monthly-budget wording is a quota, not throttling:
 		// the floating window shows the two differently.
-		if bodyKind(errorObject(errorBodyObject(text))) == "quota" {
+		if bodyKind(errorObject(errorBodyObject(text))) == "quota" || quotaMessage.MatchString(text) {
 			return "quota"
 		}
 		return "rate-limit"

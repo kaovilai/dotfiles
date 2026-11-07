@@ -726,3 +726,63 @@ func TestBuildEventCarriesFallbackReason(t *testing.T) {
 		t.Fatalf("a direct event must not carry a reason: %v", ev["fallback_reason"])
 	}
 }
+
+// The native streaming path (streamResponse) must keep the fallback reason:
+// assert on the actual call site, not only the builder it delegates to.
+func TestStreamingFailoverRecordsFallbackReason(t *testing.T) {
+	h := classifierHarness(t, "")
+	h.app.cfg.Routes = nil // hosted-only flavor: same dialect, no translator
+	glm, ds := h.app.cfg.GLM, h.app.cfg.DeepSeek
+	h.app.cfg.FallbackOn = true
+	h.failModel = glm
+	rec := streamRequest(t, h, glm)
+	if rec.Code != 200 || h.count(ds) != 1 {
+		t.Fatalf("expected a streaming fallback answer: status=%d ds=%d", rec.Code, h.count(ds))
+	}
+	ev := lastUsageEvent(t)
+	if ev["fallback"] != true || ev["fallback_reason"] != "outage-503" || ev["stream"] != true {
+		t.Fatalf("streaming failover lost the reason: fallback=%v reason=%v stream=%v", ev["fallback"], ev["fallback_reason"], ev["stream"])
+	}
+}
+
+// Same through the translated streaming path (streamTranslated): the Messages
+// client is bridged to the chat-dialect fallback.
+func TestTranslatedStreamingFailoverRecordsFallbackReason(t *testing.T) {
+	h := classifierHarness(t, "")
+	glm, ds := h.app.cfg.GLM, h.app.cfg.DeepSeek
+	h.app.cfg.FallbackOn = true
+	h.failModel = glm
+	rec := streamRequest(t, h, glm)
+	if rec.Code != 200 || h.count(ds) != 1 {
+		t.Fatalf("expected a translated streaming fallback answer: status=%d ds=%d", rec.Code, h.count(ds))
+	}
+	ev := lastUsageEvent(t)
+	if ev["fallback"] != true || ev["fallback_reason"] != "outage-503" || ev["stream"] != true {
+		t.Fatalf("translated streaming failover lost the reason: fallback=%v reason=%v stream=%v", ev["fallback"], ev["fallback_reason"], ev["stream"])
+	}
+}
+
+func streamRequest(t *testing.T, h *classifierHarnessT, model string) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages",
+		strings.NewReader(`{"model":"`+model+`","max_tokens":16,"stream":true,"messages":[{"role":"user","content":"hi"}]}`))
+	req.Header.Set("x-api-key", h.app.cfg.Token)
+	req.Header.Set("content-type", "application/json")
+	req.Header.Set("accept", "text/event-stream")
+	rec := httptest.NewRecorder()
+	h.app.ServeHTTP(rec, req)
+	return rec
+}
+
+// A quota 429 whose monthly-budget wording lives only in the message field
+// still records "quota": bodyKind reads structured fields, the fallback
+// classifier also reads the text.
+func TestFailoverReasonReadsQuotaWordingFromTheBody(t *testing.T) {
+	resp := &http.Response{StatusCode: 429, Header: http.Header{}}
+	if got := failoverReason(resp, `{"error":{"message":"monthly token budget exhausted"}}`, nil); got != "quota" {
+		t.Fatalf("message-only quota wording must record quota, got %q", got)
+	}
+	if got := failoverReason(resp, `{"error":{"message":"slow down"}}`, nil); got != "rate-limit" {
+		t.Fatalf("plain throttling must stay rate-limit, got %q", got)
+	}
+}

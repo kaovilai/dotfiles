@@ -555,7 +555,7 @@ function renderKpis() {
   tile("Output tokens", human(k.out), `${human(k.in)} fresh in · ${human(k.cread)} cached`);
   tile("Cache hit", pctf(k.hit), "cached / (fresh + cached) input");
   tile("Latency p50", ms(k.p50), k.p95 != null ? `p95 ${ms(k.p95)}${k.tps ? " · " + Math.round(k.tps) + " tok/s" : ""}` : "needs proxy log");
-  tile("Rerouted", k.n ? pctf(k.reroutes / k.n) : "-", k.reroutes ? `${k.reroutes} requests served by another model` : "none (or no proxy log)");
+  tile("Rerouted", k.n ? pctf(k.reroutes / k.n) : "-", k.reroutes ? `${k.reroutes} requests rerouted or served by a fallback` : "none (or no proxy log)");
   tile("1M-context requests", String(k.long), `context > 200k · largest ${human(k.ctxmax)}`);
   if (k.classifier) tile("Classifier calls", String(k.classifier), "auto-mode safety checks");
 }

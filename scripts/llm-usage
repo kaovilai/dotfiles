@@ -1231,7 +1231,8 @@ def aggregate(events, keyfns):
             "ctxmax": max(ctx_of(e) for e in evs), "long": sum(1 for e in evs if ctx_of(e) > LONG_CTX),
             "p50": pct(lat, 50), "p95": pct(lat, 95), "ttft": pct(ttft, 50),
             "tps": statistics.median(speeds) if speeds else None, "cost": cost,
-            "reroutes": sum(1 for e in evs if is_reroute(e)),
+            # a same-model failover (glm deployment A -> glm B) moved traffic too
+            "reroutes": sum(1 for e in evs if is_reroute(e) or e.get("fallback")),
         })
     if any(fn in (KEYS["day"], KEYS["hour"]) for fn in keyfns):
         return sorted(rows, key=lambda r: r["key"])
@@ -2941,7 +2942,7 @@ def dashboard_data(since_text, source, hide, host=None):
         "err_series": err_series, "err_limit": limit,
         "spikes": [{"start": w["start"], "end": w["end"], "n": w["n"], "e429": w["counts"][0], "e5xx": w["counts"][1], "eoth": w["counts"][2], "peak": w["peak"]} for w in windows],
         "recent": [{"t": e["t"], "proxy": proxy_name(e), "client": e.get("client"), "requested": strip_model(e["requested"]) if e.get("requested") else None,
-                    "served": strip_model(e.get("served")), "rerouted": is_reroute(e), "ok": e.get("ok", True), "status": err_status_label(e) if not e.get("ok", True) else None, "ctx": ctx_of(e),
+                    "served": strip_model(e.get("served")), "rerouted": is_reroute(e) or bool(e.get("fallback")), "ok": e.get("ok", True), "status": err_status_label(e) if not e.get("ok", True) else None, "ctx": ctx_of(e),
                     "out": e.get("out", 0), "ms": e.get("ms"), "role": e.get("role"), "fallback": bool(e.get("fallback")), "kind": reroute_kind(e),
                     "error": (e.get("error") or "")[:160] or None} for e in recent],
         "status": status,
