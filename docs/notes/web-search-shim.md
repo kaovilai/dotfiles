@@ -34,8 +34,9 @@ indistinguishable from the model choosing not to search. Use a forced-choice
 canary instead:
 
 - Sent through the proxy process (so it observes gateway + vLLM behavior, not
-  just the model) with the hosted `web_search` tool present and
-  `tool_choice: {"type": "tool", "name": "web_search"}` forced — but **marked
+  just the model) with the hosted `web_search` tool present and a forced
+  choice — `{"type": "tool", "name": "web_search"}` on the Anthropic dialect,
+  the type-only `{"type": "web_search_preview"}` on Responses — but **marked
   and exempted from the proxy's own strip/rewrite/note and fallback paths**,
   otherwise the canary measures our rewrite, not the upstream. (The forced
   choice survives to the upstream because the canary bypasses the strip; the
@@ -74,15 +75,37 @@ real search; clients that speak the native protocol cannot tell the difference.
    **preserved**, not freed: the rewritten tool keeps the name, so a caller's
    explicit requirement to search survives the rewrite. (Freeing the choice
    stays correct only for the pure strip path, where the named tool no longer
-   exists.)
+   exists.) If the request already declares a non-hosted tool named
+   `web_search`, the shim declines for that request (strip + note instead)
+   rather than shadowing the client's tool.
 2. **Response side** (new): when the upstream emits a `tool_use` for
    `web_search`, the proxy executes the search itself, maps results into the
    native block shape per dialect (Anthropic: `server_tool_use` +
    `web_search_tool_result` with titled chunks and citations; OpenAI Responses:
    `web_search_call` + results), appends the tool result, and re-invokes the
-   upstream — looping up to `max_uses` (cap 5) per turn. The final round
-   streams to the client; intermediate tool-call rounds are buffered (they are
-   not client-visible anyway).
+   upstream — looping up to `max_uses` (cap 5) per turn. Loop and streaming
+   policy:
+   - **Mixed tool calls terminate the loop.** A round whose `tool_use` list is
+     exclusively `web_search` calls is consumed server-side. A round that
+     also emits any other `tool_use` (a client function) is returned to the
+     client as-is so it can execute its tools, and the conversation resumes
+     when the client supplies the results — the proxy never hides a client
+     tool call or continues without its result.
+   - **Buffering.** While the shim tool is in the request, every round is
+     buffered: a `web_search` call can follow already-emitted text, and the
+     wire protocols allow only one response per request. The terminal round —
+     the one with no `web_search` call — is replayed to the client over SSE
+     with the accumulated search records prepended, so clients inspecting
+     search activity see the full native trail (`server_tool_use` /
+     `web_search_tool_result` / `web_search_call` records) before the final
+     answer. Requests without the shim tool stream through untouched; the
+     cost is that search-capable requests lose live token streaming (the
+     final response arrives after generation completes).
+   - **Forced choice is enforced, not just preserved.** When the caller
+     forced `web_search`, a first round that returns no call is not accepted
+     as final: the proxy re-issues it once with the forced choice intact,
+     then degrades to strip + note rather than letting the model answer
+     without searching.
 3. **Failure rule** (matches "a failure in here must never break a request"):
    Parallel call times out (~5 s) or errors → return an `is_error` tool result
    ("web search unavailable this turn") so the loop stays well-formed and the
@@ -95,10 +118,10 @@ real search; clients that speak the native protocol cannot tell the difference.
    intermediate rounds and stream the final one. Knob:
    `HOSTED_ONLY_SEARCH_SHIM` (off by default until soaked), participating in
    the existing knob/fingerprint restart machinery.
-6. **Codex catalog**: `scripts/codex-provider.zsh` currently pins
+6. **Codex catalog and launcher**: `scripts/codex-provider.zsh` currently pins
    `supports_search_tool=false` + `tool_mode: direct` for these models
-   (lines ~129/~228). With the shim on, the generated catalog must flip
-   `supports_search_tool` for shim-enabled models so Codex offers its global
+   (lines ~129/~228), and the launcher sets `web_search="disabled"`. With the
+   shim on, both must flip for shim-enabled models so Codex offers its global
    `web_search` and the proxy serves it — otherwise Codex never sends the
    tool and the shim is dead code on that path.
 7. **Note interaction**: while the shim is active, the in-band note must change
@@ -159,6 +182,11 @@ Authorization: Bearer $PARALLEL_API_KEY
   to both dialects' block shapes; loop capped at `max_uses`; Parallel timeout →
   `is_error` tool result and the turn still completes; shim off →
   byte-identical behavior to today.
+- Loop edges: a round mixing `web_search` with a client `tool_use` is returned
+  to the client, never consumed server-side; a forced-choice first round with
+  no call is re-issued once then degrades to strip + note; the terminal
+  response carries the accumulated native search records; a request that
+  already declares its own `web_search` tool skips the shim.
 - Live: one Claude (`/v1/messages`) and one Codex (`/v1/responses`) request
   through the Go proxy with the shim on, answer cites fetched URLs.
 - Tests mirror the existing patterns in `tests/hosted-only-proxy.zsh`,
