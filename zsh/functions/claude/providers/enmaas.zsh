@@ -65,6 +65,11 @@ _claude_enmaas_hook_env() {
         return 1
     }
     export CLAUDE_ENMAAS_GO_SRC="$_CLAUDE_ENMAAS_SCRIPTS/hosted-only-go"
+    # A non-exported .zshrc assignment reaches _hosted_only_knob (hosted-only
+    # launcher forwards it) but not this controller, which reads os.environ:
+    # export the classifier knob so the EnMaaS Go child and its knob digest
+    # see it too.
+    [[ -n "${HOSTED_ONLY_CLASSIFIER_ROUTE_MODEL:-}" ]] && export HOSTED_ONLY_CLASSIFIER_ROUTE_MODEL
     export ENMAAS_RESPONSES_ROUTES="$(_claude_enmaas_glm_id),$(_claude_enmaas_deepseek_id)"
     export ENMAAS_DNS_FALLBACK_HOSTS="$(_claude_enmaas_gateway_host)"
 }

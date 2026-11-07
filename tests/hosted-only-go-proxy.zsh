@@ -71,7 +71,7 @@ fp_with() {   # fp_with VAR=VALUE... -> the fingerprint line under the Go impl
 local base_fp="$(fp_with HOSTED_ONLY_IMAGE_TOKENS=2500)" changed_fp
 [[ -n "$base_fp" ]] || fail "fp_with produced no fingerprint"
 [[ "$(fp_with HOSTED_ONLY_IMAGE_CACHE_DIR=.)" != "$base_fp" ]] || fail "an explicit IMAGE_CACHE_DIR=. hashes like an unset dir"
-for knob in IMAGE_BUDGET_BYTES=123456 IMAGE_CACHE_DAYS=7 IMAGE_TOKENS=3100 IMAGE_CACHE_DIR=/tmp/other-image-cache; do
+for knob in IMAGE_BUDGET_BYTES=123456 IMAGE_CACHE_DAYS=7 IMAGE_TOKENS=3100 IMAGE_CACHE_DIR=/tmp/other-image-cache CLASSIFIER_ROUTE_MODEL=rits/google/diffusiongemma-26B-A4B-it; do
     changed_fp="$(fp_with HOSTED_ONLY_$knob)"
     [[ "$changed_fp" != "$base_fp" ]] || fail "changing HOSTED_ONLY_$knob does not change the proxy fingerprint"
 done

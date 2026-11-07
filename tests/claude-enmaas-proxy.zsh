@@ -253,6 +253,15 @@ exit $result
         stop = subprocess.run(['zsh', '-f', '-c', 'source "$ENMAAS_TEST_REPO/zsh/functions/claude/providers/enmaas.zsh"; claude-enmaas-kill'],
                               env=env, text=True, capture_output=True, timeout=30)
         assert stop.returncode == 0, stop.stderr
+        # A non-exported .zshrc classifier knob must reach the controller (it
+        # reads os.environ): _claude_enmaas_hook_env exports it.
+        export_check = subprocess.run(['zsh', '-f', '-c',
+            'source "$ENMAAS_TEST_REPO/zsh/functions/claude/providers/enmaas.zsh"; '
+            'HOSTED_ONLY_CLASSIFIER_ROUTE_MODEL=rits/fast; _claude_enmaas_hook_env || exit 9; '
+            '[[ "$(printenv HOSTED_ONLY_CLASSIFIER_ROUTE_MODEL)" == rits/fast ]] || exit 10'],
+            env=env, text=True, capture_output=True, timeout=30)
+        assert export_check.returncode == 0, export_check.stderr
+        print('PASS: a non-exported classifier knob is exported for the EnMaaS controller')
 finally:
     if 'env' in locals():
         subprocess.run(['zsh', '-f', '-c', 'source "$ENMAAS_TEST_REPO/zsh/functions/claude/providers/enmaas.zsh"; claude-enmaas-kill'],

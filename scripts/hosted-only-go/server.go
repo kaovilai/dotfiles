@@ -159,6 +159,70 @@ func (a *app) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		fallback = ""
 	}
 
+	// Pin a detected auto-mode classifier call to a fast small model
+	// (HOSTED_ONLY_CLASSIFIER_ROUTE_MODEL). The classifier is the one workload
+	// where latency dominates quality: tool-free, a few hundred input tokens,
+	// ~10 output tokens (2026-11 usage log: 3012 of 10692 events), which is
+	// exactly what a block-diffusion "System-1" model serves best. The rewrite
+	// happens before route resolution and only when the target is servable
+	// here, so a typo'd or not-yet-deployed id cannot break auto mode: the
+	// request stays on the model the client picked. Codex's reviewer is wired
+	// by config instead (auto_review_model_override), so it needs no rewrite.
+	if target := a.cfg.ClassifierRouteModel; target != "" {
+		// An alias target (claude-sonnet-5-5) is served by GLM: rewriteRequest
+		// already expanded the client's aliases, so the literal alias must not
+		// reach the upstream either. Normalize before comparing and applying.
+		if _, ok := a.cfg.Aliases[target]; ok {
+			target = a.cfg.GLM
+		}
+		// Image-bearing requests keep the vision-capable model the picker
+		// chose: classifier calls are text-only, and a text-only target would
+		// answer a validation error the failover cannot rescue (the image
+		// opt-out suppresses it).
+		if model != target && classifierMarkerInSystem(data) &&
+			!hasImage(data["messages"]) && !hasImage(data["input"]) &&
+			a.classifierServable(target, r.URL.Path) {
+			prev := model
+			data["model"] = target
+			changed = true
+			model = target
+			// A non-rits primary leaves rewriteRequest before the thinking-off
+			// injection (the early return); a rits/ target needs the switch.
+			if _, hasMessages := data["messages"]; hasMessages && data["input"] == nil && data["thinking"] == nil {
+				data["thinking"] = map[string]any{"type": "disabled"}
+				changed = true
+			}
+			// The fallback was picked for the PREVIOUS primary. After the
+			// rewrite it is wrong in general — with a third model deployed it
+			// names neither the target (whose failure would be retried on
+			// itself) nor the previous primary — and the pair picker leaves no
+			// fallback at all for a model outside GLM/DeepSeek, which would
+			// send a retryable fast-model failure to the client even though
+			// the previous primary was healthy. Clear it and install the
+			// previous primary — the model this very request was about to run
+			// on — under the same opt-outs the pair picker honors: an explicit
+			// request-level `fallbacks` field, failover disabled, or an active
+			// monthly quota on either side (retrying a quota'd model is the
+			// same 429 plus latency). The image opt-out is moot: image requests
+			// are not rewritten.
+			fallback = ""
+			if _, set := data["fallbacks"]; !set && a.cfg.FallbackOn &&
+				!a.quotaActive(prev) && !a.quotaActive(model) {
+				fallback = prev
+			}
+			// The output clamp ran for the PREVIOUS model, and the picker
+			// skips models outside the hosted pair entirely; a target inside
+			// the pair has its own window and must be clamped against it.
+			if e, clamped := clampOutput(a.cfg, data); e != nil {
+				a.writeRequestError(w, r.URL.Path, e)
+				a.usage.write(a.event(r, data, requested, served, started, usageInfo{}, false, e.Status, 0, e.Message, false, 0, "", false, 0, false, true, "", 0))
+				return
+			} else if clamped {
+				changed = true
+			}
+		}
+	}
+
 	// EnMaaS flavor: the launcher's generated config.json decides the
 	// deployment (dialect, api_base, #responses siblings). The hosted-only
 	// flavors have no route table and are restricted to the two hosted models,
@@ -267,6 +331,13 @@ func (a *app) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			fbPath = path
 			if translatable(r.URL.Path, entry.Dialect) {
 				fbTr = newTranslator(entry.Dialect)
+				// a chat-dialect fallback may have been learned Responses-only
+				// (the gateway answers chat with "use /v1/responses")
+				if entry.Dialect == "openai" {
+					if _, learned := a.responsesOnly.Load(upstream); learned {
+						fbTr = newTranslator("responses")
+					}
+				}
 			}
 		}
 		fbBody := marshal(clone)
@@ -536,6 +607,55 @@ func (a *app) shouldFailover(resp *http.Response, err error) bool {
 
 func (a *app) outageWait(model string, now time.Time) int {
 	return a.outages.wait(model, now)
+}
+
+// classifierMarkerInSystem reports whether the request's SYSTEM field carries
+// the auto-mode classifier marker. The usage log labels by the wider headText
+// (system + first messages), but a routing decision must not key on user
+// message content: pasted text there must not be able to opt a request into the
+// classifier model. The real classifier puts the marker in its system prompt.
+func classifierMarkerInSystem(data map[string]any) bool {
+	system, ok := data["system"]
+	if !ok || system == nil {
+		return false
+	}
+	text, isString := system.(string)
+	if !isString {
+		text = string(marshal(system))
+	}
+	return strings.Contains(text, classifierMarker)
+}
+
+// classifierServable reports whether the classifier-route target can answer
+// THIS client on THIS endpoint. Resolving it must land on its own deployment —
+// not the wildcard route every EnMaaS table carries, which would let a typo'd
+// or undeployed id through — and on a dialect the endpoint can serve without
+// translation (a Responses-only target must not capture a chat classifier,
+// nor a #responses sibling a chat request).
+func (a *app) classifierServable(model, path string) bool {
+	if a.cfg.Routes != nil {
+		// known() is the same gate every request passes; a target the table
+		// would reject must not be rewritten onto (a bare non-suffixed entry
+		// in a suffixed table is not served on chat, so the request keeps the
+		// model the client picked rather than being rewritten into a 400).
+		if !a.cfg.Routes.known(model, path) {
+			return false
+		}
+		entry, _, _ := a.cfg.Routes.resolve(model, path)
+		if entry.Name == "*" {
+			return false
+		}
+		// A #responses-only target is known() on chat but resolve() will not
+		// pick the sibling there; with no bare entry it synthesizes an
+		// unregistered chat route (Name = the id, no entry behind it).
+		if _, ok := a.cfg.Routes.entries[entry.Name]; !ok {
+			return false
+		}
+		// A Messages client can be bridged to a chat/Responses deployment
+		// (that is the EnMaaS translation); anything else must match exactly.
+		return dialectMismatch(path, entry.Dialect, model) == "" || translatable(path, entry.Dialect)
+	}
+	return a.cfg.allowedModel(model)
 }
 
 // fallbackServable reports whether the fallback model can answer THIS client
