@@ -41,8 +41,13 @@ _claude_copilot_latest_model() {
 #   tier <family> <model-id>
 #   pin  <family>=<model-id> <display name>
 #   model <model-id>|<display name>
+# Emitted ids/names pass through tsv_safe (tabs/newlines -> spaces): the
+# fields come from the gateway's /v1/models response, and a raw control
+# character in one could forge extra TSV rows that read as a tier/pin/model
+# line (prompt-injection shaping the pinned tiers and the /model picker).
 _claude_copilot_parse_models() {
     jq -r '
+      def tsv_safe: tostring | gsub("[\t\r\n]"; " ");
       def vnum: (try (capture("(?<maj>[0-9]+)(?:[.-](?<min>[0-9]+))?")) catch null) as $m
                 | if $m == null then 0
                   else (($m.maj | tonumber) * 1000) + (($m.min // "0") | tonumber) end;
@@ -54,12 +59,12 @@ _claude_copilot_parse_models() {
           | sort_by(.v) | last // {} | (.out // "");
       ({opus: latest("opus"), sonnet: latest("sonnet"),
         haiku: latest("haiku"), fable: latest("fable")}) as $t
-      | ($t | to_entries[] | select(.value != "") | "tier\t\(.key)\t\(.value)"),
+      | ($t | to_entries[] | select(.value != "") | "tier\t\(.key)\t\(.value | tsv_safe)"),
         ($t | to_entries[] | select(.value != "")
          | (.value | split("[")[0]) as $bare
-         | "pin\t\(.key)=\(.value)\t\([$data[] | select(.id == $bare)][0] | (.display_name // .name // ""))"),
+         | "pin\t\(.key)=\(.value | tsv_safe)\t\([$data[] | select(.id == $bare)][0] | (.display_name // .name // "") | tsv_safe)"),
         ($data[] | select(((.id? // empty) | strings) | test("embedding"; "i") | not)
-         | "model\t\(.id)|\(.display_name // .name // "")")
+         | "model\t\(.id | tsv_safe)|\((.display_name // .name // "") | tsv_safe)")
     ' <<< "$1"
 }
 
