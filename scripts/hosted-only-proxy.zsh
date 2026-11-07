@@ -342,6 +342,7 @@ _hosted_only_go_env() {
         "HOSTED_ONLY_PARALLEL_PLATFORM=$(_hosted_only_knob PARALLEL_PLATFORM https://platform.parallel.ai)"
         "HOSTED_ONLY_PARALLEL_STATE=$(_hosted_only_knob PARALLEL_STATE '')"
         "HOSTED_ONLY_PARALLEL_MCP=$(_hosted_only_knob PARALLEL_MCP https://mcp.parallel.ai/mcp)"
+        "HOSTED_ONLY_PARALLEL_ACCOUNT=$(_hosted_only_knob PARALLEL_ACCOUNT https://api.parallel.ai/account)"
         "HOSTED_ONLY_DIALECT_SUFFIX=$_hop_dialect"
         "ENMAAS_DNS_FALLBACK_HOSTS=$_hop_dns_host"
     )

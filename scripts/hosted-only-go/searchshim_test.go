@@ -7,6 +7,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -410,6 +411,70 @@ func TestParallelSearchFailureRule(t *testing.T) {
 	c := newParallelClient(cfg, nil)
 	if _, err := c.search(context.Background(), &shimPlan{MaxUses: 5}, "q"); err == nil {
 		t.Fatal("parallel failure must surface as an error")
+	}
+}
+
+// The OAuth approval URL and user code never enter the proxy log: they land
+// in a 0600 file that is removed once the code is spent.
+func TestMintKeyRedactsApprovalFromLogs(t *testing.T) {
+	const (
+		userCode = "ABCD-1234"
+		verify   = "https://platform.example/verify?uc=ABCD-1234"
+	)
+	stateDir := t.TempDir()
+	var approvalFile string
+	platform := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/getServiceKeys/register":
+			_, _ = w.Write([]byte(`{"client_id":"cid-1"}`))
+		case "/getServiceKeys/device/code":
+			_, _ = w.Write([]byte(`{"device_code":"dc-1","user_code":"` + userCode + `","verification_uri_complete":"` + verify + `","interval":1,"expires_in":60}`))
+		case "/getServiceKeys/token":
+			// capture the approval file's contents while the flow is waiting
+			// for this poll (the file is removed after a successful mint)
+			b, _ := os.ReadFile(filepath.Join(stateDir, "parallel-oauth-approval"))
+			approvalFile = string(b)
+			_, _ = w.Write([]byte(`{"access_token":"at-1","refresh_token":"rt-1"}`))
+		case "/service/v1/apps":
+			_, _ = w.Write([]byte(`{"app_id":"app-1"}`))
+		case "/service/v1/apps/app-1/keys":
+			_, _ = w.Write([]byte(`{"raw_api_key":"rk-1"}`))
+		default:
+			t.Errorf("unexpected platform call %s", r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer platform.Close()
+
+	cfg := testConfig()
+	cfg.ParallelKey = ""
+	cfg.ParallelState = stateDir
+	cfg.ParallelPlatform = platform.URL
+	cfg.ParallelAccount = platform.URL // the stub serves the Account API too
+	var logs []string
+	c := newParallelClient(cfg, func(format string, args ...any) {
+		logs = append(logs, fmt.Sprintf(format, args...))
+	})
+
+	cred := c.resolveCredential(context.Background())
+	if !cred.Authed || cred.Key != "rk-1" {
+		t.Fatalf("credential = %#v, want the minted key", cred)
+	}
+	joined := strings.Join(logs, "\n")
+	if strings.Contains(joined, userCode) || strings.Contains(joined, verify) {
+		t.Fatalf("approval URL/code leaked into the proxy log:\n%s", joined)
+	}
+	if !strings.Contains(joined, "redacted from logs") {
+		t.Fatalf("log must say the approval info is redacted:\n%s", joined)
+	}
+	// the approval file carried the URL + code for the user (0600, state dir)...
+	if !strings.Contains(approvalFile, verify) || !strings.Contains(approvalFile, userCode) {
+		t.Fatalf("approval file = %q", approvalFile)
+	}
+	// ...and is removed once the code is spent
+	if _, err := os.Stat(filepath.Join(stateDir, "parallel-oauth-approval")); err == nil {
+		t.Fatal("spent approval file was not removed after minting")
 	}
 }
 

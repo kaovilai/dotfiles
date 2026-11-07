@@ -154,7 +154,17 @@ func (c *parallelClient) mintKey(ctx context.Context) (string, error) {
 	if code.VerifyURL == "" {
 		code.VerifyURL = "https://platform.parallel.ai/getServiceKeys/device"
 	}
-	c.logf("search-shim: approve once at %s (code %s) to mint a Parallel search key", code.VerifyURL, code.UserCode)
+	// The approval URL and user code never enter the (rotated, potentially
+	// centralized) proxy log: they go to a 0600 file in the shim state dir and
+	// the log line only points at it.
+	approval := fmt.Sprintf("Approve once to mint a Parallel search key for the hosted-only proxy.\nURL: %s\nCode: %s\nThis file can be deleted after approval.\n", code.VerifyURL, code.UserCode)
+	approvalPath := c.stateFile("parallel-oauth-approval")
+	_ = os.MkdirAll(c.cfg.shimStateDir(), 0o700)
+	if err := os.WriteFile(approvalPath, []byte(approval), 0o600); err == nil {
+		c.logf("search-shim: device authorization required to mint a Parallel search key; open %s to approve (approval URL/code redacted from logs)", approvalPath)
+	} else {
+		c.logf("search-shim: device authorization required to mint a Parallel search key (approval URL/code redacted from logs; could not write %s: %v)", approvalPath, err)
+	}
 
 	interval := time.Duration(max(code.Interval, 5)) * time.Second
 	deadline := time.Now().Add(time.Duration(min(code.ExpiresIn, 900)) * time.Second)
@@ -185,9 +195,10 @@ func (c *parallelClient) mintKey(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("token poll: device code expired without approval")
 	}
 	_ = os.WriteFile(c.stateFile("parallel-refresh"), []byte(token.RefreshToken), 0o600)
+	_ = os.Remove(approvalPath) // the code is spent; drop the secret file
 
 	// Mint a dedicated app-scoped key rather than holding the account token.
-	account := "https://api.parallel.ai/account"
+	account := c.cfg.ParallelAccount
 	var app struct {
 		AppID string `json:"app_id"`
 	}
