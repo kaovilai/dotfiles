@@ -48,11 +48,17 @@ _claude_copilot_code_hash() {
     zmodload zsh/stat 2>/dev/null
     local -a st
     if (( $+builtins[zstat] )) && zstat -A st "$repo/.git/index" 2>/dev/null; then
-        local ikey="index $st[2] $st[10] $st[8]" list_cache lcached
+        # $repo in the key: inode numbers are only unique per filesystem, so
+        # two checkouts (COPILOT_API_DIR override) must never share an entry
+        local ikey="$repo index $st[2] $st[10] $st[8]" list_cache lcached
         list_cache="${XDG_STATE_HOME:-$HOME/.local/state}/claude-copilot-code-files.cache"
         [[ -r "$list_cache" ]] && { lcached=$(<"$list_cache"); } 2>/dev/null
-        if [[ "${lcached%%$'\n'*}" == "$ikey" ]]; then
+        if [[ "$lcached" == "$ikey"$'\n'* ]]; then
             files="${lcached#*$'\n'}"
+        elif [[ "$lcached" == "$ikey" ]]; then
+            # header-only cache: $() strips the trailing newline an empty
+            # file list leaves behind — the list is empty, not the header
+            files=""
         else
             files=$(git -C "$repo" ls-files -- src plugin 2>/dev/null) || { print -r -- none; return 0; }
             mkdir -p "${list_cache:h}" && print -r -- "$ikey"$'\n'"$files" >| "$list_cache"
@@ -143,7 +149,14 @@ claude-copilot() {
     # (the zero-gap restart swap in proxies.zsh) starts a replacement ALONGSIDE
     # the still-serving old process: both listeners bind SO_REUSEPORT (the fork's
     # serve options), so this start never refuses a connection.
-    if [[ -n "${_CLAUDE_COPILOT_FORCE_START-}" ]] || [[ -z "$models_json" ]]; then
+    # An empty models_json alone does not mean "not serving" — the fetch can
+    # time out on a live gateway (/v1/models needs GitHub upstream). Starting
+    # anyway would leave a second gateway bound via SO_REUSEPORT that nothing
+    # ever retires, so a slow answer is distinguished from a missing listener
+    # here; the fetch below retries against the live one. Only run when the
+    # first fetch actually failed (steady state pays nothing for this).
+    if [[ -n "${_CLAUDE_COPILOT_FORCE_START-}" ]] ||
+       { [[ -z "$models_json" ]] && [[ -z "$(_claude_listen_pids "$port")" ]]; }; then
         local -a runner
         local have_checkout=0 bun_bin=${commands[bun]-}
         [[ -d "$repo_dir/.git" ]] && have_checkout=1
