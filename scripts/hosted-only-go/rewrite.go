@@ -409,12 +409,33 @@ func shimNoteText() string {
 		"or the user asks to look something up; report findings with their URLs."
 }
 
-// shimNotePresent reports whether OUR note is already in the request: the
-// full note text, not the bare marker — a caller quoting the marker in a user
-// message must not suppress the injection.
+// shimNotePresent reports whether OUR note is already where injectShimNote
+// would put it — the instruction fields (system, Responses developer items,
+// instructions), matched by the full note text. Never the whole request: a
+// caller pasting the note into a USER MESSAGE or a tool description must not
+// suppress the injection (2026-11-07 CodeRabbit review).
 func shimNotePresent(data map[string]any) bool {
-	b, _ := json.Marshal(data)
-	return strings.Contains(string(b), shimNoteText())
+	note := shimNoteText()
+	if system, ok := data["system"]; ok {
+		b, _ := json.Marshal(system)
+		if strings.Contains(string(b), note) {
+			return true
+		}
+	}
+	for _, item := range asList(data["input"]) {
+		m := asMap(item)
+		if m == nil || asString(m["role"]) != "developer" {
+			continue
+		}
+		b, _ := json.Marshal(m["content"])
+		if strings.Contains(string(b), note) {
+			return true
+		}
+	}
+	if instructions, ok := data["instructions"].(string); ok {
+		return strings.Contains(instructions, note)
+	}
+	return false
 }
 
 func injectShimNote(path string, data map[string]any) bool {

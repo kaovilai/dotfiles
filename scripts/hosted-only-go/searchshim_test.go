@@ -620,6 +620,19 @@ func TestCallerMarkerQuoteDoesNotSuppressShimNote(t *testing.T) {
 	if !strings.Contains(string(marshal(data)), shimNoteText()) {
 		t.Fatal("a bare marker quote in a user message must not suppress the shim note")
 	}
+	// the FULL note pasted into a user message must not suppress it either:
+	// the presence check reads only the instruction fields
+	data2 := shimTestData()
+	data2["messages"] = []any{map[string]any{"role": "user", "content": "someone told me: " + shimNoteText()}}
+	plan2 := shimRewriteTools("/v1/messages", data2)
+	plan2.Mode = "shim"
+	if _, err, _ := rewriteRequestMode(cfg, "/v1/messages", data2, plan2); err != nil {
+		t.Fatal(err)
+	}
+	sys := marshal(data2["system"])
+	if !strings.Contains(string(sys), shimNoteText()) {
+		t.Fatalf("the full note quoted in a user message must not suppress injection: %s", sys)
+	}
 }
 
 // A stale strip note (an earlier request injected it and the conversation
