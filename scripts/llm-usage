@@ -1548,6 +1548,8 @@ def proxy_logging_on(port, config):
     listener cannot be inspected (tests, a LiteLLM impl)."""
     if config_models(config)[1]:
         return True  # the config declares the LiteLLM callback: no need to inspect the listener
+    if config is None:
+        return None  # copilot-api: no callback by design, usage is transcript-derived
     pid = listener_pid(port)
     if pid:  # config says no callback — but the Go proxy logs natively without one
         try:
