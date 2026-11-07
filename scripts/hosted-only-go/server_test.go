@@ -180,3 +180,39 @@ func TestFallbackIsTranslatedForItsDialect(t *testing.T) {
 		t.Fatalf("control: an Anthropic-dialect fallback stays on /v1/messages: %v", got)
 	}
 }
+
+// End to end through the handler: chat to a Responses-only model, by bare id or by
+// its explicit #responses sibling, is a 400 and never reaches the upstream, while
+// /v1/responses still does.
+func TestResponsesOnlyModelChatIsA400WithNoUpstreamCall(t *testing.T) {
+	h := newProxyHarness(t, 200, `{"id":"r","object":"response","output":[],"usage":{"input_tokens":1,"output_tokens":1}}`, nil)
+	path := filepath.Join(t.TempDir(), "routes.json")
+	if err := os.WriteFile(path, []byte(strings.ReplaceAll(enmaasTestConfig, "https://gw", h.url)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	routes, err := loadRouteTable(path, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.app.cfg.Routes = routes
+	post := func(endpoint, model string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPost, endpoint,
+			strings.NewReader(`{"model":"`+model+`","messages":[{"role":"user","content":"hi"}],"input":"hi"}`))
+		req.Header.Set("authorization", "Bearer "+h.app.cfg.Token)
+		req.Header.Set("content-type", "application/json")
+		rec := httptest.NewRecorder()
+		h.app.ServeHTTP(rec, req)
+		return rec
+	}
+	for _, model := range []string{"gpt-6", "gpt-6#responses"} {
+		if rec := post("/v1/chat/completions", model); rec.Code != http.StatusBadRequest {
+			t.Fatalf("chat to %s must be a 400, got %d: %s", model, rec.Code, rec.Body.String())
+		}
+	}
+	if n := h.count("gpt-6"); n != 0 {
+		t.Fatalf("a rejected chat request reached the upstream %d time(s)", n)
+	}
+	if rec := post("/v1/responses", "gpt-6"); rec.Code != http.StatusOK || h.count("gpt-6") != 1 {
+		t.Fatalf("/v1/responses must still reach the upstream: %d, calls=%d: %s", rec.Code, h.count("gpt-6"), rec.Body.String())
+	}
+}

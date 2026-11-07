@@ -43,6 +43,37 @@ func TestRouteResponsesSibling(t *testing.T) {
 	}
 }
 
+// A Responses-only model's generated config has a bare responses-dialect entry
+// plus an openai-dialect "#responses" sibling. The sibling serves /v1/responses
+// only: on chat it must not be selected, or the chat request passes the dialect
+// check and is forwarded to an upstream that rejects it instead of getting the
+// proxy's actionable 400.
+func TestResponsesOnlyModelIsRejectedOnChat(t *testing.T) {
+	table := testRoutes(t)
+	entry, _, _ := table.resolve("gpt-6", "/v1/chat/completions")
+	if entry.Name != "gpt-6" || entry.Dialect != "responses" {
+		t.Fatalf("chat must resolve the bare responses deployment, got %#v", entry)
+	}
+	if msg := dialectMismatch("/v1/chat/completions", entry.Dialect, "gpt-6"); msg == "" {
+		t.Fatal("chat to a Responses-only model must be rejected with a 400 message")
+	}
+	// naming the sibling directly must not bypass the restriction
+	entry, _, _ = table.resolve("gpt-6#responses", "/v1/chat/completions")
+	if msg := dialectMismatch("/v1/chat/completions", entry.Dialect, "gpt-6#responses"); msg == "" {
+		t.Fatal("chat to the explicit #responses sibling must be rejected with a 400 message")
+	}
+	if msg := dialectMismatch("/v1/responses", entry.Dialect, "gpt-6#responses"); msg != "" {
+		t.Fatalf("the explicit sibling on /v1/responses must pass: %s", msg)
+	}
+	entry, _, path := table.resolve("gpt-6", "/v1/responses")
+	if entry.Name != "gpt-6#responses" || path != "/v1/responses" {
+		t.Fatalf("the Responses endpoint must still use the sibling: %#v %q", entry, path)
+	}
+	if msg := dialectMismatch("/v1/responses", entry.Dialect, "gpt-6"); msg != "" {
+		t.Fatalf("responses to the sibling must pass: %s", msg)
+	}
+}
+
 func TestRouteAnthropicModel(t *testing.T) {
 	table := testRoutes(t)
 	entry, upstream, path := table.resolve("claude-x", "/v1/messages")

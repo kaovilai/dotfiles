@@ -100,13 +100,20 @@ func dialectOf(params map[string]any) string {
 
 // resolve picks the deployment for a client model id and endpoint. OpenAI-wire
 // endpoints use the "<id><suffix>" group when the config has one (hosted-only's
-// merged #openai deployments); /v1/responses also accepts a "<id>#responses"
-// sibling (EnMaaS); an unknown id falls back to the wildcard chat route.
+// merged #openai deployments); /v1/responses alone also accepts a
+// "<id>#responses" sibling (EnMaaS); an unknown id falls back to the wildcard chat route.
 func (t *routeTable) resolve(model, clientPath string) (routeEntry, string, string) {
 	isMessages := strings.Contains(clientPath, "/v1/messages")
 	if !isMessages {
 		for _, suffix := range []string{t.suffix, "#responses"} {
 			if suffix == "" {
+				continue
+			}
+			// The #responses sibling is an openai-dialect deployment for the
+			// Responses endpoint only. On chat it would make a Responses-only
+			// model look chat-capable, so the request was forwarded to an upstream
+			// that rejects it instead of getting the proxy's actionable 400.
+			if suffix == "#responses" && !strings.Contains(clientPath, "/v1/responses") {
 				continue
 			}
 			if entry, ok := t.entries[model+suffix]; ok {
