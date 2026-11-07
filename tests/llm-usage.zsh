@@ -945,10 +945,15 @@ mod.fleet_write_status("p7", last_ok=now - 3600, last_fail=now - 400)
 mod.fleet_write_status("p7", last_ok=now - 60, last_fail=now - 400)  # manual refresh succeeded after the failure
 assert mod._fleet_due("p7", now + 60), "an old last_fail must not block a peer whose newest result is a success"
 
-# peer names that collide with reserved host-filter values are rejected
-os.environ["LLM_USAGE_FLEET"] = "p1=local:/x,all=local:/x,local=local:/x"
+# peer names that collide with reserved host-filter values are rejected, and so
+# is a pair with an empty target (it would KeyError `fleet hosts` and fail ssh)
+os.environ["LLM_USAGE_FLEET"] = "p1=local:/x,all=local:/x,local=local:/x,empty=,blank=local:"
 assert [n for n, _ in mod.fleet_hosts()] == ["p1"], mod.fleet_hosts()
 os.environ["LLM_USAGE_FLEET"] = "p1=local:/nonexistent"
+# tail repeat-suppression: a pulled line's eid is the identity (a revision's out
+# grows under the same eid), local events fall back to the content tuple
+assert mod.tail_key({"eid": "x", "t": 1, "out": 2}) == mod.tail_key({"eid": "x", "t": 2, "out": 9})
+assert mod.tail_key({"t": 1, "out": 2}) != mod.tail_key({"t": 1, "out": 3})
 
 # the revision cutoff is the PEER's export time (peer clock), stored from the meta line
 calls = []

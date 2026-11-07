@@ -570,8 +570,9 @@ def fleet_hosts():
         if "=" not in pair:
             continue
         name, target = (x.strip() for x in pair.split("=", 1))
-        if name:
-            hosts[name] = {"name": name, "local_dir": target[6:]} if target.startswith("local:") else {"name": name, "ssh": target}
+        if not name or not target or target == "local:":  # "peer=" would KeyError cmd_fleet hosts and fail every ssh
+            continue
+        hosts[name] = {"name": name, "local_dir": target[6:]} if target.startswith("local:") else {"name": name, "ssh": target}
     hosts.pop(FLEET_LOCAL, None)  # a peer named "local" would merge with this machine's events
     hosts.pop("all", None)  # and "all" collides with the dashboard's fleet-wide host filter value
     return sorted(hosts.items())
@@ -1390,12 +1391,23 @@ def event_line(ev):
             f"ctx {human(ctx_of(ev)):>6} out {human(ev.get('out', 0)):>5} {ms(ev.get('ms')):>7}  {' '.join(extra)}").rstrip()
 
 
+def tail_key(e):
+    """Identity for `tail -f` repeat suppression. Pulled lines carry a stable eid:
+    a transcript revision replaces the stored line under the same eid while its
+    token counts grow, which the content tuple would misread as a new request.
+    Local events have no eid; their tuple keeps host so an identical peer event
+    is not a repeat of a local one."""
+    if e.get("eid"):
+        return ("eid", e["eid"])
+    return (e["t"], e.get("start"), e.get("served"), e.get("out"), host_of(e))
+
+
 def cmd_tail(args):
     seen = set()
     since = time.time() - 3600 if args.follow else parse_since(args.since)
 
     def fresh():
-        key = lambda e: (e["t"], e.get("start"), e.get("served"), e.get("out"), host_of(e))  # host too: an identical peer event is not a repeat of a local one
+        key = tail_key
         events = [e for e in load_proxy(since) if key(e) not in seen]
         if args.fleet:
             # stream peers too: kick the TTL-guarded background refresh instead of
@@ -1410,7 +1422,7 @@ def cmd_tail(args):
     for ev in events[-args.n:]:
         print(event_line(ev))
     for ev in events:
-        seen.add((ev["t"], ev.get("start"), ev.get("served"), ev.get("out"), host_of(ev)))
+        seen.add(tail_key(ev))
     if not args.follow:
         if not events:
             print("no proxy events (restart proxies with the usage callback: llm-usage status)")
@@ -1419,7 +1431,7 @@ def cmd_tail(args):
         while True:
             time.sleep(1)
             for ev in fresh():
-                seen.add((ev["t"], ev.get("start"), ev.get("served"), ev.get("out"), host_of(ev)))
+                seen.add(tail_key(ev))
                 print(event_line(ev), flush=True)
     except KeyboardInterrupt:
         pass
