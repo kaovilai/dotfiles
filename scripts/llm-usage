@@ -565,6 +565,7 @@ def fleet_hosts():
         if name:
             hosts[name] = {"name": name, "local_dir": target[6:]} if target.startswith("local:") else {"name": name, "ssh": target}
     hosts.pop(FLEET_LOCAL, None)  # a peer named "local" would merge with this machine's events
+    hosts.pop("all", None)  # and "all" collides with the dashboard's fleet-wide host filter value
     return sorted(hosts.items())
 
 
@@ -717,7 +718,14 @@ def fleet_ingest(name, events):
         written += 1
     for nb in neighbors.values():  # neighbour removals are applied once, not per event
         if nb["removed"]:
-            _rewrite_month(nb["path"], [l for l in nb["lines"] if _line_eid(l) not in nb["removed"]])
+            # re-read the file: the same batch may have appended to this month after
+            # the neighbour snapshot was taken, and the rewrite must not drop those rows
+            try:
+                with open(nb["path"], errors="replace") as handle:
+                    lines = handle.read().splitlines()
+            except OSError:
+                lines = nb["lines"] or []
+            _rewrite_month(nb["path"], [l for l in lines if _line_eid(l) not in nb["removed"]])
             written += 1
     return written
 
@@ -847,8 +855,10 @@ def fleet_pull_one(name, entry, force=False, ttl=FLEET_TTL):
     try:
         since = (st.get("last_event_t") or (now - FLEET_FIRST_SYNC)) - 2  # resume from last event, 2s overlap deduped by eid
         # A transcript file that changed since the last pull re-exports all its events:
-        # a revision keeps its old timestamp, which the `since` window would hide.
-        modified_since = max(0.0, (st.get("last_ok") or 0.0) - 60)
+        # a revision keeps its old timestamp, which the `since` window would hide. The
+        # cutoff is the PEER's export time from that pull (meta t), not our last_ok —
+        # file mtimes are peer-clock values, and the two clocks can skew apart.
+        modified_since = max(0.0, (float(st.get("peer_t") or 0) - 60))
         meta, events, flights = fleet_pull(name, entry, since, inflight=True, modified_since=modified_since)
         snap = {"t": time.time(), "requests": flights}  # always rewrite: a peer with no in-flight
         os.makedirs(fleet_dir(name), mode=0o700, exist_ok=True)  # first pull: the host dir does not exist yet
@@ -906,7 +916,7 @@ def fleet_pull_one(name, entry, force=False, ttl=FLEET_TTL):
                "pull_ms": int((time.time() - started) * 1000)}
         fleet_write_status(name, last_ok=time.time(), last_error=backfill_note, last_event_t=last_event_t,
                            backfill_cursor=cursor, backfilled=backfilled, backfill_empty=empty,
-                           months=months, host=meta.get("host"))
+                           months=months, host=meta.get("host"), peer_t=meta.get("t"))
         return out
     except OSError as err:
         fleet_write_status(name, last_error=str(err), last_fail=time.time())
@@ -940,11 +950,17 @@ def fleet_refresh(force=False, only=None, ttl=FLEET_TTL):
 def _fleet_due(name, now, ttl=FLEET_TTL):
     """Is this host due for an AUTOMATIC kick? A fresh success says no; so does a
     recent failure (backoff — a peer unreachable for hours gets one attempt per
-    FLEET_BACKOFF, not one per poll). Manual `fleet refresh` bypasses this."""
+    FLEET_BACKOFF, not one per poll). A success NEWER than the last failure is
+    back to the ordinary TTL cadence: an old last_fail must not keep a healthy
+    peer stale. Manual `fleet refresh` bypasses this."""
     st = fleet_status(name)
-    if now - st.get("last_ok", 0) < ttl:
+    last_ok = st.get("last_ok") or 0
+    if now - last_ok < ttl:
         return False
-    return now - (st.get("last_fail") or 0) >= FLEET_BACKOFF
+    last_fail = st.get("last_fail") or 0
+    if last_fail < last_ok:
+        return True
+    return now - last_fail >= FLEET_BACKOFF
 
 
 def fleet_kick(ttl=FLEET_TTL):

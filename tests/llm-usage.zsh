@@ -818,6 +818,16 @@ mod.fleet_ingest("p2", [early])
 mod.fleet_ingest("p2", [late])
 m1rows = [r for r in host_lines("p2") if r["id"] == "m1"]
 assert len(m1rows) == 1 and m1rows[0]["out"] == 2, m1rows
+# a same-batch relocation must not clobber rows appended to the neighbour month
+# after its snapshot was taken (the flush re-reads the file)
+mx = {"t": month_start + 5000, "id": "mx", "source": "claude", "port": "4141", "served": "sonnet", "ok": True, "in": 1, "out": 1}
+mod.fleet_ingest("p2", [mx])                        # the message lives in the current month
+moved = {**mx, "t": month_start - 100, "out": 2}    # re-finalized just before the boundary
+new_here = ev(month_start + 9000)                   # a new event in the same month, same batch
+mod.fleet_ingest("p2", [moved, new_here])           # one batch: relocation + append to the neighbour month
+mxrows = [r for r in host_lines("p2") if r.get("id") == "mx"]
+assert len(mxrows) == 1 and mxrows[0]["out"] == 2, mxrows
+assert any(r["eid"] == mod.event_eid(new_here) for r in host_lines("p2")), "the row appended after the neighbour snapshot must survive"
 
 # watermark + bounded backfill: the backfill chunk is bounded by --until (a peer with
 # months of history never re-transfers it all), and the watermark only tracks
@@ -916,13 +926,37 @@ revs = [r for r in host_lines("p6") if r.get("id") == "mr"]
 assert len(revs) == 1 and revs[0]["out"] == 9, revs
 
 # automatic-kick backoff: a recently failed host is not due (one attempt per 5 min
-# while unreachable, not one per poll); a fresh success is not due either
+# while unreachable, not one per poll); a fresh success is not due either, and a
+# success NEWER than the failure restores the ordinary cadence
 mod.fleet_write_status("p7", last_ok=now - 3600, last_fail=now - 10, last_error="ssh: no route to host")
 assert not mod._fleet_due("p7", now), "recent failure must back off"
 mod.fleet_write_status("p7", last_ok=now - 3600, last_fail=now - 400)
 assert mod._fleet_due("p7", now), "backoff expired: due again"
 mod.fleet_write_status("p7", last_ok=now - 10, last_fail=None)
 assert not mod._fleet_due("p7", now), "a fresh success is not due"
+mod.fleet_write_status("p7", last_ok=now - 3600, last_fail=now - 400)
+mod.fleet_write_status("p7", last_ok=now - 60, last_fail=now - 400)  # manual refresh succeeded after the failure
+assert mod._fleet_due("p7", now + 60), "an old last_fail must not block a peer whose newest result is a success"
+
+# peer names that collide with reserved host-filter values are rejected
+os.environ["LLM_USAGE_FLEET"] = "p1=local:/x,all=local:/x,local=local:/x"
+assert [n for n, _ in mod.fleet_hosts()] == ["p1"], mod.fleet_hosts()
+os.environ["LLM_USAGE_FLEET"] = "p1=local:/nonexistent"
+
+# the revision cutoff is the PEER's export time (peer clock), stored from the meta line
+calls = []
+def recording_pull(name, entry, since, inflight=False, until=None, modified_since=None):
+    calls.append((since, until, modified_since))
+    return scripted.pop(0)
+mod.fleet_pull = recording_pull
+meta_pt = {"_export": 1, "host": "p8h", "months": [month], "t": now - 1000}
+scripted.clear()
+scripted += [(meta_pt, [ev(now - 50)], []), (meta_pt, [], [])]
+mod.fleet_pull_one("p8", {"name": "p8", "local_dir": "/x"}, force=True)
+assert mod.fleet_status("p8").get("peer_t") == now - 1000, mod.fleet_status("p8")
+scripted.append((meta_pt, [ev(now - 10)], []))
+mod.fleet_pull_one("p8", {"name": "p8", "local_dir": "/x"}, force=True)
+assert calls[-1][2] == now - 1000 - 60, calls[-1]  # peer-clock cutoff, 60s margin
 
 # control socket dir: a predictable /tmp path is trusted only when provably ours
 # (real dir, owned by us, no group/other bits); a planted or loosened dir falls back to STATE

@@ -1716,6 +1716,9 @@ final class MonitorView: NSView {
                 let value = "\(h["m15"]["requests"].int ?? 0) req" + (errs > 0 ? " · \(errs) err" : "") + (inflight > 0 ? " · ⏳\(inflight)" : "")
                 drawStr(value, in: row, font: tinyFont, color: errs > 0 ? NSColor.systemRed : .secondaryLabelColor, align: .right)
             }
+        } else if !fleetShow.isEmpty, layout == .vertical, rowsLeft >= 1, let r = next() {
+            // no room for the section: say the hosts exist, the menu holds them
+            drawStr("Fleet · \(fhosts.count) host\(fhosts.count == 1 ? "" : "s") · see menu", in: r, font: tinyFont, color: .tertiaryLabelColor)
         }
         if let note = d["throttle_notes"]["github-copilot"].str, spans.allSatisfy({ $0.provider != "github-copilot" }), rowsLeft >= 1,
            providers.contains(where: { $0.key == "github-copilot" }), layout == .vertical, let r = next() {
@@ -2398,22 +2401,20 @@ final class AppController: NSObject, NSMenuDelegate, NSWindowDelegate {
                 }
             }
         }
-        flights.sort { $0.age > $1.age }  // oldest first: bars stack upward above it
-        var merged = flights.prefix(16).map { Flight(id: $0.id, model: $0.model, seconds: $0.age) }
-        // Peer in-flight requests are not readable from this machine's files: keep the ones
-        // from the last payload in the bars too, advancing their ages from the payload time
-        // (the 1s tick cannot read them; the next poll refreshes or drops them).
+        // candidates: local requests plus the peer requests from the last payload (a
+        // peer's own files are not readable here). Sort fleet-wide by age, then keep
+        // the OLDEST 16 — capping the local list first would let 16 young locals
+        // hide an older peer from the bars.
+        var candidates = flights
         if let d = data, let generated = parseISO(d["generated_at"].str) {
-            let rows = d["inflight"]["requests"].arr
-            let local = Set(merged.map { $0.id })
             let drift = max(0, now.timeIntervalSince(generated))
-            for row in rows {
-                guard let id = row["id"].str, row["host"].str != nil, !local.contains(id), merged.count < 16 else { continue }
-                merged.append(Flight(id: id, model: row["model"].str ?? "", seconds: (row["seconds"].dbl ?? 0) + drift))
+            for row in d["inflight"]["requests"].arr where row["host"].str != nil {
+                guard let id = row["id"].str else { continue }
+                candidates.append((max(0, (row["seconds"].dbl ?? 0) + drift), id, row["model"].str ?? ""))
             }
-            merged.sort { $0.seconds > $1.seconds }
         }
-        monitorView.flights = merged
+        candidates.sort { $0.age > $1.age }  // oldest first: bars stack upward above it
+        monitorView.flights = candidates.prefix(16).map { Flight(id: $0.id, model: $0.model, seconds: $0.age) }
     }
 
     func context() -> MenuContext {

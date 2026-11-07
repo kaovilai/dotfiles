@@ -583,9 +583,15 @@ function render() {
   banner.replaceChildren();
   if (D.source.startsWith("transcripts")) banner.append(html("div", { class: "banner" }, "Showing Claude Code / Codex transcripts: only the answering model, no requested → served routing, no latency. Restart the LiteLLM proxies marked “not logging” below (llm-proxy-restart) to capture those."));
   else if (D.source.startsWith("merged")) banner.append(html("div", { class: "banner" }, "Mixed data: " + D.source.replace(/^merged \(|\)$/g, "") + ". Transcript rows have no routing or latency."));
-  const staleHosts = (D.hosts || []).filter(h => h.name !== "local" && h.state !== "up");
-  if (staleHosts.length)
-    banner.append(html("div", { class: "banner" }, "Fleet: " + staleHosts.map(h => `${h.name} ${h.state}${h.last_ok_s != null ? ` (last pulled ${Math.max(1, Math.round(h.last_ok_s / 60))}m ago)` : ""}`).join(", ") + " — showing the last pulled snapshot."));
+  const notUp = (D.hosts || []).filter(h => h.name !== "local" && h.state !== "up");
+  if (notUp.length) {
+    const stale = notUp.filter(h => h.last_ok_s != null);
+    const never = notUp.filter(h => h.last_ok_s == null);
+    if (stale.length)
+      banner.append(html("div", { class: "banner" }, "Fleet: " + stale.map(h => `${h.name} ${h.state} (last pulled ${Math.max(1, Math.round(h.last_ok_s / 60))}m ago)`).join(", ") + " — showing the last pulled snapshot."));
+    if (never.length)
+      banner.append(html("div", { class: "banner" }, "Fleet: " + never.map(h => h.name).join(", ") + " never pulled."));
+  }
   renderStatus(); renderChips(); renderKpis(); renderCharts(); renderTables();
 }
 
