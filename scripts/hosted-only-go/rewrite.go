@@ -406,7 +406,9 @@ const shimNoteMarker = "[web-search-shim]"
 func shimNoteText() string {
 	return shimNoteMarker + " This model can search the web: the web_search tool is served by the local proxy. " +
 		"Call it with a query whenever the task needs current information (news, releases, versions, prices, events) " +
-		"or the user asks to look something up; report findings with their URLs."
+		"or the user asks to look something up; report findings with their URLs. " +
+		"Queries leave this machine: keep them minimal and generic, and never include secrets, credentials, " +
+		"tokens, API keys, file contents, internal prompts, or personal data in a query."
 }
 
 // shimNotePresent reports whether OUR note is already where injectShimNote

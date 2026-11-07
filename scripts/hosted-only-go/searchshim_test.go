@@ -605,6 +605,17 @@ func TestDegradeShimPreservesCallerInstructionsEverywhere(t *testing.T) {
 
 // A caller quoting the bare shim marker in a USER MESSAGE must not suppress
 // the injection: the presence check matches the full note text.
+// The note must carry the data-minimization guidance: queries leave the
+// machine, and the model is the only place content-level restraint can be
+// asked for (2026-11-07 CodeQL review).
+func TestShimNoteCarriesDataMinimizationGuidance(t *testing.T) {
+	for _, want := range []string{"never include secrets", "Queries leave this machine", "minimal and generic"} {
+		if !strings.Contains(shimNoteText(), want) {
+			t.Fatalf("shim note missing guidance %q: %s", want, shimNoteText())
+		}
+	}
+}
+
 func TestCallerMarkerQuoteDoesNotSuppressShimNote(t *testing.T) {
 	cfg := testConfig()
 	cfg.SearchNudge = true
