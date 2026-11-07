@@ -67,7 +67,20 @@ func rewriteRequestMode(cfg *config, path string, data map[string]any, plan *shi
 
 	if plan == nil && cfg.SearchNudge && stripWebSearchTools(data) {
 		changed = true
+		// Mirror of the shim side: a stale shim note (an earlier request
+		// injected it and the conversation kept it) must not survive next to
+		// the unavailable note — the model would be told to search and not to
+		// search at once. Exact match only; caller content survives.
+		removeShimNote(data)
 		if !searchNotePresent(data) && injectSearchNote(cfg, path, data) {
+			changed = true
+		}
+	} else if plan != nil && plan.Mode == "shim" && cfg.SearchNudge && !shimNotePresent(data) {
+		// The strip note says search is unavailable; with the shim active the
+		// opposite is true. Drop a stale strip note (exact match) so the model
+		// never sees both, then say the tool works.
+		removeSearchNote(cfg, data)
+		if injectShimNote(path, data) {
 			changed = true
 		}
 	}
@@ -389,6 +402,126 @@ func stripWebSearchTools(data map[string]any) bool {
 }
 
 const searchNoteMarker = "[web-search-unavailable]"
+
+// shimNoteMarker: the positive counterpart of searchNoteMarker, injected while
+// the web-search shim serves the tool. degradeShimToStrip removes it before
+// the unavailable note lands, so the model never sees both.
+const shimNoteMarker = "[web-search-shim]"
+
+func shimNoteText() string {
+	return shimNoteMarker + " This model can search the web: the web_search tool is served by the local proxy. " +
+		"Call it with a query whenever the task needs current information (news, releases, versions, prices, events) " +
+		"or the user asks to look something up; report findings with their URLs. " +
+		"Queries leave this machine: keep them minimal and generic, and never include secrets, credentials, " +
+		"tokens, API keys, file contents, internal prompts, or personal data in a query."
+}
+
+// shimNotePresent reports whether OUR note is already where injectShimNote
+// would put it — the instruction fields (system, Responses developer items,
+// instructions), matched by the full note text. Never the whole request: a
+// caller pasting the note into a USER MESSAGE or a tool description must not
+// suppress the injection (2026-11-07 CodeRabbit review).
+func shimNotePresent(data map[string]any) bool {
+	note := shimNoteText()
+	if system, ok := data["system"]; ok {
+		b, _ := json.Marshal(system)
+		if strings.Contains(string(b), note) {
+			return true
+		}
+	}
+	for _, item := range asList(data["input"]) {
+		m := asMap(item)
+		if m == nil || asString(m["role"]) != "developer" {
+			continue
+		}
+		b, _ := json.Marshal(m["content"])
+		if strings.Contains(string(b), note) {
+			return true
+		}
+	}
+	if instructions, ok := data["instructions"].(string); ok {
+		return strings.Contains(instructions, note)
+	}
+	return false
+}
+
+func injectShimNote(path string, data map[string]any) bool {
+	if _, ok := data["system"]; ok || strings.Contains(path, "messages") {
+		return addToSystem(data, shimNoteText())
+	}
+	if _, ok := data["input"]; ok {
+		if addToResponsesInput(data, shimNoteText()) {
+			return true
+		}
+	}
+	return addToInstructions(data, shimNoteText())
+}
+
+// removeShimNote drops exactly what injectShimNote added — matched by the
+// full note text, never by the marker substring, so caller content that
+// merely contains the marker cannot strip unrelated system constraints (the
+// degrade path runs on real requests; 2026-11-07 CodeQL review).
+// injectShimNote converts a string system into blocks and appends to
+// instructions with a separator, so the exact forms below are the only ones
+// it can produce.
+func removeShimNote(data map[string]any) {
+	removeExactNote(data, shimNoteText())
+}
+
+// removeSearchNote drops a stale strip note when the shim engages, so the
+// model never sees "no web search" and "use web_search" together.
+func removeSearchNote(cfg *config, data map[string]any) {
+	removeExactNote(data, searchNoteText(cfg))
+}
+
+// removeExactNote drops exactly the given note from every shape its injector
+// produces — matched in full, never by marker substring, so caller content
+// that merely quotes a marker survives (2026-11-07 CodeQL + Copilot review).
+func removeExactNote(data map[string]any, note string) {
+	if system, ok := data["system"].([]any); ok {
+		kept := make([]any, 0, len(system))
+		for _, block := range system {
+			if m := asMap(block); m != nil && asString(m["text"]) == note {
+				continue
+			}
+			kept = append(kept, block)
+		}
+		if len(kept) != len(system) {
+			if len(kept) == 0 {
+				delete(data, "system")
+			} else {
+				data["system"] = kept
+			}
+		}
+	}
+	// addToSystem writes a bare string when the request had no system: that
+	// string is ours only when it IS the note, whole.
+	if system, ok := data["system"].(string); ok && system == note {
+		delete(data, "system")
+	}
+	if input, ok := data["input"].([]any); ok {
+		ours := string(marshal([]any{map[string]any{"type": "input_text", "text": note}}))
+		kept := make([]any, 0, len(input))
+		for _, item := range input {
+			if m := asMap(item); m != nil && asString(m["role"]) == "developer" &&
+				string(marshal(m["content"])) == ours {
+				continue
+			}
+			kept = append(kept, item)
+		}
+		if len(kept) != len(input) {
+			data["input"] = kept
+		}
+	}
+	if instructions, ok := data["instructions"].(string); ok {
+		switch {
+		case strings.HasSuffix(instructions, "\n\n"+note):
+			data["instructions"] = strings.TrimSuffix(instructions, "\n\n"+note)
+		case strings.TrimSpace(instructions) == note:
+			delete(data, "instructions")
+		}
+	}
+}
 
 func searchNoteText(cfg *config) string {
 	where := "a search-capable model or provider (for example T3 delegate_task)"

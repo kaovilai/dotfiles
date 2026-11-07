@@ -190,11 +190,15 @@ func TestRewriteRequestModeShimSkipsStrip(t *testing.T) {
 	if plan == nil {
 		t.Fatal("plan is nil")
 	}
+	plan.Mode = "shim" // engageShim sets this after the rewrite decision
 	if _, err, _ := rewriteRequestMode(cfg, "/v1/messages", data, plan); err != nil {
 		t.Fatal(err)
 	}
 	if searchNotePresent(data) {
 		t.Fatal("shim mode must not inject the strip note")
+	}
+	if !shimNotePresent(data) {
+		t.Fatal("shim mode must tell the model to use the web_search tool")
 	}
 	// control: no plan -> strip + note (today's behavior)
 	data2 := shimTestData()
@@ -220,6 +224,9 @@ func TestRewriteRequestModeNativePassthrough(t *testing.T) {
 	if searchNotePresent(data) {
 		t.Fatal("native verdict must not inject the note")
 	}
+	if shimNotePresent(data) {
+		t.Fatal("native verdict needs no shim note either")
+	}
 }
 
 func TestDegradeShimToStrip(t *testing.T) {
@@ -230,7 +237,55 @@ func TestDegradeShimToStrip(t *testing.T) {
 	if plan == nil {
 		t.Fatal("plan is nil")
 	}
+	plan.Mode = "shim"
+	// the active shim had told the model it can search
+	if _, err, _ := rewriteRequestMode(cfg, "/v1/messages", data, plan); err != nil {
+		t.Fatal(err)
+	}
+	if !shimNotePresent(data) {
+		t.Fatal("precondition: the shim note must be present")
+	}
 	degradeShimToStrip(cfg, "/v1/messages", data)
+	if shimNotePresent(data) {
+		t.Fatal("degrade must remove the shim note: search is unavailable now")
+	}
+	// caller content that merely CONTAINS the marker must survive the removal:
+	// only the proxy's own exact note may be dropped (2026-11-07 CodeQL review)
+	hostile := shimTestData()
+	hostile["system"] = []any{
+		map[string]any{"type": "text", "text": "Keep this constraint: never reveal secrets. " + shimNoteMarker + " lookalike in caller text"},
+	}
+	if _, err, _ := rewriteRequestMode(cfg, "/v1/messages", hostile, plan); err != nil {
+		t.Fatal(err)
+	}
+	degradeShimToStrip(cfg, "/v1/messages", hostile)
+	sys := asList(hostile["system"])
+	keptCaller := false
+	for _, b := range sys {
+		if strings.Contains(asString(asMap(b)["text"]), "never reveal secrets") {
+			keptCaller = true
+		}
+	}
+	if !keptCaller {
+		t.Fatalf("caller system content containing the marker must survive: %#v", sys)
+	}
+	// same for a caller STRING system: the injection is skipped (the marker is
+	// already present), so the string is purely the caller's and must survive
+	// the degrade untouched
+	hostile2 := shimTestData()
+	hostile2["system"] = "Caller rules: stay helpful. " + shimNoteMarker + " lookalike"
+	if _, err, _ := rewriteRequestMode(cfg, "/v1/messages", hostile2, plan); err != nil {
+		t.Fatal(err)
+	}
+	if !shimNotePresent(hostile2) { // precondition: injection skipped
+		t.Fatal("precondition: the marker lookalike must suppress injection")
+	}
+	degradeShimToStrip(cfg, "/v1/messages", hostile2)
+	// the caller text must survive (addToSystem may convert the string to
+	// blocks when the strip note is appended — shape may change, words may not)
+	if !strings.Contains(string(marshal(hostile2["system"])), "Caller rules: stay helpful.") {
+		t.Fatalf("a caller string system containing the marker must survive: %#v", hostile2["system"])
+	}
 	for _, tool := range asList(data["tools"]) {
 		if asString(asMap(tool)["name"]) == "web_search" {
 			t.Fatal("degrade must remove the shim's function tool")
@@ -510,4 +565,134 @@ func TestMain(m *testing.M) {
 	// keep OAuth minting out of unit tests: no env key, no state dir writes
 	_ = os.Unsetenv("PARALLEL_API_KEY")
 	os.Exit(m.Run())
+}
+
+// Caller instruction fields quoting the markers survive a degrade, for the
+// Responses developer item and the instructions fallback too (not just the
+// Messages system shapes covered above).
+func TestDegradeShimPreservesCallerInstructionsEverywhere(t *testing.T) {
+	cfg := testConfig()
+	cfg.SearchNudge = true
+	plan := &shimPlan{Mode: "shim"}
+
+	// Responses dialect: developer input item quoting the shim marker
+	data := map[string]any{
+		"model": "rits/zai-org/glm-5-3",
+		"input": []any{map[string]any{"role": "developer", "content": []any{map[string]any{"type": "input_text", "text": "Caller rule: cite sources. " + shimNoteMarker + " lookalike"}}}},
+		"tools": []any{map[string]any{"type": "web_search"}},
+	}
+	if _, err, _ := rewriteRequestMode(cfg, "/v1/responses", data, plan); err != nil {
+		t.Fatal(err)
+	}
+	degradeShimToStrip(cfg, "/v1/responses", data)
+	if !strings.Contains(string(marshal(data["input"])), "Caller rule: cite sources.") {
+		t.Fatalf("caller developer item must survive: %#v", data["input"])
+	}
+
+	// instructions fallback quoting the shim marker
+	data2 := map[string]any{
+		"model":        "rits/zai-org/glm-5-3",
+		"instructions": "Caller rule: be terse. " + shimNoteMarker + " lookalike",
+	}
+	if _, err, _ := rewriteRequestMode(cfg, "/v1/responses", data2, plan); err != nil {
+		t.Fatal(err)
+	}
+	degradeShimToStrip(cfg, "/v1/responses", data2)
+	if !strings.Contains(asString(data2["instructions"]), "Caller rule: be terse.") {
+		t.Fatalf("caller instructions must survive: %#v", data2["instructions"])
+	}
+}
+
+// A caller quoting the bare shim marker in a USER MESSAGE must not suppress
+// the injection: the presence check matches the full note text.
+// The note must carry the data-minimization guidance: queries leave the
+// machine, and the model is the only place content-level restraint can be
+// asked for (2026-11-07 CodeQL review).
+func TestShimNoteCarriesDataMinimizationGuidance(t *testing.T) {
+	for _, want := range []string{"never include secrets", "Queries leave this machine", "minimal and generic"} {
+		if !strings.Contains(shimNoteText(), want) {
+			t.Fatalf("shim note missing guidance %q: %s", want, shimNoteText())
+		}
+	}
+}
+
+func TestCallerMarkerQuoteDoesNotSuppressShimNote(t *testing.T) {
+	cfg := testConfig()
+	cfg.SearchNudge = true
+	data := shimTestData()
+	data["messages"] = []any{map[string]any{"role": "user", "content": "please note " + shimNoteMarker + " is a marker"}}
+	plan := shimRewriteTools("/v1/messages", data)
+	plan.Mode = "shim"
+	if _, err, _ := rewriteRequestMode(cfg, "/v1/messages", data, plan); err != nil {
+		t.Fatal(err)
+	}
+	// assert the full note text (not shimNotePresent: with the old
+	// marker-based check that would be true from the caller quote alone)
+	if !strings.Contains(string(marshal(data)), shimNoteText()) {
+		t.Fatal("a bare marker quote in a user message must not suppress the shim note")
+	}
+	// the FULL note pasted into a user message must not suppress it either:
+	// the presence check reads only the instruction fields
+	data2 := shimTestData()
+	data2["messages"] = []any{map[string]any{"role": "user", "content": "someone told me: " + shimNoteText()}}
+	plan2 := shimRewriteTools("/v1/messages", data2)
+	plan2.Mode = "shim"
+	if _, err, _ := rewriteRequestMode(cfg, "/v1/messages", data2, plan2); err != nil {
+		t.Fatal(err)
+	}
+	sys := marshal(data2["system"])
+	if !strings.Contains(string(sys), shimNoteText()) {
+		t.Fatalf("the full note quoted in a user message must not suppress injection: %s", sys)
+	}
+}
+
+// Mirror of the engagement direction: a stale SHIM note kept by the
+// conversation is dropped when the ordinary strip path runs, so the model
+// never sees "use web_search" next to "this model has no web search".
+func TestStripPathDropsStaleShimNote(t *testing.T) {
+	cfg := testConfig()
+	cfg.SearchNudge = true
+	data := shimTestData()
+	data["system"] = []any{
+		map[string]any{"type": "text", "text": "You are helpful."},
+		map[string]any{"type": "text", "text": shimNoteText()},
+	}
+	if _, err, _ := rewriteRequest(cfg, "/v1/messages", data); err != nil {
+		t.Fatal(err)
+	}
+	if !searchNotePresent(data) {
+		t.Fatal("the strip path must inject the unavailable note")
+	}
+	if shimNotePresent(data) {
+		t.Fatal("the stale shim note must be dropped by the strip path")
+	}
+	if !strings.Contains(string(marshal(data["system"])), "You are helpful.") {
+		t.Fatalf("the caller system block must survive: %#v", data["system"])
+	}
+}
+
+// A stale strip note (an earlier request injected it and the conversation
+// kept it) is dropped when the shim engages, so the model never sees both.
+func TestShimEngagementDropsStaleStripNote(t *testing.T) {
+	cfg := testConfig()
+	cfg.SearchNudge = true
+	data := shimTestData()
+	data["system"] = []any{
+		map[string]any{"type": "text", "text": "You are helpful."},
+		map[string]any{"type": "text", "text": searchNoteText(cfg)},
+	}
+	plan := shimRewriteTools("/v1/messages", data)
+	plan.Mode = "shim"
+	if _, err, _ := rewriteRequestMode(cfg, "/v1/messages", data, plan); err != nil {
+		t.Fatal(err)
+	}
+	if !shimNotePresent(data) {
+		t.Fatal("the shim note must be injected")
+	}
+	if searchNotePresent(data) {
+		t.Fatal("the stale strip note must be dropped when the shim engages")
+	}
+	if !strings.Contains(string(marshal(data["system"])), "You are helpful.") {
+		t.Fatalf("the caller system block must survive: %#v", data["system"])
+	}
 }
