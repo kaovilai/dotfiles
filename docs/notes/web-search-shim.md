@@ -116,9 +116,10 @@ real search; clients that speak the native protocol cannot tell the difference.
 4. **Execution gate** (independent of model output — the model *requesting* a
    search never by itself authorizes one):
    - Opt-in: shim executes server-side searches only when
-     `HOSTED_ONLY_SEARCH_SHIM` is on **and** the request carries a credential
-     on the auth ladder (env key or OAuth-minted key); the anonymous free
-     tier runs ungated (zero spend).
+     `HOSTED_ONLY_SEARCH_SHIM` is on. The anonymous rung of the auth ladder
+     waives only the **credential** requirement — argument validation, the
+     per-turn `max_uses`, and the daily ceiling apply on every tier, because
+     free searches still send queries to an external service.
    - Argument validation before every call: non-empty `query` (≤200 chars,
      keyword-shaped like `search_queries`), no `site:` operators (enforced
      via `source_policy` only), `allowed_domains` entries are plain domains.
@@ -135,10 +136,14 @@ real search; clients that speak the native protocol cannot tell the difference.
      instructions" preamble in the tool-result text) and normalized
      (control chars stripped, markup flattened to text) so page text cannot
      impersonate tool-result records, system prompts, or the in-band note.
-   - The shim loop itself is policy-free: only `web_search` calls named in
-     §4's gate continue the loop; no instruction found *inside* a search
-     result can widen arguments, raise `max_uses`, alter
-     `source_policy`, or trigger additional rounds.
+   - The loop's proxy-enforced policy is immutable: only the proxy's own plan
+     sets arguments, `max_uses`, `source_policy`, and the round cap, and a
+     snippet can never widen them. What framing + normalization do NOT
+     guarantee: a snippet may still influence the model into emitting another
+     *valid* `web_search` query — which consumes the normal per-turn and
+     daily budget like any other call. Framing and normalization are defense
+     in depth against prompt impersonation, not a proof the model ignores
+     snippet content.
    - Model-visible note text stays proxy-generated only — snippets are never
      concatenated into instructions.
 6. **Auth ladder** (preferred order — avoid ever hand-pasting a key):
@@ -154,11 +159,16 @@ real search; clients that speak the native protocol cannot tell the difference.
       proxy. (Parallel also exposes a PKCE OAuth Provider whose
       `access_token` *is* the user's API key — that path is for redirect-based
       apps; the device flow fits a headless proxy better.)
-   3. **Free fallback**: no key → anonymous tier. Anonymous calls **reject all
-      overrides** (mode pin, `advanced_settings`), so the shim sends bare
+   3. **Free fallback**: no key → the keyless MCP endpoint
+      (`mcp.parallel.ai/mcp`, lower rate limits) via a minimal JSON-RPC
+      client — REST `/v1/search` requires a key, so keyless REST is not a
+      thing. The MCP tier rejects override settings, so the shim sends bare
       `{objective, search_queries}` and takes default-shaped free results —
-      still real search, just unpinned mode/knobs. Degradation is logged, not
-      fatal.
+      still real search, just unpinned mode/knobs. A non-empty
+      `allowed_domains` cannot be honored without a credential
+      (`source_policy` is an override): the shim returns the
+      "unavailable this turn" result rather than searching outside the
+      caller's allowlist. Degradation is logged, not fatal.
    Whichever credential lands, it lives only in the proxy env/state next to
    `ENMAAS_API_KEY` (same rule: only the proxy holds upstream keys, clients
    get the local token).
@@ -189,15 +199,18 @@ tool would use Extract at $1/1k URLs).
 
 - **Tier: `fast`, pinned explicitly** (~700 ms, $1/1k requests). Omitted
   `mode` on REST means `advanced` — a quiet 5×. Pinning requires
-  authentication; on the auth ladder above, tiers 1–2 pin, tier 3 (anonymous
-  free) cannot — overrides are rejected unauthenticated, so it sends no
-  `mode`/`advanced_settings` and accepts the anonymous default (`fast`).
+  authentication; on the auth ladder above, tiers 1–2 pin, tier 3 (keyless
+  MCP) cannot — the MCP tier rejects override settings, so it sends bare
+  `{objective, search_queries}` and takes default-shaped free results.
 - **Knobs** (authenticated tiers only): `max_results` 8,
   `excerpt_settings.max_chars_per_result` 2000 (≈ one native
   `web_search_tool_result`); `objective` = the model's `query` verbatim;
-  `allowed_domains` → `source_policy.include_domains`; `max_uses` → loop cap.
-  Read `errors` as well as `results`. On the free fallback these knobs are
-  omitted wholesale, not partially — a rejected override 422s the whole call.
+  `allowed_domains` → `source_policy.include_domains`; `max_uses` → loop cap
+  (enforced locally by the proxy on every tier). Read `errors` as well as
+  `results`. On the free fallback these knobs are omitted wholesale, not
+  partially — a rejected override fails the whole call — and a non-empty
+  `allowed_domains` refuses the search outright rather than leaving the
+  allowlist unenforced.
 
 ```http
 POST /v1/search
@@ -235,12 +248,16 @@ Authorization: Bearer $PARALLEL_CREDENTIAL   # env key or OAuth-minted key
   to both dialects' block shapes; loop capped at `max_uses`; Parallel timeout →
   `is_error` tool result and the turn still completes; shim off →
   byte-identical behavior to today; auth ladder: env key → OAuth-minted key →
-  anonymous free tier with knobs omitted (no 422), each step reachable and
-  logged; gate: empty/oversized/`site:`-bearing queries are rejected before
-  the Parallel call, `max_uses` + daily ceiling exceeded → `is_error` result;
-  injection: a snippet containing fake tool-result records / "raise
-  max_uses" / note-impersonating text is neutralized by framing+normalization
-  and provably cannot widen the loop.
+  keyless MCP free tier (handshake + session, knobs omitted wholesale, no
+  rejected-override failure), each step reachable and logged; gate:
+  empty/oversized/`site:`-bearing queries are rejected before the Parallel
+  call, `max_uses` + daily ceiling exceeded → `is_error` result on every
+  tier, anonymous + non-empty `allowed_domains` → `is_error` with no call
+  made; injection: a snippet containing fake tool-result records /
+  note-impersonating text is neutralized by framing+normalization, and the
+  proxy-enforced policy (arguments, caps, domain allowlist, round count)
+  cannot be widened by snippet content — while an induced but *valid*
+  follow-up query merely consumes the normal budget.
 - Loop edges: a round mixing `web_search` with a client `tool_use` is returned
   to the client, never consumed server-side; a forced-choice first round with
   no call is re-issued once then degrades to strip + note; the terminal

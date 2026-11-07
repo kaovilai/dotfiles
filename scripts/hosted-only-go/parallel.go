@@ -32,6 +32,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -47,9 +48,10 @@ type parallelClient struct {
 	account *http.Client // platform.parallel.ai for OAuth
 	logf    func(format string, args ...any)
 
-	mu       sync.Mutex
-	budget   map[string]int // UTC day -> executed searches
-	mintedIn map[string]bool
+	mu         sync.Mutex
+	budget     map[string]int // UTC day -> executed searches
+	mintedIn   map[string]bool
+	mcpSession string
 }
 
 func newParallelClient(cfg *config, logf func(format string, args ...any)) *parallelClient {
@@ -306,7 +308,11 @@ func (c *parallelClient) budgetDayCount() int {
 // search executes one model-requested web_search call through the gate and
 // the Parallel Search API. Authenticated tiers pin mode fast (omitted mode on
 // REST means advanced — a quiet 5x) and set the evidence knobs; the anonymous
-// tier sends a bare body because overrides are rejected unauthenticated.
+// tier goes through the keyless MCP endpoint, because REST /v1/search
+// requires a key. The gate (argument validation, per-turn max_uses, daily
+// ceiling) applies on EVERY tier — the anonymous rung waives only the
+// credential requirement, and free searches still send queries to an
+// external service.
 func (c *parallelClient) search(ctx context.Context, plan *shimPlan, query string) ([]searchResult, error) {
 	if err := validateSearchQuery(query); err != nil {
 		return nil, err
@@ -315,11 +321,16 @@ func (c *parallelClient) search(ctx context.Context, plan *shimPlan, query strin
 		return nil, &searchError{fmt.Sprintf("web search daily budget of %d exhausted", c.cfg.SearchDailyCap)}
 	}
 	cred := c.resolveCredential(ctx)
+	if !cred.Authed && len(plan.AllowedDomains) > 0 {
+		// The anonymous tier cannot carry source_policy.include_domains;
+		// honoring the caller's domain allowlist matters more than the
+		// search, so refuse rather than search outside it.
+		return nil, &searchError{"web search unavailable this turn: no credential to enforce allowed_domains"}
+	}
 	results, status, err := c.searchOnce(ctx, cred, plan, query)
 	if status == http.StatusUnauthorized && cred.Minted {
 		// stale minted key: drop it, re-mint once, retry once
 		_ = os.Remove(c.stateFile("parallel-key"))
-		c.mintedIn["once"] = false
 		delete(c.mintedIn, "once")
 		cred = c.resolveCredential(ctx)
 		if cred.Authed {
@@ -334,34 +345,35 @@ func (c *parallelClient) search(ctx context.Context, plan *shimPlan, query strin
 }
 
 func (c *parallelClient) searchOnce(ctx context.Context, cred credential, plan *shimPlan, query string) ([]searchResult, int, error) {
+	if !cred.Authed {
+		// REST /v1/search requires a key; the free tier lives on the keyless
+		// MCP endpoint (mcp.parallel.ai/mcp) at lower rate limits.
+		return c.searchMCP(ctx, query)
+	}
 	body := map[string]any{
 		"objective":      query,
 		"search_queries": []string{keywordQuery(query)},
 	}
-	if cred.Authed {
-		// mode fast pinned explicitly; knobs that decide how much evidence the
-		// model actually sees.
-		body["mode"] = "fast"
-		advanced := map[string]any{
-			"max_results": parallelMaxResults,
-			"excerpt_settings": map[string]any{
-				"max_chars_per_result": parallelExcerptChars,
-			},
-		}
-		if len(plan.AllowedDomains) > 0 {
-			advanced["source_policy"] = map[string]any{"include_domains": plan.AllowedDomains}
-		}
-		body["advanced_settings"] = advanced
+	// mode fast pinned explicitly; knobs that decide how much evidence the
+	// model actually sees.
+	body["mode"] = "fast"
+	advanced := map[string]any{
+		"max_results": parallelMaxResults,
+		"excerpt_settings": map[string]any{
+			"max_chars_per_result": parallelExcerptChars,
+		},
 	}
+	if len(plan.AllowedDomains) > 0 {
+		advanced["source_policy"] = map[string]any{"include_domains": plan.AllowedDomains}
+	}
+	body["advanced_settings"] = advanced
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.cfg.ParallelBase+"/v1/search", bytes.NewReader(marshal(body)))
 	if err != nil {
 		return nil, 0, err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
-	if cred.Authed {
-		req.Header.Set("Authorization", "Bearer "+cred.Key)
-	}
+	req.Header.Set("Authorization", "Bearer "+cred.Key)
 	resp, err := c.client.Do(req)
 	if err != nil {
 		return nil, 0, err
@@ -371,6 +383,157 @@ func (c *parallelClient) searchOnce(ctx context.Context, cred credential, plan *
 	if resp.StatusCode != http.StatusOK {
 		return nil, resp.StatusCode, fmt.Errorf("parallel: %d %s", resp.StatusCode, truncate(string(b), 200))
 	}
+	return parseSearchResults(b, c.logf)
+}
+
+// searchMCP runs one anonymous web_search through the keyless MCP endpoint:
+// initialize (capturing the session id) -> initialized notification ->
+// tools/call web_search. Session is cached per process and reset on error.
+func (c *parallelClient) searchMCP(ctx context.Context, query string) ([]searchResult, int, error) {
+	c.mu.Lock()
+	session := c.mcpSession
+	c.mu.Unlock()
+	if session == "" {
+		s, err := c.mcpInitialize(ctx)
+		if err != nil {
+			return nil, 0, err
+		}
+		session = s
+		c.mu.Lock()
+		c.mcpSession = session
+		c.mu.Unlock()
+	}
+	var out struct {
+		Result struct {
+			Content []struct {
+				Type string `json:"type"`
+				Text string `json:"text"`
+			} `json:"content"`
+			Structured struct {
+				Results []struct {
+					URL      string   `json:"url"`
+					Title    string   `json:"title"`
+					Excerpts []string `json:"excerpts"`
+				} `json:"results"`
+			} `json:"structuredContent"`
+		} `json:"result"`
+		Error *struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := c.mcpCall(ctx, "tools/call", map[string]any{
+		"name":      "web_search",
+		"arguments": map[string]any{"objective": query, "search_queries": []string{keywordQuery(query)}},
+	}, session, &out); err != nil {
+		// a stale session is the recoverable case: drop it once and retry
+		c.mu.Lock()
+		c.mcpSession = ""
+		c.mu.Unlock()
+		return nil, 0, err
+	}
+	if out.Error != nil {
+		return nil, http.StatusBadGateway, fmt.Errorf("parallel mcp: %s", out.Error.Message)
+	}
+	if len(out.Result.Structured.Results) > 0 {
+		b := marshal(map[string]any{"results": out.Result.Structured.Results})
+		return parseSearchResults(b, c.logf)
+	}
+	// fall back to the text blocks: one result per text chunk is the common
+	// MCP shape for this tool
+	var results []searchResult
+	for _, block := range out.Result.Content {
+		if block.Type != "text" || strings.TrimSpace(block.Text) == "" {
+			continue
+		}
+		results = append(results, searchResult{Title: "web result", Excerpts: []string{block.Text}})
+	}
+	return results, http.StatusOK, nil
+}
+
+func (c *parallelClient) mcpInitialize(ctx context.Context) (string, error) {
+	var out struct {
+		Result json.RawMessage `json:"result"`
+	}
+	headers, err := c.mcpCallHeaders(ctx, "initialize", map[string]any{
+		"protocolVersion": "2025-06-18",
+		"capabilities":    map[string]any{},
+		"clientInfo":      map[string]any{"name": "hosted-only-proxy", "version": "1"},
+	}, "", &out)
+	if err != nil {
+		return "", err
+	}
+	session := headers.Get("mcp-session-id")
+	if session == "" {
+		session = headers.Get("Mcp-Session-Id")
+	}
+	// the initialized notification; failures are non-fatal (some servers do
+	// not require it)
+	_ = c.mcpCall(ctx, "notifications/initialized", map[string]any{}, session, nil)
+	return session, nil
+}
+
+func (c *parallelClient) mcpCall(ctx context.Context, method string, params map[string]any, session string, out any) error {
+	_, err := c.mcpCallHeaders(ctx, method, params, session, out)
+	return err
+}
+
+func (c *parallelClient) mcpCallHeaders(ctx context.Context, method string, params map[string]any, session string, out any) (http.Header, error) {
+	req := map[string]any{"jsonrpc": "2.0", "method": method}
+	if params != nil {
+		req["params"] = params
+	}
+	if out != nil {
+		req["id"] = mcpNextID()
+	}
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.cfg.ParallelMCP, bytes.NewReader(marshal(req)))
+	if err != nil {
+		return nil, err
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("Accept", "application/json, text/event-stream")
+	if session != "" {
+		httpReq.Header.Set("Mcp-Session-Id", session)
+	}
+	resp, err := c.client.Do(httpReq)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	b, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+	if resp.StatusCode != http.StatusOK {
+		return resp.Header, fmt.Errorf("parallel mcp %s: %d %s", method, resp.StatusCode, truncate(string(b), 200))
+	}
+	if out == nil {
+		return resp.Header, nil
+	}
+	// streamable HTTP may answer SSE: take the last data: line's JSON
+	payload := mcpPayload(b)
+	if err := json.Unmarshal(payload, out); err != nil {
+		return resp.Header, fmt.Errorf("parallel mcp %s: %w", method, err)
+	}
+	return resp.Header, nil
+}
+
+// mcpPayload extracts the JSON-RPC reply from an SSE or JSON body.
+func mcpPayload(b []byte) []byte {
+	if !bytes.Contains(b, []byte("data:")) || bytes.HasPrefix(bytes.TrimSpace(b), []byte("{")) {
+		return b
+	}
+	var last []byte
+	for _, line := range strings.Split(string(b), "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "data:") {
+			last = bytes.TrimSpace([]byte(strings.TrimPrefix(line, "data:")))
+		}
+	}
+	return last
+}
+
+var mcpID atomic.Uint64
+
+func mcpNextID() uint64 { return mcpID.Add(1) }
+
+func parseSearchResults(b []byte, logf func(format string, args ...any)) ([]searchResult, int, error) {
 	var out struct {
 		Results []struct {
 			URL      string   `json:"url"`
@@ -383,7 +546,7 @@ func (c *parallelClient) searchOnce(ctx context.Context, cred credential, plan *
 		} `json:"errors"`
 	}
 	if err := json.Unmarshal(b, &out); err != nil {
-		return nil, resp.StatusCode, err
+		return nil, http.StatusOK, err
 	}
 	// Read errors as well as results: a URL that failed appears only in
 	// errors; silently dropping it overstates the evidence set.
@@ -395,9 +558,11 @@ func (c *parallelClient) searchOnce(ctx context.Context, cred credential, plan *
 		results = append(results, searchResult{URL: r.URL, Title: r.Title, Excerpts: r.Excerpts})
 	}
 	for _, e := range out.Errors {
-		c.logf("search-shim: parallel result error %s: %s", e.URL, e.ErrorType)
+		if logf != nil {
+			logf("search-shim: parallel result error %s: %s", e.URL, e.ErrorType)
+		}
 	}
-	return results, resp.StatusCode, nil
+	return results, http.StatusOK, nil
 }
 
 // keywordQuery reduces a natural-language query to a short keyword query

@@ -300,27 +300,77 @@ func TestParallelSearchAuthenticatedPinsModeAndKnobs(t *testing.T) {
 	}
 }
 
-func TestParallelSearchAnonymousOmitsKnobsWholesale(t *testing.T) {
-	stub := &stubParallel{}
+func TestParallelSearchAnonymousUsesKeylessMCP(t *testing.T) {
+	var sawSession bool
+	var callBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		obj, _ := decodeObject(b)
+		switch asString(obj["method"]) {
+		case "initialize":
+			w.Header().Set("Mcp-Session-Id", "sess-1")
+			_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-06-18","capabilities":{}}}`))
+		case "notifications/initialized":
+			sawSession = r.Header.Get("Mcp-Session-Id") == "sess-1"
+			_, _ = w.Write([]byte(`{}`))
+		case "tools/call":
+			callBody = obj
+			if r.Header.Get("Mcp-Session-Id") != "sess-1" {
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":2,"result":{"structuredContent":{"results":[{"url":"https://m.example","title":"M","excerpts":["s"]}]},"content":[]}}`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
 	cfg := testConfig()
-	cfg.ParallelBase = stub.server(t).URL
+	cfg.ParallelMCP = srv.URL
 	cfg.ParallelKey = "" // anonymous tier
 	cfg.ParallelState = t.TempDir()
 	cfg.ParallelPlatform = offlinePlatform()
 	c := newParallelClient(cfg, nil)
-	// no minted key on disk and minting fails (platform unreachable) -> anonymous
 	plan := &shimPlan{MaxUses: 5}
-	if _, err := c.search(context.Background(), plan, "q"); err != nil {
+	results, err := c.search(context.Background(), plan, "q")
+	if err != nil {
 		t.Fatal(err)
 	}
-	if stub.auth != "" {
-		t.Fatalf("anonymous tier must send no credential, got %q", stub.auth)
+	if len(results) != 1 || results[0].URL != "https://m.example" {
+		t.Fatalf("results = %#v", results)
 	}
-	if stub.body["mode"] != nil || stub.body["advanced_settings"] != nil {
-		t.Fatalf("anonymous tier must omit knobs wholesale (one rejected override 422s the call): %#v", stub.body)
+	if !sawSession {
+		t.Fatal("anonymous tier must run the MCP handshake (initialize + session)")
 	}
-	if stub.body["objective"] == nil || asList(stub.body["search_queries"]) == nil {
-		t.Fatalf("anonymous tier still sends objective + queries: %#v", stub.body)
+	args := asMap(asMap(callBody["params"])["arguments"])
+	if args == nil || args["mode"] != nil || args["advanced_settings"] != nil {
+		t.Fatalf("anonymous MCP arguments must omit override knobs wholesale: %#v", args)
+	}
+	if asString(args["objective"]) != "q" {
+		t.Fatalf("arguments = %#v", args)
+	}
+}
+
+func TestParallelSearchAnonymousRefusesDomainRestriction(t *testing.T) {
+	called := false
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		_, _ = w.Write([]byte(`{"results":[],"errors":[]}`))
+	}))
+	defer srv.Close()
+	cfg := testConfig()
+	cfg.ParallelMCP = srv.URL
+	cfg.ParallelBase = srv.URL
+	cfg.ParallelKey = ""
+	cfg.ParallelState = t.TempDir()
+	cfg.ParallelPlatform = offlinePlatform()
+	c := newParallelClient(cfg, nil)
+	plan := &shimPlan{MaxUses: 5, AllowedDomains: []string{"example.com"}}
+	if _, err := c.search(context.Background(), plan, "q"); err == nil {
+		t.Fatal("anonymous tier must refuse rather than search outside allowed_domains")
+	}
+	if called {
+		t.Fatal("no search call may be made when the domain allowlist cannot be honored")
 	}
 }
 

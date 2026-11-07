@@ -68,6 +68,7 @@ type config struct {
 	ParallelKey      string // env PARALLEL_API_KEY (auth ladder tier 1)
 	ParallelState    string // OAuth-minted key + budget counter state dir
 	ParallelPlatform string // OAuth device-flow base (platform.parallel.ai)
+	ParallelMCP      string // anonymous free tier: the keyless MCP endpoint
 
 	// Routes is set for the enmaas flavor: the launcher's generated LiteLLM
 	// config.json, read as a model -> deployment table.
@@ -220,6 +221,7 @@ func loadConfig(flavor, port, runtimeDir string) *config {
 		ParallelKey:      strings.TrimSpace(os.Getenv("PARALLEL_API_KEY")),
 		ParallelState:    strings.TrimSpace(knob("PARALLEL_STATE", runtimeDir)),
 		ParallelPlatform: strings.TrimRight(knob("PARALLEL_PLATFORM", "https://platform.parallel.ai"), "/"),
+		ParallelMCP:      strings.TrimRight(knob("PARALLEL_MCP", "https://mcp.parallel.ai/mcp"), "/"),
 	}
 }
 
