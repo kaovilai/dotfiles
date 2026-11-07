@@ -736,6 +736,11 @@ if [[ -x /usr/bin/swiftc ]] || command -v swiftc >/dev/null; then
     dump=$(dump_of normal)
     [[ "$dump" == "title: ● 4"$'\n'* ]] || fail "normal title: ${dump%%$'\n'*}"
     [[ "$dump" == *"PROXIES (15m / 1h)"* && "$dump" == *"hosted-only :4148  up"* && "$dump" == *"Copy restart command: claude-hosted-only-restart"* ]] || fail "proxy rows/submenu missing: $dump"
+    # Fleet: one row per pulled peer, submenu detail, absent without fleet config
+    dump=$(dump_of fleet)
+    [[ "$dump" == *"FLEET (15m / 1h)"* && "$dump" == *"● peerA  up  2/15m 2/1h 429:1"* ]] || fail "fleet section: $dump"
+    [[ "$dump" == *"last pulled"* && "$dump" == *"Copy host name (peerA)"* ]] || fail "fleet submenu: $dump"
+    [[ "$(dump_of normal)" != *"FLEET ("* ]] || fail "no fleet config must not render a fleet section"
     [[ "$dump" == *"[chart] requests/min"* && "$dump" == *"[chart] by model"* && "$dump" == *"[chart] by proxy"* ]] || fail "charts missing: $dump"
     [[ "$(dump_of normal --no-charts)" != *"[chart]"* && "$(dump_of normal --no-charts)" == *"Top models (1h): glm-5.3"* ]] || fail "--no-charts"
     [[ "$dump" == *"Open dashboard"* && "$dump" == *"Open logs folder"* && "$dump" == *"Refresh now"* && "$dump" == *"Copy status"* && "$dump" == *"Copy last error"* && "$dump" == *Quit* ]] || fail "actions missing"
@@ -815,7 +820,7 @@ if [[ -x /usr/bin/swiftc ]] || command -v swiftc >/dev/null; then
     [[ "$(dump_of throttled)" == *"ESTIMATE ·"* ]] || fail "legacy events (no reset_source) stay estimates"
     local layout
     local -A sizes=(horizontal 220x120 vertical 120x260 history 220x84)
-    for png in throttle-overlap throttle-copilot throttle-copilot-quota throttle-none throttle-upstream empty spike; do
+    for png in throttle-overlap throttle-copilot throttle-copilot-quota throttle-none throttle-upstream empty spike fleet; do
         for layout in horizontal vertical history; do
             "$mb" --window-png "$tmp/win-$png-$layout-light.png" --layout $layout --size ${sizes[$layout]} --data-file "$mbjson/$png.json" >/dev/null || fail "window-png light $png $layout"
             "$mb" --window-png "$tmp/win-$png-$layout-dark.png" --dark --layout $layout --size ${sizes[$layout]} --data-file "$mbjson/$png.json" >/dev/null || fail "window-png dark $png $layout"
