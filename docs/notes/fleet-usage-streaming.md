@@ -182,9 +182,10 @@ do nothing but export usage.
   staleness, event counts, pull latency.
 - New `llm-usage fleet` subcommand: `refresh` (manual pull), `status`
   (per-host detail incl. last_error), `hosts` (resolved config).
-- `llm-usage tail -f --fleet`: follow loop gains the puller at its existing
-  1 s cadence — new remote events print with a `HOST` column. With
-  ControlMaster warm this is effectively live streaming.
+- `llm-usage tail -f --fleet`: the follow loop reads the local + fleet caches
+  every 1 s and prints new remote events with a `HOST` column; the TTL-guarded
+  background refresh pulls peers, so peer deltas land roughly every 25 s plus
+  pull latency.
 
 ### menubar-data (JSON)
 
@@ -231,7 +232,7 @@ the same `host` field; no schema change beyond what menubar-data gets.
 | Surface | Cadence | Mechanism |
 |---|---|---|
 | Menubar + floating window | ≤ 30 s + pull latency | 30 s poll → async fleet refresh (lock+TTL) → cached events |
-| `tail -f --fleet` | 1 s (warm ssh) | follow loop triggers refresh per tick, prints deltas |
+| `tail -f --fleet` | ≈ 25 s (refresh TTL) + pull latency | follow loop reads the cache every 1 s; the TTL-guarded background refresh pulls peers |
 | `serve` | 30 s | dashboard refresh thread triggers the same refresh |
 | In-flight "now" | immediate | export includes each peer's `inflight-*` snapshot, so requests currently running remotely appear in wait bars on the next pull |
 

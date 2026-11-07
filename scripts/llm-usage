@@ -514,7 +514,7 @@ def load(since, source, host=None):
             fleet = [e for e in fleet if e.get("source", "proxy") in wanted]
         events = events + fleet
         used = f"{used} + fleet"
-    if host:
+    if host and host != "all":  # "all" reads as no filter, like the dashboard's dropdown value
         want = FLEET_LOCAL if host == "local" else host
         events = [e for e in events if host_of(e) == want]
     return events, used
@@ -931,11 +931,17 @@ def fleet_pull_one(name, entry, force=False, ttl=FLEET_TTL):
         return {"name": name, "ok": False, "error": str(err)}
 
 
-def fleet_refresh(force=False, only=None, ttl=FLEET_TTL):
+def fleet_refresh(force=False, only=None, ttl=FLEET_TTL, auto=False):
     """Pull every configured host concurrently. One refresh at a time (flock on
-    STATE/fleet/refresh.lock): callers that lose the race return immediately."""
+    STATE/fleet/refresh.lock): callers that lose the race return immediately.
+    `auto` (the kick-spawned path) applies _fleet_due per host, so a failed
+    peer is retried once per backoff window even when another host keeps the
+    refreshes coming; a manual refresh always tries every non-fresh host."""
     import fcntl
     hosts = [(n, e) for n, e in fleet_hosts() if not only or n == only]
+    if auto and not force:
+        now = time.time()
+        hosts = [(n, e) for n, e in hosts if _fleet_due(n, now, ttl)]
     if not hosts:
         return []
     try:
@@ -995,7 +1001,7 @@ def fleet_kick(ttl=FLEET_TTL):
             return
         with open(kick, "a"):
             os.utime(kick)
-        subprocess.Popen([sys.executable, os.path.realpath(__file__), "fleet", "refresh"],
+        subprocess.Popen([sys.executable, os.path.realpath(__file__), "fleet", "refresh", "--auto"],
                          stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                          start_new_session=True)
     except OSError:
@@ -1014,8 +1020,8 @@ def read_fleet_inflight(now):
                 doc = json.load(handle)
         except (OSError, ValueError):
             continue
-        if now - float(doc.get("t") or 0) > 2 * FLEET_STALE_AFTER:
-            continue
+        if now - float(doc.get("t") or 0) > 2 * FLEET_TTL + FLEET_SSH_TIMEOUT:
+            continue  # the peer's requests finished long ago (pulls failing): drop the ghost bars, not 6 min later
         for req in doc.get("requests") or []:
             if not isinstance(req, dict):
                 continue
@@ -1646,7 +1652,7 @@ def cmd_fleet(args):
     if args.action == "status":
         cmd_status(argparse.Namespace())
         return
-    for r in fleet_refresh(force=args.force, only=args.host):
+    for r in fleet_refresh(force=args.force, only=args.host, auto=args.auto):
         if r.get("skipped"):
             print(f"{r.get('name', '?')}: skipped ({r['skipped']})")
         elif r.get("ok"):
@@ -3018,6 +3024,7 @@ def main():
     p = sub.add_parser("fleet", help="pulled fleet peers: refresh over ssh, list hosts")
     p.add_argument("action", nargs="?", default="refresh", choices=["refresh", "status", "hosts"], help="refresh (default) | status | hosts")
     p.add_argument("--force", action="store_true", help="refresh even hosts pulled within the TTL")
+    p.add_argument("--auto", action="store_true", help=argparse.SUPPRESS)  # kick-spawned: apply the per-host failure backoff
     p.add_argument("--host", help="refresh only this host")
     p.set_defaults(fn=cmd_fleet)
 

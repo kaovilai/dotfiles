@@ -676,6 +676,8 @@ assert rows == {"peerA": 2}, rows  # the agg dir has no local events yet
 assert {r["key"]["host"] for r in json.loads(agg_run("summary", "--since", "all", "--by", "host", "--json"))} == {"peerA"}, "all: backfilled event is there too"
 out = agg_run("summary", "--since", "1h", "--host", "peerA", "--json")
 assert sum(r["n"] for r in json.loads(out)) == 2, out
+out = agg_run("summary", "--since", "1h", "--host", "all", "--json")
+assert sum(r["n"] for r in json.loads(out)) == 2, out  # --host all = no filter, like the dashboard dropdown
 assert "peerA" in agg_run("status") and "fleet" in agg_run("status")
 assert "peerA" in agg_run("fleet", "hosts")
 # pre-deployment history: usage that predates this feature shipping on the peer still
@@ -962,6 +964,12 @@ assert mod.fleet_status("p8").get("peer_t") == now - 1000, mod.fleet_status("p8"
 scripted.append((meta_pt, [ev(now - 10)], []))
 mod.fleet_pull_one("p8", {"name": "p8", "local_dir": "/x"}, force=True)
 assert calls[-1][2] == now - 1000 - 60, calls[-1]  # peer-clock cutoff, 60s margin
+# a kick-spawned (auto) refresh applies the backoff per host; a manual one does not
+mod.fleet_write_status("p7", last_ok=now - 3600, last_fail=now - 10, last_error="down")
+assert mod.fleet_refresh(only="p7", auto=True) == [] and not scripted, "auto refresh must skip a backing-off host"
+scripted.append((meta_pt, [ev(now - 5)], []))
+mod.fleet_refresh(only="p7")  # manual: tries regardless of the backoff
+assert mod.fleet_status("p7").get("last_ok"), mod.fleet_status("p7")
 
 # control socket dir: a predictable /tmp path is trusted only when provably ours
 # (real dir, owned by us, no group/other bits); a planted or loosened dir falls back to STATE
