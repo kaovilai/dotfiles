@@ -123,6 +123,11 @@ tbody tr:hover td { background: var(--wash); }
         <option value="all">all combined</option>
       </select>
     </label>
+    <label class="sub">Host
+      <select id="host" aria-label="Machine (fleet view)">
+        <option value="all">all machines</option>
+      </select>
+    </label>
     <label class="chk"><input type="checkbox" id="auto" checked> Auto-refresh</label>
     <button class="btn" id="theme" type="button" aria-label="Toggle theme">Theme: auto</button>
   </div>
@@ -209,7 +214,7 @@ tbody tr:hover td { background: var(--wash); }
 const NS = "http://www.w3.org/2000/svg";
 const RANGES = ["15m", "1h", "6h", "24h", "7d", "30d"];
 const METRICS = { req: "Requests", out: "Output tokens", ctx: "Context tokens", err: "Errors" };
-const st = { since: "24h", source: "auto", metric: "req", hide: new Set(), auto: true, theme: "auto" };
+const st = { since: "24h", source: "auto", metric: "req", hide: new Set(), auto: true, theme: "auto", host: "all" };
 let D = null;
 const tables = {};
 
@@ -584,6 +589,7 @@ function render() {
 /* ---------- state, fetch, controls ---------- */
 function persist() {
   const p = new URLSearchParams({ since: st.since, source: st.source, metric: st.metric });
+  if (st.host !== "all") p.set("host", st.host);
   if (st.hide.size) p.set("hide", [...st.hide].join(","));
   history.replaceState(null, "", "#" + p);
 }
@@ -591,15 +597,30 @@ function restore() {
   const p = new URLSearchParams(location.hash.slice(1));
   if (RANGES.includes(p.get("since")) || p.get("since") === "today" || p.get("since") === "all") st.since = p.get("since");
   if (p.get("source")) st.source = p.get("source");
+  if (p.get("host")) st.host = p.get("host");
   if (METRICS[p.get("metric")]) st.metric = p.get("metric");
   if (p.get("hide")) st.hide = new Set(p.get("hide").split(",").filter(Boolean));
   st.theme = localStorage.getItem("llm-usage-theme") || "auto";
+}
+/* fleet peers arrive in the payload (local + one name per pulled host); rebuild
+   the dropdown only when the set changes so an open menu is not reset mid-poll */
+function syncHostOptions(data) {
+  const sel = document.getElementById("host");
+  const hosts = data.hosts || ["local"];
+  const sig = hosts.join(",");
+  if (sel.dataset.sig === sig) { sel.value = st.host; return; }
+  sel.dataset.sig = sig;
+  sel.textContent = "";
+  sel.append(html("option", { value: "all" }, "all machines"));
+  for (const h of hosts) sel.append(html("option", { value: h }, h === "local" ? "local (this machine)" : h));
+  sel.value = st.host;
 }
 
 let inflight = 0, lastSig = "";
 async function load(force = true) {
   const my = ++inflight;
   const q = new URLSearchParams({ since: st.since, source: st.source });
+  if (st.host !== "all") q.set("host", st.host);
   if (st.hide.size) q.set("hide", [...st.hide].join(","));
   document.getElementById("app").classList.add("loading");
   try {
@@ -613,6 +634,7 @@ async function load(force = true) {
     const data = JSON.parse(text);
     if (data.error) throw new Error(data.error);
     D = data;
+    syncHostOptions(data);
     hideTip();
     render();
   } catch (err) {
@@ -628,6 +650,7 @@ function buildControls() {
   const metric = document.getElementById("metric");
   for (const k in METRICS) metric.append(html("button", { type: "button", "data-v": k, onclick: () => { st.metric = k; syncControls(); persist(); if (D) renderCharts(); } }, METRICS[k]));
   document.getElementById("source").addEventListener("change", (e) => { st.source = e.target.value; persist(); load(); });
+  document.getElementById("host").addEventListener("change", (e) => { st.host = e.target.value; persist(); load(); });
   document.getElementById("auto").addEventListener("change", (e) => { st.auto = e.target.checked; });
   document.getElementById("theme").addEventListener("click", () => {
     st.theme = { auto: "light", light: "dark", dark: "auto" }[st.theme];
