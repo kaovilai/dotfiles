@@ -646,6 +646,31 @@ func TestCallerMarkerQuoteDoesNotSuppressShimNote(t *testing.T) {
 	}
 }
 
+// Mirror of the engagement direction: a stale SHIM note kept by the
+// conversation is dropped when the ordinary strip path runs, so the model
+// never sees "use web_search" next to "this model has no web search".
+func TestStripPathDropsStaleShimNote(t *testing.T) {
+	cfg := testConfig()
+	cfg.SearchNudge = true
+	data := shimTestData()
+	data["system"] = []any{
+		map[string]any{"type": "text", "text": "You are helpful."},
+		map[string]any{"type": "text", "text": shimNoteText()},
+	}
+	if _, err, _ := rewriteRequest(cfg, "/v1/messages", data); err != nil {
+		t.Fatal(err)
+	}
+	if !searchNotePresent(data) {
+		t.Fatal("the strip path must inject the unavailable note")
+	}
+	if shimNotePresent(data) {
+		t.Fatal("the stale shim note must be dropped by the strip path")
+	}
+	if !strings.Contains(string(marshal(data["system"])), "You are helpful.") {
+		t.Fatalf("the caller system block must survive: %#v", data["system"])
+	}
+}
+
 // A stale strip note (an earlier request injected it and the conversation
 // kept it) is dropped when the shim engages, so the model never sees both.
 func TestShimEngagementDropsStaleStripNote(t *testing.T) {

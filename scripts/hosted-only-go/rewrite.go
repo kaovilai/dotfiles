@@ -67,6 +67,11 @@ func rewriteRequestMode(cfg *config, path string, data map[string]any, plan *shi
 
 	if plan == nil && cfg.SearchNudge && stripWebSearchTools(data) {
 		changed = true
+		// Mirror of the shim side: a stale shim note (an earlier request
+		// injected it and the conversation kept it) must not survive next to
+		// the unavailable note — the model would be told to search and not to
+		// search at once. Exact match only; caller content survives.
+		removeShimNote(data)
 		if !searchNotePresent(data) && injectSearchNote(cfg, path, data) {
 			changed = true
 		}
