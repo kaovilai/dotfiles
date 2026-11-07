@@ -677,16 +677,22 @@ assert sum(r["n"] for r in json.loads(out)) == 2, out
 assert "peerA" in agg_run("status") and "fleet" in agg_run("status")
 assert "peerA" in agg_run("fleet", "hosts")
 # menubar-data: fleet-wide totals, per-host block, peer throttle + in-flight, host-tagged last_error
-d = run("fleet", [ev(30)], state=agg, extra_env=fenv)
+d = run("fleet", [ev(30), err(50, 500)], state=agg, extra_env=fenv)
 fb = d["fleet"]
 assert fb["enabled"] and [(h["name"], h["state"]) for h in fb["hosts"]] == [("peerA", "up")], fb
 h = fb["hosts"][0]
 assert h["m15"]["requests"] == 2 and h["m15"]["errors"]["429"] == 1 and h["inflight"]["count"] == 1 and h["backfilled"], h
-assert d["totals"]["m15"]["requests"] == 3, d["totals"]  # 1 local + 2 peer
+assert d["totals"]["m15"]["requests"] == 4, d["totals"]  # 2 local + 2 peer
 assert d["throttled"] and d["throttled"]["proxy"] == "hosted-only@peerA" and d["throttled"]["host"] == "peerA", d["throttled"]
-assert d["last_error"] and d["last_error"]["proxy"] == "hosted-only@peerA", d["last_error"]
+# spans are per host: the local success must not end the peer's 429 span; the local error (50s) is newer than the peer's (120s)
+sp = [s for s in d["throttle_spans"] if s["provider"] == "enmaas"]
+assert sp and all(s["active"] for s in sp), sp
+assert d["last_error"] and d["last_error"]["proxy"] == "hosted-only" and d["last_error"]["status"] == "500", d["last_error"]
 assert d["inflight"]["count"] == 1 and d["inflight"]["requests"][0]["host"] == "peerA", d["inflight"]
-assert next(p for p in d["proxies"] if p["port"] == 4148)["m15"]["requests"] == 1, "per-proxy rows must stay this-machine-only"
+assert next(p for p in d["proxies"] if p["port"] == 4148)["m15"]["requests"] == 2, "per-proxy rows must stay this-machine-only"
+# --source filters fleet events by their origin too (peer proxy rows are not claude transcripts)
+assert sum(r["n"] for r in json.loads(agg_run("summary", "--since", "1h", "--source", "proxy", "--json"))) == 4  # 2 local + 2 peer
+assert sum(r["n"] for r in json.loads(agg_run("summary", "--since", "1h", "--source", "claude", "--json"))) == 0
 # a peer with no config: fleet disabled, nothing changes
 d = run("no-fleet", [ev(30)])
 assert d["fleet"] == {"enabled": False} and d["totals"]["m15"]["requests"] == 1, d.get("fleet")
@@ -723,6 +729,73 @@ log._inflight["old"] = {"t": time.time() - u.INFLIGHT_STALE_S - 5, "model": "glm
 log.log_pre_api_call("glm", [], {"litellm_call_id": "call-3"})
 assert set(json.load(open(path))["requests"]) == {"call-3"}, "entries older than the stale limit are pruned on write"
 log.log_pre_api_call("glm", [], None)  # malformed hook args never raise
+PY
+
+# fleet pull state machine: scripted exports against the module (watermark, eid identity,
+# revision replace, backfill stop) — deterministic, no subprocess timing
+python3 - "$usage" "$tmp" <<'PY' || fail "fleet state machine"
+import importlib.machinery, importlib.util, glob, json, os, sys, time
+usage, tmp = sys.argv[1:3]
+os.environ["LLM_USAGE_DIR"] = os.path.join(tmp, "fsm")
+os.environ["LLM_USAGE_FLEET"] = "p1=local:/nonexistent"  # transport unused: fleet_pull is scripted below
+os.environ["LLM_USAGE_CLAUDE_DIRS"] = os.environ["LLM_USAGE_CODEX_DIRS"] = os.path.join(tmp, "no-claude")
+sys.argv = ["llm-usage"]
+spec = importlib.util.spec_from_loader("llu", importlib.machinery.SourceFileLoader("llu", usage))
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
+now = time.time()
+month = mod.datetime.fromtimestamp(now, mod.timezone.utc).strftime("%Y-%m")
+
+def ev(t, **kw):
+    return {"t": t, "ts": mod.iso_utc(t), "start": mod.iso_utc(t - 0.5), "port": "4148", "served": "glm",
+            "requested": "glm", "ok": True, "in": 1, "out": 2, "source": "proxy", **kw}
+def host_lines(host):
+    rows = []
+    for p in sorted(glob.glob(mod.fleet_dir(host) + "/events-*.jsonl")):
+        rows += [json.loads(l) for l in open(p)]
+    return rows
+
+# eid identity: `start` (ms precision, both writers emit it) separates same-second requests;
+# a transcript message `id` is the identity and must not depend on token counts (usage grows while streaming)
+a, b = ev(now), ev(now)
+assert mod.event_eid(a) == mod.event_eid(ev(now)) and mod.event_eid(a) != {**b, "start": mod.iso_utc(now - 0.4)} and mod.event_eid(a) != mod.event_eid({**b, "out": 3})
+m4 = {"t": now - 50, "id": "m0", "source": "claude", "port": "4141", "via": "transcript", "served": "sonnet", "ok": True, "in": 10, "out": 4}
+assert mod.event_eid(m4) == mod.event_eid({**m4, "out": 8}), "message id is the identity"
+# a revision replaces the stored line instead of double-counting the request
+mod.fleet_ingest("p2", [m4])
+mod.fleet_ingest("p2", [{**m4, "out": 8}])
+rows = host_lines("p2")
+assert len(rows) == 1 and rows[0]["out"] == 8 and rows[0]["host"] == "p2", rows
+
+# watermark + late arrivals: the backfill export also returns events outside its chunk
+# window; everything it returns must be ingested (an old-timestamped event arriving
+# between the two pulls is below the watermark and would otherwise never be pulled)
+scripted = []
+mod.fleet_pull = lambda name, entry, since, inflight=False: scripted.pop(0)
+meta = {"_export": 1, "host": "p1h", "months": [month]}
+A, B = ev(now - 100), ev(now - 6 * 86400)
+scripted += [(meta, [A], []), (meta, [B, A], [])]  # incremental, then a backfill chunk whose response also carries B (>= cursor)
+mod.fleet_pull_one("p1", {"name": "p1", "local_dir": "/x"}, force=True)
+st = mod.fleet_status("p1")
+assert st["last_event_t"] == A["t"], (st, "watermark must track ingested events only")
+rows = host_lines("p1")
+assert len(rows) == 2 and {r["eid"] for r in rows} == {mod.event_eid(A), mod.event_eid(B)}, rows
+scripted.append((meta, [B, A], []))  # re-pull of the same window: dedup, no duplicates
+mod.fleet_pull_one("p1", {"name": "p1", "local_dir": "/x"}, force=True)
+assert len(host_lines("p1")) == 2
+
+# backfill stop: a peer with no proxy months (transcript-heavy) walks back until two empty
+# chunks, instead of declaring itself done on the first refresh
+meta_t = {"_export": 1, "host": "p3h", "months": []}
+old40 = ev(now - 40 * 86400)
+for backfills in ([old40], [old40], [], []):  # 4 refreshes: out-of-window, in-window, empty, empty
+    scripted += [(meta_t, [], []), (meta_t, backfills, [])]
+    mod.fleet_pull_one("p3", {"name": "p3", "local_dir": "/x"}, force=True)
+st = mod.fleet_status("p3")
+assert not scripted, "every scripted pull must have been consumed"
+assert st["backfilled"] and st["backfill_empty"] == 2, st
+rows = host_lines("p3")
+assert len(rows) == 1 and rows[0]["eid"] == mod.event_eid(old40), rows
 PY
 
 # Swift helper: compiles, and --dump-menu renders every scenario without a GUI.

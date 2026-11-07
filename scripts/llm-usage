@@ -169,7 +169,7 @@ def parse_proxy_file(handle, path):
         if ts is None:
             continue
         ev["t"] = ts
-        ev["source"] = "proxy"
+        ev.setdefault("source", "proxy")  # pulled export lines keep their origin (claude/codex/proxy)
         events.append(ev)
     return events
 
@@ -483,9 +483,15 @@ def load(since, source, host=None):
                 sys.exit(f"llm-usage: unknown source {name!r} (proxy, claude, codex, auto, all)")
             events += loader(since)
     # Fleet peers' events are pulled copies of what `llm-usage export` merged on
-    # each machine, so they need no transcript fill here (see load_fleet).
+    # each machine, so they need no transcript fill here (see load_fleet). A
+    # --source filter applies to them the same way as to local events (the
+    # export lines keep their origin).
     if fleet_hosts():
-        events = events + load_fleet(since)
+        fleet = load_fleet(since)
+        if source not in ("auto", "all"):
+            wanted = set(source.split(","))
+            fleet = [e for e in fleet if e.get("source", "proxy") in wanted]
+        events = events + fleet
         used = f"{used} + fleet"
     if host:
         want = FLEET_LOCAL if host == "local" else host
@@ -584,35 +590,45 @@ def load_fleet(since):
 
 
 def event_eid(ev):
-    """Stable per-request identity for pull dedup: every field an append-only
-    writer emits per request, plus the transcript message id when there is one
-    (two same-second requests need equal token counts to collide)."""
-    ident = "|".join([str(round(float(ev.get("t") or 0), 3))] +
-                     [str(ev.get(k)) for k in ("port", "served", "requested", "in", "out", "cache_read")])
+    """Stable per-request identity for pull dedup. Transcript events carry a
+    message `id`: their usage grows while a reply streams, so the eid must NOT
+    depend on token counts (a revision replaces the stored line, see
+    fleet_ingest). Proxy events have no id; both writers emit `start` with
+    millisecond precision, which separates same-second requests — two requests
+    collide only when they start in the same millisecond with identical fields.
+    """
     if ev.get("id"):
-        ident += "|" + str(ev["id"])
+        return "m:" + hashlib.sha1(str(ev["id"]).encode("utf-8", "replace")).hexdigest()[:16]
+    ident = "|".join([str(round(float(ev.get("t") or 0), 3))] +
+                     [str(ev.get(k)) for k in ("start", "port", "served", "requested", "in", "out", "cache_read")])
     return hashlib.sha1(ident.encode("utf-8", "replace")).hexdigest()[:16]
 
 
 def _fleet_month_eids(path):
-    """eids already ingested in one peer month file (full scan; only the months a
-    pull touches are read, and the live month is a few MB at most)."""
-    eids = set()
+    """{eid: raw line} already ingested in one peer month file (full scan; only
+    the months a pull touches are read, and the live month is a few MB at most)."""
+    out = {}
     try:
         with open(path, errors="replace") as handle:
             for line in handle:
                 try:
-                    eids.add(json.loads(line).get("eid"))
+                    eid = json.loads(line).get("eid")
                 except ValueError:
                     continue
+                if eid:
+                    out[eid] = line.rstrip("\n")
     except OSError:
         pass
-    return eids
+    return out
 
 
 def fleet_ingest(name, events):
-    """Append pulled events to fleet/<name>/events-YYYY-MM.jsonl, deduped by eid.
-    Returns the number of new lines written."""
+    """Store pulled events in fleet/<name>/events-YYYY-MM.jsonl, deduped by eid.
+
+    A same-eid line with different content is a revision (a streamed transcript
+    message whose usage grew on the peer): it replaces the stored line instead
+    of appending, so one request is never counted twice. Returns the number of
+    lines written or replaced."""
     written = 0
     months = {}
     for ev in sorted(events, key=lambda e: e["t"]):
@@ -620,20 +636,53 @@ def fleet_ingest(name, events):
         month = datetime.fromtimestamp(ev["t"], timezone.utc).strftime("%Y-%m")
         if month not in months:
             path = os.path.join(fleet_dir(name), "events-%s.jsonl" % month)
-            months[month] = (path, _fleet_month_eids(path))
-        path, eids = months[month]
+            months[month] = {"path": path, "eids": _fleet_month_eids(path), "lines": None}
+        state = months[month]
         eid = ev.get("eid") or event_eid(ev)
-        if eid in eids:
+        ev["eid"] = eid  # stamped into the stored line: the next pull's dedup scan reads it back
+        line = json.dumps(ev, separators=(",", ":"), default=str)
+        if eid in state["eids"]:
+            if state["eids"][eid] != line:  # revision: replace in place, do not double-count
+                if state["lines"] is None:
+                    try:
+                        with open(state["path"], errors="replace") as handle:
+                            state["lines"] = handle.read().splitlines()
+                    except OSError:
+                        state["lines"] = []
+                new_lines = [line if _line_eid(l) == eid else l for l in state["lines"]]
+                state["lines"] = new_lines
+                state["eids"][eid] = line
+                _rewrite_month(state["path"], new_lines)
+                written += 1
             continue
-        eids.add(eid)
+        state["eids"][eid] = line
+        if state["lines"] is not None:
+            state["lines"].append(line)
         try:
             os.makedirs(fleet_dir(name), mode=0o700, exist_ok=True)
-            with open(path, "a") as handle:
-                handle.write(json.dumps(ev, separators=(",", ":"), default=str) + "\n")
+            with open(state["path"], "a") as handle:
+                handle.write(line + "\n")
             written += 1
         except OSError:
             return written
     return written
+
+
+def _line_eid(line):
+    try:
+        return json.loads(line).get("eid")
+    except ValueError:
+        return None
+
+
+def _rewrite_month(path, lines):
+    try:
+        tmp = path + ".tmp"
+        with open(tmp, "w") as handle:
+            handle.write("\n".join(lines) + ("\n" if lines else ""))
+        os.replace(tmp, path)
+    except OSError:
+        pass
 
 
 def _fleet_export_argv(entry, since, inflight=False):
@@ -719,34 +768,44 @@ def fleet_pull_one(name, entry, force=False, ttl=FLEET_TTL):
         with open(tmp, "w") as handle:
             json.dump(snap, handle)
         os.replace(tmp, os.path.join(fleet_dir(name), "inflight.json"))
-        written = fleet_ingest(name, [e for e in events if e["t"] >= since])
-        last_event_t = max([st.get("last_event_t", 0)] + [e["t"] for e in events])
+        new_events = [e for e in events if e["t"] >= since]
+        written = fleet_ingest(name, new_events)
+        # The watermark tracks only events actually ingested: the backfill export
+        # below also returns events newer than its chunk (already ingested, or
+        # arriving between the two pulls — those must stay pending, not advance
+        # the resume point past themselves).
+        last_event_t = max([st.get("last_event_t", 0)] + [e["t"] for e in new_events])
         # Backfill: first sync is the last 7 days; walk older history back in
         # 30d chunks until the peer's oldest events month is covered ("months"
-        # in the export meta), one chunk per refresh so a big history trickles
-        # in without ever blocking the incremental pull.
+        # in the export meta — proxy log only, so a transcript-heavy peer also
+        # stops after two empty chunks), one chunk per refresh so a big history
+        # trickles in without ever blocking the incremental pull.
         cursor = st.get("backfill_cursor", now - FLEET_FIRST_SYNC)
         backfilled = bool(st.get("backfilled"))
+        empty = st.get("backfill_empty", 0)
         months = meta.get("months") or []
         oldest = None
         if months:
             y, m = min(months).split("-")
             oldest = datetime(int(y), int(m), 1, tzinfo=timezone.utc).timestamp()
         if not backfilled:
-            if oldest is None or cursor <= oldest:
+            lo = max(oldest or 0.0, cursor - FLEET_BACKFILL_CHUNK)
+            _, older, _ = fleet_pull(name, entry, lo)
+            # ingest the whole response, not just the chunk window: an event with an
+            # old timestamp that appeared after the incremental pull (a transcript
+            # revision) is below the watermark and would otherwise never be pulled
+            written += fleet_ingest(name, older)
+            chunk = [e for e in older if lo <= e["t"] < cursor]
+            last_event_t = max(last_event_t, max((e["t"] for e in older), default=0))
+            cursor = lo
+            empty = 0 if chunk else empty + 1
+            if (empty >= 1 and oldest is not None and cursor <= oldest) or empty >= 2:
                 backfilled = True
-            else:
-                lo = max(oldest, cursor - FLEET_BACKFILL_CHUNK)
-                _, older, _ = fleet_pull(name, entry, lo)
-                written += fleet_ingest(name, [e for e in older if lo <= e["t"] < cursor])
-                last_event_t = max(last_event_t, max((e["t"] for e in older), default=0))
-                cursor = lo
-                if cursor <= oldest:
-                    backfilled = True
         out = {"name": name, "ok": True, "new_events": written, "host": meta.get("host"),
                "backfilled": backfilled, "pull_ms": int((time.time() - started) * 1000)}
         fleet_write_status(name, last_ok=time.time(), last_error=None, last_event_t=last_event_t,
-                           backfill_cursor=cursor, backfilled=backfilled, months=months, host=meta.get("host"))
+                           backfill_cursor=cursor, backfilled=backfilled, backfill_empty=empty,
+                           months=months, host=meta.get("host"))
         return out
     except OSError as err:
         fleet_write_status(name, last_error=str(err), last_fail=time.time())
@@ -1195,13 +1254,13 @@ def cmd_tail(args):
     since = time.time() - 3600 if args.follow else parse_since(args.since)
 
     def fresh():
-        events = [e for e in load_proxy(since) if (e["t"], e.get("start"), e.get("served"), e.get("out")) not in seen]
+        key = lambda e: (e["t"], e.get("start"), e.get("served"), e.get("out"), host_of(e))  # host too: an identical peer event is not a repeat of a local one
+        events = [e for e in load_proxy(since) if key(e) not in seen]
         if args.fleet:
             # stream peers too: each tick first pulls what is due (TTL-guarded,
             # so a warm sshControl connection costs ~nothing), then prints deltas
             fleet_refresh(ttl=FLEET_TTL)
-            events += [e for e in load_fleet(since)
-                       if (e["t"], e.get("start"), e.get("served"), e.get("out")) not in seen]
+            events += [e for e in load_fleet(since) if key(e) not in seen]
         events.sort(key=lambda e: e["t"])
         return events
 
@@ -1209,7 +1268,7 @@ def cmd_tail(args):
     for ev in events[-args.n:]:
         print(event_line(ev))
     for ev in events:
-        seen.add((ev["t"], ev.get("start"), ev.get("served"), ev.get("out")))
+        seen.add((ev["t"], ev.get("start"), ev.get("served"), ev.get("out"), host_of(ev)))
     if not args.follow:
         if not events:
             print("no proxy events (restart proxies with the usage callback: llm-usage status)")
@@ -1218,7 +1277,7 @@ def cmd_tail(args):
         while True:
             time.sleep(1)
             for ev in fresh():
-                seen.add((ev["t"], ev.get("start"), ev.get("served"), ev.get("out")))
+                seen.add((ev["t"], ev.get("start"), ev.get("served"), ev.get("out"), host_of(ev)))
                 print(event_line(ev), flush=True)
     except KeyboardInterrupt:
         pass
@@ -1692,7 +1751,7 @@ def throttle_spans(events, now, window=MB_HOUR):
     ok_times = defaultdict(list)
     for ev in events:
         if ev.get("ok", True):
-            ok_times[(event_provider(ev, overrides)[0], strip_model(ev.get("served")))].append(ev["t"])
+            ok_times[(host_of(ev), event_provider(ev, overrides)[0], strip_model(ev.get("served")))].append(ev["t"])
     for times in ok_times.values():
         times.sort()
     raw = []
@@ -1702,7 +1761,7 @@ def throttle_spans(events, now, window=MB_HOUR):
         pkey, plabel = event_provider(ev, overrides)
         reset, kind, basis = throttle_of(ev)
         end, est = reset, reset_estimated(ev)
-        times = ok_times[(pkey, strip_model(ev.get("served")))]
+        times = ok_times[(host_of(ev), pkey, strip_model(ev.get("served")))]
         i = bisect.bisect_right(times, ev["t"])
         if i < len(times) and times[i] < end:
             end, est = times[i], False
@@ -2011,8 +2070,9 @@ def menubar_data(now=None, up_ports=None, share_window="15m", share_metric="requ
                "m15": counts(evs, MB_RECENT), "h1": counts(evs, MB_HOUR)}
         proxies.append(row)
 
-    # From here on the windows are fleet-wide: this machine + pulled peers.
-    week = events + f_events
+    # From here on the windows are fleet-wide: this machine + pulled peers,
+    # time-ordered so "last error" means the newest, not whichever host listed last.
+    week = sorted(events + f_events, key=lambda e: e["t"])
     recent = recent + f_recent
     buckets = error_buckets(recent, 60)
     windows, _ = spike_windows(buckets, 60)
@@ -2572,6 +2632,7 @@ def row_json(r, keys):
 def dashboard_data(since_text, source, hide, host=None):
     now = time.time()
     since = parse_since(since_text)
+    fleet_kick()  # the dashboard is often the only thing running: it must refresh the peers too
     events, used = load(since, source, host)
     volume = defaultdict(int)
     for ev in events:
