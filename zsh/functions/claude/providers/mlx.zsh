@@ -219,6 +219,16 @@ claude-mlx() {
         ANTHROPIC_DEFAULT_OPUS_MODEL="${_cmx_model}"
         ANTHROPIC_DEFAULT_SONNET_MODEL="${_cmx_model}"
         ANTHROPIC_DEFAULT_HAIKU_MODEL="${_cmx_model}"
+        # Claude Code doesn't recognize mlx-community ids, so without this it
+        # assumes 200k -- more than this 48GB Mac can hold: the default model
+        # tops out at 262144 positions (config.json max_position_embeddings)
+        # and its KV cache costs ~96KB/token (2 * 48 layers * 4 kv-heads *
+        # 128 dim * 2B fp16), so a 200k window would demand ~20GB of cache on
+        # top of the ~17GB weights. 64k keeps the whole serving footprint
+        # around 23GB; raise via CLAUDE_MLX_CONTEXT_TOKENS (128k = ~30GB
+        # total, only on an otherwise-light machine; 262144 = the model's
+        # hard ceiling).
+        CLAUDE_CODE_MAX_CONTEXT_TOKENS="${CLAUDE_MLX_CONTEXT_TOKENS:-65536}"
     )
 
     # --bare by default -- same rationale as claude-ollama above: a small
