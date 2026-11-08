@@ -10,6 +10,36 @@
             "statusMessage": "Checking AI commit attribution"
           }
         ]
+      },
+      {
+        "matcher": "mcp__github__(add_issue_comment|add_comment_to_pending_review|add_reply_to_pull_request_comment|issue_write|sub_issue_write|create_pull_request|update_pull_request|update_issue_comment|pull_request_review_write)",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash $HOME/.claude/hooks/enforce-claude-disclosure.sh",
+            "statusMessage": "Checking AI disclosure"
+          }
+        ]
+      },
+      {
+        "matcher": "mcp__mcp-atlassian__(jira_add_comment|jira_edit_comment|jira_create_issue|jira_update_issue|jira_transition_issue|jira_create_issue_link|jira_add_worklog)",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash $HOME/.claude/hooks/enforce-claude-disclosure-jira.sh",
+            "statusMessage": "Checking AI disclosure"
+          }
+        ]
+      },
+      {
+        "matcher": "mcp__.*[Gg]it[Ll]ab.*__(create_issue|update_issue|update_issue_description_patch|create_issue_note|update_issue_note|create_note|create_merge_request|update_merge_request|create_merge_request_note|update_merge_request_note|create_merge_request_discussion_note|update_merge_request_discussion_note|create_merge_request_thread|create_draft_note|update_draft_note|create_work_item|update_work_item|create_work_item_note)",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash $HOME/.claude/hooks/enforce-claude-disclosure-gitlab.sh",
+            "statusMessage": "Checking AI disclosure"
+          }
+        ]
       }
     ],
     "PostToolUse": [
