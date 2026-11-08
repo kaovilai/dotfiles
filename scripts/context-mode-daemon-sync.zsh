@@ -85,7 +85,17 @@ _cm_node_ok() {  # node binary path -> 0 when its version is >= 24.15 (numeric, 
     min=${v#v*${maj}.}; min=${min%%.*}
     (( maj > 24 )) || (( maj == 24 && min >= 15 ))
 }
-if _cm_node_ok "$(command -v node)"; then
+_cm_path_node_trusted() {  # node path -> 0 when it may be used from PATH
+    # a PATH node inside a managed-layout dir is held to the same marker rule:
+    # it may be a partial extraction and must not preempt the retry
+    local d="${1:h:h}"
+    if [[ "$d" == "$HOME/.local/lib"/node-v24*-linux-* || "$d" == "$HOME/.local/lib"/node-v24*-darwin-* ]]; then
+        [[ -f "$d/.cm-node-installed" ]]
+    else
+        return 0
+    fi
+}
+if _cm_node_ok "$(command -v node)" && _cm_path_node_trusted "$(command -v node)"; then
     node_bin="$(command -v node)"
 elif [[ -d "$HOME/.local/lib" ]]; then
     for ver in "$HOME/.local/lib"/node-v24*(N/); do
@@ -211,10 +221,13 @@ elif [[ "$(uname -s)" == "Darwin" ]] && command -v launchctl >/dev/null; then
     # or the next KeepAlive restart fails silently
     if [[ "$need" -eq 0 ]]; then
         stored_node=$(sed -n '/<key>ProgramArguments<\/key>/,/<\/array>/p' "$plist" | sed -n 's/.*<string>\([^<]*\)<\/string>.*/\1/p' | head -1)
-        # decode the writer's XML entities before testing the real path
-        stored_node="${stored_node//&amp;/&}"
+        # decode the writer's XML entities before testing the real path.
+        # &lt;/&gt; must decode BEFORE &amp;: a path containing a literal "&lt;"
+        # is stored as "&amp;lt;", and decoding &amp; first would turn it into
+        # "&lt;" and then wrongly into "<"
         stored_node="${stored_node//&lt;/<}"
         stored_node="${stored_node//&gt;/>}"
+        stored_node="${stored_node//&amp;/&}"
         [[ -n "$stored_node" && -x "$stored_node" ]] || need=1
     fi
     [[ "$need" -eq 0 ]] && ! launchctl print "gui/$(id -u)/$label" >/dev/null 2>&1 && need=1

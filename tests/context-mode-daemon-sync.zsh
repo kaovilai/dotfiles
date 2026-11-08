@@ -174,6 +174,18 @@ zsh -f "$repo/scripts/context-mode-daemon-sync.zsh" "${args[@]}" || fail "manual
 grep -q -- "--install" "$NODE_LOG" || fail "the manual node must be selected and used for the unit"
 export NODE_STUB_VERSION=v24.15.0
 
+# --- 2e. a PATH node inside an unmarked managed dir is not trusted ----------------------
+rm -rf "$HOME/.local/lib"
+mkdir -p "$HOME/.local/lib/node-v24.15.0-linux-x64/bin"
+cp "$fdir/bin/node" "$HOME/.local/lib/node-v24.15.0-linux-x64/bin/node"
+chmod +x "$HOME/.local/lib/node-v24.15.0-linux-x64/bin/node"
+export NODE_STUB_VERSION=v18.0.0
+export PATH="$HOME/.local/lib/node-v24.15.0-linux-x64/bin:$PATH"
+zsh -f "$repo/scripts/context-mode-daemon-sync.zsh" "${args[@]}" || fail "path-managed run must exit 0"
+[[ -f "$HOME/.local/lib/node-v24.15.0-linux-x64/.cm-node-installed" ]] || fail "an unmarked managed dir on PATH must be re-extracted, not used"
+export PATH="${PATH#*:}"
+export NODE_STUB_VERSION=v24.15.0
+
 # --- 3. everything current: no unit install, no registration add ---------------------
 : >| "$NODE_LOG"; : >| "$CLAUDE_LOG"
 mkdir -p "${unit:h}"
@@ -370,6 +382,14 @@ grep -q -- "--install" "$NODE_LOG" || fail "a unit whose ExecStart node is missi
 # --- 12. launchd: an escaped HOME must not re-load a current agent ----------------------
 export CM_TEST_UNAME=Darwin
 export HOME="$tmp/ho&me"   # & forces the XML escaping the freshness check must undo
+# the node lives under a literal "&lt;": the plist stores "$tmp/n&amp;lt;ode/bin/node",
+# and the entity decoder must NOT turn that into ".../n<ode/..." (decoding &amp;
+# before &lt;/&gt; would) — the stored-node liveness check depends on the order
+typeset tricky="$tmp/n&lt;ode"
+mkdir -p "$tricky/bin"
+cp "$tmp/home/bin/node" "$tricky/bin/node"
+chmod +x "$tricky/bin/node"
+export PATH="$tricky/bin:$PATH"
 mkdir -p "$HOME/.claude/plugins/cache/context-mode/context-mode/2.2.1"
 print -r -- '# stub bundle' > "$HOME/.claude/plugins/cache/context-mode/context-mode/2.2.1/daemon.mjs"
 cat > "$tmp/home/bin/claude" <<'STUB'
@@ -391,5 +411,6 @@ zsh -f "$repo/scripts/context-mode-daemon-sync.zsh" "${args[@]}" || fail "launch
 (( $(grep -c " bootstrap " "$LAUNCHCTL_LOG") == 1 )) || fail "a current agent with an escaped HOME must not be re-loaded"
 unset CM_TEST_UNAME
 export HOME="$tmp/home"
+export PATH="${PATH#*:}"   # drop the tricky node dir
 
-print -- "PASS: context-mode-daemon-sync (skip, node gate, autoinstall, marker retry, manual node, current, stale unit, add, foreign, numeric orderings, bad checksum, port move, rollback, unit-fail hold, scope+path guards, dead unit node, launchd escaping)"
+print -- "PASS: context-mode-daemon-sync (skip, node gate, autoinstall, marker retry, manual node, PATH-managed node, current, stale unit, add, foreign, numeric orderings, bad checksum, port move, rollback, unit-fail hold, scope+path guards, dead unit node, launchd escaping)"
