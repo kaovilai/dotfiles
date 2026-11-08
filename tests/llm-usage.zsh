@@ -404,6 +404,12 @@ assert proxy(d, 4148)["state"] == "down" and proxy(d, 4148)["expected"] and d["a
 assert not proxy(d, 4146)["expected"], "never-seen proxy must not count as down"
 assert not run("not-expected", [], up="4141")["any_down"]
 
+# mlx is on-demand: up only while a claude-mlx session runs, so down with
+# traffic this week is the resting state, not an outage -> no down alarm
+d = run("mlx-off", [ev(60), ev(120, port="4144")], up="4141,4147,4148")
+assert proxy(d, 4144)["state"] == "down" and not proxy(d, 4144)["expected"] and proxy(d, 4144)["on_demand"], proxy(d, 4144)
+assert not d["any_down"], d
+
 # throwaway test proxy on an ad-hoc port: its 429 / errors must not raise throttled, spike or down alarms
 d = run("adhoc-port", [ev(100), err(30, 429, port="4157", retry_after=300), err(20, 500, port="4157"), err(10, 500, port="4157")], up="4141,4147,4148")
 assert d["throttled"] is None and not d["any_down"] and all(p["port"] != 4157 for p in d["proxies"]), d["proxies"]
@@ -1328,6 +1334,10 @@ d["inflight"]["requests"] = reqs(True); json.dump(d, open(sys.argv[3], "w"))  # 
     [[ "$(dump_of spike)" == *"Error spike"* ]] || fail "spike warning row"
     [[ "$(dump_of down | head -1)" == "title: ✖" ]] || fail "down title: $(dump_of down | head -1)"
     [[ "$(dump_of down)" == *"DOWN"* ]] || fail "down row"
+    # mlx off is on-demand (resting state), not an outage: no ✖ title, no DOWN row
+    [[ "$(dump_of mlx-off | head -1)" == "title: ●"* ]] || fail "mlx-off must not alarm: $(dump_of mlx-off | head -1)"
+    [[ "$(dump_of mlx-off)" == *"mlx :4144  off (on-demand)"* ]] || fail "mlx on-demand row: $(dump_of mlx-off)"
+    [[ "$(dump_of mlx-off)" != *"DOWN"* ]] || fail "mlx off must not render as DOWN: $(dump_of mlx-off)"
     [[ "$(dump_of empty | head -1)" == "title: ● 0" && "$(dump_of empty)" == *"Last error: none logged"* ]] || fail "empty title/menu: $(dump_of empty | head -3)"
     [[ "$(dump_of old | head -1)" == "title: ⚠ 429 "* ]] || fail "old-events title: $(dump_of old | head -1)"
     dump=$(dump_of inflight)

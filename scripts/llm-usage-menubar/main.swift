@@ -2074,6 +2074,7 @@ final class Builder {
         let port = p["port"].int ?? 0
         let up = p["state"].str == "up"
         let expected = p["expected"].bool
+        let onDemand = p["on_demand"].bool  // up only while its wrapper session runs: off is the resting state, not an outage
         let m15 = p["m15"], h1 = p["h1"]
         func errs(_ c: J) -> String {
             let e = c["errors"]
@@ -2083,7 +2084,7 @@ final class Builder {
         let glyph = up ? "●" : (expected ? "✖" : "○")
         let src = p["source"].str == "transcript" ? " (transcript)" : ""
         let label = name == ":\(port)" ? name : "\(name) :\(port)"
-        var line = "\(glyph) \(label)  \(up ? "up" : (expected ? "DOWN" : "off"))"
+        var line = "\(glyph) \(label)  \(up ? "up" : (expected ? "DOWN" : (onDemand ? "off (on-demand)" : "off")))"
         if up, p["logging"].exists, !p["logging"].bool { line += " NOT LOGGING (restart: llm-proxy-restart)" }
         line += "  \(m15["requests"].int ?? 0)/15m \(h1["requests"].int ?? 0)/1h\(errs(h1))\(src)"
         if let fl = p["inflight"].exists ? p["inflight"]["count"].int : nil, fl > 0 { line += "  ⏳\(fl)" }
@@ -2095,7 +2096,7 @@ final class Builder {
         ])
         let sub = NSMenu()
         sub.autoenablesItems = false
-        sub.addItem(info("\(label)  \(up ? "up" : "down")", mono: false))
+        sub.addItem(info("\(label)  \(up ? "up" : (onDemand ? "off (on-demand)" : "down"))", mono: false))
         sub.addItem(info("15m: \(m15["requests"].int ?? 0) req, error rate \(pct(m15["error_rate"].dbl))\(errs(m15))", dim: true))
         sub.addItem(info("1h:  \(h1["requests"].int ?? 0) req, error rate \(pct(h1["error_rate"].dbl))\(errs(h1))", dim: true))
         if let t = h1["tokens"].exists ? h1["tokens"] : nil {

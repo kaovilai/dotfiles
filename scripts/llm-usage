@@ -78,6 +78,12 @@ for pair in filter(None, os.environ.get("LLM_USAGE_PORT_NAMES", "").split(",")):
         port, name = pair.split("=", 1)
         PROXIES[port.strip()] = (name.strip(), PROXIES.get(port.strip(), (None, None))[1])
 
+# Proxies that are up only while their wrapper session runs: mlx (:4144) serves
+# the laptop's local model and exists only from `claude-mlx` until that session
+# ends, so being down is the resting state, not an outage — they never raise the
+# menubar's proxy-down alarm and `status` labels them on-demand instead of down.
+ON_DEMAND_PROXIES = {"mlx"}
+
 TTY = sys.stdout.isatty()
 
 
@@ -1864,7 +1870,7 @@ def status_rows():
         if name == "copilot-api":
             code = "not-litellm" if up else "down"
         elif not up:
-            code = "down"
+            code = "on-demand" if name in ON_DEMAND_PROXIES else "down"
         elif logging_on is False:
             code = "not-logging"
         elif port in last_seen:
@@ -1882,6 +1888,7 @@ STATE_TEXT = {
     "not-logging": "up, NOT logging (run: llm-proxy-restart)",
     "idle": "logging enabled, no requests yet",
     "unknown": "up, unknown (config unreadable)",
+    "on-demand": "off (up only while its wrapper session runs)",
     "down": "-",
 }
 
@@ -1900,7 +1907,7 @@ def cmd_status(args):
             state = STATE_TEXT[r["code"]]
             if r["code"] == "not-logging":
                 state = color(state, "33")
-        rows.append([r["port"], r["name"], color("up", "32") if r["up"] else color("down", "2"), r["pid"] or "-",
+        rows.append([r["port"], r["name"], color("up", "32") if r["up"] else color("off" if r["code"] == "on-demand" else "down", "2"), r["pid"] or "-",
                      ",".join(r["models"]) or "-", state])
     print(render(["PORT", "PROXY", "STATE", "PID", "MODELS", "USAGE LOG"], rows))
     files = sorted(glob.glob(os.path.join(STATE, "events-*.jsonl")))
@@ -2564,10 +2571,12 @@ def menubar_data(now=None, up_ports=None, share_window="15m", share_metric="requ
             evs, source = extra, "transcript"
         mine = [f for f in flights if f["port"] == port and not f.get("host")]  # this machine's, not a peer's
         name, config = PROXIES.get(port, (f":{port}", None))
+        on_demand = name in ON_DEMAND_PROXIES
         logging_on = proxy_logging_on(port, config) if up[port] else None  # up-but-NOT-logging: traffic missing from the views
         row = {"port": int(port) if port.isdigit() else port, "name": name, "state": "up" if up[port] else "down",
                "logging": logging_on, "source": source,
-               "expected": port in seen_week or (port == "4141" and bool(extra)),
+               "expected": (port in seen_week or (port == "4141" and bool(extra))) and not on_demand,
+               "on_demand": on_demand,
                "last_seen_s": int(now - seen_week[port]) if port in seen_week else None,
                "inflight": ({"count": len(mine), "oldest_s": max((f["seconds"] for f in mine), default=0)} if port in reporting else None),
                "m15": counts(evs, MB_RECENT), "h1": counts(evs, MB_HOUR)}
