@@ -76,16 +76,30 @@ cmp -s "$tmp/dot/.codex/hooks.json" "$HOME/.codex/hooks.json" || fail "codex hoo
 cmp -s "$tmp/settings.orig" "$HOME/.claude/settings.json" || fail "settings.json not restored: $(<"$HOME/.claude/settings.json")"
 [[ -f "$XDG_STATE_HOME/fleet-sync/plugins-updated" ]] || fail "plugin stamp not written"
 
-# 2. In sync, stamp fresh: nothing to do, no plugin calls
+# 2. In sync, stamp fresh: nothing to do — no plugin calls, no harness re-link
 run || fail "second run rc=$rc: $out"
-local idle_calls; idle_calls=$(calls | grep -v '^sync-harnesses ' || true)
-[[ -z "$idle_calls" ]] || fail "idle run touched plugins: $idle_calls"
+[[ -z "$(calls)" ]] || fail "idle run did work: $(calls)"
 
-# 3. Claude config moved upstream: fast-forward, plugin sync without --update
+# 2b. Corrupted installed hooks.json: reinstalled, sync-harnesses re-run
+print -r -- '{"hooks":' >| "$HOME/.codex/hooks.json"
+run || fail "hooks reinstall run rc=$rc: $out"
+cmp -s "$tmp/dot/.codex/hooks.json" "$HOME/.codex/hooks.json" || fail "corrupted hooks.json not restored: $(<"$HOME/.codex/hooks.json")"
+[[ "$(calls)" == *"sync-harnesses"* ]] || fail "hooks.json install did not re-run sync-harnesses: $(calls)"
+
+# 3. Claude config moved upstream: fast-forward, plugin sync without --update,
+#    sync-harnesses re-run (its inputs live in the claude-config repo)
 upstream cfg skills.md new-skill
 run || fail "config run rc=$rc: $out"
 [[ "$(head_of cfg)" == "$(up_head cfg)" ]] || fail "config not fast-forwarded"
 [[ "$(calls)" == *"plugin install x@m"* && "$(calls)" != *"marketplace update"* ]] || fail "config change plugin pass wrong: $(calls)"
+[[ "$(calls)" == *"sync-harnesses"* ]] || fail "config change did not re-run sync-harnesses: $(calls)"
+
+# 3b. All three repos behind at once (fetches overlap): one run catches up all
+upstream dot file multi1
+upstream cfg skills.md multi2
+upstream capi bun.lock multi3
+run || fail "multi fast-forward run rc=$rc: $out"
+[[ "$(head_of dot)" == "$(up_head dot)" && "$(head_of cfg)" == "$(up_head cfg)" && "$(head_of capi)" == "$(up_head capi)" ]] || fail "multi fast-forward incomplete: $out"
 
 # 4. copilot-api moved with bun.lock: dependencies reinstalled; gateway not running
 # (a stray gateway from an earlier failed suite run would be adopted and break

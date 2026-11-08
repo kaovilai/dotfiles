@@ -128,7 +128,8 @@ fi
 
 # --- repos ------------------------------------------------------------------
 typeset -i problems=0
-typeset -A before=()   # label -> HEAD before a fast-forward
+typeset -A before=()      # label -> HEAD before a fast-forward
+typeset -A fetch_pid=()   # label -> pid of the background fetch (see _prefetch_repo)
 # A skip is silent forever: the timer journal is the only record, so a dirty or
 # diverged machine keeps serving months-old code while everything else moves
 # (2026-11-06 audit). Each skip drops a marker under
@@ -139,6 +140,20 @@ _drift() { mkdir -p "$drift_dir" 2>/dev/null; print -r -- "$2" >| "$drift_dir/dr
 _drift_clear() { rm -f "$drift_dir/drift-$1" 2>/dev/null; }
 
 _note() { (( quiet )) || success "$@"; }
+
+# _prefetch_repo <label> <dir>: start the upstream fetch in the background so
+# the repos' network round-trips overlap instead of running back to back —
+# three sequential fetches were most of a no-change run's wall time. _sync_repo
+# waits on the pid; a repo with no checkout or no upstream is left to
+# _sync_repo's own warnings.
+_prefetch_repo() {
+    local label=$1 dir=$2 up
+    [[ -e "$dir/.git" ]] || return 0
+    up=$(git -C "$dir" rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null) || return 0
+    git -C "$dir" fetch --quiet "${up%%/*}" >/dev/null 2>&1 &
+    # Quoted: an unquoted $! on the RHS of name[key]=value is stored literally.
+    fetch_pid[$label]="$!"
+}
 
 # _sync_repo <label> <dir>: fast-forward <dir> to its upstream when that is
 # safe; records the old HEAD in $before when it moved.
@@ -152,9 +167,18 @@ _sync_repo() {
     up=$(git -C "$dir" rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null) \
         || { warning "$label: $(git -C "$dir" branch --show-current 2>/dev/null || print detached HEAD) has no upstream; skipped"; return 1; }
     remote=${up%%/*}
-    git -C "$dir" fetch --quiet "$remote" 2>/dev/null \
-        || { warning "$label: fetch from $remote failed (offline, or no credentials for a private repo); skipped"
-             _drift "$label" "fetch from $remote failed"; return 1; }
+    local -i fetched=1
+    if [[ -n "${fetch_pid[$label]-}" ]]; then
+        # _prefetch_repo already started this fetch; wait for it.
+        wait "${fetch_pid[$label]}" || fetched=0
+    else
+        git -C "$dir" fetch --quiet "$remote" 2>/dev/null || fetched=0
+    fi
+    if (( ! fetched )); then
+        warning "$label: fetch from $remote failed (offline, or no credentials for a private repo); skipped"
+        _drift "$label" "fetch from $remote failed"
+        return 1
+    fi
     read -r ahead behind < <(git -C "$dir" rev-list --left-right --count 'HEAD...@{u}')
     if (( ! behind )); then
         # In step with upstream, but edits made here only reach the other
@@ -195,6 +219,9 @@ _sync_repo() {
 typeset dotfiles_dir="${FLEET_DOTFILES_DIR:-$root}"
 typeset claude_dir="${FLEET_CLAUDE_DIR:-${${:-$HOME/.claude}:A}}"
 typeset capi_dir="${COPILOT_API_DIR:-$HOME/git/copilot-api}"
+_prefetch_repo dotfiles "$dotfiles_dir"
+_prefetch_repo claude-config "$claude_dir"
+_prefetch_repo copilot-api "$capi_dir"
 _sync_repo dotfiles "$dotfiles_dir" || (( problems++ ))
 _sync_repo claude-config "$claude_dir" || (( problems++ ))
 _sync_repo copilot-api "$capi_dir" || (( problems++ ))
@@ -250,10 +277,17 @@ _link_codex_skills || (( problems++ ))
 # Codex hooks are real files, not symlinks: install the dotfiles-owned
 # hooks.json, then let sync-harnesses.sh link the Claude hook scripts and
 # refresh Codex trust. This keeps ~/.codex/hooks and ~/.claude/hooks in step.
+# sync-harnesses walks every skill and hook (~600 links, the most expensive
+# local step) just to find nothing to do on an idle run, so it runs only when
+# its inputs can have changed: a repo fast-forward, a hooks.json install, or
+# no stamp from a previous run. A hand-deleted ~/.codex link is outside this
+# gate — the skill-edit rule runs sync-harnesses.sh directly anyway.
 _sync_codex_hooks() {
     local src="$dotfiles_dir/.codex/hooks.json"
     local dst="${CODEX_HOME:-$HOME/.codex}/hooks.json"
     local sync="$claude_dir/skills/skills-compress/scripts/sync-harnesses.sh"
+    local stamp="$state/harnesses-synced"
+    local -i run_harnesses=0
 
     (( dry )) && return 0
     [[ -f "$src" ]] || { warning "codex hooks: $src missing"; return 1; }
@@ -263,10 +297,17 @@ _sync_codex_hooks() {
     if [[ ! -f "$dst" ]] || ! cmp -s "$src" "$dst"; then
         cp "$src" "$dst" || return 1
         success "codex hooks: installed hooks.json"
+        run_harnesses=1   # fresh hooks.json needs its links + trust refresh
+    fi
+
+    [[ -n "${before[dotfiles]-}" || -n "${before[claude-config]-}" || ! -f "$stamp" ]] && run_harnesses=1
+    if (( ! run_harnesses )); then
+        return 0
     fi
 
     if [[ -x "$sync" ]]; then
         "$sync" >/dev/null || { warning "codex hooks: sync-harnesses failed"; return 1; }
+        mkdir -p "$state" && : >| "$stamp"
     else
         warning "codex hooks: sync-harnesses missing ($sync)"
         return 1
