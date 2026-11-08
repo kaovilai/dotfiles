@@ -67,10 +67,13 @@ zstyle ':autocomplete:*' min-input 2
 # deferred source below). Otherwise the dump is built without the plugin's
 # #autoload helpers; autocomplete then sees an up-to-date dump, skips its own
 # compinit, and history completion breaks with
-# "command not found: _autocomplete__history_lines". Prepending here keeps the
+# "command not found: _autocomplete__history_lines". Adding it here keeps the
 # dump correct while the heavy widget setup stays deferred.
+# Appended rather than prepended so it doesn't become fpath[1] ahead of the
+# user completion dir. compinit scans the whole fpath, so position doesn't
+# affect dump contents.
 [[ -d $HOME/.zsh-snap/marlonrichert/zsh-autocomplete/Completions ]] &&
-    fpath=($HOME/.zsh-snap/marlonrichert/zsh-autocomplete/Completions $fpath)
+    fpath+=($HOME/.zsh-snap/marlonrichert/zsh-autocomplete/Completions)
 
 # -- Deferred plugins (turbo-style) --
 # zsh-syntax-highlighting and zsh-autocomplete are the heaviest startup cost
@@ -85,10 +88,12 @@ _zsh_deferred_plugins() {
   # Capture ^R as the user (or the rest of .zshrc) left it, so a custom
   # binding survives; the default restores native reverse-i-search after
   # zsh-autocomplete rebinds ^R to its async completion-menu toggle.
-  local -a _ctrl_r=(${(z)"$(bindkey '^R')"})
+  # Suffix-strip, not word-split: widget names can contain spaces
+  # (e.g. "up-line-or begin searching") and must stay a single argument.
+  local -P _ctrl_r="${$(bindkey '^R')#\"^R\" }"
   znap source zsh-users/zsh-syntax-highlighting
   znap source marlonrichert/zsh-autocomplete
-  (( $#_ctrl_r >= 2 )) && bindkey '^R' $_ctrl_r[2]
+  [[ -n $_ctrl_r && $_ctrl_r != undefined-key ]] && bindkey '^R' "$_ctrl_r"
 }
 if [[ -o interactive ]]; then
   # /dev/null is permanently readable (EOF counts), so zle fires the handler
