@@ -264,22 +264,41 @@ auth and transport:
 - **Aggregator side: `llm-usage fleet stream`** — one long-lived ssh per host
   (ControlMaster, ServerAlive so a network change ends both ends within ~45 s)
   reading those snapshots and atomically rewriting the same
-  `fleet/<host>/inflight.json` the pull path fills. Reconnects with a
+  `fleet/<host>/inflight.json` the pull path fills (unique tmp name per write:
+  the two hold different locks and may write concurrently). Reconnects with a
   doubling backoff capped at the pull backoff; a connection that held ≥ 60 s
   is healthy and resets it. Singleton via `flock` on `fleet/stream.lock`, so
   every consumer can spawn it fire-and-forget: the menubar helper does so at
   startup, `tail -f --fleet` and `serve` via `fleet_stream_kick()`
   (kick-file guarded, 60 s). `LLM_USAGE_FLEET_STREAM=off` disables.
   `local_dir` peers (tests, second state dirs) are polled in process instead.
+  Every fleet ssh (pulls too) carries `ServerAlive*`: whichever invocation
+  creates the shared `cm-%C` master defines its keepalives, so a pull-created
+  master must not leave a multiplexed stream reader blocked on a blackhole.
+  The singleton rescans `fleet_hosts()` every 60 s, so a peer added to
+  `fleet.json` gets its thread without a restart (a REMOVED peer keeps
+  streaming until restart — its snapshots age out like any other); on
+  SIGINT/SIGTERM it terminates the ssh children (EOF unblocks their readers)
+  and joins the workers before releasing the lock.
+- **Pull/stream coordination**: while the stream is live (flock held AND its
+  snapshot heartbeat-fresh), a pull skips its in-flight write — the pull
+  captured the peer's state earlier and would resurrect requests the stream
+  already watched finish. A stale or dead stream hands ownership back to the
+  pull, so the fallback is automatic.
 - **Division of labor**: the stream owns *freshness* of in-flight only; the
   TTL refresh stays the source of truth (events, up/down state, backfill,
   status.json). A dead stream costs accuracy, never correctness —
   `read_fleet_inflight`'s age drop still removes ghosts once the snapshot's
   `t` goes stale.
-- **Menubar**: the helper's existing dir-watch picks the snapshot rewrites up
-  (fleet dir added to `inflightDirs`), and `refreshInflight` reads
-  `fleet/<host>/inflight.json` directly (deduped against the 30 s payload as
-  a fallback), so peer wait bars move at request boundaries like local ones.
+- **Menubar**: a vnode watch covers one directory's entries, not its
+  descendants — so the helper watches the fleet base dir for host dirs
+  appearing/vanishing and each `fleet/<host>/` for its `inflight.json`
+  tmp+rename (reconciled on every base-dir event). `refreshInflight` reads
+  `fleet/<host>/inflight.json` directly, gated on the last payload's fleet
+  config (enabled + configured hosts, like `read_fleet_inflight`), and a host
+  with a successfully read snapshot — even an empty one — is owned by the
+  file: the 30 s payload must not re-add requests the stream watched finish.
+  Peer wait bars move at request boundaries like local ones.
   The spawned streamer deliberately outlives the app: `serve` and the CLI
   read the same cache, and the flock means a relaunch adopts the running one.
 
