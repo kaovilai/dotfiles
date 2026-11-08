@@ -12,7 +12,7 @@
 //                                      [--no-text]; --dump-menu also takes --no-image / --no-text
 //   --list-logos                       which source each logo key resolves to
 //   --window-png PATH [--dark] [--layout horizontal|vertical|history] [--size WxH] [--graph bars|lines|both] [--stale]
-//                                      [--hover vendor:<key>|provider:<key>|host:<name>] [--window-metric requests|tokens]
+//                                      [--hover vendor:<key>|provider:<key>|host:<name>|port:<n>] [--window-metric requests|tokens]
 //                                      [--graph-hover MINUTE]  pin the graph hover readout to minute MINUTE (0 = oldest)
 //                                      render the floating monitor window content to PNG (@2x) from --data-file
 //   --dump-menu also takes --window-visible --window-layout L --window-graph G --window-metric M --chart-metric M --window-opacity N --window-click-through
@@ -939,6 +939,12 @@ final class MonitorView: NSView {
     private var hover: HoverTarget?
     private var hoverRects: [(NSRect, HoverTarget)] = []
     private var hoverTracking: NSTrackingArea?
+    // Proxy dots (bottom of the stats column): hovering a port label swaps it for
+    // the proxy's name. Hits are collected during draw, like hoverRects.
+    private var portHits: [(rect: NSRect, port: Int, name: String)] = []
+    private var hoverPort: Int?
+    /// Headless PNG renders pin the port-label hover.
+    var debugPortHover: Int?
     // Graph hover: the minute under the mouse gets a crosshair on every graph and a readout of that minute.
     private var graphHits: [(rect: NSRect, metric: ChartMetric)] = []
     private var graphModelCache: (key: String, model: GraphModel)?
@@ -974,6 +980,14 @@ final class MonitorView: NSView {
     private func updateHover(_ point: NSPoint?) {
         updateGraphCursor(point)
         let next = point.flatMap { p in hoverRects.first { $0.0.contains(p) }?.1 }
+        // proxy dots: hovering a port label swaps in the proxy's name; the native
+        // tooltip carries both, since the swap hides the port number
+        let port = point.flatMap { p in portHits.first { $0.rect.contains(p) } }
+        if hoverPort != port?.port {
+            hoverPort = port?.port
+            needsDisplay = true
+        }
+        toolTip = port.map { "\($0.name) · :\($0.port)" }
         let overCaption = point.map { metricHit?.contains($0) ?? false } ?? false
         if overCaption != hoverMetric {
             hoverMetric = overCaption
@@ -1017,13 +1031,17 @@ final class MonitorView: NSView {
         return h == target ? 1 : 0.12
     }
 
-    /// Headless PNG renders pin a hover target: "vendor:<key>", "provider:<key>" or "host:<name>".
+    /// Headless PNG renders pin a hover: "vendor:<key>", "provider:<key>",
+    /// "host:<name>" or "port:<n>" (the proxy-dot label swap).
     func setDebugHover(_ spec: String?) {
+        hover = nil
+        debugPortHover = nil
         switch spec {
         case let s? where s.hasPrefix("vendor:"): hover = .vendor(String(s.dropFirst(7)))
         case let s? where s.hasPrefix("provider:"): hover = .provider(String(s.dropFirst(9)))
         case let s? where s.hasPrefix("host:"): hover = .host(String(s.dropFirst(5)))
-        default: hover = nil
+        case let s? where s.hasPrefix("port:"): debugPortHover = Int(s.dropFirst(5))
+        default: break
         }
     }
 
@@ -1034,6 +1052,7 @@ final class MonitorView: NSView {
         hintHit = nil
         metricHit = nil
         hoverRects = []
+        portHits = []
         graphHits = []
         guard let d = data else {
             drawStr("waiting for data…", in: NSRect(x: 0, y: b.midY - 7, width: b.width, height: 14), color: .secondaryLabelColor, align: .center)
@@ -1689,14 +1708,34 @@ final class MonitorView: NSView {
         for (i, row) in dotRows.enumerated() {
             var x = rect.minX
             let ry = rect.minY + CGFloat(dotRows.count - 1 - i) * rowH
+            var afterHover = false
             for p in row {
-                let up = p["state"].str == "up"
-                let notLogging = up && p["logging"].exists && !p["logging"].bool  // pre-callback code: up, but its traffic is missing
-                (notLogging ? NSColor.systemYellow : up ? NSColor.systemGreen : NSColor.systemRed).setFill()
-                NSBezierPath(ovalIn: NSRect(x: x, y: ry + 4, width: 5, height: 5)).fill()
-                let label = dotLabel(p)
-                drawStr(label, in: NSRect(x: x + 7, y: ry, width: textWidth(label, tinyFont) + 2, height: rowH), font: tinyFont, color: .secondaryLabelColor)
-                x += 5 + 2 + textWidth(label, tinyFont) + 5
+                let port = p["port"].int ?? 0
+                let name = p["name"].str ?? ""
+                let hasName = !name.isEmpty && name != ":\(port)"  // unnamed ad-hoc proxies carry ":<port>" as their name
+                let slot = 5 + 2 + textWidth(dotLabel(p), tinyFont) + 5
+                // hits for every port, even ones hidden by an active hover: sweeping
+                // the mouse across the row re-hovers each in turn
+                if hasName { portHits.append((NSRect(x: x, y: ry, width: slot, height: rowH), port, name)) }
+                if !afterHover {
+                    let up = p["state"].str == "up"
+                    let notLogging = up && p["logging"].exists && !p["logging"].bool  // pre-callback code: up, but its traffic is missing
+                    (notLogging ? NSColor.systemYellow : up ? NSColor.systemGreen : NSColor.systemRed).setFill()
+                    NSBezierPath(ovalIn: NSRect(x: x, y: ry + 4, width: 5, height: 5)).fill()
+                    if hasName && (debugPortHover ?? hoverPort) == port {
+                        // hovered: the proxy's name replaces this label and the rest of
+                        // the row — the full name, no truncation, no overlap; the row
+                        // restores on exit (the native tooltip adds "· :port")
+                        drawStr(name, in: NSRect(x: x + 7, y: ry, width: rect.maxX - x - 7, height: rowH),
+                                font: tinyFont, color: .labelColor)
+                        afterHover = true
+                    } else {
+                        let label = dotLabel(p)
+                        drawStr(label, in: NSRect(x: x + 7, y: ry, width: textWidth(label, tinyFont) + 2, height: rowH),
+                                font: tinyFont, color: .secondaryLabelColor)
+                    }
+                }
+                x += slot
             }
         }
 

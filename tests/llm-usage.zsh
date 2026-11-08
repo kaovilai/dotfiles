@@ -1240,6 +1240,12 @@ if [[ -x /usr/bin/swiftc ]] || command -v swiftc >/dev/null; then
     "$mb" --window-png "$tmp/w-fleet-cz-on.png" --layout horizontal --hover host:peerA --data-file "$tmp/fleet-hostzero.json" >/dev/null || fail "window-png compact host-hover"
     "$mb" --window-png "$tmp/w-fleet-cz-off.png" --layout horizontal --hover host:zzz --data-file "$tmp/fleet-hostzero.json" >/dev/null || fail "window-png compact host-hover control"
     cmp -s "$tmp/w-fleet-cz-on.png" "$tmp/w-fleet-cz-off.png" && fail "compact fleet row must highlight under its host hover"
+    # hovering a proxy dot's port label swaps in the proxy's name (port: hover);
+    # a pinned port that is not drawn (or has no name) must change nothing
+    "$mb" --window-png "$tmp/w-port-hover.png" --layout vertical --hover port:4148 --data-file "$mbjson/fleet.json" >/dev/null || fail "window-png port hover"
+    cmp -s "$tmp/w-port-hover.png" "$tmp/w-fleet-on.png" && fail "port hover must swap the label to the proxy name"
+    "$mb" --window-png "$tmp/w-port-none.png" --layout vertical --hover port:4999 --data-file "$mbjson/fleet.json" >/dev/null || fail "window-png port hover control"
+    cmp -s "$tmp/w-port-none.png" "$tmp/w-fleet-on.png" || fail "port hover with no such dot must not change the render"
     [[ "$dump" == *"[chart] requests/min"* && "$dump" == *"[chart] by model"* && "$dump" == *"[chart] by proxy"* ]] || fail "charts missing: $dump"
     [[ "$(dump_of normal --no-charts)" != *"[chart]"* && "$(dump_of normal --no-charts)" == *"Top models (1h): glm-5.3"* ]] || fail "--no-charts"
     [[ "$dump" == *"Open dashboard"* && "$dump" == *"Open logs folder"* && "$dump" == *"Refresh now"* && "$dump" == *"Copy status"* && "$dump" == *"Copy last error"* && "$dump" == *Quit* ]] || fail "actions missing"
