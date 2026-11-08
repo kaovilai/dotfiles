@@ -2917,6 +2917,22 @@ def cmd_menubar_reload(args):
     if not os.path.exists(MB_SRC):
         print("menubar: source missing; nothing to reload")
         return
+    if pid == -1:
+        # mb_running()'s sentinel: the lock is held but the holder's pid is
+        # unreadable. Something is running, yet never signal a guess —
+        # os.kill(-1, ...) would hit every process this user can signal.
+        # Rebuild at most; the restart is left to `menubar status` + a hand
+        # quit, and a launchd-installed helper still picks the new binary up
+        # at its next login start.
+        if os.path.exists(out) and mb_stale():
+            if args.dry_run:
+                print(f"would rebuild {out} from {MB_SRC} (holder pid unreadable; no restart)")
+            else:
+                mb_build()
+                print(f"menubar: rebuilt {out}; holder pid unreadable, not restarted (llm-usage menubar status)")
+        else:
+            print("menubar: helper lock held but pid unreadable; nothing to reload (llm-usage menubar status)")
+        return
     if not pid and not os.path.exists(out):
         print("menubar: not built here; nothing to reload")
         return
@@ -2941,7 +2957,10 @@ def cmd_menubar_reload(args):
         print(f"menubar: restarted via launchd (was pid {pid})")
         return
     # started by hand (`menubar run`): stop it the same way, start the new build.
-    os.kill(pid, signal.SIGTERM)
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except ProcessLookupError:
+        pass  # died between the lock read and here; just start the new build
     for _ in range(50):
         if not mb_running():
             break

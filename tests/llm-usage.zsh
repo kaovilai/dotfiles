@@ -1038,6 +1038,34 @@ with open(os.path.join(stub, "swiftc"), "w") as h:
 os.chmod(os.path.join(stub, "swiftc"), 0o755)
 r = reload()
 assert r.returncode != 0 and "swiftc failed" in r.stdout + r.stderr, (r.returncode, r.stdout, r.stderr)
+# 8. lock held but pid unreadable (mb_running() -> -1): rebuilt at most, the
+#    holder is never signalled — os.kill(-1, ...) would hit every process
+with open(os.path.join(stub, "swiftc"), "w") as h:
+    h.write('#!/bin/sh\necho "$*" >> "%s"\n'
+            'out=""; while [ $# -gt 0 ]; do case "$1" in -o) out="$2"; shift 2 ;; *) shift ;; esac; done\n'
+            'cp "%s" "$out" && chmod +x "$out"\n' % (swift_log, helper))
+os.chmod(os.path.join(stub, "swiftc"), 0o755)
+os.utime(bin_, (0, 0))
+h3 = subprocess.Popen([sys.executable, "-c",
+    "import fcntl, os, time\n"
+    "fd = os.open(os.environ['MB_TEST_LOCK'], os.O_RDWR | os.O_CREAT)\n"
+    "os.ftruncate(fd, 0)  # clear the previous holder's pid bytes\n"
+    "fcntl.flock(fd, fcntl.LOCK_EX)\n"
+    "while True: time.sleep(1)"], env=env, start_new_session=True)  # holds the lock, leaves no pid
+probe = os.open(lock, os.O_RDWR)
+for _ in range(50):
+    try:
+        fcntl.flock(probe, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        fcntl.flock(probe, fcntl.LOCK_UN)
+        time.sleep(0.1)
+    except OSError:
+        break  # holder has the lock
+os.close(probe)
+r = reload()
+assert r.returncode == 0 and "pid unreadable" in r.stdout and "not restarted" in r.stdout, (r.returncode, r.stdout, r.stderr)
+assert h3.poll() is None, "unreadable-pid holder was signalled"
+assert swift_calls() >= 1, "stale binary was not rebuilt for the unreadable-pid holder"
+h3.kill(); h3.wait()
 print("menubar reload ok")
 PY
 
