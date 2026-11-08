@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# shellcheck disable=SC2016  # $-style vars in single quotes are intentional:
+# they must expand inside the child bash -i, not in this script
 # CI: prove .bashrc and .bash_profile work on this OS.
 #
 # Sources them under a throwaway HOME (repo symlinked in as ~/git/dotfiles,

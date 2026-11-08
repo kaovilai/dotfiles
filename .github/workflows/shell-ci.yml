@@ -6,7 +6,10 @@ on:
   push:
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  # head_ref (PR branch) or ref_name (push branch) — makes the push run and
+  # the pull_request run for the same branch cancel each other instead of
+  # duplicating every job
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref_name }}
   cancel-in-progress: true
 
 permissions:

@@ -26,8 +26,11 @@ _regen_tool_completion() {
   local cache_file="$ZSH_COMPLETION_CACHE_DIR/_${tool}_generated"
   [[ -f "$cache_file" ]] && cp "$cache_file" "$HOME/.zsh/completions/_${tool}" &!
   if completion_cache_expired "$cache_file" "$ttl"; then
-    ("$tool" completion zsh > "${cache_file}.tmp" 2>/dev/null \
-      && mv "${cache_file}.tmp" "$cache_file") &!
+    # mktemp-unique name: `$$` is NOT unique here — zsh forks (disowned
+    # background jobs) report the parent's `$$`, so two writers from the same
+    # shell would collide on `.tmp.$$` and one mv would fail ENOENT.
+    ( t=$(mktemp "${cache_file}.XXXXXX") && "$tool" completion zsh > "$t" 2>/dev/null \
+      && mv "$t" "$cache_file" || rm -f "$t" 2>/dev/null ) &!
   fi
 }
 
@@ -51,9 +54,9 @@ if has_command docker; then
   # Update check and download in the background
   if [[ "$TERM_PROGRAM" != "vscode" ]] && has_command curl; then
     if completion_cache_expired "$docker_completion_file" $CACHE_TTL_STABLE; then  # 30 days for stable tools
-      (curl -fsLm 10 https://raw.githubusercontent.com/docker/docker-ce/master/components/cli/contrib/completion/zsh/_docker > "${docker_completion_file}.tmp" && 
-      mv "${docker_completion_file}.tmp" "$docker_completion_file" || 
-      rm -f "${docker_completion_file}.tmp") &!
+      ( t=$(mktemp "${docker_completion_file}.XXXXXX") && curl -fsLm 10 https://raw.githubusercontent.com/docker/docker-ce/master/components/cli/contrib/completion/zsh/_docker > "$t" &&
+      mv "$t" "$docker_completion_file" ||
+      rm -f "$t" 2>/dev/null) &!
     fi
   fi
 fi
@@ -72,7 +75,7 @@ if has_command gh; then
   local gh_completion_cache="$ZSH_COMPLETION_CACHE_DIR/_gh_generated"
   [[ -f "$gh_completion_cache" ]] && cp "$gh_completion_cache" "$HOME/.zsh/completions/_gh" &!
   if completion_cache_expired "$gh_completion_cache"; then  # 7 days
-    (gh completion -s zsh > "${gh_completion_cache}.tmp" 2>/dev/null && mv "${gh_completion_cache}.tmp" "$gh_completion_cache") &!
+    ( t=$(mktemp "${gh_completion_cache}.XXXXXX") && gh completion -s zsh > "$t" 2>/dev/null && mv "$t" "$gh_completion_cache" || rm -f "$t" 2>/dev/null) &!
   fi
 fi
 
@@ -93,9 +96,9 @@ if has_command podman; then
   # Update check and download in the background
   if [[ "$TERM_PROGRAM" != "vscode" ]] && has_command curl; then
     if completion_cache_expired "$podman_completion_file" $CACHE_TTL_STABLE; then  # 30 days for stable tools
-      (curl -fsLm 10 https://raw.githubusercontent.com/containers/podman/main/completions/zsh/_podman > "${podman_completion_file}.tmp" && 
-      mv "${podman_completion_file}.tmp" "$podman_completion_file" || 
-      rm -f "${podman_completion_file}.tmp") &!
+      ( t=$(mktemp "${podman_completion_file}.XXXXXX") && curl -fsLm 10 https://raw.githubusercontent.com/containers/podman/main/completions/zsh/_podman > "$t" &&
+      mv "$t" "$podman_completion_file" ||
+      rm -f "$t" 2>/dev/null) &!
     fi
   fi
 fi
@@ -126,9 +129,9 @@ if has_command direnv; then
   local direnv_completion_cache="$ZSH_COMPLETION_CACHE_DIR/_direnv_generated"
   [[ -f "$direnv_completion_cache" ]] && source "$direnv_completion_cache"
   if completion_cache_expired "$direnv_completion_cache"; then
-    (direnv hook zsh > "${direnv_completion_cache}.tmp" 2>/dev/null \
-      && mv "${direnv_completion_cache}.tmp" "$direnv_completion_cache" \
-      || rm -f "${direnv_completion_cache}.tmp") &!
+    ( t=$(mktemp "${direnv_completion_cache}.XXXXXX") && direnv hook zsh > "$t" 2>/dev/null \
+      && mv "$t" "$direnv_completion_cache" \
+      || rm -f "$t" 2>/dev/null) &!
   fi
 fi
 
@@ -137,9 +140,9 @@ if has_command pipenv; then
   local pipenv_completion_cache="$ZSH_COMPLETION_CACHE_DIR/_pipenv_generated"
   [[ -f "$pipenv_completion_cache" ]] && cp "$pipenv_completion_cache" "$HOME/.zsh/completions/_pipenv" &!
   if completion_cache_expired "$pipenv_completion_cache"; then
-    (_PIPENV_COMPLETE=zsh_source pipenv > "${pipenv_completion_cache}.tmp" 2>/dev/null \
-      && mv "${pipenv_completion_cache}.tmp" "$pipenv_completion_cache" \
-      || rm -f "${pipenv_completion_cache}.tmp") &!
+    ( t=$(mktemp "${pipenv_completion_cache}.XXXXXX") && _PIPENV_COMPLETE=zsh_source pipenv > "$t" 2>/dev/null \
+      && mv "$t" "$pipenv_completion_cache" \
+      || rm -f "$t" 2>/dev/null) &!
   fi
 fi
 
@@ -155,10 +158,10 @@ if has_command claude; then
     cp "$claude_completion_file" "$HOME/.zsh/completions/_claude" &!
   fi
   if has_command curl && completion_cache_expired "$claude_completion_file"; then  # 7 days
-    (curl -fsLm 10 https://raw.githubusercontent.com/wbingli/zsh-claudecode-completion/main/_claude > "${claude_completion_file}.tmp" &&
-    mv "${claude_completion_file}.tmp" "$claude_completion_file" &&
+    ( t=$(mktemp "${claude_completion_file}.XXXXXX") && curl -fsLm 10 https://raw.githubusercontent.com/wbingli/zsh-claudecode-completion/main/_claude > "$t" &&
+    mv "$t" "$claude_completion_file" &&
     cp "$claude_completion_file" "$HOME/.zsh/completions/_claude" ||
-    rm -f "${claude_completion_file}.tmp") &!
+    rm -f "$t" 2>/dev/null) &!
   fi
 fi
 
