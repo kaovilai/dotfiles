@@ -210,5 +210,8 @@ export PATH="$HOME/.local/bin:$PATH"
 # rust for t3code dev
 export PATH=/opt/homebrew/opt/rustup/bin:$PATH
 
-# Vite+ bin (https://viteplus.dev)
-[[ -f "$HOME/.config/vite-plus/env" ]] && . "$HOME/.config/vite-plus/env"
+# Vite+ bin (https://viteplus.dev) — if-block so an absent file doesn't make
+# this (last) line of .zshrc return non-zero for `source ~/.zshrc` callers
+if [[ -f "$HOME/.config/vite-plus/env" ]]; then
+  . "$HOME/.config/vite-plus/env"
+fi
