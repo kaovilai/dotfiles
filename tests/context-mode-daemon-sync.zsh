@@ -29,7 +29,9 @@ cat > "$HOME/bin/claude" <<'STUB'
 echo "claude $*" >> "$CLAUDE_LOG"
 if [ "$1" = "mcp" ] && [ "$2" = "get" ]; then
     if [ "$3" = "context-mode" ] && [ "${CLAUDE_STUB_HAS_CONTEXT_MODE:-}" = 1 ]; then
-        echo "context-mode: http://127.0.0.1:8790/mcp (HTTP)"
+        echo "context-mode:"
+        echo "  Scope: User config (available in all your projects)"
+        echo "  URL: http://127.0.0.1:8790/mcp"
         exit 0
     fi
     exit 1
@@ -65,6 +67,11 @@ echo "$CM_TEST_FAKE_BREW_PREFIX"
 STUB
 chmod +x "$HOME/bin/brew"
 export CM_TEST_FAKE_BREW_PREFIX="$tmp/no-brew"
+# -f on every invocation: a plain zsh sources ~/.zshenv, whose shell env can
+# rebuild PATH (vite-plus does, nondeterministically from this harness's view)
+# and drop the stub directory — one run then fetched the real nodejs.org
+# tarball. -f starts the child with no rc files; the script's own PATH
+# save/restore covers what it sources itself.
 export PATH="$HOME/bin:$PATH" NODE_LOG="$tmp/node.log" CLAUDE_LOG="$tmp/claude.log" SYSTEMCTL_LOG="$tmp/systemctl.log"
 export CLAUDE_PROVIDER_NATIVE_BINARY="$HOME/bin/claude"
 : >| "$NODE_LOG"; : >| "$CLAUDE_LOG"; : >| "$SYSTEMCTL_LOG"
@@ -76,14 +83,14 @@ typeset -a args=(--quiet)
 
 # --- 1. no daemon bundle in the cache: a clean skip ---------------------------------
 rm -rf "$HOME/.claude/plugins/cache/context-mode/context-mode/2.2.1"
-zsh "$repo/scripts/context-mode-daemon-sync.zsh" "${args[@]}" || fail "no-cache run must exit 0"
+zsh -f "$repo/scripts/context-mode-daemon-sync.zsh" "${args[@]}" || fail "no-cache run must exit 0"
 [[ ! -s "$NODE_LOG" ]] || fail "no-cache run must not invoke node"
 mkdir -p "$HOME/.claude/plugins/cache/context-mode/context-mode/2.2.1"
 print -r -- '# stub bundle' > "$daemon"
 
 # --- 2. node too old, autoinstall off: the daemon step is skipped, not failed ----------
 export NODE_STUB_VERSION=v22.23.1 CONTEXT_MODE_DAEMON_NODE_AUTOINSTALL=0
-zsh "$repo/scripts/context-mode-daemon-sync.zsh" "${args[@]}" || fail "old-node run must exit 0"
+zsh -f "$repo/scripts/context-mode-daemon-sync.zsh" "${args[@]}" || fail "old-node run must exit 0"
 [[ ! -s "$NODE_LOG" ]] || fail "old-node run must not invoke the daemon"
 unset CONTEXT_MODE_DAEMON_NODE_AUTOINSTALL
 export NODE_STUB_VERSION=v24.15.0
@@ -100,7 +107,12 @@ print -r -- '#!/bin/sh
 echo "node $*" >> "$NODE_LOG"' >| "$fdir/bin/node"
 chmod +x "$fdir/bin/node"
 tar -cJf "$fixture/node-v24.15.0-linux-x64.tar.xz" -C "$fixture" node-v24.15.0-linux-x64
-typeset fsha=$(sha256sum "$fixture/node-v24.15.0-linux-x64.tar.xz" | awk '{print $1}')
+typeset fsha
+if command -v shasum >/dev/null 2>&1; then
+    fsha=$(shasum -a 256 "$fixture/node-v24.15.0-linux-x64.tar.xz" | awk '{print $1}')
+else
+    fsha=$(sha256sum "$fixture/node-v24.15.0-linux-x64.tar.xz" | awk '{print $1}')
+fi
 cat > "$HOME/bin/node" <<'STUB'
 #!/bin/sh
 if [ "$1" = "--version" ]; then echo "${NODE_STUB_VERSION:-v24.15.0}"; exit 0; fi
@@ -125,31 +137,33 @@ STUB
 chmod +x "$HOME/bin/curl"
 export CM_TEST_SHA="$fsha" CM_TEST_FIXTURE="$fixture"
 export NODE_STUB_VERSION=v18.0.0   # PATH node is useless; the tarball must win
-zsh "$repo/scripts/context-mode-daemon-sync.zsh" "${args[@]}" || fail "autoinstall run must exit 0"
+zsh -f "$repo/scripts/context-mode-daemon-sync.zsh" "${args[@]}" || fail "autoinstall run must exit 0"
 [[ -x "$HOME/.local/lib/node-v24.15.0-linux-x64/bin/node" ]] || fail "the tarball must be extracted to ~/.local/lib"
 export NODE_STUB_VERSION=v24.15.0
-rm -f "$HOME/bin/curl"
+# the curl stub stays installed: later cases (the bad-checksum run) vary
+# CM_TEST_SHA instead, and without the stub the real curl would fetch
+# nodejs.org from inside the offline suite
 
 # --- 3. everything current: no unit install, no registration add ---------------------
 : >| "$NODE_LOG"; : >| "$CLAUDE_LOG"
 mkdir -p "${unit:h}"
 print -r -- "ExecStart=\"$daemon\"\nEnvironment=\"CONTEXT_MODE_DAEMON_PORT=8790\"" >| "$unit"
 export UNIT_STUB_ACTIVE=1 CLAUDE_STUB_HAS_CONTEXT_MODE=1
-zsh "$repo/scripts/context-mode-daemon-sync.zsh" "${args[@]}" || fail "current run must exit 0"
+zsh -f "$repo/scripts/context-mode-daemon-sync.zsh" "${args[@]}" || fail "current run must exit 0"
 grep -q -- "--install" "$NODE_LOG" && fail "current unit must not be reinstalled"
 grep -q -- "mcp add" "$CLAUDE_LOG" && fail "current registration must not be re-added"
 
 # --- 4. a stale unit path: the install is re-run --------------------------------------
 print -r -- "ExecStart=\"/old/path/2.2.0/daemon.mjs\"" >| "$unit"
 : >| "$NODE_LOG"
-zsh "$repo/scripts/context-mode-daemon-sync.zsh" "${args[@]}" || fail "stale-unit run must exit 0"
+zsh -f "$repo/scripts/context-mode-daemon-sync.zsh" "${args[@]}" || fail "stale-unit run must exit 0"
 grep -q -- "$daemon --install" "$NODE_LOG" || fail "a stale unit must be reinstalled against the current bundle"
 
 # --- 5. no registration: the add runs with user scope and the daemon URL --------------
 unset CLAUDE_STUB_HAS_CONTEXT_MODE
 export UNIT_STUB_ACTIVE=1
 : >| "$CLAUDE_LOG"
-zsh "$repo/scripts/context-mode-daemon-sync.zsh" "${args[@]}" || fail "no-registration run must exit 0"
+zsh -f "$repo/scripts/context-mode-daemon-sync.zsh" "${args[@]}" || fail "no-registration run must exit 0"
 grep -q -- "mcp add --scope user --transport http context-mode http://127.0.0.1:8790/mcp" "$CLAUDE_LOG" || fail "the registration must be added at user scope with the daemon URL"
 
 # --- 6. a foreign registration with the same name: left alone with a warning -----------
@@ -158,14 +172,19 @@ cat > "$HOME/bin/claude" <<'STUB'
 #!/bin/sh
 echo "claude $*" >> "$CLAUDE_LOG"
 if [ "$1" = "mcp" ] && [ "$2" = "get" ]; then
-    [ "$3" = "context-mode" ] && echo "context-mode: http://elsewhere:1/mcp (HTTP)" && exit 0
+    if [ "$3" = "context-mode" ]; then
+        echo "context-mode:"
+        echo "  Scope: User config (available in all your projects)"
+        echo "  URL: http://elsewhere.example/mcp"
+        exit 0
+    fi
     exit 1
 fi
 exit 0
 STUB
 chmod +x "$HOME/bin/claude"
 : >| "$CLAUDE_LOG"
-zsh "$repo/scripts/context-mode-daemon-sync.zsh" "${args[@]}" || fail "foreign-registration run must exit 0"
+zsh -f "$repo/scripts/context-mode-daemon-sync.zsh" "${args[@]}" || fail "foreign-registration run must exit 0"
 grep -q -- "mcp add" "$CLAUDE_LOG" && fail "a foreign registration must be left alone"
 
 # --- 7. numeric orderings: 2.2.10 beats 2.2.9; node 24.14 is not 24.15 -----------------
@@ -173,14 +192,40 @@ mkdir -p "$HOME/.claude/plugins/cache/context-mode/context-mode/2.2.9" "$HOME/.c
 print -r -- '# stub bundle' >| "$HOME/.claude/plugins/cache/context-mode/context-mode/2.2.9/daemon.mjs"
 print -r -- '# stub bundle' >| "$HOME/.claude/plugins/cache/context-mode/context-mode/2.2.10/daemon.mjs"
 : >| "$NODE_LOG"
-zsh "$repo/scripts/context-mode-daemon-sync.zsh" "${args[@]}" || fail "version-order run must exit 0"
+zsh -f "$repo/scripts/context-mode-daemon-sync.zsh" "${args[@]}" || fail "version-order run must exit 0"
 grep -q "context-mode/context-mode/2.2.10/daemon.mjs --install" "$NODE_LOG" || fail "2.2.10 must win over 2.2.9 (lexicographic sorts them backwards)"
 export NODE_STUB_VERSION=v24.14.0 CONTEXT_MODE_DAEMON_NODE_AUTOINSTALL=0
 rm -rf "$HOME/.local/lib"   # 2b's extracted node would (correctly) satisfy the lookup
 : >| "$NODE_LOG"
-zsh "$repo/scripts/context-mode-daemon-sync.zsh" "${args[@]}" || fail "node-24.14 run must exit 0"
+zsh -f "$repo/scripts/context-mode-daemon-sync.zsh" "${args[@]}" || fail "node-24.14 run must exit 0"
 [[ ! -s "$NODE_LOG" ]] || fail "node 24.14 is below the daemon's 24.15 minimum and must not be used"
 export NODE_STUB_VERSION=v24.15.0
 unset CONTEXT_MODE_DAEMON_NODE_AUTOINSTALL
 
-print -- "PASS: context-mode-daemon-sync (skip, node gate, autoinstall, current, stale unit, add, foreign, numeric orderings)"
+# --- 8. a mismatched checksum: no extraction, no use -------------------------------
+rm -rf "$HOME/.local/lib"
+export CM_TEST_SHA="0000000000000000000000000000000000000000000000000000000000000000"
+export NODE_STUB_VERSION=v18.0.0
+zsh -f "$repo/scripts/context-mode-daemon-sync.zsh" "${args[@]}" || fail "bad-checksum run must exit 0"
+[[ ! -d "$HOME/.local/lib/node-v24.15.0-linux-x64" ]] || fail "a mismatched checksum must not extract"
+export NODE_STUB_VERSION=v24.15.0
+
+# --- 9. our registration on another port is re-pointed -------------------------------
+cat > "$HOME/bin/claude" <<'STUB'
+#!/bin/sh
+echo "claude $*" >> "$CLAUDE_LOG"
+if [ "$1" = "mcp" ] && [ "$2" = "get" ]; then
+    echo "context-mode:"
+    echo "  Scope: User config (available in all your projects)"
+    echo "  URL: http://127.0.0.1:8791/mcp"
+    exit 0
+fi
+exit 0
+STUB
+chmod +x "$HOME/bin/claude"
+: >| "$CLAUDE_LOG"
+zsh -f "$repo/scripts/context-mode-daemon-sync.zsh" "${args[@]}" || fail "port-move run must exit 0"
+grep -q -- "mcp remove context-mode" "$CLAUDE_LOG" || fail "an entry on our old port must be removed"
+grep -q -- "mcp add --scope user --transport http context-mode http://127.0.0.1:8790/mcp" "$CLAUDE_LOG" || fail "the registration must be re-added at the current port"
+
+print -- "PASS: context-mode-daemon-sync (skip, node gate, autoinstall, current, stale unit, add, foreign, numeric orderings, bad checksum, port move)"
