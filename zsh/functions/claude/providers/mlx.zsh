@@ -250,6 +250,16 @@ claude-mlx() {
         # server; each brings its own KV cache, so cap the fan-out (2 * 64k
         # window ≈ 12.6GB cache worst case).
         CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS="${CLAUDE_MLX_MAX_CONCURRENT_SUBAGENTS:-2}"
+        # Unrecognized ids compact AT the context limit by default; on a 64k
+        # window one large tool result (~10-25k tokens for a file read) can
+        # overshoot the limit in a single step and error out before
+        # compaction fires. Compact at 80% (~52k) instead, keeping ~12k of
+        # overshoot headroom. CLAUDE_CODE_AUTO_COMPACT_WINDOW is useless
+        # here (its 100k-1M range gets capped to the model window), and
+        # idle compaction never applies (its 100k floor exceeds 64k) --
+        # which also spares a cold model reload just to summarize an idle
+        # session.
+        CLAUDE_AUTOCOMPACT_PCT_OVERRIDE="${CLAUDE_MLX_AUTOCOMPACT_PCT:-80}"
     )
 
     # --bare by default -- same rationale as claude-ollama above: a small
