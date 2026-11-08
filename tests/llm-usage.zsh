@@ -1240,6 +1240,39 @@ if [[ -x /usr/bin/swiftc ]] || command -v swiftc >/dev/null; then
     "$mb" --window-png "$tmp/w-fleet-cz-on.png" --layout horizontal --hover host:peerA --data-file "$tmp/fleet-hostzero.json" >/dev/null || fail "window-png compact host-hover"
     "$mb" --window-png "$tmp/w-fleet-cz-off.png" --layout horizontal --hover host:zzz --data-file "$tmp/fleet-hostzero.json" >/dev/null || fail "window-png compact host-hover control"
     cmp -s "$tmp/w-fleet-cz-on.png" "$tmp/w-fleet-cz-off.png" && fail "compact fleet row must highlight under its host hover"
+    # in-flight bars stack by age: the oldest request sits at the bottom of the
+    # strip, a new one enters from the top. The strip fits four rows, so with six
+    # in flight the two NEWEST drop off the top — a payload whose two youngest are
+    # a different vendor must render identically to one where they match (not
+    # drawn either way); and swapping which vendor is older must change the render
+    python3 -c 'import json,sys
+GLM, DS = "rits/zai-org/glm-5-3", "rits/deepseek-ai/DeepSeek-V4.1-Flash-1017"
+def payload(v):
+    d = json.load(open(sys.argv[1]))
+    d["inflight"].update(available=True, count=6, oldest_s=60,
+                         requests=[{"id": "r%d" % i, "proxy": ":4148", "model": m, "seconds": s}
+                                   for i, (m, s) in enumerate(zip([GLM] * 4 + [v] * 2, (60, 50, 40, 30, 20, 10)))])
+    return d
+json.dump(payload(DS), open(sys.argv[2], "w")); json.dump(payload(GLM), open(sys.argv[3], "w"))' "$mbjson/fleet.json" "$tmp/if-of.json" "$tmp/if-of-same.json"
+    "$mb" --window-png "$tmp/w-if-of.png" --layout vertical --data-file "$tmp/if-of.json" >/dev/null || fail "window-png inflight overflow"
+    "$mb" --window-png "$tmp/w-if-of-same.png" --layout vertical --data-file "$tmp/if-of-same.json" >/dev/null || fail "window-png inflight overflow same"
+    cmp -s "$tmp/w-if-of.png" "$tmp/w-if-of-same.png" || fail "inflight overflow must drop the newest bars from the top (oldest stay at the bottom)"
+    python3 -c 'import json,sys
+GLM, DS = "rits/zai-org/glm-5-3", "rits/deepseek-ai/DeepSeek-V4.1-Flash-1017"
+def payload(old, new, swap_ids=False):
+    d = json.load(open(sys.argv[1]))
+    oid, nid = ("new", "old") if swap_ids else ("old", "new")
+    d["inflight"].update(available=True, count=2, oldest_s=9,
+                         requests=[{"id": oid, "proxy": ":4148", "model": old, "seconds": 9},
+                                   {"id": nid, "proxy": ":4148", "model": new, "seconds": 4}])
+    return d
+json.dump(payload(GLM, DS), open(sys.argv[2], "w")); json.dump(payload(DS, GLM), open(sys.argv[3], "w"))
+json.dump(payload(GLM, DS, swap_ids=True), open(sys.argv[4], "w"))' "$mbjson/fleet.json" "$tmp/if-2a.json" "$tmp/if-2b.json" "$tmp/if-2c.json"
+    "$mb" --window-png "$tmp/w-if-2a.png" --layout vertical --data-file "$tmp/if-2a.json" >/dev/null || fail "window-png inflight order a"
+    "$mb" --window-png "$tmp/w-if-2b.png" --layout vertical --data-file "$tmp/if-2b.json" >/dev/null || fail "window-png inflight order b"
+    "$mb" --window-png "$tmp/w-if-2c.png" --layout vertical --data-file "$tmp/if-2c.json" >/dev/null || fail "window-png inflight order control"
+    cmp -s "$tmp/w-if-2a.png" "$tmp/w-if-2b.png" && fail "swapping which vendor is older must change the bar render"
+    cmp -s "$tmp/w-if-2a.png" "$tmp/w-if-2c.png" || fail "inflight bar order must follow age, not id (id-swap control)"
     [[ "$dump" == *"[chart] requests/min"* && "$dump" == *"[chart] by model"* && "$dump" == *"[chart] by proxy"* ]] || fail "charts missing: $dump"
     [[ "$(dump_of normal --no-charts)" != *"[chart]"* && "$(dump_of normal --no-charts)" == *"Top models (1h): glm-5.3"* ]] || fail "--no-charts"
     [[ "$dump" == *"Open dashboard"* && "$dump" == *"Open logs folder"* && "$dump" == *"Refresh now"* && "$dump" == *"Copy status"* && "$dump" == *"Copy last error"* && "$dump" == *Quit* ]] || fail "actions missing"

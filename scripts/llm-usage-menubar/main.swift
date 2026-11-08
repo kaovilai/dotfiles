@@ -831,11 +831,30 @@ final class MonitorView: NSView {
     // unfinished. The aggregate needle (oldest request) stays for the compact
     // overlay pill.
     let barsView = FlightBarsView(frame: .zero)
+    /// The strip's row ladder: age order, oldest first (rung 0 is the bottom
+    /// edge), so the oldest request always sits lowest and a new one enters from
+    /// the top. Persistent on purpose: a finishing request keeps its rung while
+    /// its bar drains — bars drain in place and everything above settles down one
+    /// row. Re-deriving the order from `flights` alone would compact live bars
+    /// over still-draining ones. Rungs release once a bar has fully drained.
+    private var barLadder: [String] = []
     var flights: [Flight] = [] {
         didSet {
             flightsAt = Date()
             barsView.needsDisplay = true
             if !flights.isEmpty { startWaitAnimation() }  // a bar appeared: resume the needle timer
+            let liveIds = flights.map { $0.id }  // age order, oldest first
+            let live = Set(liveIds)
+            barLadder = barLadder.filter { live.contains($0) || barShown[$0] != nil }
+            for id in liveIds where !barLadder.contains(id) {
+                // insert at the age position: below every live bar that is older, above
+                // the first live bar that is newer — a late-observed older request
+                // (payload fallback) must not enter from the top
+                let at = barLadder.firstIndex { entry in
+                    live.contains(entry) && (liveIds.firstIndex(of: entry) ?? 0) > (liveIds.firstIndex(of: id) ?? 0)
+                } ?? barLadder.count
+                barLadder.insert(id, at: at)
+            }
             // the row positions the strip during a panel draw, so the panel must
             // repaint when the strip row appears or disappears; an id change
             // alone only swaps bars inside the strip, which needsDisplay above
@@ -893,7 +912,7 @@ final class MonitorView: NSView {
         }
         for (id, shown) in barShown where !live.contains(id) {
             let next = shown * CGFloat(exp(-dt / 0.4))
-            if next > 0.01 { barShown[id] = next } else { barShown.removeValue(forKey: id); barVendor.removeValue(forKey: id) }
+            if next > 0.01 { barShown[id] = next } else { barShown.removeValue(forKey: id); barVendor.removeValue(forKey: id); barLadder.removeAll { $0 == id } }
             barsMoved = true
         }
         // aggregate needle for the overlay pill (drawn with the rest of the
@@ -914,14 +933,17 @@ final class MonitorView: NSView {
 
     /// Bars stay visible while they drain, not just while requests are live.
     var waitBarVisible: Bool { waitNeedle > 0.001 || !flights.isEmpty || !barShown.isEmpty }
-    /// Bar values to draw, oldest request at the bottom (stack grows upward).
+    /// Bar values to draw in ladder order: the oldest request at the bottom
+    /// (rung 0), a new one enters from the top, and a draining bar keeps its
+    /// rung until it is gone — the drain finishes in place and everything above
+    /// it settles down one row.
     var flightBars: [(id: String, fraction: CGFloat, vendor: String)] {
-        var rows = barShown.filter { $0.value > 0.001 }.map { (id: $0.key, fraction: $0.value, vendor: barVendor[$0.key] ?? "other") }
-        let order = flights.map { $0.id }
-        rows.sort { a, b in
-            let ia = order.firstIndex(of: a.id) ?? Int.max
-            let ib = order.firstIndex(of: b.id) ?? Int.max
-            return ia > ib  // flights[] is oldest-first, so draw newest first => oldest ends up at the bottom
+        var rows: [(id: String, fraction: CGFloat, vendor: String)] = []
+        for id in barLadder {
+            if let v = barShown[id], v > 0.001 { rows.append((id: id, fraction: v, vendor: barVendor[id] ?? "other")) }
+        }
+        for (id, v) in barShown where v > 0.001 && !barLadder.contains(id) {
+            rows.append((id: id, fraction: v, vendor: barVendor[id] ?? "other"))  // defensive: a bar without a rung still draws, at the top
         }
         return rows
     }
