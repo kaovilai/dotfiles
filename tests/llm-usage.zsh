@@ -962,11 +962,16 @@ with open(os.path.join(stub, "swiftc"), "w") as h:
             'out=""; while [ $# -gt 0 ]; do case "$1" in -o) out="$2"; shift 2 ;; *) shift ;; esac; done\n'
             'cp "%s" "$out" && chmod +x "$out"\n' % (swift_log, helper))
 os.chmod(os.path.join(stub, "swiftc"), 0o755)
-# launchctl stub: `print` exit code flips on a marker file, `kickstart` is logged
+# launchctl stub: `print` exit code flips on a marker file and reports the pid
+# launchd "runs" from another marker (ownership test); `kickstart` is logged
+# and can be made to fail
 with open(os.path.join(stub, "launchctl"), "w") as h:
     h.write('#!/bin/sh\ncase "$1" in\n'
-            '  print) [ ! -f "%s/no-launchd" ] && exit 0; exit 1 ;;\n'
-            '  kickstart) echo "$*" >> "%s"; exit 0 ;;\nesac\nexit 0\n' % (stub, kick_log))
+            '  print) [ -f "%s/no-launchd" ] && exit 1\n'
+            '        [ -f "%s/launchd-pid" ] && echo "pid = $(cat %s/launchd-pid)"\n'
+            '        exit 0 ;;\n'
+            '  kickstart) [ -f "%s/kickstart-fail" ] && exit 1\n'
+            '        echo "$*" >> "%s"; exit 0 ;;\nesac\nexit 0\n' % (stub, stub, stub, stub, kick_log))
 os.chmod(os.path.join(stub, "launchctl"), 0o755)
 env["PATH"] = stub + os.pathsep + env["PATH"]
 def reload(*cli):
@@ -1014,6 +1019,7 @@ r = reload("--dry-run")
 assert r.returncode == 0 and "would rebuild" in r.stdout and "would restart" in r.stdout, (r.stdout, r.stderr)
 assert swift_calls() == 1 and h1.poll() is None, "dry run rebuilt or killed"
 # 5. launchd-managed helper: kickstart -k, the process itself is not signalled
+open(os.path.join(stub, "launchd-pid"), "w").write(str(h1.pid))  # launchd owns the holder
 r = reload()
 assert r.returncode == 0 and "restarted via launchd" in r.stdout, (r.stdout, r.stderr)
 assert f"kickstart -k gui/{os.getuid()}/com.kaovilai.llm-usage-menubar" in open(kick_log).read(), open(kick_log).read()
@@ -1066,6 +1072,40 @@ assert r.returncode == 0 and "pid unreadable" in r.stdout and "not restarted" in
 assert h3.poll() is None, "unreadable-pid holder was signalled"
 assert swift_calls() >= 1, "stale binary was not rebuilt for the unreadable-pid holder"
 h3.kill(); h3.wait()
+# 9. agent loaded but NOT owning the holder (quit + `menubar run`): the hand
+#    path restarts the holder; kickstarting would spawn a copy that dies at
+#    the single-instance lock while the old helper keeps running
+os.remove(os.path.join(stub, "no-launchd"))
+open(os.path.join(stub, "launchd-pid"), "w").write("999")  # launchd runs something else
+kicks_before = open(kick_log).read().count("\n")
+os.utime(bin_, (0, 0))
+h4 = holder()
+r = reload()
+assert r.returncode == 0 and "started (pid" in r.stdout, (r.stdout, r.stderr)
+h4.wait(timeout=10)
+assert open(kick_log).read().count("\n") == kicks_before, "must not kickstart when launchd does not own the holder"
+time.sleep(0.2)
+with open(lock, "rb") as fh:
+    newpid = int(fh.read(32).split()[0])
+assert newpid != h4.pid and newpid != os.getpid(), (newpid, h4.pid)
+os.kill(newpid, 15)
+# 10. kickstart failure: pending-restart marker set, holder untouched; the
+#     next reload retries the restart even though the binary is now fresh
+os.utime(bin_, (0, 0))
+h5 = holder()
+open(os.path.join(stub, "launchd-pid"), "w").write(str(h5.pid))
+open(os.path.join(stub, "kickstart-fail"), "w").close()
+r = reload()
+assert r.returncode != 0 and "kickstart failed" in r.stdout + r.stderr and "pending" in r.stdout + r.stderr, (r.returncode, r.stdout, r.stderr)
+assert h5.poll() is None, "failed kickstart must not touch the holder"
+assert os.path.exists(os.path.join(state, "menubar-restart.pending")), "no pending-restart marker"
+assert os.path.getmtime(bin_) > 0, "binary should be fresh after the failed attempt"
+os.remove(os.path.join(stub, "kickstart-fail"))
+r = reload()  # binary fresh, not stale: only the marker drives the retry
+assert r.returncode == 0 and "restarted via launchd" in r.stdout, (r.stdout, r.stderr)
+assert not os.path.exists(os.path.join(state, "menubar-restart.pending")), "pending marker survived a successful restart"
+assert open(kick_log).read().count("\n") > kicks_before, "restart was not retried"
+h5.kill(); h5.wait()
 print("menubar reload ok")
 PY
 
