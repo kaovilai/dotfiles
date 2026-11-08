@@ -549,6 +549,16 @@ FLEET_STALE_AFTER = 180        # s: last successful pull older than this = stale
 FLEET_BACKOFF = 300            # s: after a failed pull, the automatic kick waits this long
 # before retrying that host (airplane mode / a tailscale reauth must not wake a
 # spawn per poll); a manual `llm-usage fleet refresh` always tries
+FLEET_STREAM_BACKOFF = 2       # s: a dead in-flight stream reconnects after this, doubling to FLEET_BACKOFF
+FLEET_STREAM_HOLD = 60         # s: connected this long = healthy, resets the reconnect backoff
+FLEET_WATCH_INTERVAL = 0.25    # s: peer-side poll of its own inflight-*.json (a stat of a few tiny files)
+FLEET_WATCH_HEARTBEAT = float(os.environ.get("LLM_USAGE_WATCH_HEARTBEAT") or 15)
+# ^ s: re-emit an UNCHANGED in-flight snapshot at least this often — a long request
+# must not trip read_fleet_inflight's staleness drop and vanish from the wait bars
+FLEET_STREAM_RESCAN = float(os.environ.get("LLM_USAGE_STREAM_RESCAN") or 60)
+# ^ s: the stream singleton outlives config edits; rescan fleet.json this often
+# so a newly added peer gets its thread (later `fleet stream` kicks exit on the
+# held flock and would never start it)
 FLEET_LOCAL = "local"          # --host value for this machine
 
 
@@ -823,8 +833,13 @@ def _fleet_export_argv(entry, since, inflight=False, until=None, modified_since=
     mux = [] if len(os.path.join(cdir, "cm-" + "0" * 40)) > 104 else \
         ["-o", "ControlMaster=auto", "-o", f"ControlPath={cdir}/cm-%C", "-o", "ControlPersist=15m"]
     # Compression: the JSONL payload shrinks ~16:1, which is the difference between
-    # 20s and 5min for a first sync over a relayed tailscale path
-    return ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=3", "-o", "Compression=yes", *mux, "--", entry["ssh"], cmd], None
+    # 20s and 5min for a first sync over a relayed tailscale path.
+    # ServerAlive on EVERY ssh (not just the stream): whichever invocation
+    # creates the shared cm-%C master defines its connection-level keepalives,
+    # so a pull-created master must carry them too — otherwise a network
+    # blackhole leaves a multiplexed stream reader blocked forever.
+    keepalive = ["-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3"]
+    return ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=3", "-o", "Compression=yes", *keepalive, *mux, "--", entry["ssh"], cmd], None
 
 
 def fleet_pull(name, entry, since, inflight=False, until=None, modified_since=None):
@@ -869,6 +884,61 @@ def fleet_pull(name, entry, since, inflight=False, until=None, modified_since=No
     return meta, events, flights
 
 
+def _write_fleet_inflight(name, requests):
+    """Atomically replace the host's cached in-flight snapshot. tmp+rename so
+    directory watchers (the menubar helper) only ever see whole documents;
+    `t` is OUR clock so read_fleet_inflight's staleness drop measures receive
+    age, while each request's own `t` (the peer's clock) drives its bar age.
+    The tmp name is unique per call: the stream and the TTL refresh hold
+    DIFFERENT locks and may write the same host concurrently — a shared tmp
+    name let one writer truncate what the other had just published (or rename
+    a file the other already moved)."""
+    snap = {"t": time.time(), "requests": requests}
+    os.makedirs(fleet_dir(name), mode=0o700, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(prefix=".inflight.", dir=fleet_dir(name))
+    try:
+        with os.fdopen(fd, "w") as handle:
+            json.dump(snap, handle)
+        os.replace(tmp, os.path.join(fleet_dir(name), "inflight.json"))
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
+def _fleet_stream_live(name):
+    """Is the in-flight stream actively owning this host's membership? True
+    when the streamer's flock is held AND its snapshot is heartbeat-fresh
+    (the stream rewrites at least every FLEET_WATCH_HEARTBEAT while alive).
+    O_RDONLY + LOCK_EX-probe: we never take the lock ourselves, and opening
+    read-only cannot truncate what the streamer holds."""
+    import fcntl
+    try:
+        fd = os.open(os.path.join(STATE, "fleet", "stream.lock"), os.O_RDONLY)
+    except OSError:
+        return False
+    try:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            held = True  # someone holds it: the streamer (its only taker)
+        else:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+            held = False
+    finally:
+        os.close(fd)
+    if not held:
+        return False
+    try:
+        with open(os.path.join(fleet_dir(name), "inflight.json")) as handle:
+            doc = json.load(handle)
+        return time.time() - float(doc.get("t") or 0) < 2 * FLEET_WATCH_HEARTBEAT
+    except (OSError, ValueError):
+        return False
+
+
 def fleet_pull_one(name, entry, force=False, ttl=FLEET_TTL):
     """Incremental pull + one backfill step for one host. Returns a status dict."""
     now = time.time()
@@ -884,12 +954,14 @@ def fleet_pull_one(name, entry, force=False, ttl=FLEET_TTL):
         # file mtimes are peer-clock values, and the two clocks can skew apart.
         modified_since = max(0.0, (float(st.get("peer_t") or 0) - 60))
         meta, events, flights = fleet_pull(name, entry, since, inflight=True, modified_since=modified_since)
-        snap = {"t": time.time(), "requests": flights}  # always rewrite: a peer with no in-flight
-        os.makedirs(fleet_dir(name), mode=0o700, exist_ok=True)  # first pull: the host dir does not exist yet
-        tmp = os.path.join(fleet_dir(name), "inflight.json.tmp")  # requests must not keep the old ones
-        with open(tmp, "w") as handle:
-            json.dump(snap, handle)
-        os.replace(tmp, os.path.join(fleet_dir(name), "inflight.json"))
+        # while the stream is live it owns in-flight membership: this pull captured
+        # the peer's state before the stream may have watched requests finish, so
+        # writing it would resurrect ghost bars until the stream's next heartbeat.
+        # Stale/dead stream (flock released or snapshot past 2 heartbeats) → the
+        # pull is the fallback again. Always-rewrite-when-owner: a peer with no
+        # in-flight requests must not keep the old ones.
+        if not _fleet_stream_live(name):
+            _write_fleet_inflight(name, flights)
         new_events = events  # the export window IS the ingest set: `since` events plus the
         # modified-since revisions (old timestamps); eid dedup absorbs the re-sent overlap
         written = fleet_ingest(name, new_events)  # raises OSError when a write fails: no watermark advance
@@ -1018,6 +1090,205 @@ def fleet_kick(ttl=FLEET_TTL):
         with open(kick, "a"):
             os.utime(kick)
         subprocess.Popen([sys.executable, os.path.realpath(__file__), "fleet", "refresh", "--auto"],
+                         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                         start_new_session=True)
+    except OSError:
+        pass
+
+
+def _fleet_watch_argv(entry):
+    """ssh argv whose stdout is the peer's `watch-inflight` stream. None for a
+    local_dir entry: its inflight files are on this machine, so the stream
+    polls them in process (also the seam the tests drive)."""
+    if entry.get("local_dir"):
+        return None
+    script_path = (entry.get("dir") or "~/git/dotfiles").rstrip("/") + "/scripts/llm-usage"
+    # leading ~/ must reach the peer's shell unexpanded (its home differs from ours)
+    remote = "~/" + shlex.quote(script_path[2:]) if script_path.startswith("~/") else shlex.quote(script_path)
+    cmd = " ".join([remote, "watch-inflight"])
+    cdir = _fleet_control_dir()
+    mux = [] if len(os.path.join(cdir, "cm-" + "0" * 40)) > 104 else \
+        ["-o", "ControlMaster=auto", "-o", f"ControlPath={cdir}/cm-%C", "-o", "ControlPersist=15m"]
+    # ServerAlive: a network change must end BOTH ends of the stream within ~45 s,
+    # not leave a ghost watcher on the peer (lines are tiny: no compression needed)
+    return ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=3", *mux,
+            "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=3", "--", entry["ssh"], cmd]
+
+
+def _fleet_inflight_snapshot(directory, now):
+    """One peer's in-flight set as watch-stream request records (port/id/t/model).
+    t is each request's own start epoch (read_inflight's start_t), so a heartbeat
+    re-emission is byte-identical — the reader's age math never sees it wobble."""
+    flights, _ = read_inflight(now, directory)
+    return [{"port": f["port"], "id": f["id"], "t": f.get("start_t", round(now - f["seconds"], 3)),
+             "model": f["model"]} for f in flights]
+
+
+def _fleet_stream_ssh(name, argv, procs):
+    """Read one peer's watch stream into the cache until it ends. Returns how
+    long the connection held (the reconnect backoff's health signal). `procs`
+    lets the supervisor terminate the ssh child on shutdown — the reader is
+    blocked in readline() and only EOF (child death) unblocks it."""
+    proc = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, bufsize=1)
+    procs[name] = proc
+    started = time.time()
+    try:
+        for line in proc.stdout:
+            try:
+                rec = json.loads(line)
+            except ValueError:
+                continue
+            if not isinstance(rec, dict):
+                continue
+            if rec.get("_watch"):
+                continue  # hello: the peer's watcher is up; snapshot timestamps stay ours
+            if isinstance(rec.get("requests"), list):
+                _write_fleet_inflight(name, rec["requests"])
+        return time.time() - started
+    finally:
+        procs.pop(name, None)
+        proc.terminate()
+        try:
+            proc.wait(2)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+
+
+def _fleet_stream_local(name, entry, stop):
+    """local_dir peer: poll its inflight files in process, feeding the same
+    cache file the ssh path writes (heartbeat included: the file's t must stay
+    fresh while requests run, exactly like the peer-side watcher)."""
+    directory = os.path.expanduser(entry["local_dir"])
+    last, last_write = None, 0.0
+    while not stop.is_set():
+        now = time.time()
+        try:
+            snap = _fleet_inflight_snapshot(directory, now)
+        except OSError:
+            snap = []
+        key = json.dumps(snap, separators=(",", ":"))
+        if key != last or now - last_write >= FLEET_WATCH_HEARTBEAT:
+            last, last_write = key, now
+            try:
+                _write_fleet_inflight(name, snap)
+            except OSError:
+                pass
+        stop.wait(FLEET_WATCH_INTERVAL)
+
+
+def _fleet_stream_host(name, entry, stop, procs):
+    """Keep one peer's in-flight snapshot fresh: connect, stream, reconnect.
+    Reconnect backoff doubles per quick death (capped at the pull path's
+    failure backoff); a connection that held a while is healthy and resets it."""
+    argv = _fleet_watch_argv(entry)
+    backoff = FLEET_STREAM_BACKOFF
+    while not stop.is_set():
+        try:
+            held = _fleet_stream_local(name, entry, stop) if argv is None else _fleet_stream_ssh(name, argv, procs)
+        except OSError:
+            held = 0.0
+        if stop.is_set():
+            break
+        backoff = FLEET_STREAM_BACKOFF if held >= FLEET_STREAM_HOLD else min(backoff * 2, FLEET_BACKOFF)
+        stop.wait(backoff)
+
+
+def fleet_stream(only=None):
+    """Stream every peer's in-flight requests into the fleet cache: one
+    long-lived ssh per host running the peer's `watch-inflight`, writing the
+    same fleet/<host>/inflight.json the pull path fills. The stream owns
+    FRESHNESS (sub-second in-flight membership); the TTL refresh stays the
+    source of truth (events, up/down state, backfill), so a dead stream only
+    costs accuracy — read_fleet_inflight's age drop still bounds ghosts. One
+    streamer at a time (flock on STATE/fleet/stream.lock): later starters
+    exit immediately, so the menubar, `tail -f --fleet` and `serve` can all
+    spawn it fire-and-forget. Runs until SIGINT/SIGTERM."""
+    import fcntl
+    if os.environ.get("LLM_USAGE_FLEET_STREAM", "").strip().lower() == "off":
+        return
+    hosts = [(n, e) for n, e in fleet_hosts() if not only or n == only]
+    if not hosts:
+        return
+    try:
+        os.makedirs(os.path.join(STATE, "fleet"), mode=0o700, exist_ok=True)
+        lock = open(os.path.join(STATE, "fleet", "stream.lock"), "w")
+    except OSError:
+        return
+    try:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            return  # a streamer is already running: nothing to do
+        import signal
+        import threading
+        stop = threading.Event()
+
+        def bye(signum, frame):
+            stop.set()
+
+        signal.signal(signal.SIGINT, bye)
+        signal.signal(signal.SIGTERM, bye)
+        # config reconciliation: this singleton outlives config edits, and later
+        # `fleet stream` kicks exit on the held flock — so rescan fleet_hosts()
+        # periodically and start threads for peers that lack one. A REMOVED
+        # peer keeps streaming until the streamer restarts: documented bound
+        # (its snapshots age out of read_fleet_inflight's drop like any other).
+        running, procs = {}, {}
+
+        def supervise():
+            current = [(n, e) for n, e in fleet_hosts() if not only or n == only]
+            for name, entry in current:
+                if name not in running or not running[name].is_alive():
+                    t = threading.Thread(target=_fleet_stream_host, args=(name, entry, stop, procs), daemon=True)
+                    t.start()
+                    running[name] = t
+
+        supervise()
+        last_scan = time.time()
+        while not stop.is_set():
+            time.sleep(1)  # interruptible: the signal handler above wakes this
+            if time.time() - last_scan >= FLEET_STREAM_RESCAN:
+                last_scan = time.time()
+                supervise()
+        # shutdown: the ssh children hold their readers blocked in readline() —
+        # daemon threads would be killed at interpreter exit without running
+        # their finally, so terminate the children ourselves (EOF unblocks the
+        # readers), then join briefly before releasing the singleton lock.
+        for proc in procs.values():
+            try:
+                proc.terminate()
+            except OSError:
+                pass
+        for t in running.values():
+            t.join(3)
+    finally:
+        lock.close()
+
+
+def fleet_stream_kick():
+    """Spawn a detached `fleet stream` when an ssh peer exists (the singleton
+    flock inside makes this a no-op while one runs). Same fire-and-forget
+    contract as fleet_kick, but with a longer kick-file window — the stream,
+    once up, never exits on its own, so re-kicks only matter after a death.
+    Never forks without ssh hosts, so local: tests and plain CLI runs stay
+    quiet."""
+    if os.environ.get("LLM_USAGE_FLEET_STREAM", "").strip().lower() == "off":
+        return
+    if not any(e.get("ssh") for _, e in fleet_hosts()):
+        return
+    kick = os.path.join(STATE, "fleet", "stream-kick")
+    try:
+        os.makedirs(os.path.dirname(kick), mode=0o700, exist_ok=True)
+        try:
+            last_kick = os.path.getmtime(kick)
+        except OSError:
+            last_kick = 0
+        now = time.time()
+        if now - last_kick < 60:
+            return
+        with open(kick, "a"):
+            os.utime(kick)
+        subprocess.Popen([sys.executable, os.path.realpath(__file__), "fleet", "stream"],
                          stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                          start_new_session=True)
     except OSError:
@@ -1443,6 +1714,8 @@ def cmd_tail(args):
         if not events:
             print("no proxy events (restart proxies with the usage callback: llm-usage status)")
         return
+    if args.fleet:
+        fleet_stream_kick()  # sub-second peer in-flight for as long as this follows; flock makes it a no-op if one runs
     try:
         while True:
             time.sleep(1)
@@ -1682,9 +1955,31 @@ def cmd_export(args):
         now = time.time()
         flights, _ = read_inflight(now)
         for f in flights:
-            print(json.dumps({"inflight": True, "host": LOCAL_HOST, "t": now - f["seconds"],
+            print(json.dumps({"inflight": True, "host": LOCAL_HOST, "t": f.get("start_t", now - f["seconds"]),
                               "port": f["port"], "id": f["id"], "model": f["model"]},
                              separators=(",", ":")))
+
+
+def cmd_watch_inflight(args):
+    """This machine's in-flight requests as a live JSONL stream on stdout —
+    the peer side of `fleet stream`. One {"_watch": 1} hello, then one
+    {"t": ..., "requests": [...]} snapshot whenever the set changes (plus a
+    heartbeat while it stays the same, so a long request must not look gone
+    quiet to the reader's staleness drop). Same read-only surface as `export`,
+    so a forced-command key pinned to export can be re-pinned to this."""
+    print(json.dumps({"_watch": 1, "host": LOCAL_HOST, "t": time.time()}, separators=(",", ":")), flush=True)
+    last, last_emit = None, 0.0
+    try:
+        while True:
+            now = time.time()
+            snap = _fleet_inflight_snapshot(STATE, now)
+            key = json.dumps(snap, separators=(",", ":"))
+            if key != last or now - last_emit >= FLEET_WATCH_HEARTBEAT:
+                last, last_emit = key, now
+                print(json.dumps({"t": now, "requests": snap}, separators=(",", ":")), flush=True)
+            time.sleep(args.interval)
+    except BrokenPipeError:
+        pass  # the aggregator hung up: nothing left to stream to
 
 
 def cmd_fleet(args):
@@ -1701,6 +1996,9 @@ def cmd_fleet(args):
         return
     if args.action == "status":
         cmd_status(argparse.Namespace())
+        return
+    if args.action == "stream":
+        fleet_stream(only=args.host)
         return
     for r in fleet_refresh(force=args.force, only=args.host, auto=args.auto):
         if r.get("skipped"):
@@ -2040,15 +2338,16 @@ def reroute_kind(ev):
     return "other"
 
 
-def read_inflight(now):
+def read_inflight(now, directory=None):
     """Live in-flight requests from the proxies' inflight-<port>-<pid>.json files.
 
     Skips files of dead pids (crash/restart leftovers). Entries from a live pid
     are kept regardless of age: a long stream must not disappear mid-request.
-    Returns (entries, ports that report in-flight at all).
+    `directory` reads another state dir (a local_dir fleet peer) instead of
+    this machine's. Returns (entries, ports that report in-flight at all).
     """
     entries, reporting = [], set()
-    for path in glob.glob(os.path.join(STATE, "inflight-*.json")):
+    for path in glob.glob(os.path.join(directory or STATE, "inflight-*.json")):
         try:
             with open(path) as handle:
                 doc = json.load(handle)
@@ -2063,13 +2362,17 @@ def read_inflight(now):
         reporting.add(port)
         for rid, req in (doc.get("requests") or {}).items():
             try:
-                age = max(0.0, now - float(req["t"]))
+                started = float(req["t"])
             except (KeyError, TypeError, ValueError):
                 continue
+            age = max(0.0, now - started)
             # The monitor plugin writes "unknown" until the request body is parsed.
             model = req.get("model") if req.get("model") not in (None, "", "unknown") else None
             model = model or req.get("actual_model") or req.get("requested") or req.get("model")
-            entries.append({"port": port, "id": "%s:%s" % (port, rid), "model": strip_model(model), "seconds": int(age)})
+            # start_t: the request's own epoch, so re-emitted snapshots (heartbeat,
+            # stream) carry a stable t instead of one recomputed from an int age
+            entries.append({"port": port, "id": "%s:%s" % (port, rid), "model": strip_model(model),
+                            "seconds": int(age), "start_t": started})
     return entries, reporting
 
 
@@ -2867,6 +3170,7 @@ def dashboard_data(since_text, source, hide, host=None):
     now = time.time()
     since = parse_since(since_text)
     fleet_kick()  # the dashboard is often the only thing running: it must refresh the peers too
+    fleet_stream_kick()  # ...and keep their in-flight snapshots streaming while it runs
     events, used = load(since, source, host)
     volume = defaultdict(int)
     for ev in events:
@@ -3183,8 +3487,13 @@ def main():
     p.add_argument("--inflight", action="store_true", help="append live in-flight requests as {\"inflight\": true} records")
     p.set_defaults(fn=cmd_export)
 
+    p = sub.add_parser("watch-inflight", help="stream this machine's in-flight requests as JSONL (peer side of `fleet stream`)")
+    p.add_argument("--interval", type=float, default=FLEET_WATCH_INTERVAL, help="peer-side poll of the inflight files, seconds (default %(default)s)")
+    p.set_defaults(fn=cmd_watch_inflight)
+
     p = sub.add_parser("fleet", help="pulled fleet peers: refresh over ssh, list hosts")
-    p.add_argument("action", nargs="?", default="refresh", choices=["refresh", "status", "hosts"], help="refresh (default) | status | hosts")
+    p.add_argument("action", nargs="?", default="refresh", choices=["refresh", "stream", "status", "hosts"],
+                   help="refresh (default) | stream (live peer in-flight) | status | hosts")
     p.add_argument("--force", action="store_true", help="refresh even hosts pulled within the TTL")
     p.add_argument("--auto", action="store_true", help=argparse.SUPPRESS)  # kick-spawned: apply the per-host failure backoff
     p.add_argument("--host", help="refresh only this host")

@@ -821,6 +821,81 @@ assert sum(r["n"] for r in json.loads(agg_run("summary", "--since", "1h", "--sou
 d = run("no-fleet", [ev(30)])
 assert d["fleet"] == {"enabled": False} and d["totals"]["m15"]["requests"] == 1, d.get("fleet")
 
+# fleet in-flight streaming: `watch-inflight` on the peer (hello, snapshot on change,
+# heartbeat while unchanged) + `fleet stream` on the aggregator (local: transport) pushing
+# into the same fleet/<host>/inflight.json the pull fills, singleton via flock
+import queue
+wenv = {**os.environ, "LLM_USAGE_DIR": peer, "LLM_USAGE_WATCH_HEARTBEAT": "1"}
+wp = subprocess.Popen([sys.executable, usage, "watch-inflight", "--interval", "0.05"],
+                      stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, env=wenv)
+wq = queue.Queue()
+def _wp_reader():
+    for line in wp.stdout:
+        wq.put(line)
+threading.Thread(target=_wp_reader, daemon=True).start()
+def wline(timeout=15):
+    line = wq.get(timeout=timeout)  # a hung watcher fails the test instead of hanging it
+    return json.loads(line)
+hello = wline()
+assert hello["_watch"] == 1 and hello["host"], hello
+snap = wline()
+assert len(snap["requests"]) == 1 and snap["requests"][0]["id"].endswith("r1") and snap["requests"][0]["port"] == "4148", snap
+assert snap["requests"][0]["model"] == "glm-5.3" and snap["t"] > 0, snap
+hb = wline()  # unchanged set: heartbeat re-emits, so a long request never looks gone quiet
+assert hb["requests"] == snap["requests"], (hb, snap)
+with open(f"{peer}/inflight-4148-777.json", "w") as h:  # a second request starts on the peer
+    json.dump({"pid": os.getpid(), "port": "4148",
+               "requests": {"r1": {"t": _time.time() - 7, "model": GLM, "requested": GLM},
+                            "r2": {"t": _time.time() - 2, "model": DS, "requested": DS}}}, h)
+snap = wline()
+assert {r["id"].rsplit(":", 1)[-1] for r in snap["requests"]} == {"r1", "r2"}, snap
+wp.terminate()
+wp.wait(10)
+# aggregator side: fleet stream (local peer) fills the cache, tracks changes, exits on SIGTERM
+sp = subprocess.Popen([sys.executable, usage, "fleet", "stream"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                      env={**os.environ, "LLM_USAGE_DIR": agg, "LLM_USAGE_STREAM_RESCAN": "1", **fenv})
+snap_path = f"{agg}/fleet/peerA/inflight.json"
+def streamed_at(path, expect, timeout=15):
+    deadline = _time.time() + timeout
+    doc = None
+    while _time.time() < deadline:
+        try:
+            doc = json.load(open(path))
+        except (OSError, ValueError):
+            doc = None
+        if doc is not None and {r["id"].rsplit(":", 1)[-1] for r in doc["requests"]} == expect:
+            return doc
+        _time.sleep(0.1)
+    raise AssertionError(f"stream never produced {expect} at {path}: {doc}")
+def streamed(expect, timeout=15):
+    return streamed_at(snap_path, expect, timeout)
+doc = streamed({"r1", "r2"})
+assert doc["t"] > _time.time() - 10 and all(r["model"] for r in doc["requests"]), doc
+# a running stream is a singleton: a second fleet stream exits immediately, exit 0
+res = subprocess.run([sys.executable, usage, "fleet", "stream"], capture_output=True, text=True, timeout=30,
+                     env={**os.environ, "LLM_USAGE_DIR": agg, **fenv})
+assert res.returncode == 0, (res.stdout, res.stderr)
+# config reconciliation: a peer added to fleet.json while the singleton runs gets its
+# thread on the next rescan (later `fleet stream` kicks exit on the held flock, so
+# nothing else would ever start it)
+peer2 = tempfile.mkdtemp(dir=tmp)
+with open(f"{peer2}/inflight-4148-888.json", "w") as h:
+    json.dump({"pid": os.getpid(), "port": "4148", "requests": {"rB": {"t": _time.time() - 3, "model": GLM, "requested": GLM}}}, h)
+with open(f"{fenv['LLM_USAGE_CONFIG_DIR']}/fleet.json", "w") as h:
+    json.dump({"hosts": [{"name": "peerB", "local_dir": peer2}]}, h)
+docB = streamed_at(f"{agg}/fleet/peerB/inflight.json", {"rB"})
+assert docB["t"] > _time.time() - 10, docB
+with open(f"{peer}/inflight-4148-777.json", "w") as h:  # r2 finishes: the next snapshot drops it
+    json.dump({"pid": os.getpid(), "port": "4148", "requests": {"r1": {"t": _time.time() - 7, "model": GLM, "requested": GLM}}}, h)
+doc = streamed({"r1"})
+sp.terminate()
+assert sp.wait(10) == 0, "fleet stream must exit cleanly on SIGTERM"
+os.unlink(f"{fenv['LLM_USAGE_CONFIG_DIR']}/fleet.json")  # config back to env-only peerA for the views below
+# the streamed snapshot feeds the same views the pull does (menubar-data reads the same file)
+d = run("fleet-stream", [], state=agg, extra_env=fenv)
+assert d["inflight"]["count"] == 1 and d["inflight"]["requests"][0]["host"] == "peerA", d["inflight"]
+assert d["fleet"]["hosts"][0]["inflight"]["count"] == 1, d["fleet"]["hosts"][0]
+
 # in-flight tracking in the proxy logger (stub litellm so it runs without the proxy venv)
 state = tempfile.mkdtemp(dir=tmp)
 os.environ["LLM_USAGE_DIR"] = state
@@ -1066,6 +1141,47 @@ assert mod._fleet_control_dir(cmroot) == cmdir
 os.rmdir(cmdir)
 os.symlink(os.path.join(tmp, "cmtest-elsewhere"), cmdir)
 assert mod._fleet_control_dir(cmroot) == os.path.join(mod.STATE, "fleet"), "symlinked dir must not be trusted"
+
+# the shared ControlMaster must carry ServerAlive no matter which side (pull or
+# stream) creates it: a pull-created master without keepalives would leave a
+# multiplexed stream reader blocked on a network blackhole
+argv, _ = mod._fleet_export_argv({"ssh": "peer.example"}, 0)
+assert "ServerAliveInterval=15" in argv and "ServerAliveCountMax=3" in argv, argv
+assert "ServerAliveInterval=15" in mod._fleet_watch_argv({"ssh": "peer.example"}), "stream ssh needs keepalives"
+
+# stream-vs-pull coordination: while the stream singleton holds its flock and its
+# snapshot is heartbeat-fresh, a pull must NOT overwrite the membership it captured
+# earlier (it would resurrect requests the stream already watched finish); a stale
+# snapshot or a released lock hands ownership back to the pull
+import fcntl
+slock = os.path.join(mod.STATE, "fleet", "stream.lock")
+os.makedirs(os.path.dirname(slock), exist_ok=True)
+sfd = os.open(slock, os.O_RDWR | os.O_CREAT, 0o600)
+newer = [{"port": "4148", "id": "4148:new", "t": now - 5, "model": "m"}]
+older = [{"port": "4148", "id": "4148:old", "t": now - 30, "model": "m"}]
+def ps_doc():
+    return json.load(open(os.path.join(mod.fleet_dir("ps"), "inflight.json")))
+try:
+    fcntl.flock(sfd, fcntl.LOCK_EX)  # we stand in for the streamer
+    mod._write_fleet_inflight("ps", newer)
+    scripted.clear()
+    scripted += [(meta_pt, [], older), (meta_pt, [], [])]
+    mod.fleet_pull_one("ps", {"name": "ps", "local_dir": "/x"}, force=True)
+    assert [r["id"] for r in ps_doc()["requests"]] == ["4148:new"], ps_doc()
+    # the lock is held but the heartbeat went stale (wedged stream): pull is the fallback
+    with open(os.path.join(mod.fleet_dir("ps"), "inflight.json"), "w") as h:
+        json.dump({"t": time.time() - 999, "requests": newer}, h)
+    scripted += [(meta_pt, [], older)]  # backfilled + cursor below oldest month: incremental only
+    mod.fleet_pull_one("ps", {"name": "ps", "local_dir": "/x"}, force=True)
+    assert [r["id"] for r in ps_doc()["requests"]] == ["4148:old"], ps_doc()
+finally:
+    fcntl.flock(sfd, fcntl.LOCK_UN)
+    os.close(sfd)
+# stream gone entirely: pulls keep writing, exactly as before the stream existed
+scripted += [(meta_pt, [], older)]
+mod.fleet_pull_one("ps", {"name": "ps", "local_dir": "/x"}, force=True)
+assert [r["id"] for r in ps_doc()["requests"]] == ["4148:old"], ps_doc()
+assert not scripted, "every scripted pull must have been consumed"
 PY
 
 # Swift helper: compiles, and --dump-menu renders every scenario without a GUI.
