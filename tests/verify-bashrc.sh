@@ -23,9 +23,14 @@ ln -s -- "$TESTHOME/git/dotfiles/.bashrc" "$TESTHOME/.bashrc"
 ln -s -- "$TESTHOME/git/dotfiles/.bash_profile" "$TESTHOME/.bash_profile"
 
 # bash -i without a tty prints job-control warnings on stderr; anything else
-# is a real problem — fail on it.
+# is a real problem — fail on it. Prints the captured stderr when the command
+# itself fails, so the actual error isn't swallowed by set -e.
 check() {
-  HOME="$TESTHOME" "$@" 2>"$TESTHOME/stderr.log"
+  if ! HOME="$TESTHOME" "$@" 2>"$TESTHOME/stderr.log"; then
+    echo "FAILED: $*" >&2
+    cat "$TESTHOME/stderr.log" >&2
+    return 1
+  fi
 }
 noise_ok() {
   local unexpected
@@ -44,7 +49,8 @@ check bash -i -c '
   set -e
   shopt -q histappend
   shopt -q checkwinsize
-  shopt -q globstar
+  # globstar is bash 4+ only (macOS ships bash 3.2)
+  if ((BASH_VERSINFO[0] >= 4)); then shopt -q globstar; fi
   [[ $HISTSIZE == 1000 && $HISTFILESIZE == 2000 && $HISTCONTROL == ignoreboth ]]
   alias ls >/dev/null
   alias ll >/dev/null
