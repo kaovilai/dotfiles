@@ -94,12 +94,35 @@ run || fail "config run rc=$rc: $out"
 [[ "$(calls)" == *"plugin install x@m"* && "$(calls)" != *"marketplace update"* ]] || fail "config change plugin pass wrong: $(calls)"
 [[ "$(calls)" == *"sync-harnesses"* ]] || fail "config change did not re-run sync-harnesses: $(calls)"
 
-# 3b. All three repos behind at once (fetches overlap): one run catches up all
+# 3b. All three repos behind at once: one run catches up all. A git shim in
+#     front of fetch holds each fetch until all three have started, so serial
+#     fetches (the old behavior) cannot pass — the barrier times out instead.
+mkdir -p "$tmp/fbin" "$tmp/fetchbar"
+real_git=$(command -v git)
+cat > "$tmp/fbin/git" <<EOF
+#!/bin/sh
+case "\$*" in
+  *fetch*)
+    echo start >> "\$FETCH_BARRIER/started"
+    i=0
+    while [ "\$(wc -l < "\$FETCH_BARRIER/started")" -lt 3 ] && [ "\$i" -lt 200 ]; do
+        sleep 0.05; i=\$((i + 1))
+    done
+    [ "\$i" -lt 200 ] || echo serial >> "\$FETCH_BARRIER/serial"
+    ;;
+esac
+exec $real_git "\$@"
+EOF
+chmod +x "$tmp/fbin/git"
 upstream dot file multi1
 upstream cfg skills.md multi2
 upstream capi bun.lock multi3
-run || fail "multi fast-forward run rc=$rc: $out"
+: >| "$STUB_LOG"
+out=$(FETCH_BARRIER="$tmp/fetchbar" PATH="$tmp/fbin:$PATH" zsh "$repo/scripts/fleet-sync.zsh" 2>&1); rc=$?
+[[ $rc -eq 0 ]] || fail "multi fast-forward run rc=$rc: $out"
 [[ "$(head_of dot)" == "$(up_head dot)" && "$(head_of cfg)" == "$(up_head cfg)" && "$(head_of capi)" == "$(up_head capi)" ]] || fail "multi fast-forward incomplete: $out"
+[[ "$(wc -l < "$tmp/fetchbar/started")" -eq 3 ]] || fail "expected 3 fetches, got $(wc -l < "$tmp/fetchbar/started")"
+[[ ! -f "$tmp/fetchbar/serial" ]] || fail "fetches ran serially: barrier timed out waiting for all three"
 
 # 3c. Failed sync-harnesses refresh: stamp dropped, so the next run retries
 #     even without a new pull (the gate must not swallow the retry)

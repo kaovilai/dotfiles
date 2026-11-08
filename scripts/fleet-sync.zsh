@@ -128,8 +128,9 @@ fi
 
 # --- repos ------------------------------------------------------------------
 typeset -i problems=0
-typeset -A before=()      # label -> HEAD before a fast-forward
-typeset -A fetch_pid=()   # label -> pid of the background fetch (see _prefetch_repo)
+typeset -A before=()       # label -> HEAD before a fast-forward
+typeset -A fetch_pid=()    # label -> pid of the background fetch (see _prefetch_repo)
+typeset -A fetch_remote=() # label -> remote that background fetch targets
 # A skip is silent forever: the timer journal is the only record, so a dirty or
 # diverged machine keeps serving months-old code while everything else moves
 # (2026-11-06 audit). Each skip drops a marker under
@@ -150,6 +151,7 @@ _prefetch_repo() {
     local label=$1 dir=$2 up
     [[ -e "$dir/.git" ]] || return 0
     up=$(git -C "$dir" rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null) || return 0
+    fetch_remote[$label]="${up%%/*}"
     git -C "$dir" fetch --quiet "${up%%/*}" >/dev/null 2>&1 &
     # Quoted: an unquoted $! on the RHS of name[key]=value is stored literally.
     fetch_pid[$label]="$!"
@@ -169,9 +171,15 @@ _sync_repo() {
     remote=${up%%/*}
     local -i fetched=1
     if [[ -n "${fetch_pid[$label]-}" ]]; then
-        # _prefetch_repo already started this fetch; wait for it.
+        # Reap the fetch _prefetch_repo started before the repo checks.
         wait "${fetch_pid[$label]}" || fetched=0
+        # If the upstream was re-pointed to a different remote after the
+        # prefetch started, that fetch says nothing about the current remote.
+        if [[ "${fetch_remote[$label]-}" != "$remote" ]]; then
+            git -C "$dir" fetch --quiet "$remote" 2>/dev/null || fetched=0
+        fi
     else
+        # No prefetch for this repo (checkout or upstream appeared mid-run).
         git -C "$dir" fetch --quiet "$remote" 2>/dev/null || fetched=0
     fi
     if (( ! fetched )); then
