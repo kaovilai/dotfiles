@@ -76,16 +76,67 @@ cmp -s "$tmp/dot/.codex/hooks.json" "$HOME/.codex/hooks.json" || fail "codex hoo
 cmp -s "$tmp/settings.orig" "$HOME/.claude/settings.json" || fail "settings.json not restored: $(<"$HOME/.claude/settings.json")"
 [[ -f "$XDG_STATE_HOME/fleet-sync/plugins-updated" ]] || fail "plugin stamp not written"
 
-# 2. In sync, stamp fresh: nothing to do, no plugin calls
+# 2. In sync, stamp fresh: nothing to do — no plugin calls, no harness re-link
 run || fail "second run rc=$rc: $out"
-local idle_calls; idle_calls=$(calls | grep -v '^sync-harnesses ' || true)
-[[ -z "$idle_calls" ]] || fail "idle run touched plugins: $idle_calls"
+[[ -z "$(calls)" ]] || fail "idle run did work: $(calls)"
 
-# 3. Claude config moved upstream: fast-forward, plugin sync without --update
+# 2b. Corrupted installed hooks.json: reinstalled, sync-harnesses re-run
+print -r -- '{"hooks":' >| "$HOME/.codex/hooks.json"
+run || fail "hooks reinstall run rc=$rc: $out"
+cmp -s "$tmp/dot/.codex/hooks.json" "$HOME/.codex/hooks.json" || fail "corrupted hooks.json not restored: $(<"$HOME/.codex/hooks.json")"
+[[ "$(calls)" == *"sync-harnesses"* ]] || fail "hooks.json install did not re-run sync-harnesses: $(calls)"
+
+# 3. Claude config moved upstream: fast-forward, plugin sync without --update,
+#    sync-harnesses re-run (its inputs live in the claude-config repo)
 upstream cfg skills.md new-skill
 run || fail "config run rc=$rc: $out"
 [[ "$(head_of cfg)" == "$(up_head cfg)" ]] || fail "config not fast-forwarded"
 [[ "$(calls)" == *"plugin install x@m"* && "$(calls)" != *"marketplace update"* ]] || fail "config change plugin pass wrong: $(calls)"
+[[ "$(calls)" == *"sync-harnesses"* ]] || fail "config change did not re-run sync-harnesses: $(calls)"
+
+# 3b. All three repos behind at once: one run catches up all. A git shim in
+#     front of fetch holds each fetch until all three have started, so serial
+#     fetches (the old behavior) cannot pass — the barrier times out instead.
+mkdir -p "$tmp/fbin" "$tmp/fetchbar"
+real_git=$(command -v git)
+cat > "$tmp/fbin/git" <<EOF
+#!/bin/sh
+case "\$*" in
+  *fetch*)
+    echo start >> "\$FETCH_BARRIER/started"
+    i=0
+    while [ "\$(wc -l < "\$FETCH_BARRIER/started")" -lt 3 ] && [ "\$i" -lt 200 ]; do
+        sleep 0.05; i=\$((i + 1))
+    done
+    [ "\$i" -lt 200 ] || echo serial >> "\$FETCH_BARRIER/serial"
+    ;;
+esac
+exec $real_git "\$@"
+EOF
+chmod +x "$tmp/fbin/git"
+upstream dot file multi1
+upstream cfg skills.md multi2
+upstream capi bun.lock multi3
+: >| "$STUB_LOG"
+out=$(FETCH_BARRIER="$tmp/fetchbar" PATH="$tmp/fbin:$PATH" zsh "$repo/scripts/fleet-sync.zsh" 2>&1); rc=$?
+[[ $rc -eq 0 ]] || fail "multi fast-forward run rc=$rc: $out"
+[[ "$(head_of dot)" == "$(up_head dot)" && "$(head_of cfg)" == "$(up_head cfg)" && "$(head_of capi)" == "$(up_head capi)" ]] || fail "multi fast-forward incomplete: $out"
+[[ "$(wc -l < "$tmp/fetchbar/started")" -eq 3 ]] || fail "expected 3 fetches, got $(wc -l < "$tmp/fetchbar/started")"
+[[ ! -f "$tmp/fetchbar/serial" ]] || fail "fetches ran serially: barrier timed out waiting for all three"
+
+# 3c. Failed sync-harnesses refresh: stamp dropped, so the next run retries
+#     even without a new pull (the gate must not swallow the retry)
+print -r -- $'#!/bin/sh\necho "sync-harnesses $*" >> "$STUB_LOG"\nexit 3' > "$tmp/cfg/skills/skills-compress/scripts/sync-harnesses.sh"
+chmod +x "$tmp/cfg/skills/skills-compress/scripts/sync-harnesses.sh"
+upstream dot file retry1
+if run; then fail "failed sync-harnesses run passed: $out"; fi
+[[ "$out" == *"codex hooks: sync-harnesses failed"* ]] || fail "sync-harnesses failure not reported: $out"
+[[ ! -f "$XDG_STATE_HOME/fleet-sync/harnesses-synced" ]] || fail "stamp survived a failed refresh"
+print -r -- $'#!/bin/sh\necho "sync-harnesses $*" >> "$STUB_LOG"' > "$tmp/cfg/skills/skills-compress/scripts/sync-harnesses.sh"
+chmod +x "$tmp/cfg/skills/skills-compress/scripts/sync-harnesses.sh"
+run || fail "retry run rc=$rc: $out"
+[[ "$(calls)" == *"sync-harnesses"* ]] || fail "failed refresh not retried without a new pull: $(calls)"
+[[ -f "$XDG_STATE_HOME/fleet-sync/harnesses-synced" ]] || fail "stamp not written after the successful retry"
 
 # 4. copilot-api moved with bun.lock: dependencies reinstalled; gateway not running
 # (a stray gateway from an earlier failed suite run would be adopted and break
