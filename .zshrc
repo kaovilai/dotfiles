@@ -209,3 +209,6 @@ export PATH="/Users/tkaovila/.local/bin:$PATH"
 
 # rust for t3code dev
 export PATH=/opt/homebrew/opt/rustup/bin:$PATH
+
+# Vite+ bin (https://viteplus.dev)
+. "/home/tkaovila/.config/vite-plus/env"
