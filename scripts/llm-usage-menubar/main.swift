@@ -14,6 +14,7 @@
 //   --window-png PATH [--dark] [--layout horizontal|vertical|history] [--size WxH] [--graph bars|lines|both] [--stale]
 //                                      [--hover vendor:<key>|provider:<key>|host:<name>] [--window-metric requests|tokens]
 //                                      [--graph-hover MINUTE]  pin the graph hover readout to minute MINUTE (0 = oldest)
+//                                      [--inflight-sample FILE]  apply a second in-flight sample (stream refinement) before rendering
 //                                      render the floating monitor window content to PNG (@2x) from --data-file
 //   --dump-menu also takes --window-visible --window-layout L --window-graph G --window-metric M --chart-metric M --window-opacity N --window-click-through
 import AppKit
@@ -835,8 +836,10 @@ final class MonitorView: NSView {
     /// edge), so the oldest request always sits lowest and a new one enters from
     /// the top. Persistent on purpose: a finishing request keeps its rung while
     /// its bar drains — bars drain in place and everything above settles down one
-    /// row. Re-deriving the order from `flights` alone would compact live bars
-    /// over still-draining ones. Rungs release once a bar has fully drained.
+    /// row. Re-deriving the whole order from `flights` would compact live bars
+    /// over still-draining ones, so only the live rungs re-deal when a refined
+    /// age sample reorders liveIds; draining rungs stay pinned to their slots.
+    /// Rungs release once a bar has fully drained.
     private var barLadder: [String] = []
     var flights: [Flight] = [] {
         didSet {
@@ -855,6 +858,13 @@ final class MonitorView: NSView {
                 } ?? barLadder.count
                 barLadder.insert(id, at: at)
             }
+            // a live id's sampled age can be refined after it first appears (the
+            // payload fallback's snapshot seconds -> its host's stream file with
+            // the precise start), which reorders liveIds: re-deal the live rungs
+            // to the latest oldest-first order. Draining entries are not live, so
+            // they keep the slots they are emptying in place.
+            let liveSlots = barLadder.indices.filter { live.contains(barLadder[$0]) }
+            for (slot, id) in zip(liveSlots, liveIds) { barLadder[slot] = id }
             // the row positions the strip during a panel draw, so the panel must
             // repaint when the strip row appears or disappears; an id change
             // alone only swaps bars inside the strip, which needsDisplay above
@@ -1871,7 +1881,7 @@ final class MonitorView: NSView {
 
 /// Window content to PNG, @2x, light or dark (debug: no GUI needed).
 func writeWindowPNG(_ d: J, layout: MonitorLayout, size: NSSize, dark: Bool, mode: GraphMode, metric: ChartMetric = .requests,
-                    stale: Bool, hover: String? = nil, graphMinute: Int? = nil, to path: String) {
+                    stale: Bool, hover: String? = nil, graphMinute: Int? = nil, inflightSample: J? = nil, to path: String) {
     let appearance = NSAppearance(named: dark ? .darkAqua : .aqua)!
     let view = MonitorView(frame: NSRect(origin: .zero, size: size))
     view.layout = layout
@@ -1883,6 +1893,15 @@ func writeWindowPNG(_ d: J, layout: MonitorLayout, size: NSSize, dark: Bool, mod
     view.debugGraphMinute = graphMinute
     view.now = parseISO(d["generated_at"].str) ?? Date()
     view.data = d
+    // test hook: apply a second in-flight sample after the payload's first one —
+    // the refined ages a host's stream snapshot delivers after the payload
+    // fallback — to exercise the ladder reconcile between successive samples
+    if let rows = inflightSample?["inflight"]["requests"].arr {
+        view.flights = rows.compactMap { row in
+            guard let id = row["id"].str else { return nil }
+            return Flight(id: id, model: row["model"].str ?? "", seconds: row["seconds"].dbl ?? 0)
+        }
+    }
     guard let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: Int(size.width) * 2, pixelsHigh: Int(size.height) * 2,
                                      bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
                                      colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0) else { return }
@@ -3120,10 +3139,12 @@ if let path = argValue("--window-png") {
     let layout = MonitorLayout(rawValue: argValue("--layout") ?? "horizontal") ?? .horizontal
     var size = layout.defaultSize
     if let sz = argValue("--size")?.split(separator: "x"), sz.count == 2, let w = Double(sz[0]), let h = Double(sz[1]) { size = NSSize(width: w, height: h) }
+    var inflightSample: J?
+    if let sp = argValue("--inflight-sample"), case .success(let s) = parseJSON(FileManager.default.contents(atPath: sp) ?? Data()) { inflightSample = s }
     writeWindowPNG(j, layout: layout, size: size, dark: args.contains("--dark"), mode: GraphMode(rawValue: argValue("--graph") ?? "both") ?? .both,
                    metric: ChartMetric(rawValue: argValue("--window-metric") ?? "") ?? .requests,
                    stale: args.contains("--stale"), hover: argValue("--hover"),
-                   graphMinute: argValue("--graph-hover").flatMap { Int($0) }, to: path)
+                   graphMinute: argValue("--graph-hover").flatMap { Int($0) }, inflightSample: inflightSample, to: path)
     exit(0)
 }
 

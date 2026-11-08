@@ -1273,6 +1273,26 @@ json.dump(payload(GLM, DS, swap_ids=True), open(sys.argv[4], "w"))' "$mbjson/fle
     "$mb" --window-png "$tmp/w-if-2c.png" --layout vertical --data-file "$tmp/if-2c.json" >/dev/null || fail "window-png inflight order control"
     cmp -s "$tmp/w-if-2a.png" "$tmp/w-if-2b.png" && fail "swapping which vendor is older must change the bar render"
     cmp -s "$tmp/w-if-2a.png" "$tmp/w-if-2c.png" || fail "inflight bar order must follow age, not id (id-swap control)"
+    # a refined second sample (a host's stream snapshot arriving after the payload
+    # fallback first showed its requests) can reorder the live ids: the ladder must
+    # re-deal the live rungs to the new oldest-first order. The reconciled render
+    # must match one that had the right order from the start, and must NOT keep
+    # the stale first-sample order
+    python3 -c 'import json,sys
+GLM, DS = "rits/zai-org/glm-5-3", "rits/deepseek-ai/DeepSeek-V4.1-Flash-1017"
+d = json.load(open(sys.argv[1]))
+d["inflight"].update(available=True, count=2, oldest_s=9)
+def reqs(b_first):  # ids keep model+age; only the sampled ORDER flips
+    a = {"id": "a", "proxy": ":4148", "model": GLM, "seconds": 9}
+    b = {"id": "b", "proxy": ":4148", "model": DS, "seconds": 4}
+    return [b, a] if b_first else [a, b]
+d["inflight"]["requests"] = reqs(False); json.dump(d, open(sys.argv[2], "w"))  # first sample: a older
+d["inflight"]["requests"] = reqs(True); json.dump(d, open(sys.argv[3], "w"))  # refined: b older' "$mbjson/fleet.json" "$tmp/if-r1.json" "$tmp/if-r2.json"
+    "$mb" --window-png "$tmp/w-if-r.png" --layout vertical --data-file "$tmp/if-r1.json" --inflight-sample "$tmp/if-r2.json" >/dev/null || fail "window-png inflight reconcile"
+    "$mb" --window-png "$tmp/w-if-r-ctrl.png" --layout vertical --data-file "$tmp/if-r2.json" >/dev/null || fail "window-png inflight reconcile control"
+    "$mb" --window-png "$tmp/w-if-r-stale.png" --layout vertical --data-file "$tmp/if-r1.json" >/dev/null || fail "window-png inflight reconcile stale"
+    cmp -s "$tmp/w-if-r.png" "$tmp/w-if-r-ctrl.png" || fail "a refined sample must re-deal the live rungs to the new age order"
+    cmp -s "$tmp/w-if-r.png" "$tmp/w-if-r-stale.png" && fail "reconciled render must not keep the stale first-sample order"
     [[ "$dump" == *"[chart] requests/min"* && "$dump" == *"[chart] by model"* && "$dump" == *"[chart] by proxy"* ]] || fail "charts missing: $dump"
     [[ "$(dump_of normal --no-charts)" != *"[chart]"* && "$(dump_of normal --no-charts)" == *"Top models (1h): glm-5.3"* ]] || fail "--no-charts"
     [[ "$dump" == *"Open dashboard"* && "$dump" == *"Open logs folder"* && "$dump" == *"Refresh now"* && "$dump" == *"Copy status"* && "$dump" == *"Copy last error"* && "$dump" == *Quit* ]] || fail "actions missing"
