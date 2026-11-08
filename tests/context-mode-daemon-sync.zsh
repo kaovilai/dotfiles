@@ -18,6 +18,7 @@ mkdir -p "$HOME/bin" "$HOME/.claude/plugins/cache/context-mode/context-mode/2.2.
 cat > "$HOME/bin/node" <<'STUB'
 #!/bin/sh
 if [ "$1" = "--version" ]; then echo "${NODE_STUB_VERSION:-v24.15.0}"; exit 0; fi
+if [ "$2" = "--install" ] && [ "${NODE_STUB_FAIL_INSTALL:-0}" = 1 ]; then exit 1; fi
 echo "node $*" >> "$NODE_LOG"
 STUB
 chmod +x "$HOME/bin/node"
@@ -56,7 +57,7 @@ chmod +x "$HOME/bin/systemctl"
 # would route the unit step into launchd and touch the host's agents
 cat > "$HOME/bin/uname" <<'STUB'
 #!/bin/sh
-[ "$1" = "-m" ] && echo x86_64 || echo Linux
+[ "$1" = "-m" ] && echo x86_64 || echo "${CM_TEST_UNAME:-Linux}"
 STUB
 chmod +x "$HOME/bin/uname"
 # brew stub: a host with a real node@24 under brew would satisfy the node
@@ -67,14 +68,22 @@ echo "$CM_TEST_FAKE_BREW_PREFIX"
 STUB
 chmod +x "$HOME/bin/brew"
 export CM_TEST_FAKE_BREW_PREFIX="$tmp/no-brew"
+# stub launchctl: always loaded, bootstrap always ok; logs invocations (the
+# Darwin case asserts a current agent is NOT re-loaded)
+cat > "$HOME/bin/launchctl" <<'STUB'
+#!/bin/sh
+echo "launchctl $*" >> "$LAUNCHCTL_LOG"
+exit 0
+STUB
+chmod +x "$HOME/bin/launchctl"
 # -f on every invocation: a plain zsh sources ~/.zshenv, whose shell env can
 # rebuild PATH (vite-plus does, nondeterministically from this harness's view)
 # and drop the stub directory — one run then fetched the real nodejs.org
 # tarball. -f starts the child with no rc files; the script's own PATH
 # save/restore covers what it sources itself.
-export PATH="$HOME/bin:$PATH" NODE_LOG="$tmp/node.log" CLAUDE_LOG="$tmp/claude.log" SYSTEMCTL_LOG="$tmp/systemctl.log"
+export PATH="$HOME/bin:$PATH" NODE_LOG="$tmp/node.log" CLAUDE_LOG="$tmp/claude.log" SYSTEMCTL_LOG="$tmp/systemctl.log" LAUNCHCTL_LOG="$tmp/launchctl.log"
 export CLAUDE_PROVIDER_NATIVE_BINARY="$HOME/bin/claude"
-: >| "$NODE_LOG"; : >| "$CLAUDE_LOG"; : >| "$SYSTEMCTL_LOG"
+: >| "$NODE_LOG"; : >| "$CLAUDE_LOG"; : >| "$SYSTEMCTL_LOG"; : >| "$LAUNCHCTL_LOG"
 
 unit="$HOME/.config/systemd/user/context-mode-daemon.service"
 daemon="$HOME/.claude/plugins/cache/context-mode/context-mode/2.2.1/daemon.mjs"
@@ -116,6 +125,7 @@ fi
 cat > "$HOME/bin/node" <<'STUB'
 #!/bin/sh
 if [ "$1" = "--version" ]; then echo "${NODE_STUB_VERSION:-v24.15.0}"; exit 0; fi
+if [ "$2" = "--install" ] && [ "${NODE_STUB_FAIL_INSTALL:-0}" = 1 ]; then exit 1; fi
 echo "node $*" >> "$NODE_LOG"
 STUB
 chmod +x "$HOME/bin/node"
@@ -145,17 +155,38 @@ export NODE_STUB_VERSION=v24.15.0
 # CM_TEST_SHA instead, and without the stub the real curl would fetch
 # nodejs.org from inside the offline suite
 
+# --- 2c. an incomplete managed install (marker gone) is retried, not trusted ------------
+rm -f "$HOME/.local/lib/node-v24.15.0-linux-x64/.cm-node-installed"
+export NODE_STUB_VERSION=v18.0.0
+zsh -f "$repo/scripts/context-mode-daemon-sync.zsh" "${args[@]}" || fail "marker-retry run must exit 0"
+[[ -f "$HOME/.local/lib/node-v24.15.0-linux-x64/.cm-node-installed" ]] || fail "a managed dir without the marker must be re-extracted, marker written"
+export NODE_STUB_VERSION=v24.15.0
+
+# --- 2d. a manually placed node (no platform suffix) is trusted without a marker ---------
+rm -rf "$HOME/.local/lib"
+mkdir -p "$HOME/.local/lib/node-v24.15.0/bin"
+cp "$fdir/bin/node" "$HOME/.local/lib/node-v24.15.0/bin/node"
+chmod +x "$HOME/.local/lib/node-v24.15.0/bin/node"
+export NODE_STUB_VERSION=v18.0.0
+: >| "$NODE_LOG"
+zsh -f "$repo/scripts/context-mode-daemon-sync.zsh" "${args[@]}" || fail "manual-node run must exit 0"
+[[ ! -d "$HOME/.local/lib/node-v24.15.0-linux-x64" ]] || fail "a trusted manual node must not trigger the autoinstall"
+grep -q -- "--install" "$NODE_LOG" || fail "the manual node must be selected and used for the unit"
+export NODE_STUB_VERSION=v24.15.0
+
 # --- 3. everything current: no unit install, no registration add ---------------------
 : >| "$NODE_LOG"; : >| "$CLAUDE_LOG"
 mkdir -p "${unit:h}"
-print -r -- "ExecStart=\"$daemon\"\nEnvironment=\"CONTEXT_MODE_DAEMON_PORT=8790\"" >| "$unit"
+print -r -- "ExecStart=\"$HOME/bin/node\" \"$daemon\"\nEnvironment=\"CONTEXT_MODE_DAEMON_PORT=8790\"" >| "$unit"
 export UNIT_STUB_ACTIVE=1 CLAUDE_STUB_HAS_CONTEXT_MODE=1
 zsh -f "$repo/scripts/context-mode-daemon-sync.zsh" "${args[@]}" || fail "current run must exit 0"
 grep -q -- "--install" "$NODE_LOG" && fail "current unit must not be reinstalled"
 grep -q -- "mcp add" "$CLAUDE_LOG" && fail "current registration must not be re-added"
 
 # --- 4. a stale unit path: the install is re-run --------------------------------------
-print -r -- "ExecStart=\"/old/path/2.2.0/daemon.mjs\"" >| "$unit"
+# the node and port are current, so the reinstall is attributable to the stale
+# daemon path alone
+print -r -- "ExecStart=\"$HOME/bin/node\" \"/old/path/2.2.0/daemon.mjs\"\nEnvironment=\"CONTEXT_MODE_DAEMON_PORT=8790\"" >| "$unit"
 : >| "$NODE_LOG"
 zsh -f "$repo/scripts/context-mode-daemon-sync.zsh" "${args[@]}" || fail "stale-unit run must exit 0"
 grep -q -- "$daemon --install" "$NODE_LOG" || fail "a stale unit must be reinstalled against the current bundle"
@@ -232,6 +263,49 @@ zsh -f "$repo/scripts/context-mode-daemon-sync.zsh" "${args[@]}" || fail "port-m
 grep -q -- "mcp remove context-mode" "$CLAUDE_LOG" || fail "an entry on our old port must be removed"
 grep -q -- "mcp add --scope user --transport http context-mode http://127.0.0.1:8790/mcp" "$CLAUDE_LOG" || fail "the registration must be re-added at the current port"
 
+# --- 9a. the move rolls back when the replacement add fails ---------------------------
+cat > "$HOME/bin/claude" <<'STUB'
+#!/bin/sh
+echo "claude $*" >> "$CLAUDE_LOG"
+if [ "$1" = "mcp" ] && [ "$2" = "get" ]; then
+    echo "context-mode:"
+    echo "  Scope: User config (available in all your projects)"
+    echo "  URL: http://127.0.0.1:8791/mcp"
+    exit 0
+fi
+if [ "$1" = "mcp" ] && [ "$2" = "add" ] && [ "$8" = "http://127.0.0.1:8790/mcp" ]; then exit 1; fi
+exit 0
+STUB
+chmod +x "$HOME/bin/claude"
+: >| "$CLAUDE_LOG"
+rc=0
+zsh -f "$repo/scripts/context-mode-daemon-sync.zsh" "${args[@]}" || rc=$?
+(( rc == 1 )) || fail "the rollback run must exit 1 (a failed move is a problem)"
+grep -q -- "mcp remove context-mode" "$CLAUDE_LOG" || fail "the move must still attempt the remove"
+grep -q -- "mcp add --scope user --transport http context-mode http://127.0.0.1:8790/mcp" "$CLAUDE_LOG" || fail "the replacement add must be attempted"
+grep -q -- "mcp add --scope user --transport http context-mode http://127.0.0.1:8791/mcp" "$CLAUDE_LOG" || fail "a failed add must restore the previous registration"
+
+# --- 9b. the move is held when the unit step could not confirm the daemon --------------
+export NODE_STUB_FAIL_INSTALL=1
+cat > "$HOME/bin/claude" <<'STUB'
+#!/bin/sh
+echo "claude $*" >> "$CLAUDE_LOG"
+if [ "$1" = "mcp" ] && [ "$2" = "get" ]; then
+    echo "context-mode:"
+    echo "  Scope: User config (available in all your projects)"
+    echo "  URL: http://127.0.0.1:8791/mcp"
+    exit 0
+fi
+exit 0
+STUB
+chmod +x "$HOME/bin/claude"
+: >| "$CLAUDE_LOG"
+rc=0
+zsh -f "$repo/scripts/context-mode-daemon-sync.zsh" "${args[@]}" || rc=$?
+(( rc == 1 )) || fail "the unit-fail run must exit 1 (the failed install is a problem)"
+grep -q -- "mcp remove" "$CLAUDE_LOG" && fail "the registration must not be moved while the daemon is unconfirmed"
+unset NODE_STUB_FAIL_INSTALL
+
 # --- 10. a foreign path on our host is not ours; a project-scoped entry is not moved ----
 typeset run_err="$tmp/run.err"
 # restore a usable node: case 8 left none installed and a poisoned digest
@@ -239,6 +313,7 @@ export NODE_STUB_VERSION=v24.15.0
 cat > "$HOME/bin/node" <<'STUB'
 #!/bin/sh
 if [ "$1" = "--version" ]; then echo "${NODE_STUB_VERSION:-v24.15.0}"; exit 0; fi
+if [ "$2" = "--install" ] && [ "${NODE_STUB_FAIL_INSTALL:-0}" = 1 ]; then exit 1; fi
 echo "node $*" >> "$NODE_LOG"
 STUB
 chmod +x "$HOME/bin/node"
@@ -274,4 +349,47 @@ STUB
     fi
 done
 
-print -- "PASS: context-mode-daemon-sync (skip, node gate, autoinstall, current, stale unit, add, foreign, numeric orderings, bad checksum, port move, scope+path guards)"
+# --- 11. a unit whose ExecStart node is gone is stale, even when all else matches -------
+cat > "$HOME/bin/claude" <<'STUB'
+#!/bin/sh
+echo "claude $*" >> "$CLAUDE_LOG"
+if [ "$1" = "mcp" ] && [ "$2" = "get" ]; then
+    echo "context-mode:"
+    echo "  Scope: User config (available in all your projects)"
+    echo "  URL: http://127.0.0.1:8790/mcp"
+    exit 0
+fi
+exit 0
+STUB
+chmod +x "$HOME/bin/claude"
+print -r -- "ExecStart=\"/gone/node\" \"$daemon\"\nEnvironment=\"CONTEXT_MODE_DAEMON_PORT=8790\"" >| "$unit"
+: >| "$NODE_LOG"
+zsh -f "$repo/scripts/context-mode-daemon-sync.zsh" "${args[@]}" || fail "dead-unit-node run must exit 0"
+grep -q -- "--install" "$NODE_LOG" || fail "a unit whose ExecStart node is missing must be reinstalled"
+
+# --- 12. launchd: an escaped HOME must not re-load a current agent ----------------------
+export CM_TEST_UNAME=Darwin
+export HOME="$tmp/ho&me"   # & forces the XML escaping the freshness check must undo
+mkdir -p "$HOME/.claude/plugins/cache/context-mode/context-mode/2.2.1"
+print -r -- '# stub bundle' > "$HOME/.claude/plugins/cache/context-mode/context-mode/2.2.1/daemon.mjs"
+cat > "$tmp/home/bin/claude" <<'STUB'
+#!/bin/sh
+echo "claude $*" >> "$CLAUDE_LOG"
+if [ "$1" = "mcp" ] && [ "$2" = "get" ]; then
+    echo "context-mode:"
+    echo "  Scope: User config (available in all your projects)"
+    echo "  URL: http://127.0.0.1:8790/mcp"
+    exit 0
+fi
+exit 0
+STUB
+chmod +x "$tmp/home/bin/claude"
+: >| "$LAUNCHCTL_LOG"
+zsh -f "$repo/scripts/context-mode-daemon-sync.zsh" "${args[@]}" || fail "launchd install run must exit 0"
+[[ -f "$HOME/Library/LaunchAgents/com.kaovilai.context-mode-daemon.plist" ]] || fail "the LaunchAgent plist must be written"
+zsh -f "$repo/scripts/context-mode-daemon-sync.zsh" "${args[@]}" || fail "launchd current run must exit 0"
+(( $(grep -c " bootstrap " "$LAUNCHCTL_LOG") == 1 )) || fail "a current agent with an escaped HOME must not be re-loaded"
+unset CM_TEST_UNAME
+export HOME="$tmp/home"
+
+print -- "PASS: context-mode-daemon-sync (skip, node gate, autoinstall, marker retry, manual node, current, stale unit, add, foreign, numeric orderings, bad checksum, port move, rollback, unit-fail hold, scope+path guards, dead unit node, launchd escaping)"

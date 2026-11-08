@@ -89,6 +89,14 @@ if _cm_node_ok "$(command -v node)"; then
     node_bin="$(command -v node)"
 elif [[ -d "$HOME/.local/lib" ]]; then
     for ver in "$HOME/.local/lib"/node-v24*(N/); do
+        # Dirs in the autoinstall layout (node-v<ver>-<plat>-<arch>) are only
+        # trusted with the completion marker: a partial extraction can leave a
+        # runnable bin/node behind, and selecting it would skip the retry
+        # forever. Manually placed dirs without the platform suffix are trusted
+        # as-is — the marker is ours, not theirs.
+        if [[ "$ver" == *-linux-* || "$ver" == *-darwin-* ]]; then
+            [[ -f "$ver/.cm-node-installed" ]] || continue
+        fi
         if _cm_node_ok "$ver/bin/node"; then node_bin="$ver/bin/node"; break; fi
     done
 fi
@@ -123,9 +131,11 @@ if [[ -z "$node_bin" ]] && [[ "${CONTEXT_MODE_DAEMON_NODE_AUTOINSTALL:-1}" != 0 
         # A complete install is marked, not merely present: a failed extraction that
         # left the directory behind must retry, not block every later run.
         if [[ ! -f "$dest/.cm-node-installed" ]]; then
-            rm -rf "$dest"
             progress "context-mode daemon: no node >= 24.15; installing ${tgz} from nodejs.org"
             if ! (( dry )); then
+                # inside the guard: a dry run must not delete a partial install
+                # it then declines to replace
+                rm -rf "$dest"
                 typeset dl=$(mktemp -d "${TMPDIR:-/tmp}/cm-node.XXXXXX") shas=""
                 {
                     # bounded: a stalled transfer must not hang fleet-sync
@@ -142,7 +152,9 @@ if [[ -z "$node_bin" ]] && [[ "${CONTEXT_MODE_DAEMON_NODE_AUTOINSTALL:-1}" != 0 
                 rm -rf "$dl"
             fi
         fi
-        _cm_node_ok "$dest/bin/node" && node_bin="$dest/bin/node"
+        # marker-gated here too: an incomplete extraction must not be used even
+        # on the run that created it
+        [[ -f "$dest/.cm-node-installed" ]] && _cm_node_ok "$dest/bin/node" && node_bin="$dest/bin/node"
     fi
 fi
 if [[ -z "$node_bin" ]]; then
@@ -152,9 +164,16 @@ fi
 
 # --- 2. the unit ---------------------------------------------------------------
 typeset want_url="http://127.0.0.1:${daemon_port}/mcp"
+typeset -i daemon_ready=0   # the registration move only runs once the daemon is confirmed on $daemon_port
 if [[ "$(uname -s)" == "Linux" ]] && command -v systemctl >/dev/null && systemctl --user list-units >/dev/null 2>&1; then
     typeset unit="$HOME/.config/systemd/user/context-mode-daemon.service" exec_line
     exec_line=$(grep -m1 '^ExecStart=' "$unit" 2>/dev/null || true)   # a missing unit must not trip err_exit
+    # the node the unit would start: first ExecStart token, quotes stripped — a
+    # removed binary (cleaned-up autoinstall dir) must re-install the unit, not
+    # stay "current" until the next KeepAlive restart fails
+    typeset exec_node="${exec_line#ExecStart=}"
+    exec_node="${exec_node%%[[:space:]]*}"
+    exec_node="${exec_node//\"/}"
     # ~/.claude is a symlink into ~/.config/claude: the unit may carry either
     # spelling, so compare against both the raw and the resolved path. The saved
     # port is compared too: a CONTEXT_MODE_DAEMON_PORT change must re-install,
@@ -163,10 +182,20 @@ if [[ "$(uname -s)" == "Linux" ]] && command -v systemctl >/dev/null && systemct
     if [[ -f "$unit" ]]; then unit_text=$(<"$unit"); fi
     if [[ ! -f "$unit" ]] || ! systemctl --user is-active --quiet context-mode-daemon.service 2>/dev/null ||
         { [[ "$exec_line" != *"$daemon"* ]] && [[ "$exec_line" != *"$daemon_real"* ]]; } ||
+        [[ -z "$exec_node" || ! -x "$exec_node" ]] ||
         # the closing quote makes the port compare exact: 879 must not match 8790
         [[ "$unit_text" != *"CONTEXT_MODE_DAEMON_PORT=${daemon_port}\""* ]]; then
         progress "context-mode daemon: installing the systemd unit for ${newest:t}"
-        (( dry )) || { "$node_bin" "$daemon" --install >/dev/null || { warning "context-mode daemon: --install failed"; problems+=('unit'); } }
+        if (( dry )); then
+            :
+        elif "$node_bin" "$daemon" --install >/dev/null; then
+            systemctl --user is-active --quiet context-mode-daemon.service 2>/dev/null && daemon_ready=1
+        else
+            warning "context-mode daemon: --install failed"
+            problems+=('unit')
+        fi
+    else
+        daemon_ready=1   # current and active — both verified by the staleness check above
     fi
 elif [[ "$(uname -s)" == "Darwin" ]] && command -v launchctl >/dev/null; then
     typeset plist="$HOME/Library/LaunchAgents/com.kaovilai.context-mode-daemon.plist" label=com.kaovilai.context-mode-daemon
@@ -174,12 +203,18 @@ elif [[ "$(uname -s)" == "Darwin" ]] && command -v launchctl >/dev/null; then
     _cm_plist_escape() { print -r -- "${1//&/&amp;}" | sed -e 's/</\&lt;/g' -e 's/>/\&gt;/g'; }
     typeset need=0 stored_node
     [[ -f "$plist" ]] || need=1
-    [[ "$need" -eq 0 ]] && ! grep -q "$daemon" "$plist" && need=1
+    # the plist stores XML-escaped paths: compare against the escaped spelling,
+    # or a HOME containing & or < never matches and every pass re-loads a valid agent
+    [[ "$need" -eq 0 ]] && ! grep -qF "$(_cm_plist_escape "$daemon")" "$plist" && need=1
     [[ "$need" -eq 0 ]] && ! grep -q "<string>${daemon_port}</string>" "$plist" && need=1
     # a stored node path that no longer exists (cleaned up, moved) must re-install,
     # or the next KeepAlive restart fails silently
     if [[ "$need" -eq 0 ]]; then
         stored_node=$(sed -n '/<key>ProgramArguments<\/key>/,/<\/array>/p' "$plist" | sed -n 's/.*<string>\([^<]*\)<\/string>.*/\1/p' | head -1)
+        # decode the writer's XML entities before testing the real path
+        stored_node="${stored_node//&amp;/&}"
+        stored_node="${stored_node//&lt;/<}"
+        stored_node="${stored_node//&gt;/>}"
         [[ -n "$stored_node" && -x "$stored_node" ]] || need=1
     fi
     [[ "$need" -eq 0 ]] && ! launchctl print "gui/$(id -u)/$label" >/dev/null 2>&1 && need=1
@@ -215,8 +250,15 @@ EOF
             # || true: on a first install there is no loaded job to boot out, and a
             # failing bare command would end the script under err_exit
             launchctl bootout "gui/$(id -u)/$label" 2>/dev/null || true
-            launchctl bootstrap "gui/$(id -u)" "$plist" 2>/dev/null || { warning "context-mode daemon: launchctl failed"; problems+=('unit'); }
+            if launchctl bootstrap "gui/$(id -u)" "$plist" 2>/dev/null; then
+                launchctl print "gui/$(id -u)/$label" >/dev/null 2>&1 && daemon_ready=1
+            else
+                warning "context-mode daemon: launchctl failed"
+                problems+=('unit')
+            fi
         }
+    else
+        daemon_ready=1   # plist current, node present, agent loaded — all verified above
     fi
 else
     progress "context-mode daemon: no systemd user session or launchd; run '$node_bin $daemon' yourself"
@@ -244,15 +286,32 @@ if [[ -x "$claude" ]]; then
         # re-point it, or sessions keep connecting to the port the daemon no longer
         # uses. The match is user scope + an exact /mcp path — a non-user entry or a
         # foreign path (/mcp-other) must not be removed (A26-cr2).
-        progress "context-mode daemon: moving the registration to $want_url"
-        (( dry )) || {
-            if (cd ~ && "$claude" mcp remove context-mode -s user >/dev/null 2>&1); then
-                (cd ~ && "$claude" mcp add --scope user --transport http context-mode "$want_url" >/dev/null 2>&1) || { warning "context-mode daemon: claude mcp add failed"; problems+=('mcp'); }
+        if (( daemon_ready )); then
+            progress "context-mode daemon: moving the registration to $want_url"
+            if (( dry )); then
+                :
+            elif (cd ~ && "$claude" mcp remove context-mode -s user >/dev/null 2>&1); then
+                if (cd ~ && "$claude" mcp add --scope user --transport http context-mode "$want_url" >/dev/null 2>&1); then
+                    :   # moved
+                elif (cd ~ && "$claude" mcp add --scope user --transport http context-mode "$entry_url" >/dev/null 2>&1); then
+                    # transactional: restore what was removed rather than leave the
+                    # fleet with no registration at all
+                    warning "context-mode daemon: claude mcp add failed; the previous registration ($entry_url) was restored"
+                    problems+=('mcp')
+                else
+                    warning "context-mode daemon: claude mcp add failed and the previous registration could not be restored; the next sync will retry"
+                    problems+=('mcp')
+                fi
             else
                 warning "context-mode daemon: could not remove the old-port registration; left as-is"
                 problems+=('mcp')
             fi
-        }
+        else
+            # the unit step could not confirm the daemon on $daemon_port (install
+            # failed or the service is down): the old registration still points
+            # where the daemon actually is, so it stays until the daemon catches up
+            warning "context-mode daemon: daemon not confirmed on port ${daemon_port}; leaving the registration at $entry_url"
+        fi
     elif [[ -z "$have" || "$have" != *"User config"* ]]; then
         # absent, or only a project/local-scoped entry (which `mcp get` can surface
         # and would wrongly read as ours): the user-scope entry is what the fleet uses
