@@ -306,9 +306,17 @@ _sync_codex_hooks() {
     fi
 
     if [[ -x "$sync" ]]; then
-        "$sync" >/dev/null || { warning "codex hooks: sync-harnesses failed"; return 1; }
-        mkdir -p "$state" && : >| "$stamp"
+        if "$sync" >/dev/null; then
+            mkdir -p "$state" && : >| "$stamp"
+        else
+            # Drop any stamp from an earlier success: the next run must retry
+            # the refresh even without a new pull, like the ungated original.
+            rm -f "$stamp"
+            warning "codex hooks: sync-harnesses failed"
+            return 1
+        fi
     else
+        rm -f "$stamp"
         warning "codex hooks: sync-harnesses missing ($sync)"
         return 1
     fi

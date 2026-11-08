@@ -101,6 +101,20 @@ upstream capi bun.lock multi3
 run || fail "multi fast-forward run rc=$rc: $out"
 [[ "$(head_of dot)" == "$(up_head dot)" && "$(head_of cfg)" == "$(up_head cfg)" && "$(head_of capi)" == "$(up_head capi)" ]] || fail "multi fast-forward incomplete: $out"
 
+# 3c. Failed sync-harnesses refresh: stamp dropped, so the next run retries
+#     even without a new pull (the gate must not swallow the retry)
+print -r -- $'#!/bin/sh\necho "sync-harnesses $*" >> "$STUB_LOG"\nexit 3' > "$tmp/cfg/skills/skills-compress/scripts/sync-harnesses.sh"
+chmod +x "$tmp/cfg/skills/skills-compress/scripts/sync-harnesses.sh"
+upstream dot file retry1
+if run; then fail "failed sync-harnesses run passed: $out"; fi
+[[ "$out" == *"codex hooks: sync-harnesses failed"* ]] || fail "sync-harnesses failure not reported: $out"
+[[ ! -f "$XDG_STATE_HOME/fleet-sync/harnesses-synced" ]] || fail "stamp survived a failed refresh"
+print -r -- $'#!/bin/sh\necho "sync-harnesses $*" >> "$STUB_LOG"' > "$tmp/cfg/skills/skills-compress/scripts/sync-harnesses.sh"
+chmod +x "$tmp/cfg/skills/skills-compress/scripts/sync-harnesses.sh"
+run || fail "retry run rc=$rc: $out"
+[[ "$(calls)" == *"sync-harnesses"* ]] || fail "failed refresh not retried without a new pull: $(calls)"
+[[ -f "$XDG_STATE_HOME/fleet-sync/harnesses-synced" ]] || fail "stamp not written after the successful retry"
+
 # 4. copilot-api moved with bun.lock: dependencies reinstalled; gateway not running
 # (a stray gateway from an earlier failed suite run would be adopted and break
 # the silence assert below — the case-9 pkill is too late for this case)
