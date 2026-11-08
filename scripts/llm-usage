@@ -2866,7 +2866,9 @@ def mb_build(force=False):
     if not os.access(swiftc, os.X_OK):
         sys.exit("llm-usage: swiftc not found (install Xcode Command Line Tools: xcode-select --install)")
     os.makedirs(os.path.dirname(out), exist_ok=True)
-    tmp = out + ".tmp"
+    # Unique per invocation: a manual build overlapping fleet-sync's must not
+    # fight over one temp path (one rename wins, the other build fails).
+    tmp = out + f".tmp.{os.getpid()}"
     res = subprocess.run([swiftc, "-O", "-swift-version", "5", "-o", tmp, MB_SRC], capture_output=True, text=True)
     if res.returncode:
         sys.exit(f"llm-usage: swiftc failed:\n{res.stderr.strip()}")
@@ -2889,7 +2891,9 @@ def mb_log_path():
 
 
 def mb_start():
-    """Start the built helper detached, logging to STATE/menubar.log."""
+    """Start the built helper detached, logging to STATE/menubar.log. Reports
+    success only when the new process actually takes the single-instance
+    lock: a start that dies at the lock (old holder still alive) is not one."""
     out = mb_build()
     os.makedirs(STATE, mode=0o700, exist_ok=True)
     log = open(mb_log_path(), "ab")
@@ -2897,9 +2901,23 @@ def mb_start():
                             env={**os.environ, **mb_env()})
     for _ in range(30):
         time.sleep(0.1)
-        if mb_running():
-            break
-    print(f"menubar: started (pid {proc.pid}); log {mb_log_path()}")
+        if mb_running() == proc.pid:
+            print(f"menubar: started (pid {proc.pid}); log {mb_log_path()}")
+            return
+    print(f"menubar: start attempted (pid {proc.pid}) but it did not take the lock; log {mb_log_path()}")
+
+
+def mb_process_start(pid):
+    """start time of pid as an epoch timestamp (ps lstart), or None when ps
+    cannot parse it. A running helper that started before the binary was
+    built is old code, however fresh the binary is."""
+    res = subprocess.run(["ps", "-p", str(pid), "-o", "lstart="], capture_output=True, text=True)
+    if res.returncode:
+        return None
+    try:
+        return datetime.strptime(" ".join(res.stdout.split()), "%a %b %d %H:%M:%S %Y").timestamp()
+    except ValueError:
+        return None
 
 
 def mb_loaded():
@@ -2959,14 +2977,21 @@ def cmd_menubar_reload(args):
             os.remove(mb_pending_path())  # nothing runs; the next start loads the fresh binary
         print("menubar: not built here; nothing to reload")
         return
-    if not mb_stale() and not pending:
+    # Old code can be running behind a fresh binary (a manual `menubar build`
+    # while it runs, or a restart that failed after the build), so the
+    # process's start time — not just the binary's mtime — decides.
+    started = mb_process_start(pid) if pid else None
+    outdated = bool(pid) and (not os.path.exists(out)
+                              or (started is not None and started < os.path.getmtime(out)))
+    if not mb_stale() and not pending and not outdated:
         print(f"menubar: up to date (pid {pid})" if pid else f"menubar: up to date: {out}")
         return
     if args.dry_run:
         if mb_stale():
             print(f"would rebuild {out} from {MB_SRC}")
         if pid:
-            print(f"would restart the running helper (pid {pid})" + (" (retrying a failed restart)" if pending else ""))
+            why = "running old code" if outdated else "a restart"
+            print(f"would restart the running helper (pid {pid}, {why})" + (" (retrying a failed restart)" if pending else ""))
         return
     mb_build()
     if not pid:
@@ -2993,19 +3018,33 @@ def cmd_menubar_reload(args):
         return
     # started by hand (`menubar run`, or the agent is loaded but idle): stop
     # it the same way, start the new build.
-    try:
-        os.kill(pid, signal.SIGTERM)
-    except ProcessLookupError:
-        pass  # died between the lock read and here; just start the new build
-    for _ in range(50):
-        if not mb_running():
-            break
-        time.sleep(0.1)
-    else:
+    holder = mb_running()
+    if holder == pid:
         try:
-            os.kill(pid, signal.SIGKILL)
+            os.kill(pid, signal.SIGTERM)
         except ProcessLookupError:
-            pass
+            pass  # died between the lock read and here; just start the new build
+        for _ in range(50):
+            if not mb_running():
+                break
+            time.sleep(0.1)
+        else:
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            # SIGKILL teardown is asynchronous: wait for the lock to actually
+            # release, or the replacement dies at it.
+            for _ in range(50):
+                if not mb_running():
+                    break
+                time.sleep(0.1)
+    elif holder:
+        # replaced while we built: never signal the pid saved before the
+        # build (it may have been recycled into an unrelated process)
+        print(f"menubar: helper was replaced (pid {holder}) during the rebuild; left alone")
+        return
+    # holder is None: it died during the build; nothing to stop
     mb_start()
     if pending:
         os.remove(mb_pending_path())

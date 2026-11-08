@@ -284,6 +284,17 @@ if [[ "$OSTYPE" == darwin* ]]; then
     [[ "$out" == *"menubar: not built here; nothing to reload"* ]] || fail "menubar reload not wired (or not a no-op): $out"
     run --dry-run || fail "menubar dry run rc=$rc: $out"
     [[ "$out" == *"menubar: not built here; nothing to reload"* ]] || fail "menubar reload dry run misbehaved: $out"
+    # argument forwarding: the real script's no-op output is identical with
+    # and without --dry-run, so swap in a recording stub to prove the flag
+    # actually reaches llm-usage. A real run first: --dry-run alone would not
+    # fast-forward the stub commit into the checkout.
+    print -r -- $'#!/bin/sh\necho "llm-usage $*" >> "$STUB_LOG"' > "$tmp/other-dot/scripts/llm-usage"
+    chmod +x "$tmp/other-dot/scripts/llm-usage"
+    $G -C "$tmp/other-dot" add scripts/llm-usage && $G -C "$tmp/other-dot" commit -qm menubar-stub && $G -C "$tmp/other-dot" push -q origin main 2>/dev/null
+    run || fail "menubar stub pull run rc=$rc: $out"
+    [[ "$(calls)" == *"llm-usage menubar reload"* ]] || fail "recording stub not called: $(calls)"
+    run --dry-run || fail "menubar stub dry run rc=$rc: $out"
+    [[ "$(calls)" == *"llm-usage menubar reload --dry-run"* ]] || fail "fleet-sync did not forward --dry-run to menubar reload: $(calls)"
 fi
 
 print -r -- "ok fleet-sync"

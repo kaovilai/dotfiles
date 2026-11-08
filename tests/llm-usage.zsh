@@ -993,10 +993,28 @@ def holder():
         try:
             with open(lock, "rb") as fh:
                 if int(fh.read(32).split()[0]) == p.pid:
-                    return p
+                    return track(p)
         except (OSError, IndexError, ValueError):
             pass
     p.kill(); raise AssertionError("holder never took the lock")
+
+# every detached process (holders, replacements) is reaped on any exit, so a
+# failed assertion cannot leave holders running after $tmp is gone
+import atexit
+spawned = []
+def track(p):
+    spawned.append(p)
+    return p
+def _reap():
+    for p in spawned:
+        try:
+            if isinstance(p, int):
+                os.kill(p, 9)
+            elif p.poll() is None:
+                p.kill()
+        except OSError:
+            pass
+atexit.register(_reap)
 
 # 1. nothing built, nothing running: a no-op, never installs
 r = reload()
@@ -1035,6 +1053,7 @@ h2.wait(timeout=10)  # SIGTERM from the reload
 time.sleep(0.2)
 with open(lock, "rb") as fh:
     newpid = int(fh.read(32).split()[0])
+track(newpid)
 assert newpid != h2.pid and newpid != os.getpid(), (newpid, h2.pid)
 os.kill(newpid, 15)
 # 7. build failure surfaces as an error, not a silent skip
@@ -1052,12 +1071,12 @@ with open(os.path.join(stub, "swiftc"), "w") as h:
             'cp "%s" "$out" && chmod +x "$out"\n' % (swift_log, helper))
 os.chmod(os.path.join(stub, "swiftc"), 0o755)
 os.utime(bin_, (0, 0))
-h3 = subprocess.Popen([sys.executable, "-c",
+h3 = track(subprocess.Popen([sys.executable, "-c",
     "import fcntl, os, time\n"
     "fd = os.open(os.environ['MB_TEST_LOCK'], os.O_RDWR | os.O_CREAT)\n"
     "os.ftruncate(fd, 0)  # clear the previous holder's pid bytes\n"
     "fcntl.flock(fd, fcntl.LOCK_EX)\n"
-    "while True: time.sleep(1)"], env=env, start_new_session=True)  # holds the lock, leaves no pid
+    "while True: time.sleep(1)"], env=env, start_new_session=True))  # holds the lock, leaves no pid
 probe = os.open(lock, os.O_RDWR)
 for _ in range(50):
     try:
@@ -1087,6 +1106,7 @@ assert open(kick_log).read().count("\n") == kicks_before, "must not kickstart wh
 time.sleep(0.2)
 with open(lock, "rb") as fh:
     newpid = int(fh.read(32).split()[0])
+track(newpid)
 assert newpid != h4.pid and newpid != os.getpid(), (newpid, h4.pid)
 os.kill(newpid, 15)
 # 10. kickstart failure: pending-restart marker set, holder untouched; the
@@ -1106,6 +1126,24 @@ assert r.returncode == 0 and "restarted via launchd" in r.stdout, (r.stdout, r.s
 assert not os.path.exists(os.path.join(state, "menubar-restart.pending")), "pending marker survived a successful restart"
 assert open(kick_log).read().count("\n") > kicks_before, "restart was not retried"
 h5.kill(); h5.wait()
+# 11. fresh binary but an old process (manual `menubar build` while it runs,
+#     or a restart that failed after the build): the process start time, not
+#     the binary mtime, decides — restart without a rebuild
+open(os.path.join(stub, "no-launchd"), "w").close()
+future = time.time() + 120
+os.utime(bin_, (future, future))  # newer than the source and than any holder
+h6 = holder()
+swifts_before = swift_calls()
+r = reload()
+assert r.returncode == 0 and "started (pid" in r.stdout, (r.stdout, r.stderr)
+assert swift_calls() == swifts_before, "fresh binary must not be rebuilt"
+h6.wait(timeout=10)
+time.sleep(0.2)
+with open(lock, "rb") as fh:
+    newpid = int(fh.read(32).split()[0])
+track(newpid)
+assert newpid != h6.pid and newpid != os.getpid(), (newpid, h6.pid)
+os.kill(newpid, 15)
 print("menubar reload ok")
 PY
 

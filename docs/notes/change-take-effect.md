@@ -27,7 +27,8 @@ systemd user timer). **Turn** = one T3 run, which spawns a fresh client process.
 | Anything on disk (configs, credentials) | processes that read it at start need their restart class above; fleet-sync reports what it restarted |
 | Machine restart | nothing special: everything reloads from disk. Only stale *state* (pid files, runtime dirs) matters, and fleet-sync reconciles that |
 
-Rule of thumb: **sync alone never touches a running process.** It updates files
-and (for proxies) restarts only what is idle; everything else waits for its own
-class above. When in doubt, `llm-proxy-restart required` lists stale proxies and
-restarts them on demand.
+Rule of thumb: **sync alone never touches a running process** — with two
+exceptions: it restarts idle proxies (never a busy one), and it rebuilds +
+restarts the menubar helper when its source moved (its whole job is showing
+current state). Everything else waits for its own class above. When in doubt,
+`llm-proxy-restart required` lists stale proxies and restarts them on demand.
