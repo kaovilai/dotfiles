@@ -228,4 +228,40 @@ zsh -f "$repo/scripts/context-mode-daemon-sync.zsh" "${args[@]}" || fail "port-m
 grep -q -- "mcp remove context-mode" "$CLAUDE_LOG" || fail "an entry on our old port must be removed"
 grep -q -- "mcp add --scope user --transport http context-mode http://127.0.0.1:8790/mcp" "$CLAUDE_LOG" || fail "the registration must be re-added at the current port"
 
-print -- "PASS: context-mode-daemon-sync (skip, node gate, autoinstall, current, stale unit, add, foreign, numeric orderings, bad checksum, port move)"
+# --- 10. a foreign path on our host is not ours; a project-scoped entry is not moved ----
+# restore a usable node: case 8 left none installed and a poisoned digest
+export NODE_STUB_VERSION=v24.15.0
+cat > "$HOME/bin/node" <<'STUB'
+#!/bin/sh
+if [ "$1" = "--version" ]; then echo "${NODE_STUB_VERSION:-v24.15.0}"; exit 0; fi
+echo "node $*" >> "$NODE_LOG"
+STUB
+chmod +x "$HOME/bin/node"
+for scope_url in "User config|http://127.0.0.1:8791/mcp-other" "Local config|http://127.0.0.1:8791/mcp"; do
+    got_scope="${scope_url%%|*}"
+    got_url="${scope_url#*|}"
+    cat > "$HOME/bin/claude" <<STUB
+#!/bin/sh
+echo "claude \$*" >> "\$CLAUDE_LOG"
+if [ "\$1" = "mcp" ] && [ "\$2" = "get" ]; then
+    echo "context-mode:"
+    echo "  Scope: ${got_scope}"
+    echo "  URL: ${got_url}"
+    exit 0
+fi
+exit 0
+STUB
+    chmod +x "$HOME/bin/claude"
+    : >| "$CLAUDE_LOG"
+    zsh -f "$repo/scripts/context-mode-daemon-sync.zsh" "${args[@]}" || fail "no-move run ($got_scope $got_url) must exit 0"
+    if [[ "$got_scope" == "User config" ]]; then
+        # a foreign path at user scope: a warning, never a remove
+        grep -q -- "mcp remove" "$CLAUDE_LOG" && fail "a foreign path must not be removed"
+    else
+        # a project/local entry with our URL: not moved, only the user-scope add runs
+        grep -q -- "mcp remove" "$CLAUDE_LOG" && fail "a non-user-scoped entry must not be removed"
+        grep -q -- "mcp add --scope user" "$CLAUDE_LOG" || fail "the user-scope registration must still be added"
+    fi
+done
+
+print -- "PASS: context-mode-daemon-sync (skip, node gate, autoinstall, current, stale unit, add, foreign, numeric orderings, bad checksum, port move, scope+path guards)"

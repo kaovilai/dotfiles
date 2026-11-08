@@ -230,13 +230,19 @@ if [[ -x "$claude" ]]; then
     [[ "$have" == *"$want_url"* && "$have" == *"User config"* ]] && ours_at_user=1
     if (( ours_at_user )); then
         :   # current: the daemon's own entry, at user scope, on the right port
-    elif [[ "$have" == *"http://127.0.0.1:"*"/mcp"* ]]; then
-        # OUR entry on another port (CONTEXT_MODE_DAEMON_PORT moved): re-point it,
-        # or sessions keep connecting to the port the daemon no longer uses
+    elif [[ "$have" == *"User config"* ]] && [[ "$have" == *http://127.0.0.1:*"/mcp" ]] && [[ "$have" != *"/mcp-"* ]]; then
+        # OUR user-scoped entry on another port (CONTEXT_MODE_DAEMON_PORT moved):
+        # re-point it, or sessions keep connecting to the port the daemon no longer
+        # uses. The match is user scope + an exact /mcp path — a non-user entry or a
+        # foreign path (/mcp-other) must not be removed (A26-cr2).
         progress "context-mode daemon: moving the registration to $want_url"
         (( dry )) || {
-            (cd ~ && "$claude" mcp remove context-mode >/dev/null 2>&1 || true)
-            (cd ~ && "$claude" mcp add --scope user --transport http context-mode "$want_url" >/dev/null 2>&1) || { warning "context-mode daemon: claude mcp add failed"; problems+=('mcp'); }
+            if (cd ~ && "$claude" mcp remove context-mode -s user >/dev/null 2>&1); then
+                (cd ~ && "$claude" mcp add --scope user --transport http context-mode "$want_url" >/dev/null 2>&1) || { warning "context-mode daemon: claude mcp add failed"; problems+=('mcp'); }
+            else
+                warning "context-mode daemon: could not remove the old-port registration; left as-is"
+                problems+=('mcp')
+            fi
         }
     elif [[ -z "$have" || "$have" != *"User config"* ]]; then
         # absent, or only a project/local-scoped entry (which `mcp get` can surface
