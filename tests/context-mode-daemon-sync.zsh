@@ -136,6 +136,7 @@ esac
 STUB
 chmod +x "$HOME/bin/curl"
 export CM_TEST_SHA="$fsha" CM_TEST_FIXTURE="$fixture"
+rehash   # the sourced shell env may have hashed curl/node from the real PATH; the stubs must win
 export NODE_STUB_VERSION=v18.0.0   # PATH node is useless; the tarball must win
 zsh -f "$repo/scripts/context-mode-daemon-sync.zsh" "${args[@]}" || fail "autoinstall run must exit 0"
 [[ -x "$HOME/.local/lib/node-v24.15.0-linux-x64/bin/node" ]] || fail "the tarball must be extracted to ~/.local/lib"
@@ -218,6 +219,9 @@ if [ "$1" = "mcp" ] && [ "$2" = "get" ]; then
     echo "context-mode:"
     echo "  Scope: User config (available in all your projects)"
     echo "  URL: http://127.0.0.1:8791/mcp"
+    echo "  Status: ✔ Connected"
+    echo ""
+    echo "To remove this server, run: claude mcp remove context-mode -s user"
     exit 0
 fi
 exit 0
@@ -237,7 +241,7 @@ if [ "$1" = "--version" ]; then echo "${NODE_STUB_VERSION:-v24.15.0}"; exit 0; f
 echo "node $*" >> "$NODE_LOG"
 STUB
 chmod +x "$HOME/bin/node"
-for scope_url in "User config|http://127.0.0.1:8791/mcp-other" "Local config|http://127.0.0.1:8791/mcp"; do
+for scope_url in "User config|http://127.0.0.1:8791/mcp-other" "User config|http://127.0.0.1:8791/other/mcp" "Local config|http://127.0.0.1:8791/mcp"; do
     got_scope="${scope_url%%|*}"
     got_url="${scope_url#*|}"
     cat > "$HOME/bin/claude" <<STUB

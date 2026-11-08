@@ -226,11 +226,20 @@ fi
 if [[ -x "$claude" ]]; then
     typeset have
     have=$(cd ~ && "$claude" mcp get context-mode 2>/dev/null || true)   # a missing entry must not trip err_exit
+    # The URL is matched as its own field (the "URL:" line), never as a substring of
+    # the whole report: `mcp get` can print headers after the URL, and a substring
+    # match would both accept foreign paths (/other/mcp, /mcp-other) as managed and
+    # miss a managed entry whose URL is not the last line (A26-cr3).
+    typeset entry_url=""
+    # || true: with no registration there is no URL line, grep exits 1, and under
+    # err_exit+pipe_fail the bare assignment would end the script — an absent
+    # entry means "", not a failure
+    entry_url=$(print -r -- "$have" | grep -m1 'URL:' | sed 's/.*URL:[[:space:]]*//') || true
     typeset -i ours_at_user=0
-    [[ "$have" == *"$want_url"* && "$have" == *"User config"* ]] && ours_at_user=1
+    [[ "$entry_url" == "$want_url" && "$have" == *"User config"* ]] && ours_at_user=1
     if (( ours_at_user )); then
         :   # current: the daemon's own entry, at user scope, on the right port
-    elif [[ "$have" == *"User config"* ]] && [[ "$have" == *http://127.0.0.1:*"/mcp" ]] && [[ "$have" != *"/mcp-"* ]]; then
+    elif [[ "$have" == *"User config"* ]] && [[ "$entry_url" =~ ^http://127\.0\.0\.1:[0-9]+/mcp$ ]]; then
         # OUR user-scoped entry on another port (CONTEXT_MODE_DAEMON_PORT moved):
         # re-point it, or sessions keep connecting to the port the daemon no longer
         # uses. The match is user scope + an exact /mcp path — a non-user entry or a
