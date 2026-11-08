@@ -444,7 +444,7 @@ claude-enmaas() (
         mcpServers: (if $mcpurl == "" then {} else {parallel: {type: "http", url: $mcpurl}} end),
         env: {ANTHROPIC_CUSTOM_HEADERS: "", CLAUDE_CODE_USE_VERTEX: "0", CLAUDE_CODE_USE_BEDROCK: "0", CLAUDE_CODE_USE_FOUNDRY: "0",
           CLAUDE_CODE_MAX_OUTPUT_TOKENS: $maxout},
-        modelSettings: {($glm): {effortLevel: "medium"}, ($ds): {effortLevel: "medium"}}
+        modelSettings: {($glm): {effortLevel: "high"}, ($ds): {effortLevel: "medium"}}
       }' <<< "$settings") || return 1
 
     # window derived above; absent when the knob says off
