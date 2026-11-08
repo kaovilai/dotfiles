@@ -2408,7 +2408,32 @@ final class AppController: NSObject, NSMenuDelegate, NSWindowDelegate {
             self?.refreshInflight()  // cheap file reads: catches a missed FS event
         }
         watchInflightDirs()
+        spawnFleetStream()
         if windowVisible { showWindow() }
+    }
+
+    /// Peer in-flight at request boundaries, not at the 30 s poll cadence: one
+    /// detached `llm-usage fleet stream` holds a long-lived ssh per peer and
+    /// rewrites fleet/<host>/inflight.json on every change; watchInflightDirs
+    /// picks the rewrites up and refreshInflight reads them. Its own flock
+    /// makes a second spawn a no-op (a relaunch while the old child still runs
+    /// just adopts it), and it deliberately outlives this app: serve and the
+    /// CLI read the same cache, so quitting the menubar keeps the cache warm.
+    private var fleetStream: Process?
+    private func spawnFleetStream() {
+        guard let bin = findUsageBinary() else { return }
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: bin)
+        p.arguments = ["fleet", "stream"]
+        p.standardInput = FileHandle.nullDevice
+        p.standardOutput = FileHandle.nullDevice
+        p.standardError = FileHandle.nullDevice
+        do {
+            try p.run()
+            fleetStream = p
+        } catch {
+            // not fatal: the 30 s pull path still fills the snapshots
+        }
     }
 
     // Event-driven in-flight updates: the monitor plugin (copilot-api) and
@@ -2424,6 +2449,9 @@ final class AppController: NSObject, NSMenuDelegate, NSWindowDelegate {
         let home = NSHomeDirectory()
         var dirs = [env["LLM_USAGE_DIR"] ?? "\(home)/.local/state/llm-usage"]
         if let monitor = env["COPILOT_API_MONITOR_DIR"], !monitor.isEmpty { dirs.append(monitor) }
+        // the fleet cache: `fleet stream` rewrites fleet/<host>/inflight.json here
+        // (dir events fire even though no file in it matches the inflight-* glob)
+        dirs.append((env["LLM_USAGE_DIR"] ?? "\(home)/.local/state/llm-usage") + "/fleet")
         var seen = Set<String>()
         return dirs.filter { seen.insert($0).inserted }
     }
@@ -2501,15 +2529,37 @@ final class AppController: NSObject, NSMenuDelegate, NSWindowDelegate {
                 }
             }
         }
-        // candidates: local requests plus the peer requests from the last payload (a
-        // peer's own files are not readable here). Sort fleet-wide by age, then keep
-        // the OLDEST 16 — capping the local list first would let 16 young locals
-        // hide an older peer from the bars.
+        // peer snapshots: fleet/<host>/inflight.json, rewritten at request boundaries
+        // by `fleet stream` (and by every pull). Same staleness drop as the CLI's
+        // read_fleet_inflight (2*TTL + ssh timeout on the doc's t, 110 s): a dead
+        // stream must not leave ghost bars behind. Ages come from each request's
+        // own t, so clock drift only ever clamps to 0, never goes negative.
+        let fleetBase = inflightDirs().last ?? ""
+        if let hosts = try? FileManager.default.contentsOfDirectory(atPath: fleetBase) {
+            for host in hosts {
+                let dirPath = fleetBase + "/" + host
+                var isDir: ObjCBool = false
+                guard FileManager.default.fileExists(atPath: dirPath, isDirectory: &isDir), isDir.boolValue,
+                      let raw = FileManager.default.contents(atPath: dirPath + "/inflight.json"),
+                      let doc = (try? JSONSerialization.jsonObject(with: raw)) as? [String: Any],
+                      let t = (doc["t"] as? NSNumber)?.doubleValue,
+                      now.timeIntervalSince1970 - t <= 110 else { continue }
+                for req in (doc["requests"] as? [[String: Any]]) ?? [] {
+                    guard let rt = (req["t"] as? NSNumber)?.doubleValue, let id = req["id"] as? String else { continue }
+                    flights.append((max(0, now.timeIntervalSince1970 - rt), "\(host):\(id)", (req["model"] as? String) ?? ""))
+                }
+            }
+        }
+        // candidates: the files above plus the peer requests from the last payload
+        // (a fallback for hosts whose files were not readable). Sort fleet-wide by
+        // age, then keep the OLDEST 16 — capping the local list first would let 16
+        // young locals hide an older peer from the bars.
         var candidates = flights
+        var seen = Set(candidates.map { $0.id })
         if let d = data, let generated = parseISO(d["generated_at"].str) {
             let drift = max(0, now.timeIntervalSince(generated))
             for row in d["inflight"]["requests"].arr where row["host"].str != nil {
-                guard let id = row["id"].str else { continue }
+                guard let id = row["id"].str, seen.insert(id).inserted else { continue }
                 candidates.append((max(0, (row["seconds"].dbl ?? 0) + drift), id, row["model"].str ?? ""))
             }
         }

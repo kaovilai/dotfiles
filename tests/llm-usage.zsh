@@ -821,6 +821,67 @@ assert sum(r["n"] for r in json.loads(agg_run("summary", "--since", "1h", "--sou
 d = run("no-fleet", [ev(30)])
 assert d["fleet"] == {"enabled": False} and d["totals"]["m15"]["requests"] == 1, d.get("fleet")
 
+# fleet in-flight streaming: `watch-inflight` on the peer (hello, snapshot on change,
+# heartbeat while unchanged) + `fleet stream` on the aggregator (local: transport) pushing
+# into the same fleet/<host>/inflight.json the pull fills, singleton via flock
+import queue
+wenv = {**os.environ, "LLM_USAGE_DIR": peer, "LLM_USAGE_WATCH_HEARTBEAT": "1"}
+wp = subprocess.Popen([sys.executable, usage, "watch-inflight", "--interval", "0.05"],
+                      stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, env=wenv)
+wq = queue.Queue()
+def _wp_reader():
+    for line in wp.stdout:
+        wq.put(line)
+threading.Thread(target=_wp_reader, daemon=True).start()
+def wline(timeout=15):
+    line = wq.get(timeout=timeout)  # a hung watcher fails the test instead of hanging it
+    return json.loads(line)
+hello = wline()
+assert hello["_watch"] == 1 and hello["host"], hello
+snap = wline()
+assert len(snap["requests"]) == 1 and snap["requests"][0]["id"].endswith("r1") and snap["requests"][0]["port"] == "4148", snap
+assert snap["requests"][0]["model"] == "glm-5.3" and snap["t"] > 0, snap
+hb = wline()  # unchanged set: heartbeat re-emits, so a long request never looks gone quiet
+assert hb["requests"] == snap["requests"], (hb, snap)
+with open(f"{peer}/inflight-4148-777.json", "w") as h:  # a second request starts on the peer
+    json.dump({"pid": os.getpid(), "port": "4148",
+               "requests": {"r1": {"t": _time.time() - 7, "model": GLM, "requested": GLM},
+                            "r2": {"t": _time.time() - 2, "model": DS, "requested": DS}}}, h)
+snap = wline()
+assert {r["id"].rsplit(":", 1)[-1] for r in snap["requests"]} == {"r1", "r2"}, snap
+wp.terminate()
+wp.wait(10)
+# aggregator side: fleet stream (local peer) fills the cache, tracks changes, exits on SIGTERM
+sp = subprocess.Popen([sys.executable, usage, "fleet", "stream"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                      env={**os.environ, "LLM_USAGE_DIR": agg, **fenv})
+snap_path = f"{agg}/fleet/peerA/inflight.json"
+def streamed(expect, timeout=15):
+    deadline = _time.time() + timeout
+    while _time.time() < deadline:
+        try:
+            doc = json.load(open(snap_path))
+        except (OSError, ValueError):
+            doc = None
+        if doc is not None and {r["id"].rsplit(":", 1)[-1] for r in doc["requests"]} == expect:
+            return doc
+        _time.sleep(0.1)
+    raise AssertionError(f"stream never produced {expect}: {doc}")
+doc = streamed({"r1", "r2"})
+assert doc["t"] > _time.time() - 10 and all(r["model"] for r in doc["requests"]), doc
+# a running stream is a singleton: a second fleet stream exits immediately, exit 0
+res = subprocess.run([sys.executable, usage, "fleet", "stream"], capture_output=True, text=True, timeout=30,
+                     env={**os.environ, "LLM_USAGE_DIR": agg, **fenv})
+assert res.returncode == 0, (res.stdout, res.stderr)
+with open(f"{peer}/inflight-4148-777.json", "w") as h:  # r2 finishes: the next snapshot drops it
+    json.dump({"pid": os.getpid(), "port": "4148", "requests": {"r1": {"t": _time.time() - 7, "model": GLM, "requested": GLM}}}, h)
+doc = streamed({"r1"})
+sp.terminate()
+assert sp.wait(10) == 0, "fleet stream must exit cleanly on SIGTERM"
+# the streamed snapshot feeds the same views the pull does (menubar-data reads the same file)
+d = run("fleet-stream", [], state=agg, extra_env=fenv)
+assert d["inflight"]["count"] == 1 and d["inflight"]["requests"][0]["host"] == "peerA", d["inflight"]
+assert d["fleet"]["hosts"][0]["inflight"]["count"] == 1, d["fleet"]["hosts"][0]
+
 # in-flight tracking in the proxy logger (stub litellm so it runs without the proxy venv)
 state = tempfile.mkdtemp(dir=tmp)
 os.environ["LLM_USAGE_DIR"] = state

@@ -14,6 +14,9 @@ _llm-usage() {
     'serve:browser dashboard (localhost only)'
     'menubar-data:compact JSON for the menubar helper'
     'menubar:macOS menubar monitor (build/run/install/...)'
+    'export:this machine'"'"'s merged events as JSONL (what a peer pulls)'
+    'fleet:pulled fleet peers: refresh over ssh, stream in-flight, list hosts'
+    'watch-inflight:stream this machine'"'"'s in-flight requests as JSONL'
   )
 
   _arguments -C \
@@ -41,8 +44,26 @@ _llm-usage() {
         tail)
           _arguments \
             '(-f --follow)'{-f,--follow}'[follow new requests]' \
+            '--fleet[follow pulled fleet peers too]' \
             '-n[number of requests]:count:' \
             '--since[time window]:window:(30m 24h 7d today all)'
+          ;;
+        export)
+          _arguments \
+            '--since[how far back]:window:(30m 24h 7d today all)' \
+            '--until[epoch upper bound]:epoch:' \
+            '--modified-since[epoch: re-export modified transcripts]:epoch:' \
+            '--inflight[append live in-flight requests]'
+          ;;
+        fleet)
+          _arguments \
+            '--force[refresh even hosts pulled within the TTL]' \
+            '--host[only this host]:host:' \
+            '1:action:(refresh stream status hosts)'
+          ;;
+        watch-inflight)
+          _arguments \
+            '--interval[poll of the inflight files, seconds]:seconds:'
           ;;
         errors)
           _arguments \

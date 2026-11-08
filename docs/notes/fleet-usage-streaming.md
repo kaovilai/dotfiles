@@ -5,7 +5,8 @@ machine in the fleet inside the local `llm-usage` views (CLI tables, `serve`
 dashboard, menubar monitor + floating window), live while those machines are
 reachable.
 
-Status: implemented (all phases). 2026-11-07. Decisions from review:
+Status: implemented (all phases), plus in-flight streaming (`fleet stream`,
+see its section). 2026-11-07. Decisions from review:
 
 1. **Aggregation topology** — default: any machine pulls the others (config is
    machine-local); no designated aggregator.
@@ -237,7 +238,7 @@ the same `host` field; no schema change beyond what menubar-data gets.
 | Menubar + floating window | ≤ 30 s + pull latency | 30 s poll → async fleet refresh (lock+TTL) → cached events |
 | `tail -f --fleet` | ≈ 25 s (refresh TTL) + pull latency | follow loop reads the cache every 1 s; the TTL-guarded background refresh pulls peers |
 | `serve` | 30 s | dashboard refresh thread triggers the same refresh |
-| In-flight "now" | immediate | export includes each peer's `inflight-*` snapshot, so requests currently running remotely appear in wait bars on the next pull |
+| In-flight "now" | immediate (stream) / next pull (fallback) | `fleet stream` (below): one long-lived ssh per peer pushes `watch-inflight` snapshots into `fleet/<host>/inflight.json` on every request boundary; the pull path's `--inflight` export is the fallback when no stream runs |
 
 A machine that goes offline keeps its last-synced events in the cache and the
 UI marks them stale — history never disappears, only freshness does. When it
@@ -245,6 +246,42 @@ comes back, the next pull resumes from `last_event_t` with no gap. While the
 aggregator itself is offline (or a peer needs a tailscale reauth), the
 automatic kick backs off: a host whose last pull failed is retried once per
 5 minutes, not once per poll (`llm-usage fleet refresh` by hand always tries).
+
+## In-flight streaming (`fleet stream`)
+
+Events do not need sub-second latency; in-flight membership does — a wait bar
+that lags 30 s shows requests that already ended and misses ones that just
+started. A literal websocket would need a listening port per peer (rejected
+above); an ssh **stdio stream** gives the same push semantics over the existing
+auth and transport:
+
+- **Peer side: `llm-usage watch-inflight`** — prints a `{"_watch": 1}` hello,
+  then one `{"t", "requests"}` snapshot whenever the local in-flight set
+  changes (polled every 0.25 s; the files are tiny), plus a heartbeat every
+  15 s while unchanged so a long request never trips the reader's staleness
+  drop. Same read-only surface as `export`, so a forced-command key can be
+  pinned to it.
+- **Aggregator side: `llm-usage fleet stream`** — one long-lived ssh per host
+  (ControlMaster, ServerAlive so a network change ends both ends within ~45 s)
+  reading those snapshots and atomically rewriting the same
+  `fleet/<host>/inflight.json` the pull path fills. Reconnects with a
+  doubling backoff capped at the pull backoff; a connection that held ≥ 60 s
+  is healthy and resets it. Singleton via `flock` on `fleet/stream.lock`, so
+  every consumer can spawn it fire-and-forget: the menubar helper does so at
+  startup, `tail -f --fleet` and `serve` via `fleet_stream_kick()`
+  (kick-file guarded, 60 s). `LLM_USAGE_FLEET_STREAM=off` disables.
+  `local_dir` peers (tests, second state dirs) are polled in process instead.
+- **Division of labor**: the stream owns *freshness* of in-flight only; the
+  TTL refresh stays the source of truth (events, up/down state, backfill,
+  status.json). A dead stream costs accuracy, never correctness —
+  `read_fleet_inflight`'s age drop still removes ghosts once the snapshot's
+  `t` goes stale.
+- **Menubar**: the helper's existing dir-watch picks the snapshot rewrites up
+  (fleet dir added to `inflightDirs`), and `refreshInflight` reads
+  `fleet/<host>/inflight.json` directly (deduped against the 30 s payload as
+  a fallback), so peer wait bars move at request boundaries like local ones.
+  The spawned streamer deliberately outlives the app: `serve` and the CLI
+  read the same cache, and the flock means a relaunch adopts the running one.
 
 ## Privacy & security
 
