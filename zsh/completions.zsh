@@ -4,6 +4,12 @@ if [[ -z "$ZSH_COMPLETION_CACHE_DIR" ]]; then
   _safe_source ~/git/dotfiles/zsh/command-cache.zsh
 fi
 
+# Generated tool completions go to ~/.zsh/completions — never infer the
+# destination from ${fpath[1]}: plugin managers (znap prompt pure) prepend
+# their own dirs to fpath, which silently redirected these writes into the
+# pure plugin checkout (dirtied it; files lost on znap pull).
+[[ -d $HOME/.zsh/completions ]] || command mkdir -p -- $HOME/.zsh/completions
+
 # Run completion setup in an anonymous function to properly scope local variables.
 # Without this, 'local' at the top level of a sourced file is a no-op in ZSH,
 # leaving variables like docker_completion_file, gh_completion_cache, etc. in
@@ -18,7 +24,7 @@ _regen_tool_completion() {
   local ttl="${2:-$CACHE_TTL_COMPLETION}"
   command -v "$tool" &>/dev/null || return 0
   local cache_file="$ZSH_COMPLETION_CACHE_DIR/_${tool}_generated"
-  [[ -f "$cache_file" ]] && cp "$cache_file" "${fpath[1]}/_${tool}" &!
+  [[ -f "$cache_file" ]] && cp "$cache_file" "$HOME/.zsh/completions/_${tool}" &!
   if completion_cache_expired "$cache_file" "$ttl"; then
     ("$tool" completion zsh > "${cache_file}.tmp" 2>/dev/null \
       && mv "${cache_file}.tmp" "$cache_file") &!
@@ -39,7 +45,7 @@ fi
 if has_command docker; then
   local docker_completion_file="$ZSH_COMPLETION_CACHE_DIR/_docker"
   if [[ -f "$docker_completion_file" ]]; then
-    cp "$docker_completion_file" "${fpath[1]}/_docker" &!
+    cp "$docker_completion_file" "$HOME/.zsh/completions/_docker" &!
   fi
   
   # Update check and download in the background
@@ -58,13 +64,13 @@ fi
 # OpenShift Install - uses cached file to avoid generating completion on every shell start
 if has_command openshift-install; then
   [[ -f ~/git/dotfiles/openshift-install-completion-zsh.txt ]] && \
-    cp ~/git/dotfiles/openshift-install-completion-zsh.txt "${fpath[1]}/_openshift-install" &!
+    cp ~/git/dotfiles/openshift-install-completion-zsh.txt "$HOME/.zsh/completions/_openshift-install" &!
 fi
 
 # GitHub CLI completion - cache for stable tools
 if has_command gh; then
   local gh_completion_cache="$ZSH_COMPLETION_CACHE_DIR/_gh_generated"
-  [[ -f "$gh_completion_cache" ]] && cp "$gh_completion_cache" "${fpath[1]}/_gh" &!
+  [[ -f "$gh_completion_cache" ]] && cp "$gh_completion_cache" "$HOME/.zsh/completions/_gh" &!
   if completion_cache_expired "$gh_completion_cache"; then  # 7 days
     (gh completion -s zsh > "${gh_completion_cache}.tmp" 2>/dev/null && mv "${gh_completion_cache}.tmp" "$gh_completion_cache") &!
   fi
@@ -81,7 +87,7 @@ if has_command podman; then
   local podman_completion_file="$ZSH_COMPLETION_CACHE_DIR/_podman"
   
   if [[ -f "$podman_completion_file" ]]; then
-    cp "$podman_completion_file" "${fpath[1]}/_podman" &!
+    cp "$podman_completion_file" "$HOME/.zsh/completions/_podman" &!
   fi
   
   # Update check and download in the background
@@ -129,7 +135,7 @@ fi
 # Pipenv - cached
 if has_command pipenv; then
   local pipenv_completion_cache="$ZSH_COMPLETION_CACHE_DIR/_pipenv_generated"
-  [[ -f "$pipenv_completion_cache" ]] && cp "$pipenv_completion_cache" "${fpath[1]}/_pipenv" &!
+  [[ -f "$pipenv_completion_cache" ]] && cp "$pipenv_completion_cache" "$HOME/.zsh/completions/_pipenv" &!
   if completion_cache_expired "$pipenv_completion_cache"; then
     (_PIPENV_COMPLETE=zsh_source pipenv > "${pipenv_completion_cache}.tmp" 2>/dev/null \
       && mv "${pipenv_completion_cache}.tmp" "$pipenv_completion_cache" \
@@ -139,19 +145,19 @@ fi
 
 # IBM Cloud completion - if needed
 if [[ -f /usr/local/ibmcloud/autocomplete/zsh_autocomplete ]]; then
-  cp /usr/local/ibmcloud/autocomplete/zsh_autocomplete "${fpath[1]}/_ibmcloud" &!
+  cp /usr/local/ibmcloud/autocomplete/zsh_autocomplete "$HOME/.zsh/completions/_ibmcloud" &!
 fi
 
 # Claude Code CLI - download from community-maintained repo
 if has_command claude; then
   local claude_completion_file="$ZSH_COMPLETION_CACHE_DIR/_claude"
   if [[ -f "$claude_completion_file" ]]; then
-    cp "$claude_completion_file" "${fpath[1]}/_claude" &!
+    cp "$claude_completion_file" "$HOME/.zsh/completions/_claude" &!
   fi
   if has_command curl && completion_cache_expired "$claude_completion_file"; then  # 7 days
     (curl -fsLm 10 https://raw.githubusercontent.com/wbingli/zsh-claudecode-completion/main/_claude > "${claude_completion_file}.tmp" &&
     mv "${claude_completion_file}.tmp" "$claude_completion_file" &&
-    cp "$claude_completion_file" "${fpath[1]}/_claude" ||
+    cp "$claude_completion_file" "$HOME/.zsh/completions/_claude" ||
     rm -f "${claude_completion_file}.tmp") &!
   fi
 fi
@@ -160,7 +166,7 @@ fi
 has_command netbird && _regen_tool_completion netbird $CACHE_TTL_STABLE
 
 # Custom code-git completion
-cat << EOF > "${fpath[1]}/_code-git" &!
+cat << EOF > "$HOME/.zsh/completions/_code-git" &!
 #compdef code-git
 
 _code-git() {
