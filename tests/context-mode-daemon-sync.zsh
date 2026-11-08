@@ -50,6 +50,21 @@ exit 0
 STUB
 chmod +x "$HOME/bin/systemctl"
 
+# uname stub: the suite must be platform-independent — on macOS the real uname
+# would route the unit step into launchd and touch the host's agents
+cat > "$HOME/bin/uname" <<'STUB'
+#!/bin/sh
+[ "$1" = "-m" ] && echo x86_64 || echo Linux
+STUB
+chmod +x "$HOME/bin/uname"
+# brew stub: a host with a real node@24 under brew would satisfy the node
+# lookup and break the no-compatible-node cases; point it at nothing
+cat > "$HOME/bin/brew" <<'STUB'
+#!/bin/sh
+echo "$CM_TEST_FAKE_BREW_PREFIX"
+STUB
+chmod +x "$HOME/bin/brew"
+export CM_TEST_FAKE_BREW_PREFIX="$tmp/no-brew"
 export PATH="$HOME/bin:$PATH" NODE_LOG="$tmp/node.log" CLAUDE_LOG="$tmp/claude.log" SYSTEMCTL_LOG="$tmp/systemctl.log"
 export CLAUDE_PROVIDER_NATIVE_BINARY="$HOME/bin/claude"
 : >| "$NODE_LOG"; : >| "$CLAUDE_LOG"; : >| "$SYSTEMCTL_LOG"
@@ -118,7 +133,7 @@ rm -f "$HOME/bin/curl"
 # --- 3. everything current: no unit install, no registration add ---------------------
 : >| "$NODE_LOG"; : >| "$CLAUDE_LOG"
 mkdir -p "${unit:h}"
-print -r -- "ExecStart=\"$daemon\"" >| "$unit"
+print -r -- "ExecStart=\"$daemon\"\nEnvironment=\"CONTEXT_MODE_DAEMON_PORT=8790\"" >| "$unit"
 export UNIT_STUB_ACTIVE=1 CLAUDE_STUB_HAS_CONTEXT_MODE=1
 zsh "$repo/scripts/context-mode-daemon-sync.zsh" "${args[@]}" || fail "current run must exit 0"
 grep -q -- "--install" "$NODE_LOG" && fail "current unit must not be reinstalled"
@@ -153,4 +168,19 @@ chmod +x "$HOME/bin/claude"
 zsh "$repo/scripts/context-mode-daemon-sync.zsh" "${args[@]}" || fail "foreign-registration run must exit 0"
 grep -q -- "mcp add" "$CLAUDE_LOG" && fail "a foreign registration must be left alone"
 
-print -- "PASS: context-mode-daemon-sync (skip, node gate, current, stale unit, add, foreign)"
+# --- 7. numeric orderings: 2.2.10 beats 2.2.9; node 24.14 is not 24.15 -----------------
+mkdir -p "$HOME/.claude/plugins/cache/context-mode/context-mode/2.2.9" "$HOME/.claude/plugins/cache/context-mode/context-mode/2.2.10"
+print -r -- '# stub bundle' >| "$HOME/.claude/plugins/cache/context-mode/context-mode/2.2.9/daemon.mjs"
+print -r -- '# stub bundle' >| "$HOME/.claude/plugins/cache/context-mode/context-mode/2.2.10/daemon.mjs"
+: >| "$NODE_LOG"
+zsh "$repo/scripts/context-mode-daemon-sync.zsh" "${args[@]}" || fail "version-order run must exit 0"
+grep -q "context-mode/context-mode/2.2.10/daemon.mjs --install" "$NODE_LOG" || fail "2.2.10 must win over 2.2.9 (lexicographic sorts them backwards)"
+export NODE_STUB_VERSION=v24.14.0 CONTEXT_MODE_DAEMON_NODE_AUTOINSTALL=0
+rm -rf "$HOME/.local/lib"   # 2b's extracted node would (correctly) satisfy the lookup
+: >| "$NODE_LOG"
+zsh "$repo/scripts/context-mode-daemon-sync.zsh" "${args[@]}" || fail "node-24.14 run must exit 0"
+[[ ! -s "$NODE_LOG" ]] || fail "node 24.14 is below the daemon's 24.15 minimum and must not be used"
+export NODE_STUB_VERSION=v24.15.0
+unset CONTEXT_MODE_DAEMON_NODE_AUTOINSTALL
+
+print -- "PASS: context-mode-daemon-sync (skip, node gate, autoinstall, current, stale unit, add, foreign, numeric orderings)"

@@ -47,11 +47,14 @@ typeset -a problems=()
 # The daemon needs it and the v2 plugin is degraded below it; a per-user copy
 # keeps the unit independent of whichever node a shell happens to expose.
 typeset node_bin="" ver
-_cm_node_ok() {  # node binary path -> 0 when its version is >= 24.15
+_cm_node_ok() {  # node binary path -> 0 when its version is >= 24.15 (numeric, not v24.*)
     [[ -x "$1" ]] || return 1
-    local v
+    local v maj min
     v=$("$1" --version 2>/dev/null) || return 1
-    [[ "$v" == v24.* || "$v" == v2[5-9].* || "$v" == v[3-9][0-9].* ]]
+    [[ "$v" == v*.*.* ]] || return 1
+    maj=${v#v}; maj=${maj%%.*}
+    min=${v#v*${maj}.}; min=${min%%.*}
+    (( maj > 24 )) || (( maj == 24 && min >= 15 ))
 }
 if _cm_node_ok "$(command -v node)"; then
     node_bin="$(command -v node)"
@@ -118,10 +121,15 @@ fi
 typeset -a versions=("$cache"/*(N/))
 (( ${#versions} )) || { progress "context-mode: plugin not installed yet; nothing to sync"; exit 0; }
 typeset newest="" v
+_cm_ver_key() {  # 2.2.10 -> 2000002000010: one integer, numeric ordering (lexicographic sorts 2.2.9 higher)
+    local -a parts=(${=1//./ })
+    printf '%d%06d%06d' "${parts[1]:-0}" "${parts[2]:-0}" "${parts[3]:-0}"
+}
 for v in "${versions[@]}"; do
     [[ -f "$v/daemon.mjs" ]] || continue
-    [[ -z "$newest" ]] && newest="$v"
-    [[ "${v:t}" > "${newest:t}" ]] && newest="$v"   # version dirs sort lexicographically for x.y.z
+    if [[ -z "$newest" ]] || (( $(_cm_ver_key "${v:t}") > $(_cm_ver_key "${newest:t}") )); then
+        newest="$v"
+    fi
 done
 [[ -n "$newest" ]] || { progress "context-mode: no daemon.mjs in the installed plugin (pre-2.2 cache only); nothing to sync"; exit 0; }
 typeset daemon="$newest/daemon.mjs"
@@ -132,9 +140,14 @@ if [[ "$(uname -s)" == "Linux" ]] && command -v systemctl >/dev/null && systemct
     typeset unit="$HOME/.config/systemd/user/context-mode-daemon.service" exec_line
     exec_line=$(grep -m1 '^ExecStart=' "$unit" 2>/dev/null || true)   # a missing unit must not trip err_exit
     # ~/.claude is a symlink into ~/.config/claude: the unit may carry either
-    # spelling, so compare against both the raw and the resolved path
-    typeset daemon_real="${daemon:A}"
-    if [[ ! -f "$unit" ]] || ! systemctl --user is-active --quiet context-mode-daemon.service 2>/dev/null || { [[ "$exec_line" != *"$daemon"* ]] && [[ "$exec_line" != *"$daemon_real"* ]]; }; then
+    # spelling, so compare against both the raw and the resolved path. The saved
+    # port is compared too: a CONTEXT_MODE_DAEMON_PORT change must re-install,
+    # not leave the daemon on the old port while the registration points at the new one.
+    typeset daemon_real="${daemon:A}" unit_text
+    unit_text=$(<"$unit" 2>/dev/null || true)
+    if [[ ! -f "$unit" ]] || ! systemctl --user is-active --quiet context-mode-daemon.service 2>/dev/null ||
+        { [[ "$exec_line" != *"$daemon"* ]] && [[ "$exec_line" != *"$daemon_real"* ]]; } ||
+        [[ "$unit_text" != *"CONTEXT_MODE_DAEMON_PORT=${daemon_port}"* ]]; then
         progress "context-mode daemon: installing the systemd unit for ${newest:t}"
         (( dry )) || { "$node_bin" "$daemon" --install >/dev/null || { warning "context-mode daemon: --install failed"; problems+=('unit'); } }
     fi
@@ -143,6 +156,7 @@ elif [[ "$(uname -s)" == "Darwin" ]] && command -v launchctl >/dev/null; then
     typeset need=0
     [[ -f "$plist" ]] || need=1
     [[ "$need" -eq 0 ]] && ! grep -q "$daemon" "$plist" && need=1
+    [[ "$need" -eq 0 ]] && ! grep -q "<string>${daemon_port}</string>" "$plist" && need=1
     [[ "$need" -eq 0 ]] && ! launchctl print "gui/$(id -u)/$label" >/dev/null 2>&1 && need=1
     if (( need )); then
         progress "context-mode daemon: installing the LaunchAgent for ${newest:t}"
@@ -169,7 +183,12 @@ elif [[ "$(uname -s)" == "Darwin" ]] && command -v launchctl >/dev/null; then
 </plist>
 EOF
 )" >| "$plist" || { warning "context-mode daemon: cannot write $plist"; problems+=('unit'); }
-            launchctl bootstrap "gui/$(id -u)" "$plist" 2>/dev/null || launchctl kickstart -k "gui/$(id -u)/$label" 2>/dev/null || { warning "context-mode daemon: launchctl failed"; problems+=('unit'); }
+            # launchd opens the log files before starting node: the directory must exist
+            mkdir -p "$HOME/.local/state" 2>/dev/null
+            # boot out the loaded job first: kickstart alone would restart the OLD
+            # in-memory definition instead of the rewritten plist
+            launchctl bootout "gui/$(id -u)/$label" 2>/dev/null
+            launchctl bootstrap "gui/$(id -u)" "$plist" 2>/dev/null || { warning "context-mode daemon: launchctl failed"; problems+=('unit'); }
         }
     fi
 else
