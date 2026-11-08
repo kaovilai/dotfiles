@@ -141,6 +141,15 @@ No formal test suite exists. Changes should be manually tested by:
 - `zsh/znap.zsh`: Manages ZSH plugins (pure prompt, syntax highlighting, autocomplete)
 - `Brewfile`: Defines all Homebrew dependencies
 
+### Context-Mode Shared Daemon
+Every Claude session's context-mode MCP server runs as ONE shared daemon per machine (loopback Streamable HTTP, default `127.0.0.1:8790`) instead of a per-session stdio spawn (~87 MB x sessions -> 87 MB x machine). The plugin (our fork `kaovilai/context-mode`, v2.2+) is hooks-only; sessions reach the daemon through a user-scope registration named `context-mode`.
+
+- `scripts/context-mode-daemon-sync.zsh` (run by `fleet-sync` every pass, idempotent): ensures node >= 24.15 (PATH, `~/.local/lib/node-v24*`, Homebrew `node@24`; else auto-installs the sha256-verified nodejs.org tarball into `~/.local/lib` unless `CONTEXT_MODE_DAEMON_NODE_AUTOINSTALL=0`), re-installs the daemon unit when the plugin's versioned cache path moves (Linux systemd user unit `context-mode-daemon.service`; macOS LaunchAgent `com.kaovilai.context-mode-daemon`), and adds the user-scope `claude mcp add --scope user --transport http context-mode http://127.0.0.1:8790/mcp` registration when missing.
+- Marketplace + plugin distribution already go through `settings.json` (`extraKnownMarketplaces` / `enabledPlugins`) via `sync-claude-plugins`.
+- Loopback is not user-isolated: on a shared host another OS user can reach the daemon (and `ctx_execute` with the owner's permissions) — the daemon has no inbound auth by design (see the fork's docs/daemon.md); run it only on single-user machines or behind OS-level access controls.
+- Check health: `systemctl --user status context-mode-daemon` (or the launchd equivalent), `curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8790/healthz` (want 204), `claude mcp get context-mode`. The daemon needs restarting only via its unit; plugin updates re-point the unit automatically on the next fleet-sync.
+- `tests/context-mode-daemon-sync.zsh` covers the sync decisions offline (stub node/claude/systemctl/curl).
+
 ## Adding New Features
 
 ### Adding Aliases

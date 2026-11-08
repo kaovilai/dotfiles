@@ -13,6 +13,8 @@
 #
 # After a fast-forward:
 #   Claude config  install newly enabled plugins (sync-claude-plugins)
+#                  keep the shared context-mode daemon unit and registration
+#                  pointed at the installed plugin version (context-mode-daemon-sync.zsh)
 #   copilot-api    bun install when bun.lock changed (before the proxy step,
 #                  so a restart runs the new deps). The gateway itself is
 #                  handled by the proxy step below like every other proxy.
@@ -348,6 +350,17 @@ fi
 # listening proxy behind what a launch would start now is restarted when idle; a
 # busy one gets a detached watcher that restarts it at the first idle moment
 # (llm-proxy-sync).
+# The shared context-mode daemon (kaovilai/context-mode fork): the plugin's
+# versioned cache path moves with every update, so the daemon unit and the
+# user-scope HTTP registration are re-pointed on every pass (cheap, idempotent).
+_sync_context_mode_daemon() {
+    local -a args=()
+    (( dry )) && args+=(--dry-run)
+    (( quiet )) && args+=(--quiet)
+    zsh "$root/scripts/context-mode-daemon-sync.zsh" $args
+}
+_sync_context_mode_daemon || (( problems++ ))
+
 _sync_proxies() {
     source "$root/zsh/functions/claude/load.zsh" || return 1
     # The hosted-only fingerprint includes the gateway key; without it the
