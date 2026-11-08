@@ -39,8 +39,15 @@ zstyle ':autocomplete:*' min-input 2
 # entry itself is on the remote host:
 #   infocmp -x xterm-ghostty | ssh <host> -- tic -x -
 () {
-  local -P kb=$HOME/.zsh-snap/marlonrichert/zsh-autocomplete/functions/Init/.autocomplete__key-bindings
-  [[ -f $kb ]] || return
+  # plugin dir is `Functions/` upstream; lowercase `functions/` only resolves on
+  # case-insensitive macOS FS, so Linux hosts silently skipped the patch
+  local -P kb=""
+  local -P d
+  for d in Functions functions; do
+    local -P f=$HOME/.zsh-snap/marlonrichert/zsh-autocomplete/$d/Init/.autocomplete__key-bindings
+    [[ -f $f ]] && kb=$f && break
+  done
+  [[ -n $kb ]] || return
   local -P c=$(<$kb)
   [[ $c == *'$terminfo[kcbt]'* ]] || return  # already patched / layout changed
   c=${c//'$terminfo[kcbt]'/'${terminfo[kcbt]-}'}
