@@ -205,10 +205,13 @@ export BUN_INSTALL="$HOME/.bun"
 export PATH="$BUN_INSTALL/bin:$PATH"
 
 # Added by cua-driver-rs installer — see https://github.com/trycua/cua
-export PATH="/Users/tkaovila/.local/bin:$PATH"
+export PATH="$HOME/.local/bin:$PATH"
 
 # rust for t3code dev
 export PATH=/opt/homebrew/opt/rustup/bin:$PATH
 
-# Vite+ bin (https://viteplus.dev)
-. "/home/tkaovila/.config/vite-plus/env"
+# Vite+ bin (https://viteplus.dev) — if-block so an absent file doesn't make
+# this (last) line of .zshrc return non-zero for `source ~/.zshrc` callers
+if [[ -f "$HOME/.config/vite-plus/env" ]]; then
+  . "$HOME/.config/vite-plus/env"
+fi

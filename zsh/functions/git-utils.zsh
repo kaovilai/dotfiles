@@ -1,5 +1,14 @@
 # Description: Git and directory batch operation utilities
 
+# NOTE: the glob-aware functions below (go-mod-upgrade-dirs, exec-dirs*,
+# code-dirs, finder-dirs) use the `function name {` form on purpose: .zshrc
+# pre-registers noglob aliases for these names (so they work on the very
+# first call, before this file is lazy-loaded), and alias expansion would
+# turn `name() {` into `noglob name () {` — a parse error that aborts this
+# whole file mid-source. The `function` keyword form is not subject to
+# alias expansion, and the aliases stay intact throughout the load (they
+# are re-created at the bottom of this file either way).
+
 # Usage: cherrypick-pr <#PR-number> ...
 cherrypick-pr() {
     if ! git rev-parse --git-dir > /dev/null 2>&1; then
@@ -101,7 +110,7 @@ go-mod-upgrade() {
 # $4 is text to prefix commit/PR title such as "CVE-2025-22869: "
 # Examples: GOTOOLCHAIN=go1.23.6 go-mod-upgrade-dirs "velero*" golang.org/x/oauth2@v0.27.0
 # Examples: GOTOOLCHAIN=go1.23.6 go-mod-upgrade-dirs "velero*" golang.org/x/crypto@v0.35.0 "gsed -i \"s/golang:1.22-bookworm/golang:1.23-bookworm/g\" Dockerfile && git add Dockerfile" CVE-2025-22869
-go-mod-upgrade-dirs() {
+function go-mod-upgrade-dirs {
     if [[ -z "$1" || -z "$2" ]]; then
         echo "Usage: go-mod-upgrade-dirs <dir-pattern> <package> [extra-cmd] [commit-prefix]" >&2
         echo "Example: go-mod-upgrade-dirs \"velero*\" golang.org/x/oauth2@v0.27.0" >&2
@@ -136,7 +145,7 @@ go-mod-upgrade-dirs() {
 # Examples: exec-dirs "velero*" branch-name "command"
 # Examples: exec-dirs "velero*" golang.org/x/oauth2@v0.27.0 "pwd && pwd"
 # Examples: exec-dirs "velero*" golang.org/x/oauth2@v0.27.0 "snyk test"
-exec-dirs() {
+function exec-dirs {
     if [[ -z "$1" || -z "$2" || -z "$3" ]]; then
         echo "Usage: exec-dirs <pattern> <branch> <command>" >&2
         echo "Example: exec-dirs \"velero*\" my-branch \"go mod tidy\"" >&2
@@ -164,7 +173,7 @@ exec-dirs() {
 # $3: base branch
 # $4: branch checkout name
 # $5: command
-exec-dirs-ds() {
+function exec-dirs-ds {
     local echo_only=false
     if [[ "$1" == "--echo-only" ]]; then
         echo_only=true
@@ -233,7 +242,7 @@ exec-dirs-ds() {
 }
 
 # Echo-only version of exec-dirs-ds (for testing what would happen)
-exec-dirs-ds-echo() {
+function exec-dirs-ds-echo {
     if [[ -z "$1" || -z "$2" || -z "$3" || -z "$4" || -z "$5" ]]; then
         echo "Usage: exec-dirs-ds-echo <pattern> <ds-name> <base-branch> <branch-name> <command>" >&2
         echo "Example: exec-dirs-ds-echo \"velero*\" upstream main fix-123 \"go mod tidy\"" >&2
@@ -264,7 +273,7 @@ exec-dirs-ds-echo() {
 
 # open all dirs matching pattern in code
 # ex: code-dirs "velero*"
-code-dirs() {
+function code-dirs {
     if [[ -z "$1" ]]; then
         echo "Usage: code-dirs <pattern>" >&2
         echo "Example: code-dirs \"velero*\"" >&2
@@ -288,7 +297,7 @@ code-dirs() {
 
 # open all dirs matching pattern in finder
 # ex: finder-dirs "velero*"
-finder-dirs() {
+function finder-dirs {
     if [[ "$OSTYPE" != darwin* ]]; then
         echo "Error: finder-dirs is only supported on macOS" >&2
         return 1

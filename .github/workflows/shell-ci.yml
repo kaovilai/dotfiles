@@ -3,19 +3,14 @@ name: Shell CI
 on:
   workflow_dispatch:
   pull_request:
-    paths:
-      - ".zshrc"
-      - "**/*.zsh"
-      - "*.sh"
-      - "**/*.sh"
-      - ".github/workflows/shell-ci.yml"
   push:
-    paths:
-      - ".zshrc"
-      - "**/*.zsh"
-      - "*.sh"
-      - "**/*.sh"
-      - ".github/workflows/shell-ci.yml"
+
+concurrency:
+  # head_ref (PR branch) or ref_name (push branch) — makes the push run and
+  # the pull_request run for the same branch cancel each other instead of
+  # duplicating every job
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -187,3 +182,40 @@ jobs:
       - name: Fail job when ShellCheck finds issues
         if: steps.shellcheck.outcome == 'failure'
         run: exit 1
+
+  # --- Functional verification: prove .zshrc / .bashrc actually work ----------
+  # Each job runs tests/verify-zshrc.zsh + tests/verify-bashrc.sh under a
+  # throwaway HOME: interactive source of the real config files, every lazy
+  # loader fired, and every repo-defined function checked via `whence`.
+
+  verify-fedora:
+    name: verify (fedora)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    container: quay.io/fedora/fedora:latest
+    steps:
+      - name: Install zsh and git
+        run: dnf install -y --setopt=install_weak_deps=False zsh git findutils gawk
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Verify .zshrc (interactive source + all functions resolve)
+        run: zsh tests/verify-zshrc.zsh
+
+      - name: Verify .bashrc / .bash_profile
+        run: bash tests/verify-bashrc.sh
+
+  verify-macos:
+    name: verify (macos)
+    runs-on: macos-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Verify .zshrc (interactive source + all functions resolve)
+        run: zsh tests/verify-zshrc.zsh
+
+      - name: Verify .bashrc / .bash_profile
+        run: bash tests/verify-bashrc.sh

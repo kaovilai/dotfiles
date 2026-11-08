@@ -22,7 +22,11 @@ shopt -s histappend     # Append to history file, don't overwrite
 
 # ===== Shell Options =====
 shopt -s checkwinsize   # Update window size after each command
-shopt -s globstar       # "**" matches all files and zero or more directories
+# globstar (** matches all files and dirs) needs bash 4+ — macOS still
+# ships bash 3.2, where `shopt -s globstar` errors and sets nothing
+if ((BASH_VERSINFO[0] >= 4)); then
+  shopt -s globstar
+fi
 
 # ===== Aliases =====
 alias z='zsh -i'

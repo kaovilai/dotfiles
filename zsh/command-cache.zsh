@@ -84,13 +84,13 @@ cached-exec() {
 
   # Run command and cache output
   mkdir -p "${cache_file:h}" || { echo "Warning: Failed to create cache directory ${cache_file:h}" >&2; "$@"; return $?; }
-  "$@" | tee "${cache_file}.tmp"
+  "$@" | tee "${cache_file}.tmp.$$"
   local exit_code=${pipestatus[1]}
   
   if [[ $exit_code -eq 0 ]]; then
-    mv "${cache_file}.tmp" "$cache_file"
+    mv "${cache_file}.tmp.$$" "$cache_file"
   else
-    rm -f "${cache_file}.tmp"
+    rm -f "${cache_file}.tmp.$$"
     # If command failed but cache exists, use cached version
     if [[ -f "$cache_file" ]]; then
       echo "Warning: Command failed, using cached version" >&2
