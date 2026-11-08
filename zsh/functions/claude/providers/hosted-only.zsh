@@ -98,7 +98,7 @@ _claude_hosted_launch() (
           CLAUDE_CODE_MAX_OUTPUT_TOKENS: $maxout,
           ANTHROPIC_SMALL_FAST_MODEL: $small, CLAUDE_CODE_SUBAGENT_MODEL: $sub,
           CLAUDE_CODE_SUBAGENT_MODEL_FORCE: "1", CLAUDE_CODE_WORKFLOW_SUBAGENT_MODEL: $sub},
-        modelSettings: {($glm): {effortLevel: "medium"}, ($ds): {effortLevel: "medium"}}
+        modelSettings: {($glm): {effortLevel: "high"}, ($ds): {effortLevel: "medium"}}
       }' <<< "$settings") || return 1
     # window derived above; absent when the knob says off
     [[ -n "$compact_window" ]] && settings=$(jq -c --arg cw "$compact_window" '.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW = $cw' <<< "$settings")
