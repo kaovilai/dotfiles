@@ -272,4 +272,18 @@ run --dry-run || fail "dry run with a stale marker rc=$rc: $out"
 run --dry-run || fail "dry run with no proxies rc=$rc: $out"
 [[ "$out" != *"== "* ]] || fail "proxy sync (dry run) spoke with nothing listening: $out"
 
+# 11. menubar reload: wired into every macOS run. The helper is never built in
+#     this throwaway HOME, so the real llm-usage reports a no-op — proving the
+#     call happens without touching a developer's real menubar.
+if [[ "$OSTYPE" == darwin* ]]; then
+    mkdir -p "$tmp/other-dot/scripts/llm-usage-menubar"
+    cp "$repo/scripts/llm-usage" "$tmp/other-dot/scripts/llm-usage"
+    print -r -- "swift source" > "$tmp/other-dot/scripts/llm-usage-menubar/main.swift"
+    $G -C "$tmp/other-dot" add scripts && $G -C "$tmp/other-dot" commit -qm menubar && $G -C "$tmp/other-dot" push -q origin main 2>/dev/null
+    run || fail "menubar wire run rc=$rc: $out"
+    [[ "$out" == *"menubar: not built here; nothing to reload"* ]] || fail "menubar reload not wired (or not a no-op): $out"
+    run --dry-run || fail "menubar dry run rc=$rc: $out"
+    [[ "$out" == *"menubar: not built here; nothing to reload"* ]] || fail "menubar reload dry run misbehaved: $out"
+fi
+
 print -r -- "ok fleet-sync"

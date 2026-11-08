@@ -32,6 +32,7 @@ import plistlib
 import re
 import shlex
 import shutil
+import signal
 import socket
 import statistics
 import stat as stat_mod
@@ -2887,6 +2888,72 @@ def mb_log_path():
     return os.path.join(STATE, "menubar.log")
 
 
+def mb_start():
+    """Start the built helper detached, logging to STATE/menubar.log."""
+    out = mb_build()
+    os.makedirs(STATE, mode=0o700, exist_ok=True)
+    log = open(mb_log_path(), "ab")
+    proc = subprocess.Popen([out], stdin=subprocess.DEVNULL, stdout=log, stderr=log, start_new_session=True,
+                            env={**os.environ, **mb_env()})
+    for _ in range(30):
+        time.sleep(0.1)
+        if mb_running():
+            break
+    print(f"menubar: started (pid {proc.pid}); log {mb_log_path()}")
+
+
+def mb_loaded():
+    return subprocess.run(["launchctl", "print", f"gui/{UID}/{MB_LABEL}"], capture_output=True).returncode == 0
+
+
+def cmd_menubar_reload(args):
+    """Bring a built/running helper onto the current source: rebuild when
+    stale, then restart the running process so the new code is live
+    (fleet-sync calls this after a pull). Never builds or starts the helper
+    on a machine that never opted in: no binary and no running process is a
+    no-op."""
+    out = mb_bin()
+    pid = mb_running()
+    if not os.path.exists(MB_SRC):
+        print("menubar: source missing; nothing to reload")
+        return
+    if not pid and not os.path.exists(out):
+        print("menubar: not built here; nothing to reload")
+        return
+    if not mb_stale():
+        print(f"menubar: up to date (pid {pid})" if pid else f"menubar: up to date: {out}")
+        return
+    if args.dry_run:
+        print(f"would rebuild {out} from {MB_SRC}")
+        if pid:
+            print(f"would restart the running helper (pid {pid})")
+        return
+    mb_build()
+    if not pid:
+        print(f"menubar: rebuilt {out}; not running (llm-usage menubar run)")
+        return
+    if mb_loaded():
+        # launchd owns it (menubar install): kill + relaunch in one step, the
+        # plist's ProgramArguments already point at the freshly built binary.
+        res = subprocess.run(["launchctl", "kickstart", "-k", f"gui/{UID}/{MB_LABEL}"], capture_output=True, text=True)
+        if res.returncode:
+            sys.exit(f"llm-usage: launchctl kickstart failed: {res.stderr.strip()}")
+        print(f"menubar: restarted via launchd (was pid {pid})")
+        return
+    # started by hand (`menubar run`): stop it the same way, start the new build.
+    os.kill(pid, signal.SIGTERM)
+    for _ in range(50):
+        if not mb_running():
+            break
+        time.sleep(0.1)
+    else:
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+    mb_start()
+
+
 # --------------------------------------------------------------------------- menubar logos
 # Logos are never committed here: `llm-usage menubar logos fetch` downloads the PNGs below from a pinned
 # commit of lobehub/lobe-icons (MIT; see THIRD_PARTY_NOTICES.md), verifies each sha256, and stores them in
@@ -3047,16 +3114,9 @@ def cmd_menubar(args):
         if pid:
             print(f"menubar: already running (pid {pid})")
             return
-        out = mb_build()
-        os.makedirs(STATE, mode=0o700, exist_ok=True)
-        log = open(mb_log_path(), "ab")
-        proc = subprocess.Popen([out], stdin=subprocess.DEVNULL, stdout=log, stderr=log, start_new_session=True,
-                                env={**os.environ, **mb_env()})
-        for _ in range(30):
-            time.sleep(0.1)
-            if mb_running():
-                break
-        print(f"menubar: started (pid {proc.pid}); log {mb_log_path()}")
+        mb_start()
+    elif action == "reload":
+        cmd_menubar_reload(args)
     elif action == "install":
         plist = {"Label": MB_LABEL, "ProgramArguments": [mb_bin()], "RunAtLoad": True, "KeepAlive": False,
                  "EnvironmentVariables": mb_env(), "StandardOutPath": mb_log_path(), "StandardErrorPath": mb_log_path(),
@@ -3098,8 +3158,7 @@ def cmd_menubar(args):
         print(f"built:     {'yes' if built else 'no'}  {out}" + (" (older than source: run `llm-usage menubar build`)" if built and mb_stale() else ""))
         pid = mb_running()
         print(f"running:   {'yes (pid %s)' % pid if pid else 'no'}")
-        loaded = subprocess.run(["launchctl", "print", f"gui/{UID}/{MB_LABEL}"], capture_output=True).returncode == 0
-        print(f"installed: {'yes' if os.path.exists(MB_PLIST) else 'no'}  {MB_PLIST}" + (" (loaded)" if loaded else ""))
+        print(f"installed: {'yes' if os.path.exists(MB_PLIST) else 'no'}  {MB_PLIST}" + (" (loaded)" if mb_loaded() else ""))
 
 
 # --------------------------------------------------------------------------- web dashboard
@@ -3535,13 +3594,13 @@ def main():
     p.add_argument("--share-metric", choices=list(SHARE_METRICS), default="requests", help="traffic-share metric (default %(default)s)")
     p.set_defaults(fn=cmd_menubar_data)
 
-    p = sub.add_parser("menubar", help="macOS menubar monitor (native Swift helper): build|run|install|uninstall|status|logos [fetch]|window [show|hide|toggle]")
-    p.add_argument("action", choices=["build", "run", "install", "uninstall", "status", "logos", "window"])
+    p = sub.add_parser("menubar", help="macOS menubar monitor (native Swift helper): build|run|reload|install|uninstall|status|logos [fetch]|window [show|hide|toggle]")
+    p.add_argument("action", choices=["build", "run", "reload", "install", "uninstall", "status", "logos", "window"])
     p.add_argument("logos_action", nargs="?", help="logos: `fetch` downloads the pinned logo PNGs, omit to list what each key resolves to; window: show|hide|toggle (default toggle)")
     p.add_argument("--from-dir", help=argparse.SUPPRESS)  # logos fetch: local checkout of the logo repo instead of the network
     p.add_argument("--no-verify", action="store_true", help=argparse.SUPPRESS)  # logos fetch: tests only (fixture PNGs)
     p.add_argument("--force", action="store_true", help="build: rebuild even when up to date")
-    p.add_argument("--dry-run", action="store_true", help="install/uninstall: print what would happen, change nothing")
+    p.add_argument("--dry-run", action="store_true", help="install/uninstall/reload: print what would happen, change nothing")
     p.set_defaults(fn=cmd_menubar)
 
     args = parser.parse_args()

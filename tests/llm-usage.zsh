@@ -931,6 +931,116 @@ assert set(json.load(open(path))["requests"]) == {"call-3"}, "entries older than
 log.log_pre_api_call("glm", [], None)  # malformed hook args never raise
 PY
 
+# menubar reload: rebuild-when-stale + restart decisions, fully offline.
+# swiftc and launchctl are stubs; a "running helper" is a background process
+# holding the real flock protocol on STATE/menubar.lock; a "rebuilt binary"
+# is a script the swiftc stub writes that grabs the lock the same way.
+python3 - "$usage" "$tmp" <<'PY' || fail "menubar reload scenarios"
+import fcntl, os, subprocess, sys, tempfile, time
+usage, tmp = sys.argv[1:3]
+bindir = tempfile.mkdtemp(dir=tmp)
+state = tempfile.mkdtemp(dir=tmp)
+stub = tempfile.mkdtemp(dir=tmp)
+lock = os.path.join(state, "menubar.lock")
+bin_ = os.path.join(bindir, "llm-usage-menubar")
+env = {**os.environ, "LLM_USAGE_MENUBAR_DIR": bindir, "LLM_USAGE_DIR": state, "MB_TEST_LOCK": lock}
+MB_SRC = os.path.join(os.path.dirname(os.path.realpath(usage)), "llm-usage-menubar", "main.swift")
+swift_log = os.path.join(stub, "swiftc.log")
+kick_log = os.path.join(stub, "kickstart.log")
+# swiftc stub: install a pre-written "binary" that holds the lock like the helper
+helper = os.path.join(stub, "helper.tmpl")
+with open(helper, "w") as h:
+    h.write('#!/usr/bin/env python3\n'
+            'import fcntl, os, time\n'
+            'fd = os.open(os.environ["MB_TEST_LOCK"], os.O_RDWR | os.O_CREAT)\n'
+            'fcntl.flock(fd, fcntl.LOCK_EX)\n'
+            'os.pwrite(fd, (str(os.getpid()) + "\\n").ljust(32).encode(), 0)\n'
+            'while True: time.sleep(1)\n')
+os.chmod(helper, 0o755)
+with open(os.path.join(stub, "swiftc"), "w") as h:
+    h.write('#!/bin/sh\necho "$*" >> "%s"\n'
+            'out=""; while [ $# -gt 0 ]; do case "$1" in -o) out="$2"; shift 2 ;; *) shift ;; esac; done\n'
+            'cp "%s" "$out" && chmod +x "$out"\n' % (swift_log, helper))
+os.chmod(os.path.join(stub, "swiftc"), 0o755)
+# launchctl stub: `print` exit code flips on a marker file, `kickstart` is logged
+with open(os.path.join(stub, "launchctl"), "w") as h:
+    h.write('#!/bin/sh\ncase "$1" in\n'
+            '  print) [ ! -f "%s/no-launchd" ] && exit 0; exit 1 ;;\n'
+            '  kickstart) echo "$*" >> "%s"; exit 0 ;;\nesac\nexit 0\n' % (stub, kick_log))
+os.chmod(os.path.join(stub, "launchctl"), 0o755)
+env["PATH"] = stub + os.pathsep + env["PATH"]
+def reload(*cli):
+    return subprocess.run([sys.executable, usage, "menubar", "reload", *cli], capture_output=True, text=True, env=env, timeout=120)
+def swift_calls():
+    try:
+        return open(swift_log).read().count("\n")
+    except OSError:
+        return 0
+def holder():
+    p = subprocess.Popen([sys.executable, "-c",
+        "import fcntl, os, time\n"
+        "fd = os.open(os.environ['MB_TEST_LOCK'], os.O_RDWR | os.O_CREAT)\n"
+        "fcntl.flock(fd, fcntl.LOCK_EX)\n"
+        "os.pwrite(fd, (str(os.getpid()) + chr(10)).ljust(32).encode(), 0)\n"
+        "while True: time.sleep(1)"], env=env, start_new_session=True)
+    for _ in range(50):
+        time.sleep(0.1)
+        try:
+            with open(lock, "rb") as fh:
+                if int(fh.read(32).split()[0]) == p.pid:
+                    return p
+        except (OSError, IndexError, ValueError):
+            pass
+    p.kill(); raise AssertionError("holder never took the lock")
+
+# 1. nothing built, nothing running: a no-op, never installs
+r = reload()
+assert r.returncode == 0 and "not built here" in r.stdout, (r.returncode, r.stdout, r.stderr)
+# 2. stale binary, not running: rebuilt by the stub swiftc, still not started
+with open(bin_, "w") as h:
+    h.write("old")
+os.utime(bin_, (0, 0))  # older than main.swift -> stale
+r = reload()
+assert r.returncode == 0 and "rebuilt" in r.stdout and "not running" in r.stdout, (r.stdout, r.stderr)
+assert swift_calls() == 1 and os.path.getmtime(bin_) > 0, "stale binary was not rebuilt"
+# 3. fresh binary: up to date, no compiler run
+r = reload()
+assert r.returncode == 0 and "up to date" in r.stdout, (r.stdout, r.stderr)
+assert swift_calls() == 1
+# 4. dry run with a stale binary and a running helper: reports, changes nothing
+os.utime(bin_, (0, 0))
+h1 = holder()
+r = reload("--dry-run")
+assert r.returncode == 0 and "would rebuild" in r.stdout and "would restart" in r.stdout, (r.stdout, r.stderr)
+assert swift_calls() == 1 and h1.poll() is None, "dry run rebuilt or killed"
+# 5. launchd-managed helper: kickstart -k, the process itself is not signalled
+r = reload()
+assert r.returncode == 0 and "restarted via launchd" in r.stdout, (r.stdout, r.stderr)
+assert f"kickstart -k gui/{os.getuid()}/com.kaovilai.llm-usage-menubar" in open(kick_log).read(), open(kick_log).read()
+assert h1.poll() is None, "launchd path must not signal the pid itself"
+h1.kill(); h1.wait()
+# 6. hand-run helper (no launchd): stopped, the new build started under a new pid
+open(os.path.join(stub, "no-launchd"), "w").close()
+os.utime(bin_, (0, 0))
+h2 = holder()
+r = reload()
+assert r.returncode == 0 and "started (pid" in r.stdout, (r.stdout, r.stderr)
+h2.wait(timeout=10)  # SIGTERM from the reload
+time.sleep(0.2)
+with open(lock, "rb") as fh:
+    newpid = int(fh.read(32).split()[0])
+assert newpid != h2.pid and newpid != os.getpid(), (newpid, h2.pid)
+os.kill(newpid, 15)
+# 7. build failure surfaces as an error, not a silent skip
+os.utime(bin_, (0, 0))
+with open(os.path.join(stub, "swiftc"), "w") as h:
+    h.write("#!/bin/sh\nexit 1\n")
+os.chmod(os.path.join(stub, "swiftc"), 0o755)
+r = reload()
+assert r.returncode != 0 and "swiftc failed" in r.stdout + r.stderr, (r.returncode, r.stdout, r.stderr)
+print("menubar reload ok")
+PY
+
 # fleet pull state machine: scripted exports against the module (watermark, eid identity,
 # revision replace, backfill stop) — deterministic, no subprocess timing
 python3 - "$usage" "$tmp" <<'PY' || fail "fleet state machine"
