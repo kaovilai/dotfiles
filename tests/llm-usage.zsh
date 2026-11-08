@@ -806,6 +806,7 @@ assert fb["enabled"] and [(h["name"], h["state"]) for h in fb["hosts"]] == [("pe
 h = fb["hosts"][0]
 assert h["m15"]["requests"] == 2 and h["m15"]["errors"]["429"] == 1 and h["inflight"]["count"] == 1 and h["backfilled"], h
 assert len(h["series"]) == 60 and sum(h["series"]) == 2 and sum(h["errors"]) == 1, (h["series"], h["errors"])  # per-host 60-min series for the window hover
+assert len(h["tps"]) == 60 and round(sum(h["tps"]), 2) in (0.16, 0.17), h["tps"]  # per-host tok/s for the tokens chart's hover filter (2 events x out=5, one or two minute buckets)
 assert d["totals"]["m15"]["requests"] == 4, d["totals"]  # 2 local + 2 peer
 assert d["throttled"] and d["throttled"]["proxy"] == "hosted-only@peerA" and d["throttled"]["host"] == "peerA", d["throttled"]
 # spans are per host: the local success must not end the peer's 429 span; the local error (50s) is newer than the peer's (120s)
@@ -1228,12 +1229,32 @@ if [[ -x /usr/bin/swiftc ]] || command -v swiftc >/dev/null; then
     "$mb" --window-png "$tmp/w-fleet-hover-bars.png" --layout vertical --graph bars --hover host:peerA --data-file "$mbjson/fleet.json" >/dev/null || fail "window-png fleet host-hover bars"
     "$mb" --window-png "$tmp/w-fleet-hz-only.png" --layout vertical --graph bars --hover host:peerA --data-file "$tmp/fleet-hostzero.json" >/dev/null || fail "window-png fleet host-zero bars-only"
     cmp -s "$tmp/w-fleet-hz-only.png" "$tmp/w-fleet-hover-bars.png" && fail "host overlay must draw in bars-only mode (zeroed series must differ)"
-    # a host hover that can filter nothing (tokens metric, fleet data stripped) must
-    # not change the render at all — not the data, not the share rows, not the
-    # error/throttle chart chrome
+    # the tokens chart gets the same filter: per-host tok/s overlay (a tokens or
+    # stacked window is where a requests-only hover filtered nothing)
+    "$mb" --window-png "$tmp/w-fleet-tokp.png" --layout vertical --window-metric tokens --data-file "$mbjson/fleet.json" >/dev/null || fail "window-png fleet tokens plain"
+    "$mb" --window-png "$tmp/w-fleet-tokh.png" --layout vertical --window-metric tokens --hover host:peerA --data-file "$mbjson/fleet.json" >/dev/null || fail "window-png fleet host-hover tokens"
+    cmp -s "$tmp/w-fleet-tokh.png" "$tmp/w-fleet-tokp.png" && fail "host hover must filter the tokens chart"
+    python3 -c 'import json,sys; d = json.load(open(sys.argv[1])); [h.update(tps=[0.0]*60) for h in d["fleet"]["hosts"] if h["name"] == "peerA"]; json.dump(d, open(sys.argv[2], "w"))' "$mbjson/fleet.json" "$tmp/fleet-tpszero.json"
+    "$mb" --window-png "$tmp/w-fleet-tzh.png" --layout vertical --window-metric tokens --hover host:peerA --data-file "$tmp/fleet-tpszero.json" >/dev/null || fail "window-png fleet tps-zero"
+    cmp -s "$tmp/w-fleet-tzh.png" "$tmp/w-fleet-tokh.png" && fail "host overlay must draw on the tokens chart (zeroed tps must differ)"
+    # the stacked "all" view: its tokens panel carries the filter too
+    "$mb" --window-png "$tmp/w-fleet-allp.png" --layout vertical --window-metric all --data-file "$mbjson/fleet.json" >/dev/null || fail "window-png fleet all plain"
+    "$mb" --window-png "$tmp/w-fleet-allh.png" --layout vertical --window-metric all --hover host:peerA --data-file "$mbjson/fleet.json" >/dev/null || fail "window-png fleet host-hover all"
+    cmp -s "$tmp/w-fleet-allh.png" "$tmp/w-fleet-allp.png" && fail "host hover must filter the stacked view's tokens panel"
+    # a host hover that can filter nothing (fleet data stripped: no host series for
+    # any metric) must not change the render at all — not the data, not the share
+    # rows, not the error/throttle chart chrome
     "$mb" --window-png "$tmp/w-fleet-tok-plain.png" --layout vertical --window-metric tokens --data-file "$tmp/fleet-stripped.json" >/dev/null || fail "window-png fleet tokens plain"
     "$mb" --window-png "$tmp/w-fleet-tok-hover.png" --layout vertical --window-metric tokens --hover host:peerA --data-file "$tmp/fleet-stripped.json" >/dev/null || fail "window-png fleet tokens host-hover"
     cmp -s "$tmp/w-fleet-tok-hover.png" "$tmp/w-fleet-tok-plain.png" || fail "host hover without a host series must not change the render"
+    # an older payload with hosts but no tps key (mixed helper versions) must not
+    # dim the tokens chart. The hovered host is the third of three, past the
+    # window's two-row cap, so its row highlight cannot draw either — a
+    # full-image compare stays clean
+    python3 -c 'import json,sys; d = json.load(open(sys.argv[1])); hs = d["fleet"]["hosts"]; extra = [dict(hs[0], name=n) for n in ("peerB", "peerC")]; extra[1].pop("tps", None); hs += extra; json.dump(d, open(sys.argv[2], "w"))' "$mbjson/fleet.json" "$tmp/fleet-notps.json"
+    "$mb" --window-png "$tmp/w-fleet-nt-plain.png" --layout vertical --window-metric tokens --data-file "$tmp/fleet-notps.json" >/dev/null || fail "window-png fleet no-tps plain"
+    "$mb" --window-png "$tmp/w-fleet-nt-hover.png" --layout vertical --window-metric tokens --hover host:peerC --data-file "$tmp/fleet-notps.json" >/dev/null || fail "window-png fleet no-tps host-hover"
+    cmp -s "$tmp/w-fleet-nt-hover.png" "$tmp/w-fleet-nt-plain.png" || fail "host hover on a payload without tps must not touch the graph"
     # the compact fleet line (horizontal window's short stats column) carries the
     # first host's hover target: same zeroed-series payload, hovering the row's own
     # host vs a name that matches nothing — the only difference is the row highlight

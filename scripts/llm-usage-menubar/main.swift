@@ -942,9 +942,12 @@ final class MonitorView: NSView {
     // Graph hover: the minute under the mouse gets a crosshair on every graph and a readout of that minute.
     private var graphHits: [(rect: NSRect, metric: ChartMetric)] = []
     private var graphModelCache: (key: String, model: GraphModel)?
-    /// per-host 60-minute request series from the payload (fleet strip hover);
-    /// refreshed alongside the graph model cache in draw()
+    /// per-host 60-minute series from the payload (fleet strip hover): request
+    /// counts for the requests chart, completion tok/s for the tokens chart
+    /// (the stacked view's tokens panel included); refreshed alongside the
+    /// graph model cache in draw()
     private var hostSeries: [String: [Int]] = [:]
+    private var hostTps: [String: [Double]] = [:]
     private var graphCursor: (graph: Int, minute: Int, x: CGFloat)?
     private var graphMinutes = 60
     /// Headless PNG renders pin the graph cursor to a minute index (0 = oldest).
@@ -1002,13 +1005,19 @@ final class MonitorView: NSView {
         }
     }
 
-    /// A host hover only filters the requests chart — on other metrics there is no
-    /// host series, so every graph/share-row hover effect (dimming, chart chrome,
-    /// overlays) treats it as no hover. The fleet row's own highlight still uses
+    /// A host hover filters the requests chart (per-minute counts) and the tokens
+    /// chart (completion tok/s — the stacked "all" view's tokens panel included).
+    /// Latency/ttft carry no per-host series, and a hover with no series behind it
+    /// (fleet data stripped) must change nothing, so on those every graph/share-row
+    /// hover effect treats it as no hover. The fleet row's own highlight still uses
     /// `hover` directly: it is row-local mouse feedback, not a graph filter.
     private var effectiveHover: HoverTarget? {
-        if case .host = hover, metric != .requests { return nil }
-        return hover
+        guard case .host(let name) = hover else { return hover }
+        switch metric {
+        case .requests: return hostSeries[name] != nil ? hover : nil
+        case .tokens, .all: return hostTps[name] != nil ? hover : nil
+        default: return nil
+        }
     }
 
     /// 1 for the hovered series, dimmed for everything else, unchanged when nothing is hovered.
@@ -1052,8 +1061,16 @@ final class MonitorView: NSView {
         if graphModelCache?.key != modelKey {
             graphModelCache = (modelKey, GraphModel(d))
             hostSeries = [:]
+            hostTps = [:]
             for h in d["fleet"]["hosts"].arr {
-                if let n = h["name"].str { hostSeries[n] = h["series"].arr.map { $0.int ?? 0 } }
+                if let n = h["name"].str {
+                    // only a key the payload actually carries counts as "this host
+                    // has a series": an older payload without it must not leave a
+                    // non-nil empty array behind (the hover would dim the chart
+                    // with no overlay to show)
+                    if h["series"].exists { hostSeries[n] = h["series"].arr.map { $0.int ?? 0 } }
+                    if h["tps"].exists { hostTps[n] = h["tps"].arr.map { $0.dbl ?? 0 } }
+                }
             }
         }
         let model = graphModelCache!.model
@@ -1598,28 +1615,34 @@ final class MonitorView: NSView {
 
         // host hover (fleet strip): the vendor bars and provider lines are dimmed
         // by the existing hoverAlpha (nothing matches a .host target); this line IS
-        // the filter — the hovered host's per-minute traffic on the chart's scale
-        if case .host(let name) = hover, let vals = hostSeries[name], m == .requests, vals.count == n, scale > 0 {
-            let hostColor = dynamicColor(light: rgb(0x2a78d6), dark: rgb(0x3987e5))
-            let line = NSBezierPath()
-            line.lineWidth = 2
-            line.lineCapStyle = .round
-            line.lineJoinStyle = .round
-            var last: NSPoint?
-            for (i, v) in vals.enumerated() {
-                guard v > 0 else { last = nil; continue }  // break the line at empty minutes
-                let p = NSPoint(x: rect.minX + slot * (CGFloat(i) + 0.5), y: rect.minY + CGFloat(v) * scale)
-                if let l = last { line.move(to: l); line.line(to: p) } else { line.move(to: p) }
-                last = p
-            }
-            hostColor.setStroke()
-            line.stroke()
-            // a dot per active minute so isolated one-off requests stay visible
-            hostColor.setFill()
-            for (i, v) in vals.enumerated() where v > 0 {
-                let x = rect.minX + slot * (CGFloat(i) + 0.5)
-                let y = rect.minY + CGFloat(v) * scale
-                NSBezierPath(ovalIn: NSRect(x: x - 2.5, y: y - 2.5, width: 5, height: 5)).fill()
+        // the filter — the hovered host's per-minute traffic on the chart's scale.
+        // Requests: per-minute counts. Tokens: completion tok/s, the provider lines'
+        // metric (drawMiniGraph passes .tokens for the stacked view's panel).
+        if case .host(let name) = hover, m == .requests || m == .tokens, scale > 0 {
+            let vals = m == .tokens ? (hostTps[name] ?? []) : (hostSeries[name] ?? []).map(Double.init)
+            if vals.count == n {
+                let hostColor = dynamicColor(light: rgb(0x2a78d6), dark: rgb(0x3987e5))
+                let base = rect.minY + (m == .tokens ? 0.5 : 0)  // tokens: sit on the provider lines' baseline
+                let line = NSBezierPath()
+                line.lineWidth = 2
+                line.lineCapStyle = .round
+                line.lineJoinStyle = .round
+                var last: NSPoint?
+                for (i, v) in vals.enumerated() {
+                    guard v > 0 else { last = nil; continue }  // break the line at empty minutes
+                    let p = NSPoint(x: rect.minX + slot * (CGFloat(i) + 0.5), y: base + CGFloat(v) * scale)
+                    if let l = last { line.move(to: l); line.line(to: p) } else { line.move(to: p) }
+                    last = p
+                }
+                hostColor.setStroke()
+                line.stroke()
+                // a dot per active minute so isolated one-off requests stay visible
+                hostColor.setFill()
+                for (i, v) in vals.enumerated() where v > 0 {
+                    let x = rect.minX + slot * (CGFloat(i) + 0.5)
+                    let y = base + CGFloat(v) * scale
+                    NSBezierPath(ovalIn: NSRect(x: x - 2.5, y: y - 2.5, width: 5, height: 5)).fill()
+                }
             }
         }
     }
@@ -1775,7 +1798,8 @@ final class MonitorView: NSView {
                 let state = h["state"].str ?? "down"
                 let name = h["name"].str ?? "?"
                 // hover target: hovering a host row filters the traffic graph to
-                // that host's per-minute series (drawGraph reads it via hostSeries)
+                // that host's per-minute series (drawGraph reads them via
+                // hostSeries/hostTps — requests and tok/s charts respectively)
                 hoverRects.append((row, .host(name)))
                 if hover == .host(name) {
                     NSColor.labelColor.withAlphaComponent(0.07).setFill()
