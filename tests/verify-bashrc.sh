@@ -22,20 +22,35 @@ ln -s -- "$REPO_ROOT" "$TESTHOME/git/dotfiles"
 ln -s -- "$TESTHOME/git/dotfiles/.bashrc" "$TESTHOME/.bashrc"
 ln -s -- "$TESTHOME/git/dotfiles/.bash_profile" "$TESTHOME/.bash_profile"
 
-# bash -i without a tty prints job-control warnings on stderr; expected noise.
+# bash -i without a tty prints job-control warnings on stderr; anything else
+# is a real problem — fail on it.
 check() {
   HOME="$TESTHOME" "$@" 2>"$TESTHOME/stderr.log"
 }
 noise_ok() {
-  grep -vE '^bash: (cannot set terminal process group|no job control in this shell)' "$TESTHOME/stderr.log" || true
+  local unexpected
+  unexpected=$(grep -avE '^bash: (cannot set terminal process group|no job control in this shell)' "$TESTHOME/stderr.log") || true
+  if [[ -n "$unexpected" ]]; then
+    echo "unexpected stderr from bash:" >&2
+    printf '%s\n' "$unexpected" >&2
+    return 1
+  fi
 }
 
 echo '==> interactive bash sources .bashrc (aliases, shopt, history)'
+# set -e inside the child: without it only the LAST line's status is the
+# exit code, so earlier failures would be masked
 check bash -i -c '
-  shopt -q histappend  && shopt -q checkwinsize && shopt -q globstar
+  set -e
+  shopt -q histappend
+  shopt -q checkwinsize
+  shopt -q globstar
   [[ $HISTSIZE == 1000 && $HISTFILESIZE == 2000 && $HISTCONTROL == ignoreboth ]]
-  alias ls >/dev/null && alias ll >/dev/null && alias la >/dev/null
-  alias z >/dev/null   && alias grep >/dev/null
+  alias ls >/dev/null
+  alias ll >/dev/null
+  alias la >/dev/null
+  alias z >/dev/null
+  alias grep >/dev/null
 '
 noise_ok
 

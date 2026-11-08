@@ -65,25 +65,31 @@ for f in $REPO_ROOT/zsh/**/*.zsh(N); do
   files+=("$f")
 done
 
-# Extract function names: `name() {` or `function name {` at column 0 only —
-# indented definitions are helpers nested inside other functions (defined
-# only when the outer function runs) and stay covered by the zsh -n syntax
-# check in CI instead. Heredoc bodies (cloud-init scripts, generated
-# completion files) are skipped so their contents aren't mistaken for zsh.
+# Extract function names: `name() {`, `function name {` and `function
+# name() {` at column 0 only — indented definitions are helpers nested inside
+# other functions (defined only when the outer function runs) and stay
+# covered by the zsh -n syntax check in CI instead. Heredoc bodies
+# (cloud-init scripts, generated completion files, and `echo "cat << EOF"`
+# instruction text) are skipped so their contents aren't mistaken for zsh;
+# a `<<` behind an unbalanced quote is string content, not a heredoc.
 expected=(${(f)"$(awk '
   BEGIN { hd = "" }
   hd != "" { if ($0 ~ "^[[:space:]]*" hd "[[:space:]]*$") hd = ""; next }
   {
     if (match($0, /<<-?[[:space:]]*['"'"'"]?[A-Za-z_][A-Za-z0-9_]*['"'"'"]?/)) {
-      t = substr($0, RSTART, RLENGTH); sub(/^<<-?/, "", t)
-      gsub(/^[[:space:]]+/, "", t)
-      gsub(/^['"'"'"]/, "", t); gsub(/['"'"'"]$/, "", t); hd = t
+      pre = substr($0, 1, RSTART - 1)
+      nq = gsub(/"/, "Q", pre); ns = gsub(/'"'"'/, "Q", pre)
+      if (nq % 2 == 0 && ns % 2 == 0) {
+        t = substr($0, RSTART, RLENGTH); sub(/^<<-?/, "", t)
+        gsub(/^[[:space:]]+/, "", t)
+        gsub(/^['"'"'"]/, "", t); gsub(/['"'"'"]$/, "", t); hd = t
+      }
     }
     print
   }' "${files[@]}" \
-  | grep -E '^(function[[:space:]]+)?[A-Za-z_][A-Za-z0-9_.-]*\(\)[[:space:]]*\{' \
+  | grep -E '^(function[[:space:]]+[A-Za-z_][A-Za-z0-9_.-]*([[:space:]]*\(\))?[[:space:]]*\{|[A-Za-z_][A-Za-z0-9_.-]*\(\)[[:space:]]*\{)' \
   | grep -v '^#' \
-  | sed -E 's/^(function[[:space:]]+)?([A-Za-z_][A-Za-z0-9_.-]*)\(\).*/\2/' \
+  | sed -E 's/^function[[:space:]]+([A-Za-z_][A-Za-z0-9_.-]*).*/\1/; s/^([A-Za-z_][A-Za-z0-9_.-]*)\(\).*/\1/' \
   | sort -u)"})
 print "==> checking ${#expected} unique function definitions from ${#files} files"
 

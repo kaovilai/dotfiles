@@ -27,6 +27,21 @@ done
 (( fail )) && exit 1
 print '    all lazy loaders fired'
 
+# A lazy-loading stub also resolves as a function via `whence`, so the name
+# check alone would accept a wrapper whose implementation never loaded.
+# After firing the loaders, no function body may still be a stub.
+stubs=()
+for name in ${(k)functions}; do
+  [[ "$name" == _lazy_load* ]] && continue
+  [[ "$functions[$name]" == *_lazy_load* ]] && stubs+=("$name")
+done
+if (( ${#stubs} )); then
+  print "UNREPLACED LAZY STUBS (${#stubs}) — payload missing or renamed:"
+  print - "  $stubs"
+  exit 1
+fi
+print '    no un-replaced lazy stubs remain'
+
 # .zshrc sources command-cache.zsh (via completions.zsh) in a disowned
 # background job — a race against this check. Source both synchronously;
 # both are idempotent and side-effect-light (completion regen is guarded by
