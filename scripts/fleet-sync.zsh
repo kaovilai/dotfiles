@@ -20,6 +20,9 @@
 #                  handled by the proxy step below like every other proxy.
 #   dotfiles       import new or changed T3 provider instances
 #                  (import-t3-providers); shells and launchers read it in place.
+#                  reload the menubar helper when its Swift source moved
+#                  (llm-usage menubar reload: rebuild + restart; a no-op
+#                  on a Mac that never built it, skipped off macOS)
 #   LLM proxies     every listening proxy (copilot-api, EnMaaS, hosted-only,
 #                  vertex, openai; Go binary, bun, or LiteLLM per flavor)
 #                  that is behind what a launch would start now (hooks, config,
@@ -34,7 +37,8 @@
 # skipped or a step failed (the timer's journal shows which).
 # Repo paths: FLEET_DOTFILES_DIR, FLEET_CLAUDE_DIR, COPILOT_API_DIR.
 # What restarts when: docs/notes/change-take-effect.md. Sync never touches a
-# running process except the idle proxies above (busy ones get a watcher).
+# running process except the idle proxies above (busy ones get a watcher) and
+# the menubar helper (rebuilt + restarted when its source moved).
 emulate -L zsh
 setopt pipe_fail
 
@@ -46,7 +50,7 @@ for arg in "$@"; do
         --update-plugins) update_plugins=1 ;;
         --install-timer) timer=install ;;
         --remove-timer) timer=remove ;;
-        -h|--help) sed -n '2,35p' "${0:A}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        -h|--help) sed -n '2,39p' "${0:A}" | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) print -ru2 -- "fleet-sync: unknown option $arg (see --help)"; exit 2 ;;
     esac
 done
@@ -259,6 +263,28 @@ fi
 if [[ -n "${before[dotfiles]-}" ]]; then
     import-t3-providers || (( problems++ ))
 fi
+
+# The menubar helper is a compiled binary under ~/.local/share/llm-usage:
+# machine-local, so a pulled main.swift change would keep the old code in the
+# status bar until someone rebuilt it by hand on that Mac. `menubar reload`
+# rebuilds when the source is newer and restarts the running helper (launchd
+# kickstart, or stop + start for a hand-run one). Checked on every run, not
+# only after a pull, so a failed build is retried; a Mac without the helper
+# is a silent no-op and non-macOS never gets here.
+_sync_menubar() {
+    [[ "$OSTYPE" == darwin* ]] || return 0
+    local usage="$dotfiles_dir/scripts/llm-usage"
+    [[ -x "$usage" ]] || return 0
+    local -a args=(menubar reload)
+    (( dry )) && args+=(--dry-run)
+    local out
+    if ! out=$("$usage" "${args[@]}" 2>&1); then
+        warning "${out}"
+        return 1
+    fi
+    _note "${out}"
+}
+_sync_menubar || (( problems++ ))
 
 # Codex skills in the dotfiles are symlinks into ~/.codex/skills. Existing
 # user-local skills are left alone so this never overwrites local work.

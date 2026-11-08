@@ -272,4 +272,29 @@ run --dry-run || fail "dry run with a stale marker rc=$rc: $out"
 run --dry-run || fail "dry run with no proxies rc=$rc: $out"
 [[ "$out" != *"== "* ]] || fail "proxy sync (dry run) spoke with nothing listening: $out"
 
+# 11. menubar reload: wired into every macOS run. The helper is never built in
+#     this throwaway HOME, so the real llm-usage reports a no-op — proving the
+#     call happens without touching a developer's real menubar.
+if [[ "$OSTYPE" == darwin* ]]; then
+    mkdir -p "$tmp/other-dot/scripts/llm-usage-menubar"
+    cp "$repo/scripts/llm-usage" "$tmp/other-dot/scripts/llm-usage"
+    print -r -- "swift source" > "$tmp/other-dot/scripts/llm-usage-menubar/main.swift"
+    $G -C "$tmp/other-dot" add scripts && $G -C "$tmp/other-dot" commit -qm menubar && $G -C "$tmp/other-dot" push -q origin main 2>/dev/null
+    run || fail "menubar wire run rc=$rc: $out"
+    [[ "$out" == *"menubar: not built here; nothing to reload"* ]] || fail "menubar reload not wired (or not a no-op): $out"
+    run --dry-run || fail "menubar dry run rc=$rc: $out"
+    [[ "$out" == *"menubar: not built here; nothing to reload"* ]] || fail "menubar reload dry run misbehaved: $out"
+    # argument forwarding: the real script's no-op output is identical with
+    # and without --dry-run, so swap in a recording stub to prove the flag
+    # actually reaches llm-usage. A real run first: --dry-run alone would not
+    # fast-forward the stub commit into the checkout.
+    print -r -- $'#!/bin/sh\necho "llm-usage $*" >> "$STUB_LOG"' > "$tmp/other-dot/scripts/llm-usage"
+    chmod +x "$tmp/other-dot/scripts/llm-usage"
+    $G -C "$tmp/other-dot" add scripts/llm-usage && $G -C "$tmp/other-dot" commit -qm menubar-stub && $G -C "$tmp/other-dot" push -q origin main 2>/dev/null
+    run || fail "menubar stub pull run rc=$rc: $out"
+    [[ "$(calls)" == *"llm-usage menubar reload"* ]] || fail "recording stub not called: $(calls)"
+    run --dry-run || fail "menubar stub dry run rc=$rc: $out"
+    [[ "$(calls)" == *"llm-usage menubar reload --dry-run"* ]] || fail "fleet-sync did not forward --dry-run to menubar reload: $(calls)"
+fi
+
 print -r -- "ok fleet-sync"

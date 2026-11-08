@@ -202,6 +202,6 @@ When adding features that require new tools, update the `Brewfile` with the nece
 ### Post-Merge Fleet Rollout (llm-usage / menubar)
 `fleet-sync` updates every machine's dotfiles checkout, but it cannot fix everything a merged llm-usage change needs. After merging a PR that touches these, verify:
 - **`scripts/llm-usage` (Python)**: nothing extra — fresh process per invocation; the menubar helper picks it up on its next 30 s poll (details: `docs/notes/change-take-effect.md`).
-- **`scripts/llm-usage-menubar/main.swift`**: NOT fixable by fleet-sync — the compiled binary under `~/.local/share/llm-usage/` is machine-local. On every Mac running the helper: `llm-usage menubar build` (or `menubar install`), then `launchctl kickstart -k gui/$UID/com.kaovilai.llm-usage-menubar` — rebuild alone leaves the old process running.
+- **`scripts/llm-usage-menubar/main.swift`**: fixed by fleet-sync now — every pass runs `llm-usage menubar reload` (rebuild when stale + restart the running helper; no-op on a Mac that never built it). Only do it by hand when you want the new code before the next fleet-sync pass: `llm-usage menubar reload`.
 - **Peer-side fleet subcommands** (`export`, `watch-inflight`): the aggregator runs them from the peer's checkout, so a not-yet-synced peer fails its pull/stream until its next fleet-sync — expected and self-healing; do not chase it as a bug.
 - **`scripts/litellm_usage_log.py` / proxy callbacks**: running proxies keep old code until `llm-proxy-restart` (or the idle-restart in `llm-proxy-sync`) on each machine.

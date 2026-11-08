@@ -32,6 +32,7 @@ import plistlib
 import re
 import shlex
 import shutil
+import signal
 import socket
 import statistics
 import stat as stat_mod
@@ -2865,7 +2866,9 @@ def mb_build(force=False):
     if not os.access(swiftc, os.X_OK):
         sys.exit("llm-usage: swiftc not found (install Xcode Command Line Tools: xcode-select --install)")
     os.makedirs(os.path.dirname(out), exist_ok=True)
-    tmp = out + ".tmp"
+    # Unique per invocation: a manual build overlapping fleet-sync's must not
+    # fight over one temp path (one rename wins, the other build fails).
+    tmp = out + f".tmp.{os.getpid()}"
     res = subprocess.run([swiftc, "-O", "-swift-version", "5", "-o", tmp, MB_SRC], capture_output=True, text=True)
     if res.returncode:
         sys.exit(f"llm-usage: swiftc failed:\n{res.stderr.strip()}")
@@ -2885,6 +2888,166 @@ def mb_env():
 
 def mb_log_path():
     return os.path.join(STATE, "menubar.log")
+
+
+def mb_start():
+    """Start the built helper detached, logging to STATE/menubar.log. Reports
+    success only when the new process actually takes the single-instance
+    lock: a start that dies at the lock (old holder still alive) is not one."""
+    out = mb_build()
+    os.makedirs(STATE, mode=0o700, exist_ok=True)
+    log = open(mb_log_path(), "ab")
+    proc = subprocess.Popen([out], stdin=subprocess.DEVNULL, stdout=log, stderr=log, start_new_session=True,
+                            env={**os.environ, **mb_env()})
+    for _ in range(30):
+        time.sleep(0.1)
+        if mb_running() == proc.pid:
+            print(f"menubar: started (pid {proc.pid}); log {mb_log_path()}")
+            return
+    print(f"menubar: start attempted (pid {proc.pid}) but it did not take the lock; log {mb_log_path()}")
+
+
+def mb_process_start(pid):
+    """start time of pid as an epoch timestamp (ps lstart), or None when ps
+    cannot parse it. A running helper that started before the binary was
+    built is old code, however fresh the binary is."""
+    res = subprocess.run(["ps", "-p", str(pid), "-o", "lstart="], capture_output=True, text=True)
+    if res.returncode:
+        return None
+    try:
+        return datetime.strptime(" ".join(res.stdout.split()), "%a %b %d %H:%M:%S %Y").timestamp()
+    except ValueError:
+        return None
+
+
+def mb_loaded():
+    return subprocess.run(["launchctl", "print", f"gui/{UID}/{MB_LABEL}"], capture_output=True).returncode == 0
+
+
+def mb_launchd_pid():
+    """pid launchd currently runs for the agent, else None (agent not loaded,
+    or loaded but idle). Decides who owns the running helper: a loaded agent
+    that is NOT the lock holder must not be kickstarted — the new instance
+    would die at the single-instance lock and the holder would keep running."""
+    res = subprocess.run(["launchctl", "print", f"gui/{UID}/{MB_LABEL}"], capture_output=True, text=True)
+    if res.returncode:
+        return None
+    m = re.search(r"^\s*pid = (\d+)", res.stdout, re.M)
+    return int(m.group(1)) if m else None
+
+
+def mb_pending_path():
+    """A restart was wanted but failed (e.g. launchctl kickstart error): the
+    binary is already fresh, so without this marker the next reload would
+    call the running helper up to date and never retry the restart."""
+    return os.path.join(STATE, "menubar-restart.pending")
+
+
+def cmd_menubar_reload(args):
+    """Bring a built/running helper onto the current source: rebuild when
+    stale, then restart the running process so the new code is live
+    (fleet-sync calls this after a pull). Never builds or starts the helper
+    on a machine that never opted in: no binary and no running process is a
+    no-op."""
+    out = mb_bin()
+    pid = mb_running()
+    pending = os.path.exists(mb_pending_path())
+    if not os.path.exists(MB_SRC):
+        print("menubar: source missing; nothing to reload")
+        return
+    if pid == -1:
+        # mb_running()'s sentinel: the lock is held but the holder's pid is
+        # unreadable. Something is running, yet never signal a guess —
+        # os.kill(-1, ...) would hit every process this user can signal.
+        # Rebuild at most; the restart is left to `menubar status` + a hand
+        # quit, and a launchd-installed helper still picks the new binary up
+        # at its next login start. A pending-restart marker survives this
+        # branch so the retry happens once the pid is readable again.
+        if os.path.exists(out) and (mb_stale() or pending):
+            if args.dry_run:
+                print(f"would rebuild {out} from {MB_SRC} (holder pid unreadable; no restart)")
+            else:
+                mb_build()
+                print(f"menubar: rebuilt {out}; holder pid unreadable, not restarted (llm-usage menubar status)")
+        else:
+            print("menubar: helper lock held but pid unreadable; nothing to reload (llm-usage menubar status)")
+        return
+    if not pid and not os.path.exists(out):
+        if pending:
+            os.remove(mb_pending_path())  # nothing runs; the next start loads the fresh binary
+        print("menubar: not built here; nothing to reload")
+        return
+    # Old code can be running behind a fresh binary (a manual `menubar build`
+    # while it runs, or a restart that failed after the build), so the
+    # process's start time — not just the binary's mtime — decides.
+    started = mb_process_start(pid) if pid else None
+    outdated = bool(pid) and (not os.path.exists(out)
+                              or (started is not None and started < os.path.getmtime(out)))
+    if not mb_stale() and not pending and not outdated:
+        print(f"menubar: up to date (pid {pid})" if pid else f"menubar: up to date: {out}")
+        return
+    if args.dry_run:
+        if mb_stale():
+            print(f"would rebuild {out} from {MB_SRC}")
+        if pid:
+            why = "running old code" if outdated else "a restart"
+            print(f"would restart the running helper (pid {pid}, {why})" + (" (retrying a failed restart)" if pending else ""))
+        return
+    mb_build()
+    if not pid:
+        if pending:
+            os.remove(mb_pending_path())  # not running: the next run/login starts the fresh binary
+        print(f"menubar: rebuilt {out}; not running (llm-usage menubar run)")
+        return
+    if mb_launchd_pid() == pid:
+        # launchd owns the running helper (menubar install): kill + relaunch
+        # in one step; the plist's ProgramArguments already point at the
+        # freshly built binary. Only when launchd's pid IS the lock holder:
+        # a loaded-but-idle agent with a hand-run holder must take the path
+        # below instead, or the kickstarted copy would die at the lock.
+        res = subprocess.run(["launchctl", "kickstart", "-k", f"gui/{UID}/{MB_LABEL}"], capture_output=True, text=True)
+        if res.returncode:
+            # The binary is fresh now, so without a marker the next reload
+            # would report up to date and never retry the restart.
+            os.makedirs(STATE, mode=0o700, exist_ok=True)
+            open(mb_pending_path(), "w").close()
+            sys.exit(f"llm-usage: launchctl kickstart failed: {res.stderr.strip()} (restart pending, retried next reload)")
+        if pending:
+            os.remove(mb_pending_path())
+        print(f"menubar: restarted via launchd (was pid {pid})")
+        return
+    # started by hand (`menubar run`, or the agent is loaded but idle): stop
+    # it the same way, start the new build.
+    holder = mb_running()
+    if holder == pid:
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass  # died between the lock read and here; just start the new build
+        for _ in range(50):
+            if not mb_running():
+                break
+            time.sleep(0.1)
+        else:
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            # SIGKILL teardown is asynchronous: wait for the lock to actually
+            # release, or the replacement dies at it.
+            for _ in range(50):
+                if not mb_running():
+                    break
+                time.sleep(0.1)
+    elif holder:
+        # replaced while we built: never signal the pid saved before the
+        # build (it may have been recycled into an unrelated process)
+        print(f"menubar: helper was replaced (pid {holder}) during the rebuild; left alone")
+        return
+    # holder is None: it died during the build; nothing to stop
+    mb_start()
+    if pending:
+        os.remove(mb_pending_path())
 
 
 # --------------------------------------------------------------------------- menubar logos
@@ -3047,16 +3210,9 @@ def cmd_menubar(args):
         if pid:
             print(f"menubar: already running (pid {pid})")
             return
-        out = mb_build()
-        os.makedirs(STATE, mode=0o700, exist_ok=True)
-        log = open(mb_log_path(), "ab")
-        proc = subprocess.Popen([out], stdin=subprocess.DEVNULL, stdout=log, stderr=log, start_new_session=True,
-                                env={**os.environ, **mb_env()})
-        for _ in range(30):
-            time.sleep(0.1)
-            if mb_running():
-                break
-        print(f"menubar: started (pid {proc.pid}); log {mb_log_path()}")
+        mb_start()
+    elif action == "reload":
+        cmd_menubar_reload(args)
     elif action == "install":
         plist = {"Label": MB_LABEL, "ProgramArguments": [mb_bin()], "RunAtLoad": True, "KeepAlive": False,
                  "EnvironmentVariables": mb_env(), "StandardOutPath": mb_log_path(), "StandardErrorPath": mb_log_path(),
@@ -3098,8 +3254,7 @@ def cmd_menubar(args):
         print(f"built:     {'yes' if built else 'no'}  {out}" + (" (older than source: run `llm-usage menubar build`)" if built and mb_stale() else ""))
         pid = mb_running()
         print(f"running:   {'yes (pid %s)' % pid if pid else 'no'}")
-        loaded = subprocess.run(["launchctl", "print", f"gui/{UID}/{MB_LABEL}"], capture_output=True).returncode == 0
-        print(f"installed: {'yes' if os.path.exists(MB_PLIST) else 'no'}  {MB_PLIST}" + (" (loaded)" if loaded else ""))
+        print(f"installed: {'yes' if os.path.exists(MB_PLIST) else 'no'}  {MB_PLIST}" + (" (loaded)" if mb_loaded() else ""))
 
 
 # --------------------------------------------------------------------------- web dashboard
@@ -3535,13 +3690,13 @@ def main():
     p.add_argument("--share-metric", choices=list(SHARE_METRICS), default="requests", help="traffic-share metric (default %(default)s)")
     p.set_defaults(fn=cmd_menubar_data)
 
-    p = sub.add_parser("menubar", help="macOS menubar monitor (native Swift helper): build|run|install|uninstall|status|logos [fetch]|window [show|hide|toggle]")
-    p.add_argument("action", choices=["build", "run", "install", "uninstall", "status", "logos", "window"])
+    p = sub.add_parser("menubar", help="macOS menubar monitor (native Swift helper): build|run|reload|install|uninstall|status|logos [fetch]|window [show|hide|toggle]")
+    p.add_argument("action", choices=["build", "run", "reload", "install", "uninstall", "status", "logos", "window"])
     p.add_argument("logos_action", nargs="?", help="logos: `fetch` downloads the pinned logo PNGs, omit to list what each key resolves to; window: show|hide|toggle (default toggle)")
     p.add_argument("--from-dir", help=argparse.SUPPRESS)  # logos fetch: local checkout of the logo repo instead of the network
     p.add_argument("--no-verify", action="store_true", help=argparse.SUPPRESS)  # logos fetch: tests only (fixture PNGs)
     p.add_argument("--force", action="store_true", help="build: rebuild even when up to date")
-    p.add_argument("--dry-run", action="store_true", help="install/uninstall: print what would happen, change nothing")
+    p.add_argument("--dry-run", action="store_true", help="install/uninstall/reload: print what would happen, change nothing")
     p.set_defaults(fn=cmd_menubar)
 
     args = parser.parse_args()
