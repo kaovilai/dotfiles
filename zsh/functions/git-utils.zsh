@@ -1,5 +1,12 @@
 # Description: Git and directory batch operation utilities
 
+# .zshrc pre-registers noglob aliases for the glob-aware functions below (so
+# they work on the very first call, before this file is lazy-loaded). Alias
+# expansion would turn `name() {` into `noglob name () {` — a parse error that
+# aborts this whole file mid-source. Drop them here; the aliases are
+# re-created at the bottom of this file.
+unalias go-mod-upgrade-dirs exec-dirs exec-dirs-ds exec-dirs-ds-echo code-dirs finder-dirs &>/dev/null
+
 # Usage: cherrypick-pr <#PR-number> ...
 cherrypick-pr() {
     if ! git rev-parse --git-dir > /dev/null 2>&1; then
