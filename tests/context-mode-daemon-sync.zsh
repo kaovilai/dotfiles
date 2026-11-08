@@ -233,6 +233,7 @@ grep -q -- "mcp remove context-mode" "$CLAUDE_LOG" || fail "an entry on our old 
 grep -q -- "mcp add --scope user --transport http context-mode http://127.0.0.1:8790/mcp" "$CLAUDE_LOG" || fail "the registration must be re-added at the current port"
 
 # --- 10. a foreign path on our host is not ours; a project-scoped entry is not moved ----
+typeset run_err="$tmp/run.err"
 # restore a usable node: case 8 left none installed and a poisoned digest
 export NODE_STUB_VERSION=v24.15.0
 cat > "$HOME/bin/node" <<'STUB'
@@ -241,7 +242,9 @@ if [ "$1" = "--version" ]; then echo "${NODE_STUB_VERSION:-v24.15.0}"; exit 0; f
 echo "node $*" >> "$NODE_LOG"
 STUB
 chmod +x "$HOME/bin/node"
-for scope_url in "User config|http://127.0.0.1:8791/mcp-other" "User config|http://127.0.0.1:8791/other/mcp" "Local config|http://127.0.0.1:8791/mcp"; do
+# the foreign-path entries cover BOTH ports: a path like /mcp-other must be
+# treated as foreign even on the current port 8790, not just on a moved one
+for scope_url in "User config|http://127.0.0.1:8791/mcp-other" "User config|http://127.0.0.1:8791/other/mcp" "User config|http://127.0.0.1:8790/mcp-other" "User config|http://127.0.0.1:8790/other/mcp" "Local config|http://127.0.0.1:8791/mcp"; do
     got_scope="${scope_url%%|*}"
     got_url="${scope_url#*|}"
     cat > "$HOME/bin/claude" <<STUB
@@ -257,10 +260,13 @@ exit 0
 STUB
     chmod +x "$HOME/bin/claude"
     : >| "$CLAUDE_LOG"
-    zsh -f "$repo/scripts/context-mode-daemon-sync.zsh" "${args[@]}" || fail "no-move run ($got_scope $got_url) must exit 0"
+    : >| "$run_err"
+    zsh -f "$repo/scripts/context-mode-daemon-sync.zsh" "${args[@]}" 2> "$run_err" || fail "no-move run ($got_scope $got_url) must exit 0"
     if [[ "$got_scope" == "User config" ]]; then
-        # a foreign path at user scope: a warning, never a remove
+        # a foreign path at user scope: a warning, never a remove or re-add
         grep -q -- "mcp remove" "$CLAUDE_LOG" && fail "a foreign path must not be removed"
+        grep -q -- "mcp add" "$CLAUDE_LOG" && fail "a foreign path must not be re-added"
+        grep -q -- "left as-is" "$run_err" || fail "a foreign path must warn that it was left as-is"
     else
         # a project/local entry with our URL: not moved, only the user-scope add runs
         grep -q -- "mcp remove" "$CLAUDE_LOG" && fail "a non-user-scoped entry must not be removed"
