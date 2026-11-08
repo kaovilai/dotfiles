@@ -219,6 +219,16 @@ claude-mlx() {
         ANTHROPIC_DEFAULT_OPUS_MODEL="${_cmx_model}"
         ANTHROPIC_DEFAULT_SONNET_MODEL="${_cmx_model}"
         ANTHROPIC_DEFAULT_HAIKU_MODEL="${_cmx_model}"
+        ANTHROPIC_DEFAULT_FABLE_MODEL="${_cmx_model}"
+        # Background small/fast calls (session titles, client-side
+        # classifiers) and subagents otherwise resolve against ~/.claude's
+        # global model -- an id the mlx route table does not carry, so those
+        # calls 404. Pin everything to the one local model, same pinning
+        # claude-hosted-only does for its single-endpoint world.
+        ANTHROPIC_SMALL_FAST_MODEL="${_cmx_model}"
+        CLAUDE_CODE_SUBAGENT_MODEL="${_cmx_model}"
+        CLAUDE_CODE_SUBAGENT_MODEL_FORCE=1
+        CLAUDE_CODE_WORKFLOW_SUBAGENT_MODEL="${_cmx_model}"
         # Claude Code doesn't recognize mlx-community ids, so without this it
         # assumes 200k -- more than this 48GB Mac can hold: the default model
         # tops out at 262144 positions (config.json max_position_embeddings)
@@ -229,6 +239,17 @@ claude-mlx() {
         # total, only on an otherwise-light machine; 262144 = the model's
         # hard ceiling).
         CLAUDE_CODE_MAX_CONTEXT_TOKENS="${CLAUDE_MLX_CONTEXT_TOKENS:-65536}"
+        # A runaway generation on local hardware (~60 tok/s) takes minutes
+        # and grows the KV cache; cap it well under the context window.
+        CLAUDE_CODE_MAX_OUTPUT_TOKENS="${CLAUDE_MLX_MAX_OUTPUT_TOKENS:-16384}"
+        # Local-pair hiccups should fail fast, not stall the turn through
+        # Claude Code's default 10 retries with long backoffs (same rationale
+        # as claude-hosted-only's client retry cap).
+        CLAUDE_CODE_MAX_RETRIES="${CLAUDE_MLX_MAX_RETRIES:-3}"
+        # Parallel subagents are separate conversations on the one local
+        # server; each brings its own KV cache, so cap the fan-out (2 * 64k
+        # window ≈ 12.6GB cache worst case).
+        CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS="${CLAUDE_MLX_MAX_CONCURRENT_SUBAGENTS:-2}"
     )
 
     # --bare by default -- same rationale as claude-ollama above: a small
