@@ -41,10 +41,16 @@ zstyle ':autocomplete:*' min-input 2
 () {
   # plugin dir is `Functions/` upstream; lowercase `functions/` only resolves on
   # case-insensitive macOS FS, so Linux hosts silently skipped the patch
+  # probe both casings: upstream dir is `Functions/`, some installs `functions/`;
+  # lowercase-only path silently no-ops on case-sensitive Linux FS
+  # (no `local` inside the loop body -- that SIGBUSes zsh 5.9 at function exit)
+  local -a kbs=(
+    $HOME/.zsh-snap/marlonrichert/zsh-autocomplete/Functions/Init/.autocomplete__key-bindings
+    $HOME/.zsh-snap/marlonrichert/zsh-autocomplete/functions/Init/.autocomplete__key-bindings
+  )
   local -P kb=""
-  local -P d
-  for d in Functions functions; do
-    local -P f=$HOME/.zsh-snap/marlonrichert/zsh-autocomplete/$d/Init/.autocomplete__key-bindings
+  local -P f
+  for f in $kbs; do
     [[ -f $f ]] && kb=$f && break
   done
   [[ -n $kb ]] || return
