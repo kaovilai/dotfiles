@@ -36,7 +36,7 @@ export HOME="$tmp/home" XDG_STATE_HOME="$tmp/state" COPILOT_API_PORT=59997
 export CLAUDE_VERTEX_PROXY_PORT=59991 CLAUDE_OPENAI_PROXY_PORT=59992 CLAUDE_ENMAAS_PROXY_PORT=59993
 export HOSTED_ONLY_CODEX_PROXY_PORT=59994 HOSTED_ONLY_CLAUDE_PROXY_PORT=59995
 export FLEET_DOTFILES_DIR="$tmp/dot" FLEET_CLAUDE_DIR="$tmp/cfg" COPILOT_API_DIR="$tmp/capi"
-export CLAUDE_PROVIDER_NATIVE_BINARY="$HOME/.local/bin/claude" STUB_LOG="$tmp/calls"
+export CLAUDE_PROVIDER_NATIVE_BINARY="$HOME/.local/bin/claude" STUB_LOG="$tmp/calls" STUB_HEAL="$tmp/heal"
 mkdir -p "$HOME/.claude/plugins" "$HOME/.local/bin" "$HOME/.bun/bin"
 mkdir -p "$tmp/dot/.codex/skills/example"
 print -r -- "example skill" > "$tmp/dot/.codex/skills/example/SKILL.md"
@@ -137,6 +137,67 @@ chmod +x "$tmp/cfg/skills/skills-compress/scripts/sync-harnesses.sh"
 run || fail "retry run rc=$rc: $out"
 [[ "$(calls)" == *"sync-harnesses"* ]] || fail "failed refresh not retried without a new pull: $(calls)"
 [[ -f "$XDG_STATE_HOME/fleet-sync/harnesses-synced" ]] || fail "stamp not written after the successful retry"
+
+# 3d. Plugin install fails "not found in marketplace": the targeted refresh +
+#     single retry heals it within the same run (a bulk marketplace update can
+#     re-clone a marketplace and the install right after still miss it)
+cat > "$HOME/.local/bin/claude" <<'EOF'
+#!/bin/sh
+echo "claude $*" >> "$STUB_LOG"
+case "$*" in
+    "plugin marketplace add"*)
+        jq '.extraKnownMarketplaces.m.source.repo = "rewritten"' "$HOME/.claude/settings.json" > "$HOME/.claude/s.tmp" &&
+            mv "$HOME/.claude/s.tmp" "$HOME/.claude/settings.json" ;;
+    "plugin marketplace update m") : >| "$STUB_HEAL" ;;   # targeted refresh heals
+    "plugin install x@m")
+        [ -f "$STUB_HEAL" ] && exit 0
+        echo "Failed to install plugin: not found in marketplace" >&2; exit 1 ;;
+esac
+exit 0
+EOF
+chmod +x "$HOME/.local/bin/claude"
+rm -f "$XDG_STATE_HOME/fleet-sync/plugins-updated" "$STUB_HEAL"
+run || fail "install-retry run rc=$rc: $out"
+[[ "$(grep -c '^claude plugin install x@m$' "$STUB_LOG")" -eq 2 ]] || fail "install not retried exactly once: $(calls)"
+grep -q '^claude plugin install x@m$' "$STUB_LOG" && grep -q '^claude plugin marketplace update m$' "$STUB_LOG" \
+    || fail "targeted marketplace refresh missing: $(calls)"
+[[ "$(grep -n '^claude plugin install x@m$\|^claude plugin marketplace update m$' "$STUB_LOG" | cut -d: -f2- | tr '\n' '|')" == \
+   "claude plugin install x@m|claude plugin marketplace update m|claude plugin install x@m|" ]] \
+   || fail "retry order wrong: $(calls)"
+[[ "$out" == *"1 installed"* ]] || fail "healed install not counted: $out"
+
+# 3e. Install still failing after the retry: warned once, run fails
+cat > "$HOME/.local/bin/claude" <<'EOF'
+#!/bin/sh
+echo "claude $*" >> "$STUB_LOG"
+case "$*" in
+    "plugin marketplace add"*)
+        jq '.extraKnownMarketplaces.m.source.repo = "rewritten"' "$HOME/.claude/settings.json" > "$HOME/.claude/s.tmp" &&
+            mv "$HOME/.claude/s.tmp" "$HOME/.claude/settings.json" ;;
+    "plugin install x@m") echo "Failed to install plugin: really broken" >&2; exit 1 ;;
+esac
+exit 0
+EOF
+chmod +x "$HOME/.local/bin/claude"
+rm -f "$XDG_STATE_HOME/fleet-sync/plugins-updated" "$STUB_HEAL"
+if run; then fail "unfixable install run passed: $out"; fi
+[[ "$out" == *"Could not install plugin x@m"* ]] || fail "install failure not reported: $out"
+[[ "$(grep -c '^claude plugin install x@m$' "$STUB_LOG")" -eq 2 ]] || fail "unfixable install not capped at one retry: $(calls)"
+cmp -s "$tmp/settings.orig" "$HOME/.claude/settings.json" || fail "settings.json not restored after failed install: $(<"$HOME/.claude/settings.json")"
+# restore the always-succeeding stub and a fresh stamp for the cases below
+cat > "$HOME/.local/bin/claude" <<'EOF'
+#!/bin/sh
+echo "claude $*" >> "$STUB_LOG"
+case "$*" in
+    "plugin marketplace add"*)
+        jq '.extraKnownMarketplaces.m.source.repo = "rewritten"' "$HOME/.claude/settings.json" > "$HOME/.claude/s.tmp" &&
+            mv "$HOME/.claude/s.tmp" "$HOME/.claude/settings.json" ;;
+esac
+exit 0
+EOF
+chmod +x "$HOME/.local/bin/claude"
+run || fail "post-recovery run rc=$rc: $out"
+[[ -f "$XDG_STATE_HOME/fleet-sync/plugins-updated" ]] || fail "plugin stamp not rewritten after recovery"
 
 # 4. copilot-api moved with bun.lock: dependencies reinstalled; gateway not running
 # (a stray gateway from an earlier failed suite run would be adopted and break
