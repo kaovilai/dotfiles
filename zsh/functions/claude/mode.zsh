@@ -115,7 +115,12 @@ _claude-mode() {
     done
     _describe -t modes 'claude mode' modes
 }
-# $+functions guard: mode.zsh is also sourced by offline tests in bare zsh,
-# where compdef does not exist yet (znap defines it before load.zsh runs in
-# real shells; plain compinit shells define it at compinit time).
-(( $+functions[compdef] )) && compdef _claude-mode claude-mode
+# $+functions guard: mode.zsh is also sourced by bare-zsh scripts
+# (mlx-idle-watch, llm-proxy-watch, fleet-sync) that run `source ... || exit`,
+# so when compdef does not exist yet (znap defines it before load.zsh runs in
+# real shells; plain compinit shells define it at compinit time) the file must
+# still source cleanly AND exit 0 — `(( ... )) && compdef` as the last
+# statement would leave a nonzero status behind.
+if (( $+functions[compdef] )); then
+    compdef _claude-mode claude-mode
+fi

@@ -40,13 +40,16 @@ comp() {
 
 # First word must offer exactly the modes claude-mode()'s case pattern
 # accepts (parsed from the source so adding a provider without updating the
-# completion fails here, not at the keyboard).
+# completion fails here, not at the keyboard). Anchor is any line that is
+# ONLY an alternation pattern (order-independent — reordering the case
+# alternatives is behavior-neutral and must not break this test).
 comp 2
 (( ${#described} == 10 )) || fail "expected 10 mode candidates, got ${#described}: $described"
 local -a offered accepted
 offered=(${described%%:*})
 local case_line
-case_line=$(grep -m1 -E '^[[:space:]]+copilot\|enmaas\|' "$repo/zsh/functions/claude/mode.zsh") ||
+case_line=$(grep -E '^[[:space:]]+[a-z0-9-]+(\|[a-z0-9-]+)+\)$' \
+    "$repo/zsh/functions/claude/mode.zsh" | grep -m1 -F vertex) ||
     fail 'accepted-mode case pattern not found in mode.zsh'
 accepted=(${(s:|:)${${case_line%%\)*}##[[:space:]]##}})
 [[ ${(j.:.)${(on)offered}} == ${(j.:.)${(on)accepted}} ]] ||
@@ -72,5 +75,15 @@ tagged=(${(M)described:#*\[current\]})
 print -r -- vertex >! "$tmp/mode"
 comp 3
 (( ${#described} == 0 )) || fail "completion offered past first word: $described"
+
+# Sourcing mode.zsh in a bare zsh WITHOUT compdef must exit 0: the real
+# consumers (mlx-idle-watch.zsh, llm-proxy-watch.zsh, fleet-sync.zsh) do
+# `source ... || exit/return 1`, and the compdef registration line is the
+# file's last statement — a bare `(( $+functions[compdef] )) && compdef`
+# there would leak a nonzero status and kill those scripts at startup.
+# Runs in a subshell so the stub above stays for the other cases.
+( unset -f compdef
+  source "$repo/zsh/functions/claude/mode.zsh" ) ||
+    fail 'sourcing mode.zsh without compdef must exit 0 (scripts gate on it)'
 
 print 'PASS: claude-mode completion registers, matches accepted modes, tags current, stops at one arg'
