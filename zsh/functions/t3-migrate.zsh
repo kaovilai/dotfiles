@@ -736,8 +736,7 @@ sync-claude-plugins() {
                 # marketplace moments earlier and the install still miss it.
                 # Refresh just that marketplace and retry once, so fleet-sync
                 # heals in the same run instead of failing until the next.
-                local mk="${pid#*@}"
-                if [[ "$pid" == *@* ]] && _t3_plugin_cli $dry "$claude" marketplace update "$mk" \
+                if [[ "$pid" == *@* ]] && _t3_plugin_cli $dry "$claude" marketplace update "${pid#*@}" \
                    && _t3_plugin_cli $dry "$claude" install "$pid"; then (( inst++ ))
                 else warning "Could not install plugin $pid"; (( fail++ )); fi
             fi
