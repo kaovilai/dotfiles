@@ -86,3 +86,36 @@ function claude {
         *)                 claude-vertex "$@" ;;
     esac
 }
+
+# Tab completion for claude-mode: the first word is a mode from the case
+# pattern above (pre-rename spellings like enmass are intentionally NOT
+# suggested), the persisted choice is tagged so `claude-mode <TAB>` shows
+# where you are. Keep the candidate list in sync with claude-mode()'s case
+# pattern when adding a provider.
+_claude-mode() {
+    # one optional argument only — nothing to complete past the first word
+    (( CURRENT == 2 )) || return 0
+    local -a modes
+    modes=(
+        'copilot:copilot-api gateway'
+        'enmaas:EnMaaS gateway'
+        'hosted-only:EnMaaS-hosted free models through the local proxy'
+        'vertex:local LiteLLM proxy fronting Vertex AI Claude (default)'
+        'vertex-native-adc:native CLAUDE_CODE_USE_VERTEX integration'
+        'ollama:local Ollama server'
+        'openshell-copilot:OpenShell-sandboxed copilot'
+        'openshell-vertex:OpenShell-sandboxed vertex'
+        'openshell-enmaas:OpenShell-sandboxed enmaas'
+        'openshell-openai:OpenShell-sandboxed openai'
+    )
+    local current i
+    current="$(_claude_mode_get 2>/dev/null)"
+    for i in {1..$#modes}; do
+        [[ ${modes[i]%%:*} == "$current" ]] && modes[i]+=' [current]'
+    done
+    _describe -t modes 'claude mode' modes
+}
+# $+functions guard: mode.zsh is also sourced by offline tests in bare zsh,
+# where compdef does not exist yet (znap defines it before load.zsh runs in
+# real shells; plain compinit shells define it at compinit time).
+(( $+functions[compdef] )) && compdef _claude-mode claude-mode
