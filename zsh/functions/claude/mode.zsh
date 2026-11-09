@@ -4,7 +4,8 @@
 # Monitor tool support (vertex, DEFAULT), Claude Code's built-in
 # CLAUDE_CODE_USE_VERTEX native integration with no Monitor support
 # (vertex-native-adc), the copilot-api gateway (copilot), the EnMaaS gateway
-# (enmaas), a local Ollama server (ollama), or an OpenShell-sandboxed
+# (enmaas), EnMaaS-hosted free models through the local hosted-only proxy
+# (hosted-only), a local Ollama server (ollama), or an OpenShell-sandboxed
 # invocation (openshell-*). Persisted in ~/.config/claude-mode so the choice
 # survives across shells.
 
@@ -16,6 +17,7 @@ _claude_mode_get() {
     case "$mode" in
         copilot)           print -r -- copilot ;;
         enmaas|enmass)     print -r -- enmaas ;;   # "enmass" = pre-rename persisted value
+        hosted-only)       print -r -- hosted-only ;;
         ollama)            print -r -- ollama ;;
         vertex-native-adc) print -r -- vertex-native-adc ;;
         openshell-copilot) print -r -- openshell-copilot ;;
@@ -31,13 +33,13 @@ _claude_mode_get() {
 
 claude-mode() {
     if (( $# > 1 )); then
-        echo "Usage: claude-mode [copilot|enmaas|vertex|vertex-native-adc|ollama|openshell-copilot|openshell-vertex|openshell-enmaas|openshell-openai]" >&2
+        echo "Usage: claude-mode [copilot|enmaas|hosted-only|vertex|vertex-native-adc|ollama|openshell-copilot|openshell-vertex|openshell-enmaas|openshell-openai]" >&2
         return 1
     fi
     # Pre-rename spellings are accepted and stored under the current name.
     local requested="${1/enmass/enmaas}"
     case "$requested" in
-        copilot|enmaas|vertex|vertex-native-adc|ollama|openshell-copilot|openshell-vertex|openshell-enmaas|openshell-openai)
+        copilot|enmaas|hosted-only|vertex|vertex-native-adc|ollama|openshell-copilot|openshell-vertex|openshell-enmaas|openshell-openai)
             # >| overrides NO_CLOBBER; fail loudly if persistence fails
             if ! mkdir -p "${_claude_mode_file:h}" ||
                ! print -r -- "$requested" >| "$_claude_mode_file"; then
@@ -48,10 +50,10 @@ claude-mode() {
             ;;
         "")
             echo "claude mode: $(_claude_mode_get)"
-            echo "usage: claude-mode [copilot|enmaas|vertex|vertex-native-adc|ollama|openshell-copilot|openshell-vertex|openshell-enmaas|openshell-openai]"
+            echo "usage: claude-mode [copilot|enmaas|hosted-only|vertex|vertex-native-adc|ollama|openshell-copilot|openshell-vertex|openshell-enmaas|openshell-openai]"
             ;;
         *)
-            echo "Usage: claude-mode [copilot|enmaas|vertex|vertex-native-adc|ollama|openshell-copilot|openshell-vertex|openshell-enmaas|openshell-openai]" >&2
+            echo "Usage: claude-mode [copilot|enmaas|hosted-only|vertex|vertex-native-adc|ollama|openshell-copilot|openshell-vertex|openshell-enmaas|openshell-openai]" >&2
             return 1
             ;;
     esac
@@ -64,10 +66,11 @@ unalias claude 2>/dev/null || true   # tolerate missing alias under ERR_EXIT
 function claude {
     local mode="$(_claude_mode_get)"
     # stderr so piped/scripted output (e.g. claude -p) stays clean
-    echo "claude mode: ${mode} (switch: claude-mode copilot|enmaas|vertex|vertex-native-adc|ollama|openshell-copilot|openshell-vertex|openshell-enmaas|openshell-openai)" >&2
+    echo "claude mode: ${mode} (switch: claude-mode copilot|enmaas|hosted-only|vertex|vertex-native-adc|ollama|openshell-copilot|openshell-vertex|openshell-enmaas|openshell-openai)" >&2
     case "$mode" in
         copilot)           claude-copilot "$@" ;;
         enmaas)            claude-enmaas "$@" ;;
+        hosted-only)       claude-hosted-only "$@" ;;
         ollama)            claude-ollama "$@" ;;
         vertex-native-adc) claude-vertex-native-adc "$@" ;;
         openshell-copilot) openshell-copilot "$@" ;;
