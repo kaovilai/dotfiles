@@ -88,21 +88,43 @@ def color(text, code):
 
 # --------------------------------------------------------------------------- model naming
 
+_strip_model_cache = {}
+
+
 def strip_model(model):
-    """Display name: lowercase, provider/org prefixes, build-date suffix, [1m] and #responses dropped."""
+    """Display name: lowercase, provider/org prefixes, build-date suffix, [1m] and #responses dropped.
+    Memoized: the dashboard recomputes it for every event across ~8 aggregation
+    passes (~470k calls on a 90d window) over a few dozen distinct strings.
+    Cache key includes the type: 1 and True are equal dict keys but normalize
+    differently ("1" vs "true"), so a value-keyed cache would cross-contaminate."""
+    key = (type(model), model)
+    try:
+        return _strip_model_cache[key]
+    except (KeyError, TypeError):
+        pass
     if not model:
         return "?"
     # "#responses" = the EnMaaS proxy's /v1/responses sibling route of the same model;
     # "#openai" = the merged hosted-only proxy's openai-dialect group (same model)
     m = str(model).lower().replace("[1m]", "").removesuffix("#responses").removesuffix("#openai")
     if "glm" in m:
-        return "glm-5.3" if re.search(r"5[-.]3", m) else m.split("/")[-1]
-    if "deepseek" in m:
+        m = "glm-5.3" if re.search(r"5[-.]3", m) else m.split("/")[-1]
+    elif "deepseek" in m:
         # rits/deepseek-ai/DeepSeek-V4.1-Flash-1017 -> deepseek-v4.1-flash
-        return re.sub(r"-\d{4,}$", "", m.split("/")[-1])
-    for prefix in ("anthropic/", "vertex_ai/", "openai/", "bedrock/", "github_copilot/", "copilot/"):
-        if m.startswith(prefix):
-            m = m[len(prefix):]
+        m = re.sub(r"-\d{4,}$", "", m.split("/")[-1])
+    else:
+        for prefix in ("anthropic/", "vertex_ai/", "openai/", "bedrock/", "github_copilot/", "copilot/"):
+            if m.startswith(prefix):
+                m = m[len(prefix):]
+    try:
+        # Bounded both ways for a long-lived serve parsing junk transcripts:
+        # entry count (clear past 4096) and entry size (skip huge identifiers).
+        if len(_strip_model_cache) > 4096:
+            _strip_model_cache.clear()
+        if not isinstance(model, str) or len(model) <= 512:
+            _strip_model_cache[key] = m
+    except TypeError:
+        pass  # unhashable (junk from a transcript): computed, just not cached
     return m
 
 
@@ -1491,26 +1513,59 @@ def aggregate(events, keyfns):
     for ev in events:
         groups[tuple(fn(ev) for fn in keyfns)].append(ev)
     rows = []
+    # One pass per group: the row below needs ~16 aggregates, and separate
+    # comprehensions made this the hottest loop in the dashboard (4 calls over
+    # the same events every rebuild).
     for key, evs in groups.items():
-        lat = [e["ms"] for e in evs if e.get("ms") is not None]
-        ttft = [e["ttft_ms"] for e in evs if e.get("ttft_ms") is not None]
-        speeds = [e["out"] / ((e["ms"] - (e.get("ttft_ms") or 0)) / 1000)
-                  for e in evs if e.get("ms") and e.get("out", 0) >= 20 and e["ms"] - (e.get("ttft_ms") or 0) > 200]
-        cin = sum(e.get("in", 0) for e in evs)
-        cread = sum(e.get("cache_read", 0) for e in evs)
-        cost = sum(e["cost"] for e in evs if isinstance(e.get("cost"), (int, float)))
+        n = len(evs)
+        lat, ttft, speeds, costs = [], [], [], []
+        cin = cread = out = err = e429 = e5xx = eoth = long_ = reroutes = 0
+        ctxmax = 0
+        for e in evs:
+            ms_ = e.get("ms")
+            if ms_ is not None:
+                lat.append(ms_)
+            ttft_ms = e.get("ttft_ms")
+            if ttft_ms is not None:
+                ttft.append(ttft_ms)
+            if ms_ and e.get("out", 0) >= 20 and ms_ - (ttft_ms or 0) > 200:
+                speeds.append(e["out"] / ((ms_ - (ttft_ms or 0)) / 1000))
+            cin += e.get("in", 0)
+            cread += e.get("cache_read", 0)
+            out += e.get("out", 0)
+            if isinstance(e.get("cost"), (int, float)):
+                costs.append(e["cost"])
+            if not e.get("ok", True):
+                err += 1
+                cls = err_class(e)
+                if cls == "429":
+                    e429 += 1
+                elif cls == "5xx":
+                    e5xx += 1
+                else:
+                    eoth += 1
+            ctx = ctx_of(e)
+            if ctx > ctxmax:
+                ctxmax = ctx
+            if ctx > LONG_CTX:
+                long_ += 1
+            if is_reroute(e) or e.get("fallback"):
+                reroutes += 1
         rows.append({
-            "key": key, "n": len(evs), "err": sum(1 for e in evs if not e.get("ok", True)),
-            "e429": sum(1 for e in evs if err_class(e) == "429"), "e5xx": sum(1 for e in evs if err_class(e) == "5xx"),
-            "eoth": sum(1 for e in evs if err_class(e) == "oth"),
-            "err_rate": sum(1 for e in evs if not e.get("ok", True)) / len(evs),
-            "in": cin, "out": sum(e.get("out", 0) for e in evs), "cread": cread,
+            "key": key, "n": n, "err": err,
+            "e429": e429, "e5xx": e5xx, "eoth": eoth,
+            "err_rate": err / n,
+            "in": cin, "out": out, "cread": cread,
             "hit": cread / (cin + cread) if cin + cread else None,
-            "ctxmax": max(ctx_of(e) for e in evs), "long": sum(1 for e in evs if ctx_of(e) > LONG_CTX),
+            "ctxmax": ctxmax, "long": long_,
             "p50": pct(lat, 50), "p95": pct(lat, 95), "ttft": pct(ttft, 50),
-            "tps": statistics.median(speeds) if speeds else None, "cost": cost,
+            "tps": statistics.median(speeds) if speeds else None,
+            # cost via sum(), not +=: builtins.sum does compensated float
+            # summation, and totals must not wobble a ULP between versions.
+            # in/cread/out use += safely: token counts are ints at every producer.
+            "cost": sum(costs),
             # a same-model failover (glm deployment A -> glm B) moved traffic too
-            "reroutes": sum(1 for e in evs if is_reroute(e) or e.get("fallback")),
+            "reroutes": reroutes,
         })
     if any(fn in (KEYS["day"], KEYS["hour"]) for fn in keyfns):
         return sorted(rows, key=lambda r: r["key"])
@@ -1847,7 +1902,17 @@ def proxy_logging_on(port, config):
     return False
 
 
-def status_rows():
+_status_cache = [None]  # single slot: (monotonic ts, (rows, events)) — see status_rows(ttl)
+
+
+def status_rows(ttl=0.0):
+    """Per-proxy listener status. ttl > 0 (the dashboard's 5 s poll passes one)
+    reuses a recent result: each row costs an HTTP probe plus lsof/ps
+    subprocesses per proxy, which dominated a dashboard rebuild on macOS
+    (lsof is ~100ms+ there per port). CLI calls keep ttl=0 = always fresh."""
+    hit = _status_cache[0]  # read once: the slot swap below is a single atomic store
+    if ttl and hit is not None and time.monotonic() - hit[0] < ttl:
+        return hit[1]
     events = load_proxy(time.time() - 7 * 86400)
     last_seen, counts = {}, defaultdict(int)
     errs = defaultdict(Counter)
@@ -1875,6 +1940,8 @@ def status_rows():
         rows.append({"port": port, "name": name, "up": up, "pid": listener_pid(port) if up else None,
                      "models": models or [], "code": code, "requests_7d": counts.get(port, 0), "errors_7d": dict(errs.get(port, {})),
                      "last_seen": last_seen.get(port)})
+    if ttl:
+        _status_cache[0] = (time.monotonic(), (rows, events))  # monotonic: a backward wall-clock step must not extend the TTL
     return rows, events
 
 
@@ -3385,7 +3452,7 @@ def dashboard_data(since_text, source, hide, host=None):
 
     total = aggregate(events, [lambda e: "all"])
     kp = total[0] if total else None
-    status, _ = status_rows()
+    status, _ = status_rows(ttl=15)  # probe/lsof/ps per proxy: reuse for 15 s across the 5 s polls
     recent = sorted(events, key=lambda e: -e["t"])[:40]
     bad = defaultdict(int)
     for ev in events:
