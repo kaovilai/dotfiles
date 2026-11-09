@@ -49,8 +49,10 @@ claude-mode() {
             echo "claude mode: $requested"
             # Shells still running pre-hosted-only mode.zsh read the persisted
             # value as unknown and fail safe to vertex (paid) -- reload them.
-            [[ "$requested" == hosted-only ]] &&
+            # `if` (not `[[ ]] && echo`) so other modes still exit 0.
+            if [[ "$requested" == hosted-only ]]; then
                 echo "⚠️ reload older shells (exec zsh) before invoking claude there: pre-hosted-only shells dispatch this mode as vertex" >&2
+            fi
             ;;
         "")
             echo "claude mode: $(_claude_mode_get)"
