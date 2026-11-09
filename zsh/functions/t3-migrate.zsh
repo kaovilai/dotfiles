@@ -730,7 +730,17 @@ sync-claude-plugins() {
                 if _t3_plugin_cli $dry "$claude" update "$pid"; then (( upd++ ))
                 else warning "Could not update plugin $pid"; (( fail++ )); fi
             elif _t3_plugin_cli $dry "$claude" install "$pid"; then (( inst++ ))
-            else warning "Could not install plugin $pid"; (( fail++ )); fi
+            else
+                # The CLI's own advice for "Plugin ... not found in
+                # marketplace": a bulk `marketplace update` can re-clone a
+                # marketplace moments earlier and the install still miss it.
+                # Refresh just that marketplace and retry once, so fleet-sync
+                # heals in the same run instead of failing until the next.
+                local mk="${pid#*@}"
+                if [[ "$pid" == *@* ]] && _t3_plugin_cli $dry "$claude" marketplace update "$mk" \
+                   && _t3_plugin_cli $dry "$claude" install "$pid"; then (( inst++ ))
+                else warning "Could not install plugin $pid"; (( fail++ )); fi
+            fi
         done
     } always {
         cat "$saved" > "$cs"   # cat, not mv: keeps the file and its mode in place
