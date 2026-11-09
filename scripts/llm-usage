@@ -114,6 +114,8 @@ def strip_model(model):
             if m.startswith(prefix):
                 m = m[len(prefix):]
     try:
+        if len(_strip_model_cache) > 4096:  # junk transcripts in a long-lived serve: don't grow forever
+            _strip_model_cache.clear()
         _strip_model_cache[model] = m
     except TypeError:
         pass  # unhashable (junk from a transcript): computed, just not cached
@@ -1552,8 +1554,9 @@ def aggregate(events, keyfns):
             "ctxmax": ctxmax, "long": long_,
             "p50": pct(lat, 50), "p95": pct(lat, 95), "ttft": pct(ttft, 50),
             "tps": statistics.median(speeds) if speeds else None,
-            # sum(), not +=: builtins.sum does compensated float summation, and
-            # the dashboard must not wobble a cost by a ULP between versions
+            # cost via sum(), not +=: builtins.sum does compensated float
+            # summation, and totals must not wobble a ULP between versions.
+            # in/cread/out use += safely: token counts are ints at every producer.
             "cost": sum(costs),
             # a same-model failover (glm deployment A -> glm B) moved traffic too
             "reroutes": reroutes,
@@ -1893,7 +1896,7 @@ def proxy_logging_on(port, config):
     return False
 
 
-_status_cache = [0.0, None]  # (computed at, (rows, events)) — see status_rows(ttl)
+_status_cache = [None]  # single slot: (computed at, (rows, events)) — see status_rows(ttl)
 
 
 def status_rows(ttl=0.0):
@@ -1901,8 +1904,9 @@ def status_rows(ttl=0.0):
     reuses a recent result: each row costs an HTTP probe plus lsof/ps
     subprocesses per proxy, which dominated a dashboard rebuild on macOS
     (lsof is ~100ms+ there per port). CLI calls keep ttl=0 = always fresh."""
-    if ttl and _status_cache[1] is not None and time.time() - _status_cache[0] < ttl:
-        return _status_cache[1]
+    hit = _status_cache[0]  # read once: the slot swap below is a single atomic store
+    if ttl and hit is not None and time.time() - hit[0] < ttl:
+        return hit[1]
     events = load_proxy(time.time() - 7 * 86400)
     last_seen, counts = {}, defaultdict(int)
     errs = defaultdict(Counter)
@@ -1931,7 +1935,7 @@ def status_rows(ttl=0.0):
                      "models": models or [], "code": code, "requests_7d": counts.get(port, 0), "errors_7d": dict(errs.get(port, {})),
                      "last_seen": last_seen.get(port)})
     if ttl:
-        _status_cache[0], _status_cache[1] = time.time(), (rows, events)
+        _status_cache[0] = (time.time(), (rows, events))
     return rows, events
 
 
