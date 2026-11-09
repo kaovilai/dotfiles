@@ -94,9 +94,12 @@ _strip_model_cache = {}
 def strip_model(model):
     """Display name: lowercase, provider/org prefixes, build-date suffix, [1m] and #responses dropped.
     Memoized: the dashboard recomputes it for every event across ~8 aggregation
-    passes (~470k calls on a 90d window) over a few dozen distinct strings."""
+    passes (~470k calls on a 90d window) over a few dozen distinct strings.
+    Cache key includes the type: 1 and True are equal dict keys but normalize
+    differently ("1" vs "true"), so a value-keyed cache would cross-contaminate."""
+    key = (type(model), model)
     try:
-        return _strip_model_cache[model]
+        return _strip_model_cache[key]
     except (KeyError, TypeError):
         pass
     if not model:
@@ -114,9 +117,12 @@ def strip_model(model):
             if m.startswith(prefix):
                 m = m[len(prefix):]
     try:
-        if len(_strip_model_cache) > 4096:  # junk transcripts in a long-lived serve: don't grow forever
+        # Bounded both ways for a long-lived serve parsing junk transcripts:
+        # entry count (clear past 4096) and entry size (skip huge identifiers).
+        if len(_strip_model_cache) > 4096:
             _strip_model_cache.clear()
-        _strip_model_cache[model] = m
+        if not isinstance(model, str) or len(model) <= 512:
+            _strip_model_cache[key] = m
     except TypeError:
         pass  # unhashable (junk from a transcript): computed, just not cached
     return m
@@ -1896,7 +1902,7 @@ def proxy_logging_on(port, config):
     return False
 
 
-_status_cache = [None]  # single slot: (computed at, (rows, events)) — see status_rows(ttl)
+_status_cache = [None]  # single slot: (monotonic ts, (rows, events)) — see status_rows(ttl)
 
 
 def status_rows(ttl=0.0):
@@ -1905,7 +1911,7 @@ def status_rows(ttl=0.0):
     subprocesses per proxy, which dominated a dashboard rebuild on macOS
     (lsof is ~100ms+ there per port). CLI calls keep ttl=0 = always fresh."""
     hit = _status_cache[0]  # read once: the slot swap below is a single atomic store
-    if ttl and hit is not None and time.time() - hit[0] < ttl:
+    if ttl and hit is not None and time.monotonic() - hit[0] < ttl:
         return hit[1]
     events = load_proxy(time.time() - 7 * 86400)
     last_seen, counts = {}, defaultdict(int)
@@ -1935,7 +1941,7 @@ def status_rows(ttl=0.0):
                      "models": models or [], "code": code, "requests_7d": counts.get(port, 0), "errors_7d": dict(errs.get(port, {})),
                      "last_seen": last_seen.get(port)})
     if ttl:
-        _status_cache[0] = (time.time(), (rows, events))
+        _status_cache[0] = (time.monotonic(), (rows, events))  # monotonic: a backward wall-clock step must not extend the TTL
     return rows, events
 
 
