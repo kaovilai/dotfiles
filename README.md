@@ -37,14 +37,14 @@ Everything here is ZSH (not Bash), kebab-case for public commands, and covered b
 <details>
 <summary><b>Hosted-only provider — details</b></summary>
 
-`claude-hosted-only`, `codex-hosted-only`, T3 launchers `claude-t3-hosted-only` / `codex-t3-hosted-only`: a cost guard, EnMaaS-hosted free models only so subagents cannot reach paid models by accident. GLM 5.3 is main; DeepSeek V4.1 Flash is the auto-mode classifier / Codex reviewer / small-fast / subagent model and the vision fallback, so no OpenAI key is involved. One local proxy per client flavor (Claude :4148, Codex :4147; `scripts/hosted-only-proxy.zsh`, state `~/.local/state/hosted-only-<flavor>-<port>/`). The proxy is a stdlib Go binary by default (built from `scripts/hosted-only-go`: ~10 MB, no uv or Python, millisecond boot, zero-refuse restarts); `HOSTED_ONLY_PROXY_IMPL=litellm` is the escape hatch. Parity limits in `docs/notes/hosted-only-go-proxy.md`. Knobs `HOSTED_ONLY_*` (ports, models, classifier/reviewer picks). EnMaaS 429s are rewritten so T3 can auto-resume; on the OpenAI chat route a monthly quota becomes HTTP 402 `insufficient_quota` (OpenCode would otherwise sleep ~9 days), per-minute limits stay 429 + `retry-after`. The reset time comes from what upstream sends when it sends anything, else an estimate (next UTC month for the monthly quota, 60 s otherwise); limit data the hooks don't understand is logged as `drift` on the `llm-usage` event (`docs/notes/enmaas-reset-forward-compat.md`). LiteLLM's own upstream retries are off (default 0, so each 429 is one upstream hit); `HOSTED_ONLY_CLIENT_MAX_RETRIES` (default 3) bounds Claude Code's stall on 60 s waits. Stop: `claude-hosted-only-kill` / `codex-hosted-only --stop-proxy`. Retired names (`claude-glm-{hybrid,only}`, `codex-glm-{hybrid,only}`, the `*-t3-glm-*` launchers, `GLM_HYBRID_*` env names) remain as aliases of hosted-only.
+`claude-hosted-only`, `codex-hosted-only`, T3 launchers `claude-t3-hosted-only` / `codex-t3-hosted-only`: a cost guard, EnMaaS-hosted free models only so subagents cannot reach paid models by accident. GLM 5.3 is main; DeepSeek V4.1 Flash is the auto-mode classifier / Codex reviewer / small-fast / subagent model and the vision fallback, so no OpenAI key is involved. One local proxy per client flavor (Claude :4148, Codex :4147; `scripts/hosted-only-proxy.zsh`, state `~/.local/state/hosted-only-<flavor>-<port>/`). The proxy is a stdlib-only Go binary (built from `scripts/hosted-only-go`: ~10 MB, no uv or Python, millisecond boot, zero-refuse restarts) — the retired LiteLLM impl is gone, and the old `HOSTED_ONLY_PROXY_IMPL`/`LLM_PROXY_IMPL=litellm` knobs now error loudly instead of silently selecting it. Parity limits in `docs/notes/hosted-only-go-proxy.md`. Knobs `HOSTED_ONLY_*` (ports, models, classifier/reviewer picks). EnMaaS 429s are rewritten so T3 can auto-resume; on the OpenAI chat route a monthly quota becomes HTTP 402 `insufficient_quota` (OpenCode would otherwise sleep ~9 days), per-minute limits stay 429 + `retry-after`. The reset time comes from what upstream sends when it sends anything, else an estimate (next UTC month for the monthly quota, 60 s otherwise); limit data the proxy doesn't understand is logged as `drift` on the `llm-usage` event (`docs/notes/enmaas-reset-forward-compat.md`). `HOSTED_ONLY_CLIENT_MAX_RETRIES` (default 3) bounds Claude Code's retry stall on 60 s waits. Stop: `claude-hosted-only-kill` / `codex-hosted-only --stop-proxy`. Retired names (`claude-glm-{hybrid,only}`, `codex-glm-{hybrid,only}`, the `*-t3-glm-*` launchers, `GLM_HYBRID_*` env names) remain as aliases of hosted-only.
 </details>
 
 Non-interactive launchers (for apps like T3 Code) live in `scripts/claude-provider.zsh` / `scripts/codex-provider.zsh`.
 
 ### 2. `llm-usage` — LLM telemetry that answers real questions
 
-Requested vs **served** model (so reroutes like `sonnet->glm-5.3` or the `glm->deepseek-v4.1-flash` vision fallback are visible), tokens with Anthropic cache semantics, cache hit rate, latency, errors with upstream status, requests over 200k context (1M-window use). Data is one JSONL line per request that each local proxy writes into `~/.local/state/llm-usage/` — nothing leaves the machine. Without proxy data it falls back to Claude Code / Codex transcripts.
+Requested vs **served** model (so reroutes like `sonnet->glm-5.3` or the `glm->deepseek-v4.1-flash` vision fallback are visible), tokens with Anthropic cache semantics, cache hit rate, latency, errors with upstream status, requests over 200k context (1M-window use). Data is one JSONL line per request that each local proxy writes into `~/.local/state/llm-usage/` — logs stay local unless fleet sharing is enabled (then configured peers retrieve merged events over SSH; see Fleet below). Without proxy data it falls back to Claude Code / Codex transcripts.
 
 ```bash
 llm-usage                      # summary; --by model,route,proxy,client,role,day,ctx
@@ -70,7 +70,10 @@ A single-file Swift helper (`scripts/llm-usage-menubar/main.swift` — AppKit st
 - **Floating window** (Activity Monitor-style, same process): per-minute request bars stacked by model vendor with 429/5xx marks, per-provider rate lines, and translucent throttle ribbons — flat wash for rate limit, hatched for quota, dashed edge for estimated reset. Non-activating panel on all Spaces over full-screen apps; layout, opacity, click-through and frame persist.
 
 ```bash
-llm-usage menubar build|run|install|status    # install = LaunchAgent
+llm-usage menubar build    # compile when source is newer
+llm-usage menubar run      # start one detached instance
+llm-usage menubar install  # write + bootstrap the LaunchAgent
+llm-usage menubar status
 llm-usage menubar window show|hide|toggle
 ```
 
@@ -88,10 +91,10 @@ Full cluster lifecycles as shell commands, lazy-loaded so they cost nothing unti
 
 ```bash
 list-ocp-clusters                    # every cluster you own, all clouds
-create-ocp-aws | create-ocp-gcp-wif | create-ocp-azure-sts | create-rosa-sts
-use-ocp-cluster [pattern]           # point KUBECONFIG at it
-delete-ocp-aws | delete-ocp-gcp-wif | delete-ocp-azure-sts | delete-rosa-sts
-setup-velero-oadp-for-{gcp,azure,rosa}-cluster   # buckets, identities, DPA
+create-ocp-aws              # or: create-ocp-gcp-wif, create-ocp-azure-sts, create-rosa-sts
+use-ocp-cluster [pattern]   # point KUBECONFIG at it
+delete-ocp-aws              # or: delete-ocp-gcp-wif, delete-ocp-azure-sts, delete-rosa-sts
+setup-velero-oadp-for-gcp-cluster   # buckets, identities, DPA — also ...-azure- / ...-rosa-cluster
 ```
 
 Details that matter: every `oc adm release extract` goes through a **version-matched `oc`** extracted from the release image (`get-release-oc`) to dodge stale-filter bugs (OCPBUGS-77845); preflight checks cover cloud permissions and instance-type capacity; cluster naming is date-tagged (`20250131-aws-arm64`) under `$OCP_MANIFESTS_DIR`; and the installer-resolution logic is offline-tested (`tests/openshift-destroy-installer.zsh`).
@@ -157,11 +160,13 @@ Clone and go:
 
 ```bash
 git clone git@github.com:kaovilai/dotfiles.git ~/git/dotfiles
-ln -sf ~/git/dotfiles/.zshrc ~/.zshrc   # or: echo "source ~/git/dotfiles/.zshrc" >> ~/.zshrc
+# Back up any existing ~/.zshrc first — ln -sf replaces it. Alternatively keep
+# your current file and add: echo "source ~/git/dotfiles/.zshrc" >> ~/.zshrc
+ln -sf ~/git/dotfiles/.zshrc ~/.zshrc
 exec zsh
 ```
 
-`.zshrc` self-bootstraps: if the repo is missing it clones itself, znap installs the prompt/plugins on first run, and secrets stay out of the repo in `~/secrets.zsh` (permission-checked to 600). New machine? `source zsh/functions/migrate-laptop.zsh && migrate-to-new-laptop` walks the full setup (checklist: `docs/LAPTOP_MIGRATION.md`).
+`.zshrc` self-bootstraps: if the repo is missing it clones itself, znap installs the prompt/plugins on first run, and secrets stay out of the repo in `~/secrets.zsh` (permission-checked to 600). New machine? `source ~/git/dotfiles/zsh/functions/migrate-laptop.zsh && migrate-to-new-laptop` walks the full setup (checklist: `docs/LAPTOP_MIGRATION.md`).
 
 ### Fedora (dnf) — Brewfile equivalents
 
