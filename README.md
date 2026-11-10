@@ -1,196 +1,176 @@
 # Dotfiles
 
-A collection of shell configuration files and utilities for a productive development environment.
+A ZSH-first development environment that follows you across machines — and across LLM providers.
 
-## Structure
+One repo covers four things that usually live in five places:
 
-- **zsh/**: ZSH shell configuration files
-  - **aliases/**: Organized aliases by category
-    - **docker.zsh**: Docker-related aliases
-    - **git.zsh**: Git command shortcuts
-    - **github.zsh**: GitHub CLI commands
-    - **code.zsh**: VSCode related aliases
-    - **ibmcloud.zsh**: IBM Cloud commands
-    - **velero.zsh**: Velero-specific commands
-    - **misc.zsh**: Miscellaneous aliases
-  - **alias.zsh**: Main alias loader
-  - **colors.zsh**: Color definitions
-  - **completions.zsh**: Command completion configuration
-  - **paths.zsh**: PATH environment variable configuration
-  - **util.zsh**: Utility functions
-  - **znap.zsh**: ZSH Snap plugin manager configuration
-  - Other tool-specific configuration files
+- **A fast, lazy-loading ZSH setup** — aliases, functions, completions, and a startup path that keeps heavy work out of your way.
+- **Multi-provider Claude Code / Codex routing** — `claude-mode` swaps the `claude` command between Anthropic, Vertex, EnMaaS, Copilot, OpenAI, local MLX/Ollama, and a cost-guarded "hosted-only" mode, each with its own loopback proxy and lifecycle management.
+- **An LLM telemetry stack** — `llm-usage` reads every local proxy's request log (plus Claude/Codex transcripts) and answers "which model actually served my traffic, at what cost, and what is throttled right now" — in the terminal, a browser dashboard, and a native macOS menubar monitor, across your whole fleet of machines.
+- **OpenShift / OADP / Velero cluster automation** — repeatable create/connect/destroy flows for AWS, GCP (WIF), Azure (STS), and ROSA clusters with Velero backup setup, version-matched `oc` binaries, and offline-testable installer logic.
 
-## Usage
+Everything here is ZSH (not Bash), kebab-case for public commands, and covered by [26 offline test suites](tests/) that run without a cluster, a proxy, or a GUI.
 
-The main entry point is `.zshrc` which sources all the necessary files.
+## Highlights
 
-### Key Commands
+### 1. One `claude` command, any provider
 
-- `copy-to-dotfiles-from-zshrc`: Copy your local .zshrc to the dotfiles repo
-- `push-dotfiles-from-zshrc`: Push changes to the dotfiles repository
-- `update-zshrc-from-dotfiles`: Update your local .zshrc from the dotfiles repo
+`claude-mode <provider>` persists your choice; `claude` then dispatches to it, and every provider gets `claude-<provider>`, `claude-<provider>-kill`, and `claude-<provider>-restart`. `codex` works the same way via `codex-mode`. Each provider is one self-documenting file under `zsh/functions/claude/providers/`:
 
-### Migration Commands
+| Provider | What it does |
+|---|---|
+| `copilot` | GitHub Copilot via the copilot-api gateway |
+| `vertex` | Google Vertex AI (ADC auth, tier-ranked model probing) |
+| `enmaas` | Every EnMaaS model — Claude via Messages, GPT/Gemini via Responses/Chat, GLM/DeepSeek via the Anthropic dialect — behind one shared Go proxy (:4146) with vLLM/`rits/` workarounds baked in |
+| `hosted-only` | **Cost guard**: EnMaaS free-tier models only, so subagents can never reach a paid model. GLM 5.3 main, DeepSeek V4.1 Flash as classifier/reviewer/vision fallback. Retired `glm-hybrid`/`glm-only` names still alias here |
+| `mlx` / `ollama` | Fully local inference on Apple Silicon / any box, with model resolution and resource checks |
+| `openai` | Direct OpenAI, with a route-writing proxy |
+| `openshell` | Claude Code inside an NVIDIA OpenShell sandbox |
+| `offline` | No network, no accidents |
 
-- `migrate-to-new-laptop`: Set up a new laptop with your development environment
-- `export-wifi-credentials`: Export WiFi network names for migration
-- `import-wifi-credentials`: Import WiFi networks on new laptop
-- `list-wifi-networks`: List currently saved WiFi networks
+<details>
+<summary><b>EnMaaS provider — details</b></summary>
 
-### Claude providers
+`claude-enmaas`, `claude-t3-enmaas`, `codex-t3-enmaas`: every EnMaaS model, no tier pinning: Claude via Messages, GPT/Gemini via Responses/Chat (per the discovered catalogs), GLM 5.3 and DeepSeek V4.1 Flash via the Anthropic dialect. One shared loopback proxy (default :4146, `CLAUDE_ENMAAS_PROXY_PORT`; runtime `$XDG_STATE_HOME/claude-enmaas-proxy-<uid>-<port>/`) serves Claude Code (`/v1/messages`) and Codex (`/v1/responses`, `/v1/chat/completions`); `codex-t3-enmaas` wires Codex to it with `-c` overrides that replace T3's direct-to-gateway launchArgs (everything else, e.g. `review_model`, `approvals_reviewer`, stays) and a generated model catalog (`$XDG_STATE_HOME/codex-enmaas/models.json`); Codex only gets the proxy's local token. `CODEX_ENMAAS_DIRECT=1` restores the old direct route. The proxy is a stdlib-only Go binary that reads the generated `config.json` as its route table and does everything the old LiteLLM hooks did: vLLM workarounds for `rits/` models (grammar strip for `apply_patch`, empty developer item filter, thinking-off default, hosted `web_search` dropped, GLM image requests to DeepSeek), Codex `additional_tools` flattening, the 429 reset rewrite for all models, and Messages ↔ Chat/Responses translation so Claude Code works with the GPT/Gemini models too; see `docs/notes/hosted-only-go-proxy.md`. `CLAUDE_ENMAAS_VISION_FALLBACK_MODEL=<id>` only routes that model through the proxy. A running proxy is never restarted under live sessions: a changed gateway/key/routes/code fails the next launch with a restart instruction; `claude-enmaas-kill` stops only the identity-checked proxy. Tests: `tests/claude-enmaas{,-lifecycle,-proxy,-go-swap}.zsh`, `tests/codex-enmaas.zsh`.
+</details>
 
-`claude` dispatches to the provider saved by `claude-mode`; each provider also has its own `claude-<provider>` / `claude-<provider>-kill` commands. Every provider lives in one file under `zsh/functions/claude/providers/`, whose header comment documents its requirements and environment variables. Non-interactive launchers for apps such as T3 Code are documented in `scripts/claude-provider.zsh`.
+<details>
+<summary><b>Hosted-only provider — details</b></summary>
 
-**EnMaaS** (`claude-enmaas`, `claude-t3-enmaas`, `codex-t3-enmaas`): every EnMaaS model, no tier pinning: Claude via Messages, GPT/Gemini via Responses/Chat (per the discovered catalogs), GLM 5.3 and DeepSeek V4.1 Flash via the Anthropic dialect. One shared loopback proxy (default :4146, `CLAUDE_ENMAAS_PROXY_PORT`; runtime `$XDG_STATE_HOME/claude-enmaas-proxy-<uid>-<port>/`, boot log `proxy.log` there) serves Claude Code (`/v1/messages`) and Codex (`/v1/responses`, `/v1/chat/completions`); `codex-t3-enmaas` wires Codex to it with `-c` overrides that replace T3's direct-to-gateway launchArgs (everything else in the launchArgs, e.g. `review_model`, `approvals_reviewer`, stays) and a generated model catalog (bundled entries + GLM text + DeepSeek text/image, `$XDG_STATE_HOME/codex-enmaas/models.json`); Codex only gets the proxy's local token. `CODEX_ENMAAS_DIRECT=1` restores the old direct route. The proxy is a stdlib-only Go binary (the LiteLLM impl is retired; a go toolchain is required) that reads the generated `config.json` as its route table (`model_list` dialects, `#responses` siblings, `api_base`, `master_key`) and does everything the old LiteLLM hooks did: vLLM workarounds for `rits/` models (grammar strip for `apply_patch`, empty developer item filter, thinking-off default, hosted `web_search` dropped, GLM image requests to DeepSeek), Codex `additional_tools` flattening, the 429 reset rewrite for all models, and Messages <-> Chat/Responses translation so Claude Code works with the GPT/Gemini models too; see `docs/notes/hosted-only-go-proxy.md`. `CLAUDE_ENMAAS_VISION_FALLBACK_MODEL=<id>` only routes that model through the proxy (it does not enable a retry of a failed GLM request on it — that retry went with the LiteLLM impl). A running proxy is never restarted under live sessions: a changed gateway/key/routes/code or `HOSTED_ONLY_*` knob fails the next launch with a restart instruction; `claude-enmaas-kill` stops only the identity-checked proxy. Tests: `tests/claude-enmaas{,-lifecycle,-proxy,-go-swap}.zsh`, `tests/codex-enmaas.zsh`.
+`claude-hosted-only`, `codex-hosted-only`, T3 launchers `claude-t3-hosted-only` / `codex-t3-hosted-only`: a cost guard, EnMaaS-hosted free models only so subagents cannot reach paid models by accident. GLM 5.3 is main; DeepSeek V4.1 Flash is the auto-mode classifier / Codex reviewer / small-fast / subagent model and the vision fallback, so no OpenAI key is involved. One local proxy per client flavor (Claude :4148, Codex :4147; `scripts/hosted-only-proxy.zsh`, hooks `scripts/hosted_only_hooks.py`, state `~/.local/state/hosted-only-<flavor>-<port>/`). The proxy is a stdlib Go binary by default (`scripts/hosted-only-go`: ~10 MB, no uv or Python, millisecond boot, zero-refuse restarts); `HOSTED_ONLY_PROXY_IMPL=litellm` is the escape hatch. Parity limits in `docs/notes/hosted-only-go-proxy.md`. Knobs `HOSTED_ONLY_*` (ports, models, classifier/reviewer picks). EnMaaS 429s are rewritten so T3 can auto-resume; on the OpenAI chat route a monthly quota becomes HTTP 402 `insufficient_quota` (OpenCode would otherwise sleep ~9 days), per-minute limits stay 429 + `retry-after`. The reset time comes from what upstream sends when it sends anything, else an estimate (next UTC month for the monthly quota, 60 s otherwise); limit data the hooks don't understand is logged as `drift` on the `llm-usage` event (`docs/notes/enmaas-reset-forward-compat.md`). LiteLLM's own upstream retries are off (default 0, so each 429 is one upstream hit); `HOSTED_ONLY_CLIENT_MAX_RETRIES` (default 3) bounds Claude Code's stall on 60 s waits. Stop: `claude-hosted-only-kill` / `codex-hosted-only --stop-proxy`. Retired names (`claude-glm-{hybrid,only}`, `codex-glm-{hybrid,only}`, the `*-t3-glm-*` launchers, `GLM_HYBRID_*` env names) remain as aliases of hosted-only.
+</details>
 
-**Hosted-only** (`claude-hosted-only`, `codex-hosted-only`, T3 launchers `claude-t3-hosted-only` / `codex-t3-hosted-only`): a cost guard, EnMaaS-hosted free models only so subagents cannot reach paid models by accident. GLM 5.3 is main; DeepSeek V4.1 Flash is the auto-mode classifier / Codex reviewer / small-fast / subagent model and the vision fallback, so no OpenAI key is involved. One local proxy per client flavor (Claude :4148, Codex :4147; `scripts/hosted-only-proxy.zsh`, hooks `scripts/hosted_only_hooks.py`, state `~/.local/state/hosted-only-<flavor>-<port>/`). The proxy is a stdlib Go binary by default (`scripts/hosted-only-go`: ~10 MB, no uv or Python, millisecond boot, zero-refuse restarts; used when a go toolchain is installed, else LiteLLM); `HOSTED_ONLY_PROXY_IMPL=litellm` (or `LLM_PROXY_IMPL=litellm` for every proxy) is the escape hatch, and `CLAUDE_ENMAAS_PROXY_IMPL=go` opts the shared EnMaaS proxy in (it stays on LiteLLM by default: only LiteLLM translates Messages <-> Chat/Responses for the non-Anthropic models). Parity limits in `docs/notes/hosted-only-go-proxy.md`. Knobs `HOSTED_ONLY_*` (ports `HOSTED_ONLY_{CLAUDE,CODEX}_PROXY_PORT`, `HOSTED_ONLY_{GLM,DEEPSEEK}_MODEL`, `HOSTED_ONLY_{CLASSIFIER,SMALL_FAST,REVIEW}_MODEL`, ...). EnMaaS 429s are rewritten so T3 can auto-resume (see the hooks docstring); on the OpenAI chat route (`/v1/chat/completions`, OpenCode) a monthly quota becomes HTTP 402 `insufficient_quota` with no `retry-after` (OpenCode retries every 429 and would sleep ~9 days), per-minute limits stay 429 + `retry-after`. The reset time comes from what upstream sends when it sends anything (`retry-after[-ms]`, JSON `error.reset_at`/`retry_after`, `x-ratelimit-reset-*`, `RateLimit`, Anthropic/Copilot reset headers), else an estimate (next UTC month for the monthly quota, 60 s otherwise); limit data the hooks do not understand is logged as `drift` on the `llm-usage` event and as one WARNING per signal in the proxy log (`docs/notes/enmaas-reset-forward-compat.md`). LiteLLM's own upstream retries are off (`HOSTED_ONLY_UPSTREAM_RETRIES`, default 0, so each 429 is one upstream hit); `HOSTED_ONLY_CLIENT_MAX_RETRIES` (default 3) sets `CLAUDE_CODE_MAX_RETRIES` for `claude-hosted-only` (Claude Code default 10 stalls ~10 min on 60 s per-minute waits; also bounds real 5xx retries). Changing either knob changes the proxy fingerprint: stop an idle proxy to apply it (`claude-hosted-only-kill` / `codex-hosted-only --stop-proxy`). Stop: `claude-hosted-only-kill` / `codex-hosted-only --stop-proxy`. History: an earlier "GLM hybrid" mode (GLM main, OpenAI `gpt-6-luna` reviewer) is retired; `claude-glm-hybrid`, `claude-glm-only`, `codex-glm-hybrid`, `codex-glm-only`, the `*-t3-glm-{hybrid,only}` launchers and the `GLM_HYBRID_*` env names remain as aliases of hosted-only.
+Non-interactive launchers (for apps like T3 Code) live in `scripts/claude-provider.zsh` / `scripts/codex-provider.zsh`.
 
-### LLM usage monitor
+### 2. `llm-usage` — LLM telemetry that answers real questions
 
-`llm-usage` shows which providers and models your traffic really hits: requested vs served model (flags reroutes such as `sonnet->glm-5.3` or the vision fallback `glm->deepseek-v4.1-flash`), tokens, cache hit rate, latency, errors (the proxy logs the upstream status, e.g. EnMaaS 429, even when the hook rewrites it to a 503 with a reset time; events from before that are classified from the error text and marked `*`), and requests over 200k context (1M-window use). The local LLM proxies log one JSONL line per request into `~/.local/state/llm-usage/` — the Go binary (hosted-only, EnMaaS, mlx, openai, vertex) writes it itself (`scripts/hosted-only-go/usage.go`); without proxy data it falls back to Claude Code/Codex transcripts. Commands: `llm-usage [summary --by model,route,proxy,client,role,day,ctx]`, `routes`, `tail -f`, `top`, `errors` (grouped by status + message, flagged rate-limit / quota (budget exhausted) / server; `--spikes` lists error bursts with a sparkline), `status` (which proxies are up and logging, with 7d error counts), and `serve --open` for a browser dashboard with graphs (http://127.0.0.1:4150, loopback only; model usage over time, model share, context-size histogram, latency, routes with reroutes flagged, errors over time split 429 / 5xx / other with spike windows, per-model error rate, live request feed; light/dark, table view per chart, auto-refresh). Proxies started before the callback existed must be restarted to log: `llm-proxy-restart` (restarts every proxy currently listening; or name them: `copilot vertex openai enmaas glm-claude glm-codex`, `--list` to show state). Per-proxy: `claude-{copilot,vertex,openai,enmaas}-restart`, `claude-hosted-only-restart` (retired aliases `claude-glm-hybrid-restart`, `claude-glm-only-restart`), `codex-hosted-only-restart` (retired aliases `codex-glm-hybrid-restart`, `codex-glm-only-restart`) (stop, wait for the port, start again; sessions using that proxy are cut off). **Fleet**: `~/.config/llm-usage/fleet.json` (example: `scripts/fleet.json.example`) lists the other machines; this machine pulls their merged events over read-only ssh (`llm-usage export` on the peer, `llm-usage fleet refresh` here; nothing is pushed, no port is opened, a peer that is unreachable keeps its last snapshot marked stale). First pull covers the last 7 days, then history backfills 30d per refresh until the peer's oldest events month is covered. Totals, `--by host`, `--host <name>`, the menubar FLEET section, the floating window's fleet rows and the dashboard's Host dropdown cover every machine; per-proxy rows stay this-machine-only. `tail -f --fleet` streams peers live. `LLM_USAGE_FLEET=off` disables. Design: `docs/notes/fleet-usage-streaming.md`. Test: `zsh tests/llm-usage.zsh`.
-
-**Menubar monitor** (macOS): a native single-file Swift helper (`scripts/llm-usage-menubar/main.swift`, AppKit status item, no Xcode project/app bundle, needs only `swiftc` from the Command Line Tools) polls `llm-usage menubar-data` (one JSON document: per-proxy up/down, 15m/1h requests and 429/5xx/other counts, throttle, spike, in-flight, by-model/by-proxy, reroutes, Copilot) every 30s and shows `● 12` normally, `⚠ 429 3m` while a 429 reset is in the future (countdown; marked as an estimate from `retry_after`, or the next UTC month start for a quota 429 without one), `✖` when a proxy that logged this week stopped answering, `⚠ spike` on an error burst, plus ` ⏳N` requests in flight and ` ↪N` reroutes in the last 15m; a trailing `?` / greyed item means the last poll failed (menu keeps the last good data and says so). The menu has per-proxy submenus (copy port / restart command, never restarts anything), sparkline and by-model/by-proxy charts (toggle), reroutes by kind (`alias` Claude name served by GLM/DeepSeek, `vision` glm→deepseek, `fallback` router retry), a Copilot section, notifications for entering throttled / a proxy going down (toggle, once per transition), Open dashboard (starts `llm-usage serve` if needed), Open logs, Copy status / last error. In-flight counts come from `inflight-<port>-<pid>.json` files the usage callback writes (entries older than 15m or of dead pids are ignored; proxies only report after `llm-proxy-restart` loads the updated callback). copilot-api has no callback, so its numbers are derived from Claude Code/Codex transcripts (models absent from the proxy log), its in-flight is `n/a`, and the premium quota/reset date comes from copilot-api's `/usage` endpoint when reachable. Commands: `llm-usage menubar build|run|install|uninstall|status` (`build` compiles to `~/.local/share/llm-usage/llm-usage-menubar` when the source is newer; `run` starts one detached instance; `install` writes `~/Library/LaunchAgents/com.kaovilai.llm-usage-menubar.plist` and bootstraps it, `install|uninstall --dry-run` only print). The status item draws an image by default: `<model logos><provider logos>` as two avatar stacks (models: Claude, GPT, GLM, DeepSeek, Gemini, other; providers: GitHub Copilot, EnMaaS, Vertex, OpenAI, Anthropic, other), each logo's opacity following its share of traffic (floor 0.25, dominant on top, at most 4 per cluster plus a `+N` chip, a faint outline per cluster when idle), a red/amber dot on the corner for throttled / proxy down (red) or error spike (amber), and the short text (`12`, `429 3m`) after it. `menubar-data` carries the same numbers as `share` (`{window, metric, models[], providers[]}`; `--share-window 15m|1h`, `--share-metric requests|tokens`); the menu lists them under TRAFFIC SHARE and has toggles for the image, the text, the 1h window and tokens as the metric (defaults: image + text, 15m, requests). Models map from the served model name (`MODEL_VENDORS`), providers from the proxy port (`PROVIDER_PORTS`; copilot transcript calls count as GitHub Copilot); `LLM_USAGE_PROVIDER_MAP="4149=anthropic,my-proxy=key:Label"` overrides or extends it. No logo files are committed: lookup order is `~/.config/llm-usage/logos/<key>.png|pdf|svg` (or `<key>.mono.png`, tinted to the menubar text colour) > `~/.local/share/llm-usage/logos/` > an installed app's icon (Claude, ChatGPT, GitHub Copilot, Gemini) > a generated monogram in a plain brand colour. `llm-usage menubar logos` lists what each key resolved to and where to drop custom files; `llm-usage menubar logos fetch` downloads a sha256-pinned set of PNGs from a pinned commit of [lobehub/lobe-icons](https://github.com/lobehub/lobe-icons) (MIT; credit and license text in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)). The logos are trademarks of their owners, shown for personal status-bar use only. Debug without a GUI: `llm-usage-menubar --dump-menu [--data-file FILE] [--chart-png out.png] [--no-image] [--no-text]`, `llm-usage-menubar --status-png out.png [--dark] [--no-text] [--data-file FILE]` (renders the status item, @2x, light or dark), `llm-usage-menubar --list-logos`.
-
-**Floating monitor window** (same helper, no extra process; Activity Monitor-style "CPU History"): menu items `Floating Window` (checkmark), `Window Layout` (Horizontal / Vertical / compact History), `Window Graph` (Bars = models / Lines = providers / Both), `Window Opacity` (100/80/60/40%) and `Window Click-through` (mouse passes through; the menubar menu item is the way back). It is a non-activating utility panel (`.floating` level, all Spaces, over full-screen apps, no Dock icon, movable by its background, resizable) whose frame, per-layout size, layout, graph mode, opacity, click-through and visibility persist across restarts. The graph is per-minute requests for the last hour as bars stacked by model vendor (claude/gpt/glm/deepseek/gemini colours) with 429 (amber) / 5xx (red) marks, one rate line per provider (Copilot white on dark / grey on light, EnMaaS red, Vertex pink, ...), and translucent throttle ribbons per provider spanning start (first 429) to reset: flat wash = rate limit, hatched + dotted lane = quota, dashed end edge = estimated reset, solid edge = known end (a later success of the same provider + model, or an upstream-reported `reset_source`). Beside/below it: in-flight count + oldest wait, top models and providers with share %, proxy up/down dots; a yellow `⚠ code needs updating: <hint>` row appears when the proxy logger attached `drift` notes (click copies the hint; the same row is in the menu). `menubar-data` gained `series.by_vendor`, `series_by_provider`, `throttle_spans[]` (`provider, start, end, end_estimated, kind, count, source, basis, reset_source`), `throttle_notes`, `drift[]`, and `throttled.estimated/reset_source` (upstream resets drop the `ESTIMATE` label); spans use named proxies only. Copilot (:4141, no usage log) throttles are read from Claude Code transcripts (`type:system subtype:api_error` retry entries with `error.status` 429/402/403/503 + `retryInMs`, and `isApiErrorMessage` + `apiErrorStatus`), attributed by the session's last model with the same "model absent from the proxy log" rule as the usage numbers; LiteLLM "No deployments available" 429s and bracket-tagged proxy errors are the hosted-only proxy's and never become Copilot spans; a 402 is a quota span (ending at copilot-api `/usage`'s reset when known); `/usage` premium interactions and `5Hour-`/`Weekly-Session-RateLimits` at 0 remaining also become quota spans; with no data the menu says so instead of inventing a throttle. `llm-usage menubar window show|hide|toggle` drops a command file the running helper polls once a second. Debug without a GUI: `llm-usage-menubar --window-png out.png [--dark] [--layout horizontal|vertical|history] [--size WxH] [--graph bars|lines|both] [--stale] --data-file FILE`; `llm-usage errors` ends with a "Code needs updating" block when drift notes exist. Apply a new build with `llm-usage menubar build`, then quit the helper and `llm-usage menubar run`.
-
-
-## Features
-
-- Organized aliases by category for better maintainability
-- Efficient completion file caching
-- Optimized utility functions
-- Znap plugin manager for fast shell startup
-- Comprehensive Git and GitHub workflow aliases
-- Docker and container management shortcuts
-- Cloud platform integrations (IBM Cloud, AWS, etc.)
-
-## Adding New Aliases
-
-See `zsh/aliases/README.md` for instructions on adding new aliases to the appropriate category.
-
-## Dependencies
-
-This dotfiles repository relies on several tools and utilities. Below is a list of all dependencies and how to install them using Homebrew:
-
-### Core Shell Tools
+Requested vs **served** model (so reroutes like `sonnet->glm-5.3` or the `glm->deepseek-v4.1-flash` vision fallback are visible), tokens with Anthropic cache semantics, cache hit rate, latency, errors with upstream status, requests over 200k context (1M-window use). Data is one JSONL line per request that each local proxy writes into `~/.local/state/llm-usage/` — nothing leaves the machine. Without proxy data it falls back to Claude Code / Codex transcripts.
 
 ```bash
-# Install ZSH (may already be installed on macOS)
-brew install zsh
-
-# Install required utilities for the shell
-brew install coreutils
+llm-usage                      # summary; --by model,route,proxy,client,role,day,ctx
+llm-usage top                  # top models / providers
+llm-usage routes               # requested→served with reroute flags
+llm-usage errors --spikes      # grouped by status + message, error-burst sparklines
+llm-usage status               # which proxies are up and logging (7d error counts)
+llm-usage tail -f              # live stream (--fleet to include peers)
+llm-usage serve --open         # browser dashboard, http://127.0.0.1:4150
 ```
 
-### Plugin Manager & Plugins
+The dashboard shows model usage over time, share, context-size histogram, latency, rerouting, errors split 429/5xx/other with spike windows, and a live request feed — light/dark, table view per chart, auto-refresh.
+
+**Fleet**: list your other machines in `~/.config/llm-usage/fleet.json` (example: `scripts/fleet.json.example`) and each machine **pulls** the others' merged events over read-only ssh (`llm-usage fleet refresh`) — nothing pushed, no ports opened, unreachable peers keep a snapshot marked stale. First pull covers 7 days, then history backfills 30d per refresh. Design: `docs/notes/fleet-usage-streaming.md`.
+
+### 3. Native macOS menubar + floating monitor
+
+A single-file Swift helper (`scripts/llm-usage-menubar/main.swift` — AppKit status item, no Xcode project, needs only `swiftc`) polls `llm-usage menubar-data` every 30 s:
+
+- Status item `● 12` normally, `⚠ 429 3m` while a rate-limit reset is in the future, `✖` when a proxy that logged this week stopped answering, `⚠ spike` on an error burst, plus `⏳N` in-flight and `↪N` reroutes.
+- **Avatar-stack image**: `<model logos><provider logos>` (Claude, GPT, GLM, DeepSeek, Gemini / Copilot, EnMaaS, Vertex, OpenAI, Anthropic), each logo's opacity following its traffic share. Logo lookup falls back from `~/.config/llm-usage/logos/` through installed app icons to generated monograms; `llm-usage menubar logos fetch` pulls a sha256-pinned set from [lobehub/lobe-icons](https://github.com/lobehub/lobe-icons) (license: [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)).
+- Menu: per-proxy submenus (copy restart command — never restarts anything for you), sparkline and share charts, reroutes by kind, Copilot section, throttle notifications, Open dashboard/logs.
+- **Floating window** (Activity Monitor-style, same process): per-minute request bars stacked by model vendor with 429/5xx marks, per-provider rate lines, and translucent throttle ribbons — flat wash for rate limit, hatched for quota, dashed edge for estimated reset. Non-activating panel on all Spaces over full-screen apps; layout, opacity, click-through and frame persist.
 
 ```bash
-# ZSH Snap (znap) will be automatically installed when you source the dotfiles
-# The following plugins are managed by znap and will be installed automatically:
-# - sindresorhus/pure (prompt)
-# - zsh-users/zsh-syntax-highlighting
-# - marlonrichert/zsh-autocomplete
+llm-usage menubar build|run|install|status    # install = LaunchAgent
+llm-usage menubar window show|hide|toggle
 ```
 
-### Version Control Tools
+Debug without a GUI: `llm-usage-menubar --dump-menu`, `--status-png out.png`, `--window-png out.png`.
+
+### 4. `fleet-sync` — edit on one machine, the others follow
+
+`scripts/fleet-sync.zsh` fast-forwards this machine's dotfiles, Claude config (`~/.config/claude`), and copilot-api checkouts, then applies what changed: newly enabled plugins, the shared context-mode daemon unit, T3 provider imports, `bun install` when a lockfile moved, and a rebuild+restart of the menubar helper when its Swift source moved. It never commits, merges, or discards — a repo with uncommitted or diverged work is skipped with a warning. Install an hourly systemd user timer with `--install-timer` (Linux).
+
+The **context-mode daemon** (synced the same way) runs one shared MCP server per machine on loopback instead of one ~87 MB process per session — a `87 MB × sessions → 87 MB × machine` saving.
+
+### 5. OpenShift / OADP / Velero automation
+
+Full cluster lifecycles as shell commands, lazy-loaded so they cost nothing until used:
 
 ```bash
-# Git and GitHub related tools
-brew install git
-brew install gh
-brew install jq  # Used in GitHub workflow aliases
-
-# OpenCommit for AI-powered Git commits
-npm install -g opencommit
+list-ocp-clusters                    # every cluster you own, all clouds
+create-ocp-aws | create-ocp-gcp-wif | create-ocp-azure-sts | create-rosa-sts
+use-ocp-cluster [pattern]           # point KUBECONFIG at it
+delete-ocp-aws | delete-ocp-gcp-wif | delete-ocp-azure-sts | delete-rosa-sts
+setup-velero-oadp-for-{gcp,azure,rosa}-cluster   # buckets, identities, DPA
 ```
 
-### Development & Container Tools
+Details that matter: every `oc adm release extract` goes through a **version-matched `oc`** extracted from the release image (`get-release-oc`) to dodge stale-filter bugs (OCPBUGS-77845); preflight checks cover cloud permissions and instance-type capacity; cluster naming is date-tagged (`20250131-aws-arm64`) under `$OCP_MANIFESTS_DIR`; and the installer-resolution logic is offline-tested (`tests/openshift-destroy-installer.zsh`).
+
+### 6. A dotfiles repo that tests itself
+
+26 offline test suites (`tests/`) stub out `node`, `claude`, `systemctl`, `curl` and more to verify real behavior: provider lifecycle and proxy routing, mode completion, model pickers, fleet-sync decisions, the context-mode daemon sync, T3 launchers, and `zsh -n` over the whole `.zshrc`. The shell itself is performance-tuned: lazy-loaded function groups, backgrounded non-essential init, and completion caching.
+
+## Function catalog
+
+### Claude / Codex providers & proxies
+`claude-mode`, `codex-mode`, `claude-<provider>{,-kill,-restart}` for copilot / vertex / enmaas / hosted-only / mlx / ollama / openai / openshell, `claude-{offline,enmaas}`, `codex-enmaas`, `codex-hosted-only`, `openshell-claude-{ls,clean,image-build}`, `llm-proxy-restart`, `llm-proxy-sync`, `llm-proxy-watch`, `llm-usage` (summary / top / routes / errors / status / tail / serve / fleet / menubar)
+
+### Git & GitHub
+`cherrypick-pr`, `cherrypick-pr-to-branch`, `new-changelog`, `go-mod-upgrade`, `pr-me-wt` (runs `pr-me worktree`), `code-git-exclude`, `git-exclude-claude`, OpenCommit signoff wrappers (`oco-signoff`, `oco-signoff-push-force`, …), and ~120 aliases across `zsh/aliases/git.zsh` + `github.zsh` covering fetch/push/PR-create/PR-checkout flows
+
+### Containers & registries
+`podman-build-multiarch` (amd64+arm64 via QEMU), `container-registry-inherit`, `check-qemu-stuck` / `kill-stuck-qemu`, `docker-auth` / `podman-auth`, `ghcr_tag`/`ocregistry_tag` helpers, ~30 docker/podman aliases
+
+### OpenShift / cloud
+cluster lifecycle (above), `get-release-oc`, `get-openshift-install-for-release-image`, `install-{oc,ccoctl,opm}`, `check-for-existing-clusters`, `save-cluster-login`, `get-{api,oc}-router-ca` + `trust-*` variants, `watch-all-pod-{logs,errors}-in-namespace`, `start-gcp-bootstrap-bugfix-helper`, `start-aws-metal-health-watcher`, `cleanup-orphaned-gcp-resources`, IBM Cloud VPC/COS helpers
+
+### Velero / OADP
+`setup-velero-oadp-for-{gcp,azure,rosa}-cluster`, `create-velero-{bsl,bucket,container,identity,dpa}-for-*`, `validate-velero-role-assignments-*`, `cleanup-velero-rosa-resources`, `velero-makecontainer*`, `velero/oadp-set-reviewers`, `velero-review-all`
+
+### Laptop migration & machine setup
+`migrate-to-new-laptop` (guided, with `docs/LAPTOP_MIGRATION.md`), `export/import-wifi-credentials`, `list-wifi-networks`, `brewfile-cleanup`, `update-brewfile`, `verify-migration`, `randomize-mac-ifconfig`
+
+### Networking & misc
+`set-dns-servers` / `clear-dns-servers`, `wifi-standard`, `generate-self-signed-cert`, `trust-certificate-in-system`, `symlink-to-sd` / `unsymlink-from-sd` / `relink-from-sd`, `aa-inflight-wifi`, `listening-ports`, `sync-claude-plugins`, `fleet-sync`, `export-t3-data` / `import-t3-data`, `install-t3code-from-source`, Hermes session management (`restart-hermes-full`, `kill-hermes-session`, …)
+
+## Scripts (`scripts/`)
+
+| Script | Purpose |
+|---|---|
+| `claude-provider.zsh` / `codex-provider.zsh` | Non-interactive provider launchers for apps (T3 Code) |
+| `claude-provider-go`, `hosted-only-go` | The stdlib-only Go proxies behind the providers |
+| `hosted-only-proxy.zsh`, `claude-copilot-paperclip.zsh` | Proxy lifecycle helpers |
+| `litellm_usage_log.py` | LiteLLM callback that writes the `llm-usage` JSONL |
+| `llm-usage` | The telemetry CLI (stdlib Python, no state beyond the logs) |
+| `llm-usage-menubar/main.swift` | The native macOS menubar + floating monitor |
+| `llm-usage-dashboard.html` | Browser dashboard |
+| `mlx-idle-watch.zsh` | Unloads MLX server when idle |
+| `fleet-sync.zsh` | Multi-machine dotfiles/config sync (+ systemd timer) |
+| `context-mode-daemon-sync.zsh` | Shared context-mode MCP daemon unit/registration |
+| `setup-t3-headless.zsh` | Headless T3 Code laptop setup |
+| `spectre-x360/`, `wsl-keepalive.ps1` | Hardware/WSL specific helpers |
+
+Design notes for the proxies and telemetry live in `docs/notes/` (429/503 handling per client, Go-proxy parity, fleet streaming, reset forward-compat, …).
+
+## Installation
+
+**macOS**: install dependencies, then symlink so every edit is instantly live:
 
 ```bash
-# Container tools
-brew install podman
-brew install docker  # or download Docker Desktop
-brew install colima  # macOS container runtime alternative
-
-# Docker buildx for multi-architecture builds
-# (included with Docker Desktop or Docker CE >= 19.03)
-
-# Code editors
-brew install --cask visual-studio-code
-
-# Local AI
-brew install ollama
-
-# YAML processing
-brew install yq
-
-# JSON processing 
-brew install jq
-
-# Go programming language
-brew install go
+brew bundle --file=~/git/dotfiles/Brewfile   # after cloning below
+ln -sf ~/git/dotfiles/.zshrc ~/.zshrc
 ```
 
-### Cloud & Kubernetes Tools
+**Linux (Fedora)**: see the [dnf equivalents](#fedora-dnf--brewfile-equivalents) section below; everything else is identical.
+
+Clone and go:
 
 ```bash
-# Kubernetes and related tools
-brew install kubernetes-cli  # kubectl
-brew install kind
-brew install krew  # kubectl plugin manager
-
-# Cloud provider CLIs
-brew install awscli
-brew install google-cloud-sdk
-brew install velero
-brew install ibmcloud-cli
-
-# OpenShift tools (alternative installation methods provided in functions)
-# OpenShift CLI
-brew install openshift-cli   # Or use the provided function: install-oc
-
-# For OpenShift development
-# install-ocp-installer  # Function provided in the repo
-# For cloud credential operator
-# install-ccoctl        # Function provided in the repo
+git clone git@github.com:kaovilai/dotfiles.git ~/git/dotfiles
+ln -sf ~/git/dotfiles/.zshrc ~/.zshrc   # or: echo "source ~/git/dotfiles/.zshrc" >> ~/.zshrc
+exec zsh
 ```
 
-### Utility Tools
+`.zshrc` self-bootstraps: if the repo is missing it clones itself, znap installs the prompt/plugins on first run, and secrets stay out of the repo in `~/secrets.zsh` (permission-checked to 600). New machine? `source zsh/functions/migrate-laptop.zsh && migrate-to-new-laptop` walks the full setup (checklist: `docs/LAPTOP_MIGRATION.md`).
 
-```bash
-# General utilities
-brew install gnu-sed
-brew install socat
-brew install spoof-mac
-brew install lsof
-brew install coreutils
+### Fedora (dnf) — Brewfile equivalents
 
-# macOS specific
-brew install --cask displaylink  # For external display support
-```
+<details>
+<summary>Full dnf install list</summary>
 
-### Browser
-
-```bash
-# Microsoft Edge
-brew install --cask microsoft-edge
-```
-
-### Optional Tools
-
-```bash
-# Additional tools referenced in aliases
-brew install --cask github
-brew install --cask activepieces
-```
-
-## Fedora (dnf) — Brewfile Equivalents
-
-`Brewfile` is macOS/Homebrew-only. On Fedora, install the same tool set via `dnf` (and a few curl-script/pip/go installers where Fedora has no package) instead of running `brew bundle`.
+`Brewfile` is macOS/Homebrew-only. On Fedora, install the same tool set via `dnf` (and a few curl-script/pip/go installers where Fedora has no package).
 
 ### Essential CLI
-
 ```bash
 sudo dnf install -y git gh wget curl gnupg2 gpgme bash pinentry
 # glab (GitLab CLI): no Fedora repo package -- download binary from
@@ -198,7 +178,6 @@ sudo dnf install -y git gh wget curl gnupg2 gpgme bash pinentry
 ```
 
 ### Shell and terminal tools
-
 ```bash
 # coreutils/sed/grep are already GNU on Fedora -- no gsed/ggrep prefix needed,
 # unlike macOS where Homebrew's GNU versions must be g-prefixed.
@@ -208,7 +187,6 @@ sudo dnf install -y ripgrep fzf tree htop procps-ng jq lynx parallel mosh
 ```
 
 ### Development tools
-
 ```bash
 sudo dnf install -y golang nodejs pipx pkgconf
 # golangci-lint: curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b $(go env GOPATH)/bin
@@ -218,7 +196,6 @@ sudo dnf install -y golang nodejs pipx pkgconf
 ```
 
 ### Container and Kubernetes tools
-
 ```bash
 # Prefer podman over docker on this repo (see CLAUDE.md) -- native on Fedora, no VM needed.
 sudo dnf install -y podman kubernetes-client skopeo
@@ -227,7 +204,6 @@ sudo dnf install -y podman kubernetes-client skopeo
 ```
 
 ### Cloud CLI tools
-
 ```bash
 # azure-cli: curl -sL https://aka.ms/InstallAzureCLIDeb | bash  (Debian-flavored script; on
 #   Fedora, add Microsoft's yum repo per https://learn.microsoft.com/cli/azure/install-azure-cli-linux)
@@ -237,7 +213,6 @@ sudo dnf install -y podman kubernetes-client skopeo
 ```
 
 ### Network tools
-
 ```bash
 sudo dnf install -y iperf iperf3
 # spoof-mac (macOS networksetup wrapper): no Linux equivalent needed --
@@ -245,13 +220,11 @@ sudo dnf install -y iperf iperf3
 ```
 
 ### Document and media tools
-
 ```bash
 sudo dnf install -y ffmpeg poppler-utils ocrmypdf   # ffmpeg needs RPM Fusion enabled
 ```
 
 ### YAML/config tools
-
 ```bash
 sudo dnf install -y yamllint
 # yamlfix: pip install yamlfix
@@ -259,7 +232,6 @@ sudo dnf install -y yamllint
 ```
 
 ### AI tools
-
 ```bash
 # ollama: curl -fsSL https://ollama.com/install.sh | sh
 # gptme: pip install gptme
@@ -267,7 +239,6 @@ sudo dnf install -y yamllint
 ```
 
 ### Misc tools
-
 ```bash
 # copyparty: pipx install copyparty
 # googleworkspace-cli (gws): install per its own repo instructions, no dnf package
@@ -275,58 +246,63 @@ sudo dnf install -y yamllint
 ```
 
 ### Security
-
 ```bash
 # snyk: npm install -g snyk
 # trivy: add Aqua Security's dnf repo (https://aquasecurity.github.io/trivy/latest/getting-started/installation/) then: sudo dnf install trivy
 ```
 
 ### Runtime tools
-
 ```bash
 # bun: curl -fsSL https://bun.sh/install | bash
 # socktainer (macOS podman-machine socket manager): not needed -- podman runs natively on Linux
 ```
 
 ### Cask equivalents
-
 ```bash
 # ghostty: available via Fedora COPR (or check `sudo dnf install ghostty` -- shipped in Fedora repos as of recent releases)
 sudo dnf install -y gstreamer1-plugins-base gstreamer1-plugins-good gstreamer1-plugins-bad-free gstreamer1-plugins-ugly-free openscad
 ```
 
 ### VS Code extensions
-
 Unaffected by OS — `code --install-extension <id>` for each entry in `Brewfile`'s `vscode "..."` lines works the same on Linux, once VS Code itself is installed:
 ```bash
 # VS Code: add Microsoft's repo (https://code.visualstudio.com/docs/setup/linux#_rhel-fedora-and-centos-based-distributions), then:
 sudo dnf install -y code
 ```
+</details>
 
-## Installation
-
-After installing the dependencies above, clone this repository and source the `.zshrc` file:
-
-```bash
-git clone https://github.com/USERNAME/dotfiles.git ~/git/dotfiles
-echo "source ~/git/dotfiles/.zshrc" >> ~/.zshrc
-```
-
-Replace USERNAME with your GitHub username.
-
-## Testing Changes
-
-Before committing changes to ZSH configuration files:
+## Testing changes
 
 ```bash
-# Check syntax of modified file
-zsh -n ~/git/dotfiles/zsh/[modified-file].zsh
-
-# Source and test the changes
-source ~/git/dotfiles/zsh/[modified-file].zsh
-
-# Test full shell reload
-exec zsh
+zsh -n ~/git/dotfiles/zsh/[modified-file].zsh   # syntax check
+source ~/git/dotfiles/zsh/[modified-file].zsh   # source and exercise it
+exec zsh                                        # full reload
+zsh tests/<suite>.zsh                           # run the matching offline suite
+time zsh -i -c exit                             # keep startup fast
 ```
+
+No formal framework — each test suite is a self-contained zsh script that stubs external commands and asserts behavior. When adding a feature that has a testable core (sync decisions, route generation, installer resolution), add a suite; the existing 26 are the pattern.
+
+## Structure
+
+```
+.zshrc                  # entry point — symlink ~/.zshrc here; self-bootstrapping
+Brewfile                # macOS dependencies
+zsh/
+  alias.zsh             # loads all alias categories
+  aliases/              # git, github, docker, go, velero, ibmcloud, code, misc
+  functions/
+    claude/             # provider framework: load.zsh, mode.zsh, providers/*.zsh, openshell/
+    openshift/          # cluster lifecycle, lazy-loaded
+    s3/                 # S3 tooling, lazy-loaded
+    git-utils.zsh, podman-utils.zsh, dns.zsh, wifi.zsh, ...  # lazy-loaded groups
+  znap.zsh              # plugin manager (pure prompt, syntax highlighting, autocomplete)
+  completions/          # custom completions (llm-usage, tailscale)
+scripts/                # llm-usage, proxies, fleet-sync, menubar monitor, ...
+docs/                   # setup guides + docs/notes/ design notes
+tests/                  # 26 offline test suites
+```
+
+See `zsh/aliases/README.md` for adding aliases; conventions (ZSH not Bash, kebab-case public names, `znap` never prefixed on function definitions) are in `CLAUDE.md`.
 
  <3
