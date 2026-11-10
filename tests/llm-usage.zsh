@@ -404,6 +404,16 @@ assert proxy(d, 4148)["state"] == "down" and proxy(d, 4148)["expected"] and d["a
 assert not proxy(d, 4146)["expected"], "never-seen proxy must not count as down"
 assert not run("not-expected", [], up="4141")["any_down"]
 
+# on-demand proxies (vertex :4142, mlx :4144, openai :4145) resting is by
+# design: traffic this week must not turn their (intentional) down state into
+# an alarm -- no DOWN glyph, no any_down -- while an always-on one still alarms.
+d = run("on-demand-idle", [ev(60, port="4144"), ev(60, port="4145"), ev(60, port="4142")], up="4141")
+for p in (4142, 4144, 4145):
+    assert proxy(d, p)["state"] == "down" and not proxy(d, p)["expected"] and proxy(d, p)["on_demand"], proxy(d, p)
+assert not d["any_down"], "an idle on-demand proxy is not an alarm"
+d = run("on-demand-busy", [ev(60, port="4144")], up="4141,4144")
+assert proxy(d, 4144)["state"] == "up" and not d["any_down"], proxy(d, 4144)
+
 # throwaway test proxy on an ad-hoc port: its 429 / errors must not raise throttled, spike or down alarms
 d = run("adhoc-port", [ev(100), err(30, 429, port="4157", retry_after=300), err(20, 500, port="4157"), err(10, 500, port="4157")], up="4141,4147,4148")
 assert d["throttled"] is None and not d["any_down"] and all(p["port"] != 4157 for p in d["proxies"]), d["proxies"]

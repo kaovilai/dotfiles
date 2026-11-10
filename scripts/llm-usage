@@ -1930,7 +1930,7 @@ def status_rows(ttl=0.0):
         if name == "copilot-api":
             code = "not-litellm" if up else "down"
         elif not up:
-            code = "down"
+            code = "standby" if port in ON_DEMAND_PORTS else "down"
         elif logging_on is False:
             code = "not-logging"
         elif port in last_seen:
@@ -1951,6 +1951,7 @@ STATE_TEXT = {
     "idle": "logging enabled, no requests yet",
     "unknown": "up, unknown (config unreadable)",
     "down": "-",
+    "standby": "on demand (starts when a session uses it)",
 }
 
 
@@ -1968,7 +1969,13 @@ def cmd_status(args):
             state = STATE_TEXT[r["code"]]
             if r["code"] == "not-logging":
                 state = color(state, "33")
-        rows.append([r["port"], r["name"], color("up", "32") if r["up"] else color("down", "2"), r["pid"] or "-",
+        if r["up"]:
+            listener = color("up", "32")
+        elif r["code"] == "standby":
+            listener = color("standby", "2")
+        else:
+            listener = color("down", "2")
+        rows.append([r["port"], r["name"], listener, r["pid"] or "-",
                      ",".join(r["models"]) or "-", state])
     print(render(["PORT", "PROXY", "STATE", "PID", "MODELS", "USAGE LOG"], rows))
     files = sorted(glob.glob(os.path.join(STATE, "events-*.jsonl")))
@@ -2497,6 +2504,12 @@ MODEL_VENDORS = [
     ("qwen", "Qwen", r"qwen"),  # the MLX flavor's local Qwen3-Coder models
 ]
 # Provider side: proxy port -> logo key. "via: transcript" events are copilot-api traffic (see menubar_data).
+# Proxies that start only when a session uses them (vertex/openai/mlx are
+# launched on demand by their wrappers; mlx additionally reaps its server and
+# proxy when idle by design). Down is their normal resting state, so it is not
+# an alarm: no "DOWN", no any_down, and the status table reads "on demand".
+ON_DEMAND_PORTS = {"4142", "4144", "4145"}
+
 PROVIDER_PORTS = {"4141": "github-copilot", "4142": "vertex", "4144": "mlx", "4145": "openai", "4146": "enmaas", "4147": "enmaas", "4148": "enmaas"}
 PROVIDER_LABELS = {"github-copilot": "GitHub Copilot", "vertex": "Vertex AI", "mlx": "MLX (local)", "openai": "OpenAI", "enmaas": "EnMaaS",
                    "anthropic": "Anthropic", "other": "Other"}
@@ -2634,8 +2647,11 @@ def menubar_data(now=None, up_ports=None, share_window="15m", share_metric="requ
         name, config = PROXIES.get(port, (f":{port}", None))
         logging_on = proxy_logging_on(port, config) if up[port] else None  # up-but-NOT-logging: traffic missing from the views
         row = {"port": int(port) if port.isdigit() else port, "name": name, "state": "up" if up[port] else "down",
-               "logging": logging_on, "source": source,
-               "expected": port in seen_week or (port == "4141" and bool(extra)),
+               "logging": logging_on, "source": source, "on_demand": port in ON_DEMAND_PORTS,
+               # An on-demand proxy is expected up only while it runs: its idle
+               # rest is by design (mlx reaps itself), so a down one must not
+               # raise the menubar's down alarm even after weeks of traffic.
+               "expected": (port in seen_week or (port == "4141" and bool(extra))) and port not in ON_DEMAND_PORTS,
                "last_seen_s": int(now - seen_week[port]) if port in seen_week else None,
                "inflight": ({"count": len(mine), "oldest_s": max((f["seconds"] for f in mine), default=0)} if port in reporting else None),
                "m15": counts(evs, MB_RECENT), "h1": counts(evs, MB_HOUR)}
