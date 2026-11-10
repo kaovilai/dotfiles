@@ -39,6 +39,10 @@ type app struct {
 	quotaMu    sync.Mutex
 	quotaUntil map[string]time.Time
 
+	// mlx flavor: the lazy-load gate (warm.go) answers 429 + retry-after
+	// while mlx_lm.server loads its weights.
+	warmGateState warmGate
+
 	// responsesOnly remembers chat-dialect models whose gateway answered "use
 	// /v1/responses" (gpt-6-* reject function tools on chat completions, live
 	// 2026-11-07): later Messages requests for them go straight to the Responses
@@ -330,6 +334,13 @@ func (a *app) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// when it asked to stream, with the native search trail prepended).
 	if plan != nil && plan.Mode == "shim" && tr == nil {
 		a.serveShim(w, r, plan, data, outBody, upstreamBase, upstreamPath, stream, requested, served, started)
+		return
+	}
+
+	// mlx flavor: a cold model must not block this call for the whole load.
+	// The gate 429s with retry-after until the weights are resident (warm.go);
+	// it only ever fires for a real API request, never for a provider probe.
+	if !a.warmReady(w, r, data, upstreamBase, served, requested, started) {
 		return
 	}
 

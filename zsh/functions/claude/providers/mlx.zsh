@@ -89,16 +89,37 @@ _claude_mlx_wait_loaded() {
     return 1
 }
 
+# The mlx_lm.server start command and log, shared by the Go proxy's warm gate
+# (scripts/hosted-only-go/warm.go) and the optional blocking preload below.
+_claude_mlx_server_cmd() {
+    local model="$1" port="${CLAUDE_MLX_PORT:-4143}"
+    print -r -- "uvx --from mlx-lm mlx_lm.server --model ${(q)model} --port ${port}"
+}
+_claude_mlx_server_log() { print -r -- "${TMPDIR:-/tmp}/mlx-lm-server.log" }
+
 # Ensure a local mlx_lm.server is reachable, auto-starting one if not.
 # Mirrors _claude_ollama_ensure_server's shape exactly (detached subshell +
 # up-to-60s poll loop + log-file-under-TMPDIR idiom) -- only the readiness
-# probe path differs (/health, not Ollama's /api/tags), and health only
-# proves the socket, so _claude_mlx_wait_loaded force-loads after it.
+# probe path differs (/health, not Ollama's /api/tags).
+#
+# NOTHING here may start mlx_lm.server unless CLAUDE_MLX_PRELOAD=1: the server
+# loads its ~17 GB of weights at STARTUP (observed 2026-11-10), and everything
+# that spawns this wrapper -- T3's periodic provider capability probe above
+# all -- would otherwise pull the model into RAM to read an account name. The
+# Go proxy's warm gate owns the start: the first REAL API request through
+# :4144 spawns the server and answers 429 + retry-after until the weights are
+# resident, so a cold turn retries instead of timing out and probes load
+# nothing.
 _claude_mlx_ensure_server() {
     local model="$1"
     local base="$(_claude_mlx_base)"
+
+    if [[ "${CLAUDE_MLX_PRELOAD:-0}" == 0 ]]; then
+        return 0
+    fi
+
     local port="${CLAUDE_MLX_PORT:-4143}"
-    local log="${TMPDIR:-/tmp}/mlx-lm-server.log"
+    local log="$(_claude_mlx_server_log)"
 
     if ! curl -sf --max-time 2 "${base}/health" -o /dev/null; then
         if ! command -v uv &>/dev/null; then
@@ -166,9 +187,22 @@ _claude_mlx_prepare() {
     # mlx_lm.server ignores Authorization, but the Go proxy wants a non-empty
     # upstream key. No image prune (HOSTED_ONLY_IMAGE_BUDGET_BYTES=0): a
     # local model has no gateway body cap, and LiteLLM never pruned here.
+    # Warm gate: the Go proxy owns the mlx_lm.server start (warm.go) because
+    # the server loads its ~17 GB of weights at startup and nothing that only
+    # probes must trigger that. Knobs travel as fingerprint extras too, so a
+    # change restarts the idle proxy (the same contract as every other knob).
+    local warm_rss="${CLAUDE_MLX_LOADED_RSS_KB:-10485760}"
+    local warm_retry="${CLAUDE_MLX_WARM_RETRY_AFTER:-30}"
+    local warm_max="${CLAUDE_MLX_WARM_MAX_SECONDS:-900}"
+    local warm_cmd
+    warm_cmd="$(_claude_mlx_server_cmd "$model")"
+    local warm_log
+    warm_log="$(_claude_mlx_server_log)"
     _claude_go_proxy_retire_litellm "$port"
     HOSTED_ONLY_UPSTREAM_KEY=mlx-local HOSTED_ONLY_IMAGE_BUDGET_BYTES=0 \
-        _claude_go_proxy_ensure mlx "$port" "$routes" "$master_key" || return 1
+        CLAUDE_MLX_SERVER_CMD="$warm_cmd" CLAUDE_MLX_SERVER_LOG="$warm_log" \
+        _claude_go_proxy_ensure mlx "$port" "$routes" "$master_key" \
+        "warm=$warm_rss/$warm_retry/$warm_max" || return 1
 
     _claude_mlx_watch_start
 

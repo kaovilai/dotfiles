@@ -60,6 +60,17 @@ type config struct {
 	QuotaTZ        *time.Location
 	UsageDir       string
 	SearchDelegate string
+
+	// mlx warm gate (warm.go): the lazy load of mlx_lm.server must not block
+	// a turn past its timeout. WarmRSSKB is the resident-RSS threshold that
+	// counts as loaded (0 disables the gate); WarmRetryAfter is the 429
+	// retry-after the client waits per attempt; WarmMax bounds how long the
+	// gate holds requests before it lets them block upstream.
+	WarmRSSKB      int
+	WarmRetryAfter int
+	WarmMax        int
+	WarmServerCmd  string // CLAUDE_MLX_SERVER_CMD: the detached mlx_lm.server start
+	WarmServerLog  string // CLAUDE_MLX_SERVER_LOG: where that start logs
 	// SearchMCP names the web-search MCP server the launchers register for
 	// sessions on this search-less upstream (T3_WEB_SEARCH_MCP, e.g. "parallel").
 	SearchMCP string
@@ -92,6 +103,19 @@ func knob(name, def string) string {
 		return v
 	}
 	return def
+}
+
+// envInt reads a raw (unprefixed) env var: the mlx warm-gate knobs keep the
+// provider's own CLAUDE_MLX_* names, matching CLAUDE_MLX_PORT and friends.
+func envInt(name string, def, min int) int {
+	v, err := strconv.Atoi(strings.TrimSpace(os.Getenv(name)))
+	if err != nil {
+		return def
+	}
+	if v < min {
+		return min
+	}
+	return v
 }
 
 func intKnob(name string, def, min int) int {
@@ -242,24 +266,28 @@ func loadConfig(flavor, port, runtimeDir string) *config {
 		AttachmentsDir:       os.Getenv("HOME") + "/.t3/userdata/attachments",
 		DefaultRetry:         intKnob("RATE_LIMIT_DEFAULT_RETRY_SECONDS", 60, 1),
 		ClientRetryMax:       intKnob("CLIENT_RETRY_MAX_SECONDS", 60, 0),
-		OutageBase:           intKnob("OUTAGE_RETRY_SECONDS", 60, 1),
-		OutageMax:            intKnob("OUTAGE_RETRY_MAX_SECONDS", 600, 1),
-		OutageState:          strings.TrimSpace(knob("OUTAGE_STATE", "")),
-		OutageCoalesce:       coalesceKnob(),
-		RequestTimeout:       time.Duration(intKnob("REQUEST_TIMEOUT", 300, 1)) * time.Second,
-		QuotaTZ:              tz,
-		UsageDir:             usageDir,
-		SearchDelegate:       strings.TrimSpace(os.Getenv("T3_WEB_SEARCH_DELEGATE")),
-		SearchMCP:            strings.TrimSpace(os.Getenv("T3_WEB_SEARCH_MCP")),
-		SearchShim:           boolKnob("SEARCH_SHIM", false),
-		SearchVerdicts:       strings.TrimSpace(knob("SEARCH_VERDICTS", "")),
-		SearchDailyCap:       intKnob("SEARCH_DAILY_CAP", 500, 0),
-		ParallelBase:         strings.TrimRight(knob("PARALLEL_BASE", "https://api.parallel.ai"), "/"),
-		ParallelKey:          strings.TrimSpace(os.Getenv("PARALLEL_API_KEY")),
-		ParallelState:        strings.TrimSpace(knob("PARALLEL_STATE", runtimeDir)),
-		ParallelPlatform:     strings.TrimRight(knob("PARALLEL_PLATFORM", "https://platform.parallel.ai"), "/"),
-		ParallelMCP:          strings.TrimRight(knob("PARALLEL_MCP", "https://mcp.parallel.ai/mcp"), "/"),
-		ParallelAccount:      strings.TrimRight(knob("PARALLEL_ACCOUNT", "https://api.parallel.ai/account"), "/"),
+		WarmRSSKB:            envInt("CLAUDE_MLX_LOADED_RSS_KB", 10485760, 0),
+		WarmRetryAfter:       envInt("CLAUDE_MLX_WARM_RETRY_AFTER", 30, 1),
+		WarmMax:              envInt("CLAUDE_MLX_WARM_MAX_SECONDS", 900, 0),
+		WarmServerCmd:        strings.TrimSpace(os.Getenv("CLAUDE_MLX_SERVER_CMD")),
+		WarmServerLog:        strings.TrimSpace(os.Getenv("CLAUDE_MLX_SERVER_LOG")), OutageBase: intKnob("OUTAGE_RETRY_SECONDS", 60, 1),
+		OutageMax:        intKnob("OUTAGE_RETRY_MAX_SECONDS", 600, 1),
+		OutageState:      strings.TrimSpace(knob("OUTAGE_STATE", "")),
+		OutageCoalesce:   coalesceKnob(),
+		RequestTimeout:   time.Duration(intKnob("REQUEST_TIMEOUT", 300, 1)) * time.Second,
+		QuotaTZ:          tz,
+		UsageDir:         usageDir,
+		SearchDelegate:   strings.TrimSpace(os.Getenv("T3_WEB_SEARCH_DELEGATE")),
+		SearchMCP:        strings.TrimSpace(os.Getenv("T3_WEB_SEARCH_MCP")),
+		SearchShim:       boolKnob("SEARCH_SHIM", false),
+		SearchVerdicts:   strings.TrimSpace(knob("SEARCH_VERDICTS", "")),
+		SearchDailyCap:   intKnob("SEARCH_DAILY_CAP", 500, 0),
+		ParallelBase:     strings.TrimRight(knob("PARALLEL_BASE", "https://api.parallel.ai"), "/"),
+		ParallelKey:      strings.TrimSpace(os.Getenv("PARALLEL_API_KEY")),
+		ParallelState:    strings.TrimSpace(knob("PARALLEL_STATE", runtimeDir)),
+		ParallelPlatform: strings.TrimRight(knob("PARALLEL_PLATFORM", "https://platform.parallel.ai"), "/"),
+		ParallelMCP:      strings.TrimRight(knob("PARALLEL_MCP", "https://mcp.parallel.ai/mcp"), "/"),
+		ParallelAccount:  strings.TrimRight(knob("PARALLEL_ACCOUNT", "https://api.parallel.ai/account"), "/"),
 	}
 }
 
