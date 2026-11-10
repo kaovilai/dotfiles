@@ -17,7 +17,7 @@ It serves every current proxy from one binary:
 |---|---|---|
 | `claude` / `codex` (hosted-only) | 4148, one shared process (4147 only when `HOSTED_ONLY_CODEX_PROXY_PORT` splits it off) | the merged `config.yaml`: bare groups = anthropic, `#openai` groups = OpenAI-wire |
 | `enmaas` | 4146 | the launcher's generated `config.json`, read as a route table |
-| `mlx` | 4144 | `_claude_mlx_prepare`'s generated `routes.json`: one chat-dialect row pointing at `mlx_lm.server` (:4143); the proxy is the Messages<->chat bridge LiteLLM used to be. `mlx_lm.server` itself still runs via uvx |
+| `mlx` | 4144 | `_claude_mlx_prepare`'s generated `routes.json`: one chat-dialect row pointing at `mlx_lm.server` (:4143); the proxy is the Messages<->chat bridge LiteLLM used to be. `mlx_lm.server` itself still runs via uvx, and the proxy owns its START (see "mlx warm gate") |
 | `openai` | 4145 | `_claude_openai_proxy_write_routes`: wildcard + pinned chat-dialect rows at api.openai.com; the key rides in `HOSTED_ONLY_UPSTREAM_KEY` |
 | `vertex` | 4142 | `_claude_vertex_proxy_write_routes`: anthropic-dialect rows with no api_base (the binary builds the publisher-models URL from `CLOUD_ML_REGION`/`ANTHROPIC_VERTEX_PROJECT_ID`); upstream auth is an ADC access token refreshed in-process (vertex.go), not a static key |
 
@@ -372,6 +372,32 @@ to the route table and set the knob; nothing else changes. A non-exported
 (`_hosted_only_go_env`), and the EnMaaS hook env exports it for the controller
 (which reads `os.environ` and hashes `HOSTED_ONLY_*` into its knob digest, so a
 change restarts an idle EnMaaS proxy too).
+
+## mlx warm gate
+
+`mlx_lm.server` loads its ~17 GB of weights at **startup** (measured
+2026-11-10: 6.7 GB seconds after spawn, before any completion) and answers
+`/health` while it loads. Everything that spawns the provider wrapper — T3's
+periodic provider capability probe above all — would otherwise pull the model
+into RAM just to read an account name.
+
+So the wrapper starts only the proxy, and the proxy owns the server start
+(`warm.go`, mlx flavor only):
+
+- No listener on :4143, or its RSS below `CLAUDE_MLX_LOADED_RSS_KB` (default
+  10 GiB): spawn `CLAUDE_MLX_SERVER_CMD` (the launcher's uvx command) detached
+  when the listener is absent — at most once per 120 s — and answer **429 +
+  `retry-after: CLAUDE_MLX_WARM_RETRY_AFTER`** (default 30 s) +
+  `x-should-retry: true`, in the client's dialect. Claude Code / T3 retry on
+  that, prolonging the wait past their own timeouts instead of failing the turn.
+- RSS at/above the threshold: forward normally.
+- Unmeasurable listener (no `lsof`/`ps`): fail open — never wedge the proxy.
+- `CLAUDE_MLX_WARM_MAX_SECONDS` (default 900) bounds how long the gate holds
+  requests; past it requests pass through and simply wait upstream.
+- Provider capability probes send **no API request** (their prompt generator
+  never yields), so they can never spawn or load the model. Only a real turn
+  does; `CLAUDE_MLX_PRELOAD=1` restores the old blocking preload for a human at
+  the terminal.
 
 ## Tests
 
