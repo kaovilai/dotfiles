@@ -163,7 +163,9 @@ After importing:
 
 ##### Claude provider launchers
 
-T3 Code's Claude provider instances don't run `claude` directly. Each instance's `binaryPath` in `~/.t3/userdata/settings.json` points at `~/.local/bin/claude-t3-<backend>` (`copilot`, `vertex`, `openai`, or `enmaas`), a symlink to `scripts/claude-provider.zsh` in this repo. The script takes the backend from the link name, reads keys from `~/secrets.zsh`, sets up that backend's gateway or proxy, then starts Claude Code from `~/.local/bin/claude`.
+T3 Code's Claude provider instances don't run `claude` directly. Each instance's `binaryPath` in `~/.t3/userdata/settings.json` points at `~/.local/bin/claude-t3-<backend>` (`copilot`, `vertex`, `openai`, `enmaas`, `hosted-only`, `mlx`, `vertex-native-adc`, or `ollama`), a symlink to `scripts/claude-provider.zsh` in this repo. The script takes the backend from the link name, reads keys from `~/secrets.zsh`, sets up that backend's gateway or proxy, then starts Claude Code from `~/.local/bin/claude`.
+
+Anything that spawns `claude` by PATH lookup instead of a provider instance — `npx t3 triage`, editors, scripts — resolves the claude-dispatch shim, a `claude` symlink in `~/.local/bin/claude-dispatch/` (prepended to PATH by `zsh/paths.zsh`, ahead of the installer's `~/.local/bin/claude`). The shim makes those invocations follow the saved `claude-mode` instead of the parent shell's ambient transport variables; the interactive `claude` function chain and admin subcommands (`mcp`, `plugin`, `update`, ...) bypass it. Without it, a shell carrying `~/secrets.zsh`'s Vertex exports would run triage as vertex-native-adc even with `claude-mode hosted-only`.
 
 Git doesn't track these links and `export-t3-data` doesn't include them. On the new laptop, after installing Claude Code (above):
 
@@ -172,8 +174,12 @@ Git doesn't track these links and `export-t3-data` doesn't include them. On the 
 # Run it again whenever the dotfiles checkout moves.
 link-claude-t3-launchers
 
+# PATH shim so triage and other PATH-spawned claude follows claude-mode
+link-claude-dispatch
+
 # Each launcher should resolve to this checkout and start Claude Code
 verify-claude-t3-launchers
+verify-claude-dispatch
 ```
 
 `verify-t3-migration` also warns about any enabled provider whose absolute `binaryPath` in `settings.json` doesn't exist, and `verify-migration` counts that as a failed check.

@@ -52,6 +52,8 @@ for func in \
     verify-t3-migration \
     link-claude-t3-launchers \
     verify-claude-t3-launchers \
+    link-claude-dispatch \
+    verify-claude-dispatch \
     link-codex-t3-launchers \
     verify-codex-t3-launchers \
     verify-t3-headless \

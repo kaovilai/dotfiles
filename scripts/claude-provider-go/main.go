@@ -53,11 +53,11 @@ func runMain(args []string) int {
 			backend = "hosted-only"
 		}
 		switch backend {
-		case "copilot", "vertex", "openai", "enmaas", "hosted-only", "mlx":
+		case "copilot", "vertex", "openai", "enmaas", "hosted-only", "mlx", "vertex-native-adc", "ollama":
 			return run(backend, args[1], args[2:])
 		}
 	}
-	fmt.Fprintln(os.Stderr, "Usage: claude-provider <copilot|vertex|openai|enmaas|hosted-only|mlx> <native> [Claude arguments]")
+	fmt.Fprintln(os.Stderr, "Usage: claude-provider <copilot|vertex|openai|enmaas|hosted-only|mlx|vertex-native-adc|ollama> <native> [Claude arguments]")
 	return 2
 }
 

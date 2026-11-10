@@ -18,7 +18,7 @@ source "$repo/zsh/functions/migrate-laptop.zsh"
 
 fail() { print -ru2 -- "FAIL: $*"; exit 1; }
 local target="$repo/scripts/claude-provider.zsh" out b l
-(( ${#_T3_CLAUDE_BACKENDS} == 8 )) || fail "expected eight backends, got $_T3_CLAUDE_BACKENDS"
+(( ${#_T3_CLAUDE_BACKENDS} == 10 )) || fail "expected ten backends, got $_T3_CLAUDE_BACKENDS"
 [[ "$_T3_DOTFILES_ROOT" == "${repo:A}" ]] || fail "dotfiles root resolved to $_T3_DOTFILES_ROOT"
 
 # A fresh directory gets every link, each resolving to this checkout

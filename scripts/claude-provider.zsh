@@ -1,5 +1,5 @@
 #!/bin/zsh -f
-# Symlink as claude-t3-{copilot,vertex,openai,enmaas,hosted-only,mlx}; claude-t3-glm-hybrid and
+# Symlink as claude-t3-{copilot,vertex,openai,enmaas,hosted-only,mlx,vertex-native-adc,ollama}; claude-t3-glm-hybrid and
 # claude-t3-glm-only are retired names for hosted-only. Never load .zshrc.
 #
 # Executable launcher for apps (e.g. T3 Code) that need a binary path instead
@@ -39,8 +39,8 @@ fi
 [[ "$backend" == enmass ]] && backend=enmaas   # pre-rename launcher name
 [[ "$backend" == glm-hybrid || "$backend" == glm-only || "$backend" == hybrid ]] && backend=hosted-only   # retired names
 case "$backend" in
-    copilot|vertex|openai|enmaas|hosted-only|mlx) ;;
-    *) print -ru2 -- 'Usage: claude-provider.zsh <copilot|vertex|openai|enmaas|hosted-only|mlx> [Claude arguments | --prepare]'; exit 2 ;;
+    copilot|vertex|openai|enmaas|hosted-only|mlx|vertex-native-adc|ollama) ;;
+    *) print -ru2 -- 'Usage: claude-provider.zsh <copilot|vertex|openai|enmaas|hosted-only|mlx|vertex-native-adc|ollama> [Claude arguments | --prepare]'; exit 2 ;;
 esac
 typeset native="${CLAUDE_PROVIDER_NATIVE_BINARY:-$HOME/.local/bin/claude}"
 [[ -x "$native" && "${native:A}" != "${0:A}" ]] || {

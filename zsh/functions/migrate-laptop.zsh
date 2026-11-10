@@ -265,6 +265,11 @@ EOF
     progress "Linking T3 Code's Claude provider launchers..."
     link-claude-t3-launchers || warning "Some launchers were not linked; see above"
 
+    # Step 11a: Link the claude-dispatch PATH shim so PATH-spawned claude
+    # (npx t3 triage, editors, scripts) follows claude-mode
+    progress "Linking the claude dispatch shim..."
+    link-claude-dispatch || warning "Dispatch shim was not linked; see above"
+
     # Step 11b: Link the Codex provider launchers T3 Code runs
     progress "Linking T3 Code's Codex provider launchers..."
     link-codex-t3-launchers || warning "Some launchers were not linked; see above"
@@ -594,6 +599,7 @@ verify-migration() {
     _verify_check "Python installed" command_exists python3
     _verify_check "Claude Code" test -x "$HOME/.local/bin/claude"
     _verify_check "T3 Code Claude launchers" verify-claude-t3-launchers
+    _verify_check "Claude dispatch shim" verify-claude-dispatch
     _verify_check "T3 Code Codex launchers" verify-codex-t3-launchers
     _verify_check "T3 Code provider binaries" _t3_check_provider_binaries
     _verify_check "T3 Code data" verify-t3-migration

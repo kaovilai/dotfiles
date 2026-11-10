@@ -45,7 +45,7 @@ typeset -g _T3_DOTFILES_ROOT=${${(%):-%x}:A:h:h:h}
 # which takes its backend from the link name. Keep this list in sync with the
 # backends that script accepts. glm-hybrid / glm-only are retired names of
 # hosted-only, still linked because T3 settings.json may reference them.
-typeset -ga _T3_CLAUDE_BACKENDS=(copilot vertex openai enmaas hosted-only mlx glm-hybrid glm-only)
+typeset -ga _T3_CLAUDE_BACKENDS=(copilot vertex openai enmaas hosted-only mlx vertex-native-adc ollama glm-hybrid glm-only)
 
 # Each codex-t3-<backend> launcher is a symlink to scripts/codex-provider.zsh,
 # same link-name dispatch. Keep this list in sync with the backends that
@@ -371,10 +371,16 @@ _t3_claude_launcher_prereqs() {
         || warning "Claude Code not found at $native (install: curl -fsSL https://claude.ai/install.sh | bash)"
 
     # python3 + jq: every backend. uv: the LiteLLM proxies (vertex, openai,
-    # enmaas, hosted-only). bun + a copilot-api checkout: copilot.
+    # enmaas, hosted-only). bun + a copilot-api checkout: copilot. ollama
+    # server binary: ollama. vertex-native-adc needs no proxy, only gcloud ADC
+    # plus CLOUD_ML_REGION / ANTHROPIC_VERTEX_PROJECT_ID from secrets.zsh.
     local -a cmds=(python3 jq)
     (( ${@[(I)copilot]} )) && cmds+=(bun)
-    (( ${#${@:#copilot}} )) && cmds+=(uv)
+    (( ${@[(I)ollama]} )) && cmds+=(ollama)
+    (( ${@[(I)vertex|openai|enmaas|hosted-only|glm-hybrid|glm-only]} )) && cmds+=(uv)
+    if (( ${@[(I)vertex-native-adc]} )) && [[ -z "${CLOUD_ML_REGION:-}" || -z "${ANTHROPIC_VERTEX_PROJECT_ID:-}" ]]; then
+        warning "vertex-native-adc needs CLOUD_ML_REGION and ANTHROPIC_VERTEX_PROJECT_ID exported (secrets.zsh) plus gcloud ADC"
+    fi
     local cmd hint="brew bundle --file=$_T3_DOTFILES_ROOT/Brewfile"
     [[ "$OSTYPE" == darwin* ]] || hint="install it with your package manager; bun: curl -fsSL https://bun.sh/install | bash"
     for cmd in $cmds; do
@@ -461,6 +467,54 @@ verify-claude-t3-launchers() {
         fi
     done
     return $failed
+}
+
+# Link the claude-dispatch PATH shim: ~/.local/bin/claude-dispatch/claude ->
+# this checkout's scripts/claude-dispatch.zsh. zsh/paths.zsh prepends that
+# directory before ~/.local/bin, so PATH-spawned `claude` (npx t3 triage,
+# editors, scripts) follows claude-mode instead of the parent shell's ambient
+# transport vars. The installer's ~/.local/bin/claude symlink is never touched,
+# so Claude Code self-updates keep working.
+link-claude-dispatch() {
+    local target="$_T3_DOTFILES_ROOT/scripts/claude-dispatch.zsh"
+    local dir="${T3_CLAUDE_DISPATCH_DIR:-$HOME/.local/bin/claude-dispatch}"
+    [[ -x "$target" ]] || { error "Dispatch script missing or not executable: $target"; return 1 }
+    mkdir -p "$dir" || { error "Failed to create $dir"; return 1 }
+    local link="$dir/claude"
+    if [[ -L "$link" && "${link:A}" == "${target:A}" ]]; then
+        success "claude dispatch shim already linked"
+    elif [[ -e "$link" && ! -L "$link" ]]; then
+        error "$link exists and is not a symlink; leaving it untouched"
+        return 1
+    elif ln -sfn "$target" "$link"; then
+        success "Linked $link -> $target"
+    else
+        error "Failed to link $link"
+        return 1
+    fi
+    local native="${CLAUDE_PROVIDER_NATIVE_BINARY:-$HOME/.local/bin/claude}"
+    [[ -x "$native" ]] \
+        || warning "Claude Code not found at $native (the shim execs it directly)"
+    return 0
+}
+
+# Check the dispatch shim resolves to this checkout and starts Claude Code.
+verify-claude-dispatch() {
+    local target="$_T3_DOTFILES_ROOT/scripts/claude-dispatch.zsh"
+    local dir="${T3_CLAUDE_DISPATCH_DIR:-$HOME/.local/bin/claude-dispatch}"
+    local link="$dir/claude"
+    if [[ ! -L "$link" || "${link:A}" != "${target:A}" ]]; then
+        error "$link is not linked to $target (run link-claude-dispatch)"
+        return 1
+    fi
+    # --version takes the shim's native fast path: proves the shim runs and
+    # reaches the native binary without touching credentials or proxies.
+    if ! "$link" --version >/dev/null 2>&1; then
+        error "claude dispatch shim --version failed (is Claude Code installed?)"
+        return 1
+    fi
+    success "claude dispatch shim starts Claude Code"
+    return 0
 }
 
 # What the codex launchers need at run time that neither git nor the T3

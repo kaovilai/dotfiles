@@ -8,6 +8,10 @@ path=(
     $HOME/go/bin(N)
     ${KREW_ROOT:-$HOME/.krew}/bin(N)
     $HOME/.npm-global/bin(N)
+    # claude-dispatch shim: must resolve before the installer's
+    # ~/.local/bin/claude so PATH-spawned `claude` follows claude-mode.
+    # Linked by link-claude-dispatch; absent dir is silently skipped.
+    $HOME/.local/bin/claude-dispatch(N)
     $HOME/.local/bin(N)
     $path
     $HOME/google-cloud-sdk/bin(N)

@@ -110,7 +110,13 @@ _claude_endpoint_guard() {
 
 _claude_invoke() {
     _claude_endpoint_guard
-    command claude "$@"
+    # CLAUDE_PROVIDER_DISPATCHED tells the claude-dispatch PATH shim
+    # (scripts/claude-dispatch.zsh) this invocation was already prepared by a
+    # claude-<backend> wrapper, so it execs the native binary instead of
+    # re-dispatching to a claude-t3-<backend> launcher. Env-prefix form: the
+    # marker reaches the child tree only, never this shell (a leaked marker
+    # would make a later `npx t3 triage` in the same shell bypass dispatch).
+    CLAUDE_PROVIDER_DISPATCHED=1 command claude "$@"
 }
 
 typeset -g _CLAUDE_SCRIPTS_DIR="${${(%):-%x}:A:h:h:h:h}/scripts"
