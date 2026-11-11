@@ -28,7 +28,7 @@ permissions:
   pull-requests: write
   issues: write
 concurrency:
-  group: hosted-only-review-${{ github.event.pull_request.number || github.event.issue.number }}
+  group: hosted-only-review-${{ github.event_name }}-${{ github.event.pull_request.number || github.event.issue.number }}
   cancel-in-progress: true
 env:
   DOTFILES_REF: main
