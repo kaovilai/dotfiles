@@ -345,7 +345,7 @@ def run(name, events=(), up="4141,4147,4148", extra_env=None, inflight=None, tim
             for row in transcript_lines or []:
                 h.write(json.dumps(row) + "\n")
     env = {**os.environ, "LLM_USAGE_DIR": state, "LLM_USAGE_CLAUDE_DIRS": claude, "LLM_USAGE_CODEX_DIRS": tempfile.mkdtemp(dir=tmp),
-           "LLM_USAGE_COPILOT_URL": "http://127.0.0.1:9/usage", **(extra_env or {})}
+           "LLM_USAGE_COPILOT_URL": "http://127.0.0.1:9/usage", "LLM_USAGE_PROXY_SYNC": "off", **(extra_env or {})}
     res = subprocess.run([sys.executable, usage, "menubar-data", "--up-ports", up, *cli], capture_output=True, text=True, env=env, timeout=60)
     assert res.returncode == 0, (name, res.stderr)
     d = json.loads(res.stdout)
@@ -717,6 +717,10 @@ with open(f"{peer}/events-{old_month}.jsonl", "w") as h:                 # histo
     h.write(json.dumps(ev(45 * 86400)) + "\n")
 with open(f"{peer}/inflight-4148-777.json", "w") as h:                   # a live in-flight request on the peer
     json.dump({"pid": os.getpid(), "port": "4148", "requests": {"r1": {"t": _time.time() - 7, "model": GLM, "requested": GLM}}}, h)
+with open(f"{peer}/proxy-sync.json", "w") as h:                          # the peer's Go-proxy update state (llm-proxy-sync --status-json cache)
+    json.dump({"checked_at": _time.time() - 30, "proxies": [
+        {"name": "glm-codex", "port": 4148, "state": "current", "why": ""},
+        {"name": "enmaas", "port": 4146, "state": "pending", "why": "knobs"}]}, h)
 agg = tempfile.mkdtemp(dir=tmp)
 # an empty config dir: LLM_USAGE_FLEET adds peerA, it must not also pull in the
 # developer's own ~/.config/llm-usage/fleet.json ssh peers
@@ -731,6 +735,7 @@ out = agg_run("export", "--since", "1h", "--inflight", extra_env={"LLM_USAGE_DIR
 lines = [json.loads(l) for l in out.splitlines()]
 meta, recs = lines[0], lines[1:]
 assert meta["_export"] == 1 and meta["host"] and set(meta["months"]) == {old_month, f"{now:%Y-%m}"}, meta
+assert meta["proxy_sync"] and [p["state"] for p in meta["proxy_sync"]["proxies"]] == ["current", "pending"], meta
 flights = [r for r in recs if r.get("inflight")]
 assert len(flights) == 1 and flights[0]["port"] == "4148" and flights[0]["model"] == "glm-5.3" and flights[0]["id"].endswith("r1"), flights
 evs = [r for r in recs if not r.get("inflight")]
@@ -756,6 +761,8 @@ first = [json.loads(l) for l in open(pulled[0])]
 assert len(first) == 2 and all(e["host"] == "peerA" and e["eid"] for e in first), first
 st = json.load(open(f"{agg}/fleet/peerA/status.json"))
 assert st["last_ok"] and st["last_error"] is None and st["months"] == [old_month, f"{now:%Y-%m}"] and not st["backfilled"], st
+psnap = json.load(open(f"{agg}/fleet/peerA/proxy-sync.json"))  # the pull persisted the peer's proxy-update state
+assert psnap["pulled_at"] and psnap["peer_t"] and [p["state"] for p in psnap["doc"]["proxies"]] == ["current", "pending"], psnap
 agg_run("fleet", "refresh", "--force")  # backfill chunk reaches the 45d-old event; incremental re-pull dedups
 agg_run("fleet", "refresh", "--force")
 pulled = sorted(glob.glob(f"{agg}/fleet/peerA/events-*.jsonl"))
@@ -819,6 +826,10 @@ labels = {r["key"]["proxy"] for r in json.loads(out.stdout)}
 assert "claude" in labels and "copilot-api" not in labels and "hosted-only" in labels, labels
 
 # menubar-data: fleet-wide totals, per-host block, peer throttle + in-flight, host-tagged last_error
+aggsync = {"checked_at": _time.time() - 10, "proxies": [
+    {"name": "copilot", "port": 4141, "state": "current", "why": ""},
+    {"name": "glm-codex", "port": 4148, "state": "current", "why": ""}]}
+json.dump(aggsync, open(f"{agg}/proxy-sync.json", "w"))
 d = run("fleet", [ev(30), err(50, 500)], state=agg, extra_env=fenv)
 fb = d["fleet"]
 assert fb["enabled"] and [(h["name"], h["state"]) for h in fb["hosts"]] == [("peerA", "up")], fb
@@ -834,12 +845,72 @@ assert sp and all(s["active"] for s in sp), sp
 assert d["last_error"] and d["last_error"]["proxy"] == "hosted-only" and d["last_error"]["status"] == "500", d["last_error"]
 assert d["inflight"]["count"] == 1 and d["inflight"]["requests"][0]["host"] == "peerA", d["inflight"]
 assert next(p for p in d["proxies"] if p["port"] == 4148)["m15"]["requests"] == 2, "per-proxy rows must stay this-machine-only"
+# the counts the float's header reads are fleet-wide too: the peer's 429 lands
+# in totals (the local 5xx likewise), and the proxy-update state is fleet-wide —
+# the peer's pending proxy is named, with full coverage reported
+assert d["totals"]["m15"]["errors"] == {"429": 1, "5xx": 1, "other": 0}, d["totals"]
+ps = d["proxy_sync"]
+assert ps["state"] == "pending" and ps["pending"] == ["peerA: enmaas (:4146)"] and ps["unknown"] == [], ps
+assert ps["fleet"] == {"machines": 2, "reporting": 2} and [hh["host"] for hh in ps["hosts"]] == ["local", "peerA"], ps
 # --source filters fleet events by their origin too (peer proxy rows are not claude transcripts)
 assert sum(r["n"] for r in json.loads(agg_run("summary", "--since", "1h", "--source", "proxy", "--json"))) == 4  # 2 local + 2 peer
 assert sum(r["n"] for r in json.loads(agg_run("summary", "--since", "1h", "--source", "claude", "--json"))) == 0
 # a peer with no config: fleet disabled, nothing changes
 d = run("no-fleet", [ev(30)])
 assert d["fleet"] == {"enabled": False} and d["totals"]["m15"]["requests"] == 1, d.get("fleet")
+
+# Go-proxy update state (the float's checkmark): read from llm-proxy-sync's
+# status-json cache, refreshed by the kick (off in tests) — current, pending
+# with shared-port merge, watcher (busy), unknown when there is no cache, stale.
+def sync_state(name, doc, events=(ev(30),)):
+    st = tempfile.mkdtemp(dir=tmp)
+    if doc is not None:
+        json.dump(doc, open(f"{st}/proxy-sync.json", "w"))
+    return run(name, list(events), state=st)
+d = sync_state("proxy-cur", {"checked_at": _time.time(), "proxies": [
+    {"name": "copilot", "port": 4141, "state": "current", "why": ""},
+    {"name": "glm-codex", "port": 4148, "state": "current", "why": ""},
+    {"name": "glm-claude", "port": 4148, "state": "current", "why": ""}]})
+ps = d["proxy_sync"]
+assert ps["state"] == "current" and ps["pending"] == [] and ps["watcher"] == [] and ps["unknown"] == [], ps
+assert ps["fleet"] == {"machines": 1, "reporting": 1} and ps["hosts"][0]["host"] == "local", ps
+d = sync_state("proxy-pend", {"checked_at": _time.time(), "proxies": [
+    {"name": "copilot", "port": 4141, "state": "current", "why": ""},
+    {"name": "glm-codex", "port": 4148, "state": "pending", "why": "hooks"},
+    {"name": "glm-claude", "port": 4148, "state": "current", "why": ""}]})
+assert d["proxy_sync"]["state"] == "pending" and d["proxy_sync"]["pending"] == ["glm-codex/glm-claude (:4148)"], d["proxy_sync"]
+d = sync_state("proxy-watcher", {"checked_at": _time.time(), "proxies": [
+    {"name": "copilot", "port": 4141, "state": "watcher", "why": "busy"}]})
+assert d["proxy_sync"]["state"] == "pending" and d["proxy_sync"]["watcher"] == ["copilot (:4141)"], d["proxy_sync"]
+d = sync_state("proxy-unknown", None)
+assert d["proxy_sync"]["state"] == "unknown" and d["proxy_sync"]["unknown"] == ["local"] and d["proxy_sync"]["age_s"] is None, d["proxy_sync"]
+d = sync_state("proxy-stale", {"checked_at": _time.time() - 4000, "proxies": [
+    {"name": "copilot", "port": 4141, "state": "current", "why": ""}]})
+assert d["proxy_sync"]["state"] == "unknown" and "old" in d["proxy_sync"]["hosts"][0]["why"], d["proxy_sync"]
+
+# fleet-wide proxy state, degraded: a reachable peer that published no proxy
+# state and an unreachable peer both read as unknown — never an all-clear
+d = run("proxy-degraded", [ev(30)], extra_env={"LLM_USAGE_FLEET": f"peerB=local:{peer},dead=127.0.0.1",
+                                               "LLM_USAGE_CONFIG_DIR": tempfile.mkdtemp(dir=tmp)})
+ps = d["proxy_sync"]
+assert ps["state"] == "unknown", ps
+assert "local" in ps["unknown"] and "peerB" in ps["unknown"] and "dead" in ps["unknown"], ps
+assert ps["fleet"] == {"machines": 3, "reporting": 0}, ps
+
+# usage aggregation is fleet-wide: a peer's vision reroute and 5xx land in this
+# machine's reroute counts / error totals (the float's header), not just in the
+# peer's own rows
+peer2 = tempfile.mkdtemp(dir=tmp)
+with open(f"{peer2}/events-{now:%Y-%m}.jsonl", "w") as h:
+    h.write(json.dumps(ev(40, requested=GLM, served=DS)) + "\n")          # vision reroute on the peer
+    h.write(json.dumps(err(35, 500, requested=GLM, served=GLM)) + "\n")   # peer 5xx
+agg3 = tempfile.mkdtemp(dir=tmp)
+fenv3 = {"LLM_USAGE_FLEET": f"peerC=local:{peer2}", "LLM_USAGE_CONFIG_DIR": tempfile.mkdtemp(dir=tmp)}
+subprocess.run([sys.executable, usage, "fleet", "refresh", "--force"], capture_output=True, text=True, timeout=60,
+               env={**os.environ, "LLM_USAGE_DIR": agg3, **fenv3})
+d = run("fleet-reroutes", [ev(30)], state=agg3, extra_env=fenv3)
+assert d["reroutes_15m"] == 1 and d["reroutes_kinds_15m"].get("vision") == 1, d.get("reroutes_kinds_15m")
+assert d["totals"]["m15"]["errors"]["5xx"] == 1 and d["totals"]["m15"]["requests"] == 3, d["totals"]
 
 # fleet in-flight streaming: `watch-inflight` on the peer (hello, snapshot on change,
 # heartbeat while unchanged) + `fleet stream` on the aggregator (local: transport) pushing
@@ -1431,6 +1502,21 @@ if [[ -x /usr/bin/swiftc ]] || command -v swiftc >/dev/null; then
     dump=$(dump_of normal)
     [[ "$dump" == "title: ● 4"$'\n'* ]] || fail "normal title: ${dump%%$'\n'*}"
     [[ "$dump" == *"PROXIES (15m / 1h)"* && "$dump" == *"hosted-only :4148  up"* && "$dump" == *"Copy restart command: claude-hosted-only-restart"* ]] || fail "proxy rows/submenu missing: $dump"
+    # the Go-proxy update indicator: the menu spells out every state, and the
+    # float draws it in every layout (current vs pending must render
+    # differently; a payload without the block must lose the checkmark)
+    [[ "$(dump_of proxy-cur)" == *"PROXY UPDATE (fleet)"*"✓ every running proxy is up to date (fleet 1/1)"* ]] || fail "proxy current menu"
+    [[ "$(dump_of proxy-pend)" == *"⟳ update pending · glm-codex/glm-claude (:4148)"* ]] || fail "proxy pending menu"
+    [[ "$(dump_of proxy-watcher)" == *"⟳ busy, restart queued · copilot (:4141)"* ]] || fail "proxy watcher menu"
+    [[ "$(dump_of proxy-unknown)" == *"? state unknown · local"* ]] || fail "proxy unknown menu"
+    for lay in horizontal vertical history; do
+      "$mb" --window-png "$tmp/w-px-cur-$lay.png" --layout "$lay" --data-file "$mbjson/proxy-cur.json" >/dev/null || fail "window-png proxy current $lay"
+      "$mb" --window-png "$tmp/w-px-pend-$lay.png" --layout "$lay" --data-file "$mbjson/proxy-pend.json" >/dev/null || fail "window-png proxy pending $lay"
+      cmp -s "$tmp/w-px-cur-$lay.png" "$tmp/w-px-pend-$lay.png" && fail "proxy update state must change the $lay render"
+    done
+    python3 -c 'import json,sys; d = json.load(open(sys.argv[1])); d.pop("proxy_sync", None); json.dump(d, open(sys.argv[2], "w"))' "$mbjson/proxy-cur.json" "$tmp/no-proxy-sync.json"
+    "$mb" --window-png "$tmp/w-px-none.png" --layout horizontal --data-file "$tmp/no-proxy-sync.json" >/dev/null || fail "window-png without proxy_sync"
+    cmp -s "$tmp/w-px-none.png" "$tmp/w-px-cur-horizontal.png" && fail "the current-state checkmark must change the render"
     # Fleet: one row per pulled peer, submenu detail, absent without fleet config
     dump=$(dump_of fleet)
     [[ "$dump" == *"FLEET (15m / 1h)"* && "$dump" == *"● peerA  up  2/15m 2/1h 429:1"* ]] || fail "fleet section: $dump"

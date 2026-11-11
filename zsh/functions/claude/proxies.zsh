@@ -500,7 +500,7 @@ _llm_proxy_sync_tables() {
         glm-claude "$_ho_shared_port" glm-codex "$(_hosted_only_knob CODEX_PROXY_PORT "$_ho_shared_port")")
 }
 
-# llm-proxy-sync [--dry-run] [--quiet]
+# llm-proxy-sync [--dry-run] [--quiet] [--status-json]
 # The unattended cousin of `llm-proxy-restart required`, run by
 # scripts/fleet-sync.zsh: a pulled hook or config change reaches a running proxy
 # only when it restarts, and a T3 session that is already running never launches
@@ -516,13 +516,28 @@ _llm_proxy_sync_tables() {
 # since #599) are handled by the first of them alone. Returns 1 when a restart
 # did not bring the proxy back or a watcher could not start, 2 on a bad option;
 # a proxy that cannot be checked is reported and left running.
+#
+# --status-json: read-only snapshot for the menubar float's proxy-update
+# indicator (scripts/llm-usage's proxy_sync block; fleet-sync also writes it to
+# that machine's llm-usage state after its proxy pass, so the Mac aggregating
+# the fleet sees each peer's state). One JSON document on stdout, nothing
+# restarted, nothing written: {"checked_at": <epoch>, "proxies": [{"name",
+# "port", "state", "why"}]} with state current (matches what a launch would
+# start now), pending (behind, or its listener does not answer the health
+# check), watcher (behind and busy: a watcher is waiting for an idle moment) or
+# unknown (its check failed — e.g. no ENMAAS_API_KEY to compare the gateway
+# fingerprint; never an error, never a false all-clear). Only listening proxies
+# and live watchers appear: a stopped proxy matches nothing and cannot be
+# behind. The watcher check (pid + ps, free) runs before the fingerprint check,
+# so a busy watched proxy skips the expensive comparison.
 llm-proxy-sync() {
-    local dry=0 quiet=0 a
+    local dry=0 quiet=0 status_json=0 a
     for a in "$@"; do
         case "$a" in
             --dry-run) dry=1 ;;
             --quiet) quiet=1 ;;
-            *) print -ru2 -- "llm-proxy-sync: unknown option '$a' (--dry-run, --quiet)"; return 2 ;;
+            --status-json) status_json=1 ;;
+            *) print -ru2 -- "llm-proxy-sync: unknown option '$a' (--dry-run, --quiet, --status-json)"; return 2 ;;
         esac
     done
     local -A fn chk port
@@ -545,6 +560,35 @@ llm-proxy-sync() {
     # mid-swap and refuse requests arriving in the crossfire (2026-11-07
     # ECONNREFUSED on a T3 run).
     local -A covered
+    if (( status_json )); then
+        # See the --status-json paragraph above. why is sanitized to one line:
+        # it becomes one tab-separated field, and launcher output is free-form.
+        local -a lines
+        local ws=$'\t\n\r'
+        for t in $order; do
+            if [[ -n "$(_claude_listen_pids "${port[$t]}")" ]]; then
+                if _llm_proxy_watch_alive "$t"; then
+                    lines+=("$t	${port[$t]}	watcher	busy; a watcher is waiting for an idle moment to restart it")
+                    continue
+                fi
+                verdict=$(${chk[$t]})
+                case "$verdict" in
+                    fresh)  lines+=("$t	${port[$t]}	current	") ;;
+                    stale*) lines+=("$t	${port[$t]}	pending	${${verdict#stale: }//[$ws]/ }") ;;
+                    down)   lines+=("$t	${port[$t]}	pending	listener does not answer its health check") ;;
+                    *)      lines+=("$t	${port[$t]}	unknown	${verdict//[$ws]/ }") ;;
+                esac
+            elif _llm_proxy_watch_alive "$t"; then
+                # the proxy died while its watcher waited: the update it was
+                # going to land is still outstanding
+                lines+=("$t	${port[$t]}	watcher	busy; a watcher is waiting for an idle moment to restart it")
+            fi
+        done
+        print -r -- "${(F)lines}" | jq -Rn '{checked_at: (now | floor),
+            proxies: [inputs | select(length > 0) | split("\t")
+                      | {name: .[0], port: (.[1] | tonumber), state: .[2], why: (.[3] // "")}]}'
+        return 0
+    fi
     for t in $order; do
         if [[ -n "$(_claude_listen_pids "${port[$t]}")" ]]; then
             if (( $+covered[${port[$t]}] )); then

@@ -129,6 +129,31 @@ func summarize(_ d: J, now: Date, stale: Bool) -> Summary {
     return base
 }
 
+// MARK: - Go-proxy update state (fleet-wide, from llm-usage's proxy_sync block)
+
+/// SF Symbol rendered in a solid colour: template symbols carry no tint of
+/// their own, so the glyph is drawn and then filled sourceAtop (only its
+/// shape picks the colour up). Cached by name — the header redraws on every
+/// poll. Solid (non-dynamic) colours on purpose: the tint is baked into the
+/// bitmap once, under whichever appearance created it.
+private var proxySymbolCache: [String: NSImage] = [:]
+func tintedSymbol(_ name: String, color: NSColor, fallback glyph: String, font: NSFont) -> NSImage? {
+    if let hit = proxySymbolCache[name] { return hit }
+    guard let base = NSImage(systemSymbolName: name, accessibilityDescription: nil)?
+        .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: font.pointSize, weight: .semibold)) else { return nil }
+    let img = NSImage(size: base.size)
+    img.lockFocus()
+    let rect = NSRect(origin: .zero, size: base.size)
+    base.draw(in: rect)
+    color.set()
+    rect.fill(using: .sourceAtop)
+    img.unlockFocus()
+    proxySymbolCache[name] = img
+    return img
+}
+
+let proxySyncGreen = rgb(0x34C759), proxySyncOrange = rgb(0xFF9F0A), proxySyncGray = rgb(0x8E8E93)
+
 // MARK: - charts (drawn with system colors only, so light/dark just work)
 
 let chartWidth: CGFloat = 380
@@ -1122,7 +1147,14 @@ final class MonitorView: NSView {
         switch layout {
         case .history:
             drawGraph(ctx, rect: area, model: model, spans: spans, metric: metric.isStacked ? .tokens : metric)
-            drawOverlay(summary: summary, live: live, d: d, in: area)
+            // the proxy/fleet cluster rides the same band the overlay pill
+            // (top-left, under the throttle lanes) uses, right-aligned; the
+            // pill's width is capped first so the two cannot collide
+            let laneCount = Set(spanItems(d).map { $0.provider }).count
+            let syncRect = NSRect(x: area.minX, y: area.maxY - 6 - CGFloat(laneCount) * 3.5 - 13, width: area.width, height: 13)
+            let syncW = drawProxySync(d, in: syncRect, leftBound: area.minX + area.width / 2, draw: false)
+            drawOverlay(summary: summary, live: live, d: d, in: area, rightReserve: syncW > 0 ? syncW + 10 : 0)
+            drawProxySync(d, in: syncRect, leftBound: area.minX + area.width / 2)
         case .horizontal, .vertical:
             let header = NSRect(x: area.minX, y: area.maxY - 14, width: area.width, height: 14)
             drawHeader(ctx, summary: summary, live: live, d: d, in: header)
@@ -1297,17 +1329,95 @@ final class MonitorView: NSView {
         }
     }
 
+    /// The right-edge status cluster: a fleet-coverage chip ("fleet 2/3", only
+    /// when some machine's usage data is not being pulled) and the Go-proxy
+    /// update element — a checkmark when every fleet machine's running proxies
+    /// match what a launch would start now, "update pending" naming the
+    /// machine/port when one is behind (a busy proxy with a watcher counts as
+    /// pending), and a dim "?" when a machine's state is unknown: an
+    /// unreachable peer must never render as an all-clear. `draw: false` only
+    /// measures. Returns the width used (0 when the payload has no block).
+    @discardableResult
+    func drawProxySync(_ d: J, in r: NSRect, leftBound: CGFloat, draw: Bool = true) -> CGFloat {
+        let ps = d["proxy_sync"]
+        guard ps.exists, r.width > 16 else { return 0 }
+        let font = boldFont
+        var symbol = "checkmark.circle", glyph = "✓", color = proxySyncGreen
+        var candidates: [String] = []
+        switch ps["state"].str ?? "unknown" {
+        case "current":
+            break
+        case "pending":
+            symbol = "arrow.triangle.2.circlepath"; glyph = "⟳"; color = proxySyncOrange
+            let pending = ps["pending"].arr.compactMap { $0.str }
+            let queued = ps["watcher"].arr.compactMap { $0.str }
+            let who = (pending + queued).first.map { " \($0)" } ?? ""
+            candidates = pending.isEmpty ? ["restart queued\(who)", "restart queued", "queued", ""]
+                                         : ["update pending\(who)", "update pending", "update", ""]
+        default:
+            symbol = "questionmark.circle"; glyph = "?"; color = proxySyncGray
+            let machines = ps["fleet"]["machines"].int ?? 1
+            if machines > 1 {
+                candidates = ["fleet \(ps["fleet"]["reporting"].int ?? 0)/\(machines)", ""]
+            }
+        }
+        // fleet coverage chip: the usage numbers are fleet-aggregated; say when
+        // a machine's events are not arriving, so a partial sum is never silent
+        var chip = ""
+        if d["fleet"]["enabled"].bool {
+            let hosts = d["fleet"]["hosts"].arr
+            let up = hosts.filter { $0["state"].str == "up" }.count
+            if up < hosts.count { chip = "fleet \(up + 1)/\(hosts.count + 1)" }
+        }
+        let sym = tintedSymbol(symbol, color: color, fallback: glyph, font: font)
+        let symW = sym != nil ? ceil(sym!.size.width) : textWidth(glyph, font)
+        let symH = sym != nil ? ceil(sym!.size.height) : font.boundingRectForFont.height
+        func w(_ s: String) -> CGFloat { s.isEmpty ? 0 : textWidth(s, font) }
+        let budget = r.maxX - leftBound
+        var text = ""
+        for cand in candidates where symW + (w(cand) > 0 ? 4 + w(cand) : 0) <= budget { text = cand; break }
+        if !chip.isEmpty && w(chip) + 8 + symW + (text.isEmpty ? 0 : 4 + w(text)) > budget { chip = "" }
+        let total = w(chip) + (chip.isEmpty ? 0 : 8) + symW + (text.isEmpty ? 0 : 4 + w(text))
+        guard draw, budget >= symW else { return min(total, max(0, budget)) }
+        var x = r.maxX - total
+        if !chip.isEmpty {
+            drawStr(chip, in: NSRect(x: x, y: r.minY, width: w(chip), height: r.height), font: font, color: proxySyncOrange)
+            x += w(chip) + 8
+        }
+        if let img = sym {
+            img.draw(in: NSRect(x: x, y: r.midY - symH / 2, width: symW, height: symH))
+        } else {
+            drawStr(glyph, in: NSRect(x: x, y: r.minY, width: symW, height: r.height), font: font, color: color)
+        }
+        x += symW + (text.isEmpty ? 0 : 4)
+        if !text.isEmpty {
+            drawStr(text, in: NSRect(x: x, y: r.minY, width: min(r.maxX - x, w(text)), height: r.height), font: font, color: color)
+        }
+        return total
+    }
+
     func drawHeader(_ ctx: CGContext, summary: Summary, live: [SpanItem], d: J, in r: NSRect) {
         stateColor(summary).setFill()
         NSBezierPath(ovalIn: NSRect(x: r.minX, y: r.midY - 3.5, width: 7, height: 7)).fill()
         let main = headerText(summary, live: live, d: d) + (stale ? " · stale" : "")
         drawStr(main, in: NSRect(x: r.minX + 11, y: r.minY, width: r.width - 11, height: r.height),
                 font: boldFont, color: summary.state == "normal" ? .labelColor : stateColor(summary))
+        // Proxy-update / fleet-coverage cluster at the right edge: meaningful in
+        // every state, so abnormal headers draw it and stop here. When the
+        // reroute/error extras below have something to say they go first (stale
+        // routing is the more urgent signal) and the cluster takes whatever
+        // space is left, dropping to the bare symbol — or nothing — when the
+        // window is too narrow.
+        func drawEdge(_ leftBound: CGFloat) { drawProxySync(d, in: r, leftBound: leftBound) }
+        let textEnd = r.minX + 11 + textWidth(main, boldFont)
         // The header row is mostly empty space after "OK · N req/15m": carry the
         // 15m reroute kinds (vision / fallback) and error counts there too, so a
         // redirect is visible without opening the menu. Abnormal states already
         // say what is wrong, so the extras ride along only when things look OK.
-        guard summary.state == "normal" else { return }
+        guard summary.state == "normal" else {
+            drawEdge(textEnd + 8)
+            return
+        }
         let rr = d["reroutes_15m"].int ?? 0
         var kinds: [(String, Int)] = []
         for k in d["reroutes_kinds_15m"].keys {
@@ -1327,8 +1437,11 @@ final class MonitorView: NSView {
         if e5 > 0 { errParts.append(("5xx ×\(e5)", .systemRed)) }
         if eo > 0 { errParts.append(("err ×\(eo)", .systemRed)) }
         let parts = (reroutePart.map { [$0] } ?? []) + errParts
-        guard !parts.isEmpty else { return }
-        var x = r.minX + 11 + textWidth(main, boldFont)
+        guard !parts.isEmpty else {
+            drawEdge(textEnd + 8)
+            return
+        }
+        var x = textEnd
         func drawParts(_ parts: [(String, NSColor)]) {
             for (text, color) in parts {
                 x += 6
@@ -1357,6 +1470,7 @@ final class MonitorView: NSView {
         // the ↪ count still shows when every error-including candidate is too wide
         if let c = compactRR { candidates.append([c]) }
         if let pick = candidates.first(where: fits) { drawParts(pick) }
+        drawEdge(x + 6)  // whatever the extras left, right-aligned
     }
 
     /// History layout: no text rows, so a small pill carries the state (and in-flight count) over the graph.
@@ -1368,7 +1482,7 @@ final class MonitorView: NSView {
         barsView.fractions = flightBars
     }
 
-    func drawOverlay(summary: Summary, live: [SpanItem], d: J, in r: NSRect) {
+    func drawOverlay(summary: Summary, live: [SpanItem], d: J, in r: NSRect, rightReserve: CGFloat = 0) {
         var parts: [String] = []
         if summary.state != "normal" { parts.append(headerText(summary, live: live, d: d)) }
         if let n = d["inflight"]["count"].int, n > 0 { parts.append("⏳\(n)") }
@@ -1377,7 +1491,7 @@ final class MonitorView: NSView {
         let text = parts.joined(separator: " · ")
         let font = NSFont.systemFont(ofSize: 9, weight: .semibold)
         let barW: CGFloat = waitBarVisible ? 34 : 0  // wait bar after the text, while something is in flight or the needle drains
-        let w = min(textWidth(text, font) + 14 + barW, r.width - 8)
+        let w = min(textWidth(text, font) + 14 + barW, r.width - 8 - rightReserve)
         let laneCount = Set(spanItems(d).map { $0.provider }).count
         let pill = NSRect(x: r.minX + 4, y: r.maxY - 6 - CGFloat(laneCount) * 3.5 - 13, width: w, height: 13)  // top-left, under the throttle lanes
         NSColor.windowBackgroundColor.withAlphaComponent(0.8).setFill()
@@ -2227,6 +2341,23 @@ final class Builder {
             menu.addItem(.separator())
             addActions(menu, c, plainCopy: nil)
             return (menu, plain)
+        }
+
+        // Proxy update state (fleet-wide): the float's checkmark, spelled out
+        if d["proxy_sync"].exists {
+            let ps = d["proxy_sync"]
+            let machines = ps["fleet"]["machines"].int ?? 1, reporting = ps["fleet"]["reporting"].int ?? 1
+            menu.addItem(.separator()); add(header("PROXY UPDATE (fleet)"))
+            switch ps["state"].str ?? "unknown" {
+            case "current":
+                add(info("✓ every running proxy is up to date (fleet \(reporting)/\(machines))"))
+            case "pending":
+                for p in ps["pending"].arr.compactMap({ $0.str }) { add(info("⟳ update pending · \(p)")) }
+                for w in ps["watcher"].arr.compactMap({ $0.str }) { add(info("⟳ busy, restart queued · \(w)")) }
+            default:
+                break
+            }
+            for u in ps["unknown"].arr.compactMap({ $0.str }) { add(info("? state unknown · \(u)", dim: true)) }
         }
 
         // Throttled

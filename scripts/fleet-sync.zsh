@@ -399,6 +399,20 @@ _sync_proxies() {
     (( dry )) && args+=(--dry-run)
     (( quiet )) && args+=(--quiet)
     llm-proxy-sync $args
+    local sync_rc=$?
+    # Refresh the proxy-update state cache with the post-sync picture (the same
+    # read-only document `llm-proxy-sync --status-json` prints). Every machine
+    # runs this hourly, so even the boxes without the floating window publish
+    # fresh state: the Mac that aggregates the fleet reads it through the
+    # ordinary `llm-usage export` pull (its meta line carries this file).
+    local cache="${LLM_USAGE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/llm-usage}/proxy-sync.json"
+    mkdir -p "${cache:h}" 2>/dev/null || true
+    if llm-proxy-sync --status-json >| "${cache}.tmp" 2>/dev/null; then
+        mv "${cache}.tmp" "$cache"
+    else
+        rm -f "${cache}.tmp" 2>/dev/null || true
+    fi
+    return $sync_rc
 }
 _sync_proxies || (( problems++ ))
 

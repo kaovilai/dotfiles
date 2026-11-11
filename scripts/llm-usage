@@ -1036,6 +1036,19 @@ def fleet_pull_one(name, entry, force=False, ttl=FLEET_TTL):
         fleet_write_status(name, last_ok=time.time(), last_error=backfill_note, last_event_t=last_event_t,
                            backfill_cursor=cursor, backfilled=backfilled, backfill_empty=empty,
                            months=months, host=meta.get("host"), peer_t=meta.get("t"))
+        # The peer's proxy-update snapshot (export meta line) for the float's
+        # fleet-wide indicator. pulled_at is OUR clock, peer_t the peer's, so
+        # _peer_sync_read's age math needs no clock sync. Written even when the
+        # peer published nothing (doc null): reachable-but-silent must read as
+        # unknown, distinct from unreachable.
+        try:
+            snap = {"pulled_at": time.time(), "peer_t": meta.get("t"), "doc": meta.get("proxy_sync")}
+            tmp = os.path.join(fleet_dir(name), "proxy-sync.json.tmp")
+            with open(tmp, "w") as handle:
+                json.dump(snap, handle)
+            os.replace(tmp, os.path.join(fleet_dir(name), "proxy-sync.json"))
+        except OSError:
+            pass
         return out
     except OSError as err:
         fleet_write_status(name, last_error=str(err), last_fail=time.time())
@@ -1117,6 +1130,176 @@ def fleet_kick(ttl=FLEET_TTL):
                          start_new_session=True)
     except OSError:
         pass
+
+
+# --- Go-proxy update state (llm-proxy-sync --status-json) -------------------
+# The float's proxy-update indicator. The full check costs seconds (the EnMaaS
+# launcher does model discovery), so it never runs in the poll: it is cached in
+# STATE/proxy-sync.json, refreshed detached by proxy_sync_kick (60 s TTL) and by
+# every machine's fleet-sync after its proxy pass. Each peer's cache rides the
+# ordinary fleet pull — `llm-usage export` ships it in its meta line — so the
+# aggregate is fleet-wide with no new daemons.
+
+PROXY_SYNC_TTL = 60           # s: re-kick the detached check at most this often
+PROXY_SYNC_LOCAL_STALE = 300  # s: a local cache older than this = unknown
+PROXY_SYNC_PEER_STALE = 7200  # s: a peer snapshot older than this = unknown (fleet-sync writes it hourly)
+
+
+def _proxy_sync_read(path, now):
+    """(doc, age_s) from a status-json cache file; (None, None) when absent or
+    unparsable. Never raises: a missing check must not take the menubar down."""
+    try:
+        with open(path) as handle:
+            doc = json.load(handle)
+        checked = float(doc.get("checked_at") or 0)
+        if not checked or not isinstance(doc.get("proxies"), list):
+            return None, None
+        return doc, max(0.0, now - checked)
+    except (OSError, ValueError, TypeError, AttributeError):
+        return None, None
+
+
+def proxy_sync_kick():
+    """Spawn a detached `llm-proxy-sync --status-json` when the cache is older
+    than PROXY_SYNC_TTL and none ran recently (kick-file mtime, the fleet_kick
+    protocol). The poll returns immediately; the next one sees the fresh cache.
+    LLM_USAGE_PROXY_SYNC=off disables (tests, second state dirs)."""
+    if os.environ.get("LLM_USAGE_PROXY_SYNC", "").strip().lower() == "off":
+        return
+    root = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
+    load = os.path.join(root, "zsh", "functions", "claude", "load.zsh")
+    if not os.path.isfile(load):
+        return  # not a dotfiles checkout (installed copy): no status to fetch
+    now = time.time()
+    kick = os.path.join(STATE, "proxy-sync.kick")
+    out = os.path.join(STATE, "proxy-sync.json")
+    try:
+        os.makedirs(STATE, mode=0o700, exist_ok=True)
+        try:
+            last_kick = os.path.getmtime(kick)
+        except OSError:
+            last_kick = 0  # no kick file yet: treat as long ago, do not strand the first check
+        if now - last_kick < PROXY_SYNC_TTL - 5:
+            return
+        with open(kick, "a"):
+            os.utime(kick)
+        # ENMAAS_API_KEY: the enmaas/hosted-only fingerprints compare the
+        # gateway key, so source the credentials exactly like fleet-sync's
+        # proxy pass; without them those proxies report "unknown", never error.
+        script = (
+            f"source {shlex.quote(load)}\n"
+            '[[ -n "${ENMAAS_API_KEY-}" ]] || { creds="${CLAUDE_PROVIDER_CREDENTIALS_FILE:-$HOME/secrets.zsh}"; '
+            '[[ -r "$creds" ]] && source "$creds" >/dev/null 2>&1; }\n'
+            f'llm-proxy-sync --status-json >| {shlex.quote(out + ".tmp")} && mv {shlex.quote(out + ".tmp")} {shlex.quote(out)}\n'
+        )
+        subprocess.Popen(["zsh", "-c", script], stdin=subprocess.DEVNULL,
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+    except OSError:
+        pass
+
+
+def _peer_sync_read(directory, now):
+    """(doc, age_s) for one peer's proxy-update snapshot as pulled into
+    fleet/<name>/proxy-sync.json: {"pulled_at", "peer_t", "doc"}. The age is the
+    time since the peer's own check on OUR clock — the pull latency plus the
+    snapshot's age at pull time (peer_t - checked_at is peer-clock-only math) —
+    so a stale peer never looks fresh and clock skew cannot fake either."""
+    try:
+        with open(os.path.join(directory, "proxy-sync.json")) as handle:
+            wrap = json.load(handle)
+        doc = wrap.get("doc")
+        checked = float((doc or {}).get("checked_at") or 0)
+        pulled = float(wrap.get("pulled_at") or 0)
+        if not pulled or not isinstance((doc or {}).get("proxies"), list):
+            return None, None
+        age_at_pull = max(0.0, float(wrap.get("peer_t") or pulled) - checked) if checked else 0.0
+        return doc, max(0.0, now - pulled) + age_at_pull
+    except (OSError, ValueError, TypeError, AttributeError):
+        return None, None
+
+
+def proxy_sync_status(now):
+    """Fleet-wide Go-proxy update state for the float's indicator: a checkmark
+    only when every machine's running proxies match what a launch would start
+    now. This machine's state comes from the local cache (proxy_sync_kick
+    refreshes it); each peer's rides the fleet pull. A machine whose state
+    cannot be known — cache missing or stale, peer unreachable — is reported as
+    unknown, so an unreachable peer can never render as an all-clear."""
+    doc, age = _proxy_sync_read(os.path.join(STATE, "proxy-sync.json"), now)
+    if age is None or age > PROXY_SYNC_TTL:
+        proxy_sync_kick()
+
+    def machine(host, mdoc, mage):
+        """One machine's roll-up. Flavors sharing a listener (glm-codex /
+        glm-claude on one port) merge into one entry; the worst verdict wins."""
+        by_port = {}
+        for r in mdoc.get("proxies") or []:
+            if not isinstance(r, dict) or r.get("state") not in ("current", "pending", "watcher", "unknown"):
+                continue
+            port = r.get("port")
+            key = str(port) if port is not None else str(r.get("name"))
+            e = by_port.setdefault(key, {"port": port, "names": [], "state": "current", "why": ""})
+            e["names"].append(str(r.get("name") or key))
+            rank = {"pending": 3, "watcher": 2, "unknown": 1, "current": 0}[r["state"]]
+            if rank > {"pending": 3, "watcher": 2, "unknown": 1, "current": 0}[e["state"]]:
+                e["state"], e["why"] = r["state"], str(r.get("why") or "")
+        pending, watcher, unsure, state = [], [], [], "current"
+        for key in sorted(by_port):
+            e = by_port[key]
+            label = "/".join(dict.fromkeys(e["names"])) + (f" (:{e['port']})" if e["port"] is not None else "")
+            if e["state"] == "pending":
+                pending.append(label)
+            elif e["state"] == "watcher":
+                watcher.append(label)
+            elif e["state"] == "unknown":
+                unsure.append(label)
+        if pending or watcher:
+            state = "pending"
+        elif unsure:
+            state = "unknown"
+        return ({"host": host, "state": state, "pending": pending, "watcher": watcher, "unknown": unsure,
+                 "age_s": int(mage) if mage is not None else None}, pending, watcher)
+
+    hosts_out, pending, watcher, unknown_hosts = [], [], [], []
+    if doc is None or age > PROXY_SYNC_LOCAL_STALE:
+        why = "no check has run yet" if doc is None else f"last check {int(age)}s old"
+        hosts_out.append({"host": FLEET_LOCAL, "state": "unknown", "why": why,
+                          "age_s": int(age) if age is not None else None})
+        unknown_hosts.append(FLEET_LOCAL)
+    else:
+        m, p, w = machine(FLEET_LOCAL, doc, age)
+        hosts_out.append(m)
+        pending, watcher = pending + p, watcher + w
+        if m["state"] == "unknown":
+            unknown_hosts.append(FLEET_LOCAL)
+    machines, reporting = 1, 0 if unknown_hosts and unknown_hosts[0] == FLEET_LOCAL else 1
+    for name, _entry in fleet_hosts():
+        machines += 1
+        st = fleet_status(name)
+        last_ok = st.get("last_ok")
+        reachable = bool(last_ok and now - last_ok < FLEET_STALE_AFTER)
+        pdoc, page = _peer_sync_read(fleet_dir(name), now)
+        if not reachable:
+            hosts_out.append({"host": name, "state": "unknown", "why": "fleet pull unreachable"})
+            unknown_hosts.append(name)
+            continue
+        if pdoc is None or page > PROXY_SYNC_PEER_STALE:
+            hosts_out.append({"host": name, "state": "unknown",
+                              "why": "published no proxy state" if pdoc is None else f"peer's last check {int(page)}s old",
+                              "age_s": int(page) if page is not None else None})
+            unknown_hosts.append(name)
+            continue
+        reporting += 1
+        m, p, w = machine(name, pdoc, page)
+        hosts_out.append(m)
+        pending += [f"{name}: {x}" for x in p]
+        watcher += [f"{name}: {x}" for x in w]
+        if m["state"] == "unknown":
+            unknown_hosts.append(name)
+    state = "pending" if pending or watcher else ("unknown" if unknown_hosts else "current")
+    return {"state": state, "pending": pending, "watcher": watcher, "unknown": unknown_hosts,
+            "hosts": hosts_out, "fleet": {"machines": machines, "reporting": reporting},
+            "age_s": int(age) if age is not None else None}
 
 
 def _fleet_watch_argv(entry):
@@ -2019,6 +2202,12 @@ def cmd_export(args):
         events = [e for e in events if e["t"] < args.until]
     months = sorted({os.path.basename(p)[7:-6] for p in glob.glob(os.path.join(STATE, "events-*.jsonl"))})
     meta = {"_export": 1, "host": LOCAL_HOST, "t": time.time(), "events": len(events), "months": months}
+    # This machine's Go-proxy update state rides along (a free file read): the
+    # pulling machine's float aggregates it fleet-wide. Absent on a peer that
+    # has not run the updated fleet-sync yet — that reads as "unknown" there,
+    # never as an all-clear.
+    _ps_doc, _ = _proxy_sync_read(os.path.join(STATE, "proxy-sync.json"), meta["t"])
+    meta["proxy_sync"] = _ps_doc
     print(json.dumps(meta, separators=(",", ":")))
     for ev in sorted(events, key=lambda e: e["t"]):
         if ev.get("port") == "transcript":  # the copilot-api attribution convention (menubar_data)
@@ -2847,6 +3036,7 @@ def menubar_data(now=None, up_ports=None, share_window="15m", share_metric="requ
         "dashboard_port": int(os.environ.get("LLM_USAGE_PORT", "4150")),
         "proxies": proxies,
         "fleet": hosts_block,
+        "proxy_sync": proxy_sync_status(now),
         "any_down": any(p["state"] == "down" and p["expected"] for p in proxies),
         "totals": {w: {k: v for k, v in counts(recent + extra, win).items() if k != "tokens"}
                    for w, win in (("m15", MB_RECENT), ("h1", MB_HOUR))},  # proxy logs + copilot (transcript-derived)

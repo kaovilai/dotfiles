@@ -44,7 +44,7 @@ tmp=$(mktemp -d) || fail "mktemp"
 trap 'rm -rf "$tmp"' EXIT
 export XDG_STATE_HOME="$tmp/state"   # watcher pid files and logs
 
-typeset -A listening stub_verdict serving restart_rc
+typeset -A listening stub_verdict serving restart_rc watch_names
 typeset -a restarted confirmed watch_started watch_killed
 integer WATCH_ALIVE=0 WATCH_START_RC=0 FAKE_NOW=1000 BUSY_UNTIL=0
 # The real helpers are tested at the end; the sync tests use stubs for them.
@@ -69,7 +69,7 @@ claude-enmaas-restart() { restarted+=(enmaas); return ${restart_rc[enmaas]-0}; }
 claude-hosted-only-restart() { restarted+=(glm-claude); return ${restart_rc[glm-claude]-0}; }
 codex-hosted-only-restart() { restarted+=(glm-codex); return ${restart_rc[glm-codex]-0}; }
 _llm_proxy_sync_confirm() { confirmed+=($1); [[ "${CONFIRM_RESULT-1}" == 1 ]]; }
-_llm_proxy_watch_alive() { (( WATCH_ALIVE )); }
+_llm_proxy_watch_alive() { (( WATCH_ALIVE )) || [[ -n "${watch_names[$1]-}" ]]; }
 _llm_proxy_watch_start() { watch_started+=($1); return $WATCH_START_RC; }
 _llm_proxy_watch_kill() { watch_killed+=($1); return 0; }
 # fake clock: every poll pause is one second
@@ -78,7 +78,7 @@ _llm_proxy_watch_pause() { (( FAKE_NOW++ )); }
 
 local out rc outfile="$tmp/out"
 reset() {
-    listening=(); stub_verdict=(); serving=(); restart_rc=(); restarted=(); confirmed=(); watch_started=(); watch_killed=()
+    listening=(); stub_verdict=(); serving=(); restart_rc=(); watch_names=(); restarted=(); confirmed=(); watch_started=(); watch_killed=()
     unset CONFIRM_RESULT LLM_PROXY_WATCH_TIMEOUT
     WATCH_ALIVE=0 WATCH_START_RC=0 FAKE_NOW=1000 BUSY_UNTIL=0
     rm -rf "$XDG_STATE_HOME"
@@ -234,6 +234,40 @@ reset; listening=(59003 1)
 stub_verdict=(glm-codex "stale: hooks" glm-claude "stale: hooks")
 HOSTED_ONLY_CODEX_PROXY_PORT=59003 sync
 (( rc == 0 )) && [[ ${#watch_killed} -eq 0 ]] || fail "stopped a watcher that was not alive: killed=$watch_killed"
+
+# 14. --status-json: the read-only machine-readable snapshot the menubar float
+# renders and fleet-sync caches for the fleet aggregate. Listening proxies only
+# (a stopped proxy cannot be behind), nothing restarted, no marker written.
+status_json() { llm-proxy-sync --status-json >"$outfile" 2>&1; rc=$?; out=$(<"$outfile"); }
+reset; listening=(59000 1 59003 1); stub_verdict=(copilot fresh glm-claude "stale: hooks, knobs")
+status_json
+(( rc == 0 && ${#restarted} == 0 && ${#watch_started} == 0 )) || fail "status-json acted: rc=$rc restarted=$restarted started=$watch_started"
+jq -e '.checked_at > 0 and (.proxies | length) == 2' <<< "$out" >/dev/null || fail "status-json shape: $out"
+[[ "$(jq -r '.proxies[] | select(.name == "copilot") | .state' <<< "$out")" == current ]] || fail "copilot not current: $out"
+[[ "$(jq -r '.proxies[] | select(.name == "glm-claude") | "\(.state)|\(.why)"' <<< "$out")" == "pending|hooks, knobs" ]] || fail "glm-claude not pending with why: $out"
+[[ -z "$(jq -r '.proxies[] | select(.name == "vertex") | .name' <<< "$out")" ]] || fail "a stopped proxy was reported: $out"
+[[ -z "$(ls "$XDG_STATE_HOME/llm-proxy-sync"/up-* 2>/dev/null)" ]] || fail "status-json wrote recovery markers"
+
+# 14b. a live watcher means "behind and busy": state watcher (not the
+# fingerprint's pending) and no fingerprint check needed; a watcher whose
+# proxy has died still means the update is outstanding
+reset; listening=(59004 1); stub_verdict=(glm-codex "stale: hooks"); serving=(59004 1); watch_names=(glm-codex 1)
+status_json
+[[ "$(jq -r '.proxies[0].state' <<< "$out")" == watcher && "$(jq -r '.proxies | length' <<< "$out")" == 1 ]] || fail "watcher state not reported: $out"
+reset; watch_names=(glm-codex 1)
+status_json
+[[ "$(jq -r '.proxies[0].state' <<< "$out")" == watcher && "$(jq -r '.proxies | length' <<< "$out")" == 1 ]] || fail "watcher with dead listener not reported: $out"
+
+# 14c. a check that cannot run (e.g. no ENMAAS_API_KEY) degrades to unknown:
+# rc 0, valid JSON, never an error and never a false all-clear
+reset; listening=(59005 1); stub_verdict=(enmaas unknown)
+status_json
+(( rc == 0 )) && [[ "$(jq -r '.proxies[0].state' <<< "$out")" == unknown ]] || fail "unknown not degraded: rc=$rc $out"
+
+# 14d. nothing listening and no watchers: an empty but valid snapshot
+reset
+status_json
+(( rc == 0 )) && [[ "$(jq -r '.proxies | length' <<< "$out")" == 0 ]] || fail "empty snapshot: rc=$rc $out"
 
 # --- llm-proxy-watch (the detached watcher) ---------------------------------
 
