@@ -691,6 +691,23 @@ _llm_proxy_watch_log() {
     return 0
 }
 
+# _llm_proxy_notify <title> <message>: desktop notification, best effort.
+# LLM_PROXY_NOTIFY_LOG=<file> appends instead (tests, headless hosts).
+_llm_proxy_notify() {
+    local title="$1" message="$2"
+    if [[ -n "${LLM_PROXY_NOTIFY_LOG-}" ]]; then
+        print -r -- "$title: $message" >> "$LLM_PROXY_NOTIFY_LOG" 2>/dev/null
+        return 0
+    fi
+    if [[ "$(uname)" == Darwin ]] && (( $+commands[osascript] )); then
+        local esc_t="${title//\"/\\\"}" esc_m="${message//\"/\\\"}"
+        osascript -e "display notification \"${esc_m}\" with title \"${esc_t}\"" >/dev/null 2>&1
+    elif (( $+commands[notify-send] )); then
+        notify-send --app-name=llm-proxy-sync "$title" "$message" >/dev/null 2>&1
+    fi
+    return 0
+}
+
 # _llm_proxy_watch_start <name>: start a detached `llm-proxy-watch <name>`.
 # Under a systemd service (the fleet-sync timer is a oneshot unit) children die
 # with the unit, so the watcher goes out as its own transient user unit; anywhere
@@ -769,6 +786,7 @@ llm-proxy-watch() {
             fi
             if (( $(_llm_proxy_now) >= deadline )); then
                 _llm_proxy_watch_log "$t" "still busy at the deadline; giving up (the next fleet-sync starts a new watcher)"
+                _llm_proxy_notify "Proxy update deferred" "$t (:${port[$t]}) stayed busy for the whole watch window; the next fleet-sync retries"
                 rc=1
                 break
             fi
@@ -784,8 +802,10 @@ llm-proxy-watch() {
                 _llm_proxy_watch_log "$t" "idle; restarting ($verdict)"
                 if ${fn[$t]} || _llm_proxy_sync_confirm "${port[$t]}"; then
                     _llm_proxy_watch_log "$t" "restarted with the current code"
+                    _llm_proxy_notify "Proxy updated" "$t (:${port[$t]}) restarted at the first idle moment with the pulled code"
                 else
                     _llm_proxy_watch_log "$t" "restart did not bring it back; run: ${fn[$t]}"
+                    _llm_proxy_notify "Proxy restart FAILED" "$t (:${port[$t]}) — run ${fn[$t]}"
                     rc=1
                 fi
                 break

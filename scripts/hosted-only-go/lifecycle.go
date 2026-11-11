@@ -25,6 +25,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -823,6 +824,8 @@ func runWatch(args []string) int {
 		}
 		if !time.Now().Before(deadline) {
 			logf("still busy at the deadline; giving up (the next fleet-sync starts a new watcher)")
+			notifyUser("Proxy update deferred",
+				fmt.Sprintf("%s (:%s) stayed busy for the whole watch window; the next fleet-sync retries", *name, *port))
 			rc = 1
 			break
 		}
@@ -836,6 +839,8 @@ func runWatch(args []string) int {
 			switch {
 			case err != nil:
 				logf("restart did not bring it back; run: %s-hosted-only-restart", *flavor)
+				notifyUser("Proxy restart FAILED",
+					fmt.Sprintf("%s (:%s) — run %s-hosted-only-restart", *name, *port, *flavor))
 				rc = 1
 			case status == "fresh":
 				logf("already restarted with the current code; nothing to do")
@@ -846,12 +851,36 @@ func runWatch(args []string) int {
 				continue
 			default:
 				logf("restarted with the current code")
+				notifyUser("Proxy updated",
+					fmt.Sprintf("%s (:%s) restarted at the first idle moment with the pulled code", *name, *port))
 			}
 			break
 		}
 		time.Sleep(watchPoll)
 	}
 	return rc
+}
+
+// notifyUser tells the human the deferred restart finally happened (or did
+// not), without the terminal: a desktop notification, best effort.
+// LLM_PROXY_NOTIFY_LOG=<file> appends instead of notifying (tests, headless).
+func notifyUser(title, message string) {
+	if log := strings.TrimSpace(os.Getenv("LLM_PROXY_NOTIFY_LOG")); log != "" {
+		if f, err := os.OpenFile(log, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600); err == nil {
+			_, _ = f.WriteString(title + ": " + message + "\n")
+			_ = f.Close()
+		}
+		return
+	}
+	clean := func(s string) string {
+		return strings.NewReplacer("\"", "'", "\n", " ").Replace(s)
+	}
+	if runtime.GOOS == "darwin" {
+		script := fmt.Sprintf("display notification %q with title %q", clean(message), clean(title))
+		_ = exec.Command("osascript", "-e", script).Run()
+		return
+	}
+	_ = exec.Command("notify-send", "--app-name=llm-proxy-sync", title, message).Run()
 }
 
 func readFileOr(path, fallback string) string {

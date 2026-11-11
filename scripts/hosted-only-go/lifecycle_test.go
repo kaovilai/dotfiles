@@ -185,3 +185,18 @@ func TestEnsureRefusesToSwapAForeignListener(t *testing.T) {
 		t.Fatalf("a foreign listener must be refused, got %v", err)
 	}
 }
+
+// The deferred-restart notifier writes to LLM_PROXY_NOTIFY_LOG when set
+// (tests, headless hosts) instead of invoking a desktop notifier.
+func TestNotifyUserWritesLog(t *testing.T) {
+	log := filepath.Join(t.TempDir(), "notify.log")
+	t.Setenv("LLM_PROXY_NOTIFY_LOG", log)
+	notifyUser("Proxy updated", "glm-codex (:4148) restarted at the first idle moment")
+	data, err := os.ReadFile(log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "Proxy updated: glm-codex (:4148) restarted") {
+		t.Fatalf("notification line: %q", data)
+	}
+}
