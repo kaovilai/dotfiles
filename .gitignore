@@ -5,3 +5,4 @@ temp_extract
 .DS_Store
 backlog/
 __pycache__/
+*.private-key.pem
