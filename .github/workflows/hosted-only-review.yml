@@ -58,12 +58,16 @@ jobs:
       - name: Clone dotfiles (proxy source)
         run: |
           git clone -q --depth 1 -b "${DOTFILES_REF:-main}" https://github.com/kaovilai/dotfiles "$RUNNER_TEMP/dotfiles"
-          echo "DOTFILES_SHA=$(git -C "$RUNNER_TEMP/dotfiles" rev-parse HEAD)" >> "$GITHUB_ENV"
-      - name: Cache proxy binary (keyed on dotfiles sha)
+          echo "DOTFILES_SHA=$(git -C "$RUNNER_TEMP/dotfiles" rev-parse HEAD)"
+          # same hash _hosted_only_go_hash computes (sha256 over go.mod + *.go, C locale):
+          # cache + binary stamp survive unrelated dotfiles commits
+          src_sha=$( cd "$RUNNER_TEMP/dotfiles/scripts/hosted-only-go" && export LC_ALL=C && cat ./go.mod ./*.go | sha256sum | cut -d' ' -f1 )
+          echo "PROXY_SRC_SHA=$src_sha" >> "$GITHUB_ENV"
+      - name: Cache proxy binary (keyed on proxy source hash)
         uses: actions/cache@v4
         with:
           path: ~/.local/state/hosted-only-go
-          key: hosted-only-proxy-${{ env.DOTFILES_SHA }}
+          key: hosted-only-proxy-${{ env.PROXY_SRC_SHA }}
       - name: Start hosted-only proxy (EnMaaS GLM, port 4148)
         env:
           ENMAAS_API_KEY: ${{ secrets.ENMAAS_API_KEY }}
