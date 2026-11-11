@@ -19,9 +19,9 @@ runs, so the proxy cannot start.
   `HOSTED_ONLY_CLAUDE_MENTIONS=true` (set with
   `gh variable set HOSTED_ONLY_CLAUDE_MENTIONS --repo kaovilai/dotfiles --body true`)
   and only OWNER/MEMBER/COLLABORATOR comments trigger, so bots quoting `@claude`
-  in review bodies never fire it. Off by default because `claude.yml` already
-  answers `@claude` via the Claude subscription OAuth; enable here only after
-  disabling that workflow.
+  in review bodies never fire it. The former `claude.yml` (subscription-OAuth
+  `@claude` responder) is removed in this PR — hosted-only takes over mentions
+  once the variable is set.
 - **Install/update/switch**: managed by the `claude-gha-hosted-only` skill in
   [kaovilai/.claude](https://github.com/kaovilai/.claude) —
   `install-reviewer.sh kaovilai/dotfiles` (re-run = refresh to current template;
