@@ -34,30 +34,36 @@ func (a *app) streamTranslated(w http.ResponseWriter, resp *http.Response, tr tr
 	}
 	info, readErr := tr.Stream(resp.Body, emit, requested)
 
-	// A failure after the 200 was sent must still reach the client: emit the
-	// Anthropic mid-stream error event (the stream then ends without
-	// message_stop, per the protocol) instead of a bare EOF.
-	if readErr != nil && writeErr == nil {
-		_ = emit("error", marshal(map[string]any{
-			"type":  "error",
-			"error": map[string]any{"type": "api_error", "message": readErr.Error()},
-		}))
-	}
-
 	ok := readErr == nil && writeErr == nil
 	status := http.StatusOK
 	errText := ""
+	resetAt, resetSource, retryAfter := int64(0), "", 0
 	if !ok {
 		status = http.StatusBadGateway
 		if writeErr != nil {
 			status = 499 // client closed the stream; same convention as streamResponse
 			errText = "client write failed: " + writeErr.Error()
 		} else {
-			errText = "upstream stream interrupted: " + readErr.Error()
+			// Headers are already out: the SSE error event is the retry channel.
+			// rate_limit_error + the outage wait makes Claude Code retry the
+			// turn instead of classifying a mid-stream cut as an unknown API
+			// error (2026-11-11, GLM "Claude API unknown").
+			now := time.Now()
+			retryAfter = a.outages.wait(served, now)
+			resetAt, resetSource = now.Add(time.Duration(retryAfter)*time.Second).Unix(), "estimate:stall"
+			errText = fmt.Sprintf("upstream stream interrupted (retry after %ds): %v", retryAfter, readErr)
+			message := readErr.Error()
+			if retryAfter > 0 {
+				message = fmt.Sprintf("%s (retry after %ds)", message, retryAfter)
+			}
+			_ = emit("error", marshal(map[string]any{
+				"type":  "error",
+				"error": map[string]any{"type": "rate_limit_error", "message": message},
+			}))
 		}
 	}
 	if ok {
 		a.outages.success(served)
 	}
-	a.usage.write(a.buildEvent(path, data, requested, served, started, info, ok, status, 0, errText, false, 0, "", false, 0, usedFallback, fallbackReason, true, served, firstChunk, userAgent))
+	a.usage.write(a.buildEvent(path, data, requested, served, started, info, ok, status, 0, errText, !ok && readErr != nil, resetAt, resetSource, false, retryAfter, usedFallback, fallbackReason, true, served, firstChunk, userAgent))
 }

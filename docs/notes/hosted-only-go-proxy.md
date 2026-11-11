@@ -163,6 +163,16 @@ gateway name over DoH itself.
 - **Cost guard:** the hosted-only flavors answer 400 for any model id they do
   not serve (LiteLLM's `model_list` restriction), instead of forwarding it with
   the real upstream key.
+- **Timeouts:** `REQUEST_TIMEOUT` (`HOSTED_ONLY_REQUEST_TIMEOUT`, 180) bounds
+  the time to the upstream's **response headers**, not the whole body; a body
+  that produces no bytes for `STREAM_IDLE_TIMEOUT` (300 s, 0 disables) is cut
+  by an idle watchdog. Actively streaming answers are never cut by a total
+  deadline (2026-11-11: a >180 s GLM stream was cut mid-answer and surfaced as
+  "Claude API unknown"). A stall before headers fails over to the sibling; a
+  stall after bytes reached the client ends with a retryable
+  `rate_limit_error` SSE event carrying the outage wait, and a stalled
+  buffered (non-stream) body answers the rewritten retry shape (503 Messages /
+  429 chat+Responses) with `retry-after`.
 - **Limit/outage rewrite:** 429/402, 503 `upstream rate limited` and JSON
   `error.code: rate_limited`; outages are 408/502/504/524, 503
   `no_db_connection`, 500 connection errors and transport failures (excluding

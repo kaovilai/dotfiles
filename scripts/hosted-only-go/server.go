@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"net/url"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -85,13 +86,20 @@ func newApp(cfg *config) *app {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.ForceAttemptHTTP2 = true
 	transport.DialContext = dohDialContext(&net.Dialer{Timeout: 30 * time.Second}, newDoHResolver())
+	// First-byte budget: request write to response headers.
+	if cfg.RequestTimeout > 0 {
+		transport.ResponseHeaderTimeout = cfg.RequestTimeout
+	}
 	verdictPath := cfg.SearchVerdicts
 	if verdictPath == "" {
 		verdictPath = filepath.Join(cfg.shimStateDir(), "search-verdicts.json")
 	}
 	return &app{
-		cfg:      cfg,
-		client:   &http.Client{Timeout: cfg.RequestTimeout, Transport: transport},
+		cfg: cfg,
+		// No total client deadline: it would cut actively-streaming answers
+		// (see watchdog.go). The header budget and the idle watchdog bound the
+		// two ways a request can actually stall.
+		client:   &http.Client{Transport: transport},
 		usage:    newUsageLog(cfg.UsageDir, cfg.Port),
 		outages:  newOutageTracker(cfg.OutageState, cfg.OutageBase, cfg.OutageMax, time.Duration(cfg.OutageCoalesce*float64(time.Second))),
 		verdicts: newVerdictStore(verdictPath),
@@ -528,6 +536,34 @@ func (a *app) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	respBody, readErr := io.ReadAll(resp.Body)
+	if readErr != nil {
+		// The body stalled or was cut before anything reached the client (this
+		// path buffers): answer the retryable rewrite so the client retries
+		// later instead of seeing a corrupt/partial answer. The outage streak
+		// supplies the wait.
+		now := time.Now()
+		wait := a.outages.wait(served, now)
+		if a.cfg.OutageRewrite {
+			info := limitInfo{
+				Reset:  now.Add(time.Duration(wait) * time.Second),
+				Kind:   "outage",
+				Source: "estimate:stall",
+			}
+			status, out, extra := renderLimit(a.cfg, r.URL.Path, served, info, http.StatusBadGateway, now)
+			for k, v := range extra {
+				w.Header().Set(k, v)
+			}
+			a.writeJSON(w, status, nil, out)
+			a.usage.write(a.event(r, data, requested, served, started, usageInfo{}, false, status, resp.StatusCode,
+				"upstream body stalled (retry after "+strconv.Itoa(wait)+"s): "+readErr.Error(), true,
+				info.Reset.Unix(), info.Source, false, wait, usedFallback, fallbackReason, false, "", 0))
+			return
+		}
+		msg := "upstream body stalled: " + readErr.Error()
+		a.writeDialectError(w, r.URL.Path, http.StatusBadGateway, msg, "")
+		a.usage.write(a.event(r, data, requested, served, started, usageInfo{}, false, http.StatusBadGateway, resp.StatusCode, msg, false, 0, "", false, 0, usedFallback, fallbackReason, false, "", 0))
+		return
+	}
 	responseModel := ""
 	if obj, err := decodeObject(respBody); err == nil {
 		responseModel = asString(obj["model"])
@@ -647,7 +683,15 @@ func (a *app) upstream(r *http.Request, body []byte, base, path string, stream b
 	} else {
 		req.Header.Set("Authorization", "Bearer "+a.cfg.APIKey)
 	}
-	return a.client.Do(req)
+	ctx, cancel := context.WithCancel(r.Context())
+	req = req.WithContext(ctx)
+	resp, err := a.client.Do(req)
+	if err != nil {
+		cancel()
+		return nil, err
+	}
+	resp.Body = newIdleBody(resp.Body, a.cfg.StreamIdleTimeout, cancel)
+	return resp, nil
 }
 
 func isAnthropicPath(path string) bool {
@@ -861,19 +905,41 @@ func (a *app) streamResponse(w http.ResponseWriter, resp *http.Response, path st
 	ok := readErr == nil && writeErr == nil
 	status := http.StatusOK
 	errText := ""
+	resetAt, resetSource, retryAfter := int64(0), "", 0
 	if !ok {
 		status = http.StatusBadGateway
 		if writeErr != nil {
 			status = 499 // client closed the stream; same convention as nginx
 			errText = "client write failed: " + writeErr.Error()
 		} else {
-			errText = "upstream stream interrupted: " + readErr.Error()
+			// Headers are already out, so the HTTP status cannot change; the
+			// SSE error event is the retry channel. A rate_limit_error with the
+			// outage wait makes Claude Code retry the turn instead of
+			// classifying a mid-stream cut as an unknown API error.
+			now := time.Now()
+			retryAfter = a.outages.wait(served, now)
+			resetAt, resetSource = now.Add(time.Duration(retryAfter)*time.Second).Unix(), "estimate:stall"
+			errText = fmt.Sprintf("upstream stream interrupted (retry after %ds): %v", retryAfter, readErr)
+			if isAnthropicPath(path) {
+				payload := marshal(map[string]any{
+					"type": "error",
+					"error": map[string]any{
+						"type":    "rate_limit_error",
+						"message": fmt.Sprintf("upstream stream stalled or was cut; retry after %ds", retryAfter),
+					},
+				})
+				if _, werr := fmt.Fprintf(w, "event: error\ndata: %s\n\n", payload); werr == nil {
+					if flusher != nil {
+						flusher.Flush()
+					}
+				}
+			}
 		}
 	}
 	if ok {
 		a.outages.success(served)
 	}
-	a.usage.write(a.buildEvent(path, data, requested, served, started, parser.info, ok, status, 0, errText, false, 0, "", false, 0, usedFallback, fallbackReason, true, parser.model, firstChunk, userAgent))
+	a.usage.write(a.buildEvent(path, data, requested, served, started, parser.info, ok, status, 0, errText, !ok && readErr != nil, resetAt, resetSource, false, retryAfter, usedFallback, fallbackReason, true, parser.model, firstChunk, userAgent))
 }
 
 func (a *app) event(r *http.Request, data map[string]any, requested, served string, started time.Time, info usageInfo, ok bool, status, upstreamStatus int, errText string, rewritten bool, resetAt int64, resetSource string, quota bool, retryAfter int, fallback bool, fallbackReason string, stream bool, responseModel string, ttft int) map[string]any {

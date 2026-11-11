@@ -4,6 +4,9 @@ if [[ -z "$ZSH_COMPLETION_CACHE_DIR" ]]; then
   _safe_source ~/git/dotfiles/zsh/command-cache.zsh
 fi
 
+# Pinned remote completion downloads (supply-chain hardening, see completion-pins.zsh)
+_safe_source ~/git/dotfiles/zsh/completion-pins.zsh
+
 # Generated tool completions go to ~/.zsh/completions — never infer the
 # destination from ${fpath[1]}: plugin managers (znap prompt pure) prepend
 # their own dirs to fpath, which silently redirected these writes into the
@@ -51,13 +54,9 @@ if has_command docker; then
     cp "$docker_completion_file" "$HOME/.zsh/completions/_docker" &!
   fi
   
-  # Update check and download in the background
+  # Pinned download + upstream staleness notice (see completion-pins.zsh)
   if [[ "$TERM_PROGRAM" != "vscode" ]] && has_command curl; then
-    if completion_cache_expired "$docker_completion_file" $CACHE_TTL_STABLE; then  # 30 days for stable tools
-      ( t=$(mktemp "${docker_completion_file}.XXXXXX") && curl -fsLm 10 https://raw.githubusercontent.com/docker/docker-ce/master/components/cli/contrib/completion/zsh/_docker > "$t" &&
-      mv "$t" "$docker_completion_file" ||
-      rm -f "$t" 2>/dev/null) &!
-    fi
+    _completion-pin-ensure docker $CACHE_TTL_STABLE
   fi
 fi
 
@@ -93,13 +92,9 @@ if has_command podman; then
     cp "$podman_completion_file" "$HOME/.zsh/completions/_podman" &!
   fi
   
-  # Update check and download in the background
+  # Pinned download + upstream staleness notice (see completion-pins.zsh)
   if [[ "$TERM_PROGRAM" != "vscode" ]] && has_command curl; then
-    if completion_cache_expired "$podman_completion_file" $CACHE_TTL_STABLE; then  # 30 days for stable tools
-      ( t=$(mktemp "${podman_completion_file}.XXXXXX") && curl -fsLm 10 https://raw.githubusercontent.com/containers/podman/main/completions/zsh/_podman > "$t" &&
-      mv "$t" "$podman_completion_file" ||
-      rm -f "$t" 2>/dev/null) &!
-    fi
+    _completion-pin-ensure podman $CACHE_TTL_STABLE
   fi
 fi
 
@@ -157,11 +152,9 @@ if has_command claude; then
   if [[ -f "$claude_completion_file" ]]; then
     cp "$claude_completion_file" "$HOME/.zsh/completions/_claude" &!
   fi
-  if has_command curl && completion_cache_expired "$claude_completion_file"; then  # 7 days
-    ( t=$(mktemp "${claude_completion_file}.XXXXXX") && curl -fsLm 10 https://raw.githubusercontent.com/wbingli/zsh-claudecode-completion/main/_claude > "$t" &&
-    mv "$t" "$claude_completion_file" &&
-    cp "$claude_completion_file" "$HOME/.zsh/completions/_claude" ||
-    rm -f "$t" 2>/dev/null) &!
+  # Pinned download + upstream staleness notice (see completion-pins.zsh)
+  if has_command curl && [[ "$TERM_PROGRAM" != "vscode" ]]; then
+    _completion-pin-ensure claude
   fi
 fi
 

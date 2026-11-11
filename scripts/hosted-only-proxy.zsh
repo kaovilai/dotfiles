@@ -283,7 +283,7 @@ _hosted_only_proxy_fp() {
     # Every knob _hosted_only_go_env forwards is a fingerprint input: one left
     # out (IMAGE_TOKENS, IMAGE_CACHE_DIR, SEARCH_NUDGE) would let a running
     # proxy serve the old value as "fresh".
-    local knobs="$(_hosted_only_knob OUTAGE_COALESCE_SECONDS 5) $_hop_vision_fallback $_hop_limit_rewrite $_hop_limit_retry $_hop_client_retry $_hop_fallback $_hop_aliases $_hop_request_timeout $_hop_image_budget $_hop_image_cache_days $_hop_dialect $dns_host ${ENMAAS_DNS_DOH_URLS:-} $(_hosted_only_knob IMAGE_TOKENS 2500) $(_hosted_only_knob IMAGE_CACHE_DIR '') $(_hosted_only_knob SEARCH_NUDGE 1) $(_hosted_only_knob SEARCH_SHIM 0) $(_hosted_only_knob SEARCH_DAILY_CAP 500) $(_hosted_only_knob PARALLEL_BASE https://api.parallel.ai) $(_hosted_only_knob PARALLEL_PLATFORM https://platform.parallel.ai) $(_hosted_only_knob CLASSIFIER_ROUTE_MODEL '')"
+    local knobs="$(_hosted_only_knob OUTAGE_COALESCE_SECONDS 5) $_hop_vision_fallback $_hop_limit_rewrite $_hop_limit_retry $_hop_client_retry $_hop_fallback $_hop_aliases $_hop_request_timeout $(_hosted_only_knob STREAM_IDLE_TIMEOUT 300) $_hop_image_budget $_hop_image_cache_days $_hop_dialect $dns_host ${ENMAAS_DNS_DOH_URLS:-} $(_hosted_only_knob IMAGE_TOKENS 2500) $(_hosted_only_knob IMAGE_CACHE_DIR '') $(_hosted_only_knob SEARCH_NUDGE 1) $(_hosted_only_knob SEARCH_SHIM 0) $(_hosted_only_knob SEARCH_DAILY_CAP 500) $(_hosted_only_knob PARALLEL_BASE https://api.parallel.ai) $(_hosted_only_knob PARALLEL_PLATFORM https://platform.parallel.ai) $(_hosted_only_knob CLASSIFIER_ROUTE_MODEL '')"
     local fp token_fp
     fp=$(print -rn -- "$config"$'\x1f'"$hooks_hash"$'\x1f'"$ENMAAS_API_KEY"$'\x1f'"$knobs" \
         | shasum -a 256 | cut -d' ' -f1) || return 1
@@ -334,6 +334,7 @@ _hosted_only_go_env() {
         "HOSTED_ONLY_BYTES_PER_TOKEN=$(_hosted_only_knob BYTES_PER_TOKEN 3)"
         "HOSTED_ONLY_MIN_OUTPUT=$(_hosted_only_knob MIN_OUTPUT 16000)"
         "HOSTED_ONLY_REQUEST_TIMEOUT=$_hop_request_timeout"
+        "HOSTED_ONLY_STREAM_IDLE_TIMEOUT=$(_hosted_only_knob STREAM_IDLE_TIMEOUT 300)"
         "HOSTED_ONLY_SEARCH_NUDGE=$(_hosted_only_knob SEARCH_NUDGE 1)"
         "HOSTED_ONLY_SEARCH_SHIM=$(_hosted_only_knob SEARCH_SHIM 0)"
         "HOSTED_ONLY_SEARCH_DAILY_CAP=$(_hosted_only_knob SEARCH_DAILY_CAP 500)"

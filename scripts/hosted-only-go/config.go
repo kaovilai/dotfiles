@@ -56,10 +56,17 @@ type config struct {
 	OutageMax      int
 	OutageState    string // HOSTED_ONLY_OUTAGE_STATE: streaks survive a restart
 	OutageCoalesce float64
+	// RequestTimeout bounds the time to the upstream's RESPONSE HEADERS (first
+	// byte of the answer), not the whole body: a long-but-active stream must
+	// never be cut by a total deadline (2026-11-11: a >180 s GLM stream was cut
+	// at exactly REQUEST_TIMEOUT and surfaced as "Claude API unknown").
 	RequestTimeout time.Duration
-	QuotaTZ        *time.Location
-	UsageDir       string
-	SearchDelegate string
+	// StreamIdleTimeout cuts a stream that produced NO bytes for this long
+	// (stalled upstream); 0 disables. Active streams are unaffected.
+	StreamIdleTimeout time.Duration
+	QuotaTZ           *time.Location
+	UsageDir          string
+	SearchDelegate    string
 
 	// mlx warm gate (warm.go): the lazy load of mlx_lm.server must not block
 	// a turn past its timeout. WarmRSSKB is the resident-RSS threshold that
@@ -271,23 +278,24 @@ func loadConfig(flavor, port, runtimeDir string) *config {
 		WarmMax:              envInt("CLAUDE_MLX_WARM_MAX_SECONDS", 900, 0),
 		WarmServerCmd:        strings.TrimSpace(os.Getenv("CLAUDE_MLX_SERVER_CMD")),
 		WarmServerLog:        strings.TrimSpace(os.Getenv("CLAUDE_MLX_SERVER_LOG")), OutageBase: intKnob("OUTAGE_RETRY_SECONDS", 60, 1),
-		OutageMax:        intKnob("OUTAGE_RETRY_MAX_SECONDS", 600, 1),
-		OutageState:      strings.TrimSpace(knob("OUTAGE_STATE", "")),
-		OutageCoalesce:   coalesceKnob(),
-		RequestTimeout:   time.Duration(intKnob("REQUEST_TIMEOUT", 300, 1)) * time.Second,
-		QuotaTZ:          tz,
-		UsageDir:         usageDir,
-		SearchDelegate:   strings.TrimSpace(os.Getenv("T3_WEB_SEARCH_DELEGATE")),
-		SearchMCP:        strings.TrimSpace(os.Getenv("T3_WEB_SEARCH_MCP")),
-		SearchShim:       boolKnob("SEARCH_SHIM", false),
-		SearchVerdicts:   strings.TrimSpace(knob("SEARCH_VERDICTS", "")),
-		SearchDailyCap:   intKnob("SEARCH_DAILY_CAP", 500, 0),
-		ParallelBase:     strings.TrimRight(knob("PARALLEL_BASE", "https://api.parallel.ai"), "/"),
-		ParallelKey:      strings.TrimSpace(os.Getenv("PARALLEL_API_KEY")),
-		ParallelState:    strings.TrimSpace(knob("PARALLEL_STATE", runtimeDir)),
-		ParallelPlatform: strings.TrimRight(knob("PARALLEL_PLATFORM", "https://platform.parallel.ai"), "/"),
-		ParallelMCP:      strings.TrimRight(knob("PARALLEL_MCP", "https://mcp.parallel.ai/mcp"), "/"),
-		ParallelAccount:  strings.TrimRight(knob("PARALLEL_ACCOUNT", "https://api.parallel.ai/account"), "/"),
+		OutageMax:         intKnob("OUTAGE_RETRY_MAX_SECONDS", 600, 1),
+		OutageState:       strings.TrimSpace(knob("OUTAGE_STATE", "")),
+		OutageCoalesce:    coalesceKnob(),
+		RequestTimeout:    time.Duration(intKnob("REQUEST_TIMEOUT", 300, 1)) * time.Second,
+		StreamIdleTimeout: time.Duration(intKnob("STREAM_IDLE_TIMEOUT", 300, 0)) * time.Second,
+		QuotaTZ:           tz,
+		UsageDir:          usageDir,
+		SearchDelegate:    strings.TrimSpace(os.Getenv("T3_WEB_SEARCH_DELEGATE")),
+		SearchMCP:         strings.TrimSpace(os.Getenv("T3_WEB_SEARCH_MCP")),
+		SearchShim:        boolKnob("SEARCH_SHIM", false),
+		SearchVerdicts:    strings.TrimSpace(knob("SEARCH_VERDICTS", "")),
+		SearchDailyCap:    intKnob("SEARCH_DAILY_CAP", 500, 0),
+		ParallelBase:      strings.TrimRight(knob("PARALLEL_BASE", "https://api.parallel.ai"), "/"),
+		ParallelKey:       strings.TrimSpace(os.Getenv("PARALLEL_API_KEY")),
+		ParallelState:     strings.TrimSpace(knob("PARALLEL_STATE", runtimeDir)),
+		ParallelPlatform:  strings.TrimRight(knob("PARALLEL_PLATFORM", "https://platform.parallel.ai"), "/"),
+		ParallelMCP:       strings.TrimRight(knob("PARALLEL_MCP", "https://mcp.parallel.ai/mcp"), "/"),
+		ParallelAccount:   strings.TrimRight(knob("PARALLEL_ACCOUNT", "https://api.parallel.ai/account"), "/"),
 	}
 }
 
