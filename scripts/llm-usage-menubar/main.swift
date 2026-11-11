@@ -2847,12 +2847,21 @@ final class AppController: NSObject, NSMenuDelegate, NSWindowDelegate {
     /// spawning `llm-usage menubar-data` (process + full aggregation). The full
     /// poll keeps its own slow cadence, Activity-Monitor style: sample the hot
     /// metric cheaply and often, refresh everything else rarely.
+    private var lastInflightGC: Date?
     func refreshInflight() {
         // same guard as updateWindow: the float is the ONLY consumer of the
         // bar list, so a hidden (or never-shown) window skips the scan — the
         // 30 s data refresh and the menu/status item keep their own cadence.
         // showWindow() runs one scan on the way back in, so nothing is stale.
-        guard let p = panel, p.isVisible else { return }
+        // The dead-pid GC still runs at a slow cadence while hidden: skipping
+        // it entirely would let the writers' uncleaned leftovers grow
+        // unboundedly again (2026-11-11: 39 of 42 files on disk were dead).
+        guard let p = panel, p.isVisible else {
+            if let last = lastInflightGC, Date().timeIntervalSince(last) < 60 { return }
+            lastInflightGC = Date()
+            _ = scanInflightFiles(dirs: inflightDirs())
+            return
+        }
         let now = Date()
         var flights = scanInflightFiles(dirs: inflightDirs(), now: now).flights
         // peer snapshots: fleet/<host>/inflight.json, rewritten at request boundaries
