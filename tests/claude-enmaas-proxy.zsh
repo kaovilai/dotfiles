@@ -8,6 +8,49 @@ if ! command -v go >/dev/null; then
     exit 0
 fi
 export ENMAAS_TEST_REPO="${0:A:h:h}"
+
+# The controller's knob digest must ignore ambient tooling locators. The
+# menubar helper's launchd env exports LLM_USAGE_BIN, and hashing it made every
+# check run from that env — the float's detached status-json kick — report a
+# terminal-launched proxy as changed ("gateway/key or dependency settings"): a
+# permanent false "update pending" while fleet-sync's own check in the same
+# minute said up to date (2026-11-11). LLM_USAGE_DIR stays a child knob.
+python3 - "${0:A:h:h}" <<'PY' || exit 1
+import importlib.util, os, subprocess, sys, tempfile
+repo = sys.argv[1]
+prog = subprocess.run(['zsh', '-f', '-c',
+                       'source "$1/zsh/functions/claude/providers/enmaas.zsh"; _claude_enmaas_proxy_program',
+                       'x', repo], capture_output=True, text=True, check=True).stdout
+with tempfile.NamedTemporaryFile('w', suffix='.py', delete=False) as handle:
+    handle.write(prog)
+    path = handle.name
+spec = importlib.util.spec_from_file_location('enmaas_controller', path)
+controller = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(controller)  # the __main__ guard keeps main() out of it
+PREFIXES = ('LLM_USAGE_', 'HOSTED_ONLY_', 'GLM_HYBRID_', 'ENMAAS_RESPONSES_', 'ENMAAS_DNS_', 'T3_WEB_SEARCH_')
+
+def digest(**env):
+    saved = dict(os.environ)
+    try:
+        for k in [k for k in os.environ if k.startswith(PREFIXES)]:
+            del os.environ[k]
+        os.environ.update(env)
+        return controller.knob_digest()
+    finally:
+        os.environ.clear()
+        os.environ.update(saved)
+
+base = digest()
+assert digest(LLM_USAGE_BIN='/x/llm-usage') == base, 'ambient LLM_USAGE_BIN changed the proxy identity'
+assert digest(LLM_USAGE_PORT='4150') == base, 'ambient LLM_USAGE_PORT changed the proxy identity'
+assert digest(T3_WEB_SEARCH_STATE='/x') == base, 'ambient T3_WEB_SEARCH_* changed the proxy identity'
+assert digest(LLM_USAGE_DIR='/x') != base, 'LLM_USAGE_DIR is a child knob and must change the identity'
+assert digest(HOSTED_ONLY_VISION_FALLBACK='0') != base, 'a HOSTED_ONLY_ knob must change the identity'
+assert digest(ENMAAS_DNS_FALLBACK_HOSTS='other.example') != base, 'an ENMAAS_DNS_ knob must change the identity'
+os.unlink(path)
+print('PASS: knob digest ignores tooling locators and hashes the real child knobs', flush=True)
+PY
+
 run_suite() {
 export ENMAAS_TEST_IMPL=go
 python3 - <<'PY'

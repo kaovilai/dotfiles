@@ -311,9 +311,15 @@ def knob_digest():
     T3_WEB_SEARCH_* is ambient session wiring (an interactive shell exports
     it, the hourly timer's fleet-sync does not): hashing it made the timer
     and an interactive sync fight over the identity, restarting the proxy
-    every cycle, so it is excluded too."""
+    every cycle, so it is excluded too. Of the LLM_USAGE_* family only
+    LLM_USAGE_DIR is a child knob (the usage log dir): the rest are tooling
+    locators, and the menubar helper's launchd env exports LLM_USAGE_BIN —
+    hashing it made every check run from that env (the float's detached
+    status kick) report a terminal-launched proxy as 'gateway/key or
+    dependency settings', a permanent false "update pending" (2026-11-11)."""
     items = sorted((k, v) for k, v in os.environ.items()
-                   if k.startswith(CHILD_ENV_PREFIXES)
+                   if ((k.startswith(CHILD_ENV_PREFIXES) and not k.startswith('LLM_USAGE_'))
+                       or k == 'LLM_USAGE_DIR')
                    and k != 'HOSTED_ONLY_OUTAGE_STATE'
                    and not k.startswith('T3_WEB_SEARCH_'))
     return hashlib.sha256(repr(items).encode()).hexdigest()

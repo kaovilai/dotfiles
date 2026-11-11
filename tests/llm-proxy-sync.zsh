@@ -269,6 +269,33 @@ reset
 status_json
 (( rc == 0 )) && [[ "$(jq -r '.proxies | length' <<< "$out")" == 0 ]] || fail "empty snapshot: rc=$rc $out"
 
+# 15. --status-json and the sync must agree for the same proxy: both read the
+# same verdict, so the snapshots's state must match what the sync would do.
+# (A 2026-11-11 live divergence — status "pending" for a proxy the sync called
+# up to date — came from the enmaas controller hashing the menubar helper's
+# ambient LLM_USAGE_BIN into the proxy fingerprint; the digest itself is pinned
+# in tests/claude-enmaas-proxy.zsh.)
+status_sync_agree() {  # <expect-status> <expect-in-sync-output> [sync args...]
+    local expect_state="$1" expect_sync="$2"; shift 2
+    status_json
+    (( rc == 0 )) || fail "status-json rc=$rc for $expect_state"
+    local state; state=$(jq -r '.proxies[0].state' <<< "$out")
+    [[ "$state" == "$expect_state" ]] || fail "status state '$state', expected '$expect_state': $out"
+    sync "$@"
+    [[ "$out" == *"$expect_sync"* ]] || fail "sync said '$(print -r -- "$out")', expected '*$expect_sync*' for state $state"
+}
+reset; listening=(59000 1); stub_verdict=(copilot fresh)
+status_sync_agree current "copilot (:59000) up to date"
+(( ${#restarted} == 0 && ${#watch_started} == 0 )) || fail "agreed-fresh proxy was touched: $restarted $watch_started"
+reset; listening=(59000 1); stub_verdict=(copilot "stale: source hash")
+status_sync_agree pending "copilot (:59000) changed: source hash; idle, restarting"
+reset; listening=(59003 1); stub_verdict=(glm-claude "stale: hooks"); serving=(59003 1); watch_names=(glm-claude 1)
+status_sync_agree watcher "a watcher is already waiting for an idle moment"
+reset; listening=(59003 1); stub_verdict=(glm-claude "stale: hooks"); serving=(59003 1)
+status_sync_agree pending "serving a request, watcher started: restarts it at the first idle moment"
+reset; listening=(59005 1); stub_verdict=(enmaas unknown)
+status_sync_agree unknown "could not be checked (unknown"
+
 # --- llm-proxy-watch (the detached watcher) ---------------------------------
 
 # W1. busy for a while, then idle: restarted at the first idle moment (two quiet
