@@ -8,7 +8,8 @@ review: GitHub hides repo secrets (`ENMAAS_API_KEY`) from fork-`pull_request`
 runs, so the proxy cannot start.
 
 - **Proxy**: cloned from this repo at `DOTFILES_REF` (default `main`), Go binary
-  cached per dotfiles sha, port 4148. Same engine as local: GLM→DeepSeek reroute
+  cached per proxy source hash (unrelated dotfiles commits do not rebuild),
+  port 4148. Same engine as local: GLM→DeepSeek reroute
   for image-bearing requests, thinking cutoff for the classifier, 429 reset
   rewrite, retry caps. Model ids follow this repo (`_hop_glm`) — a GLM bump here
   updates the reviewer on the next run, no workflow edit needed.
@@ -20,8 +21,8 @@ runs, so the proxy cannot start.
   `gh variable set HOSTED_ONLY_CLAUDE_MENTIONS --repo kaovilai/dotfiles --body true`)
   and only OWNER/MEMBER/COLLABORATOR comments trigger, so bots quoting `@claude`
   in review bodies never fire it. The former `claude.yml` (subscription-OAuth
-  `@claude` responder) is removed in this PR — hosted-only takes over mentions
-  once the variable is set.
+  `@claude` responder) was removed in #644 — hosted-only owns `@claude`
+  mentions on this repo; the variable is set.
 - **Install/update/switch**: managed by the `claude-gha-hosted-only` skill in
   [kaovilai/.claude](https://github.com/kaovilai/.claude) —
   `install-reviewer.sh kaovilai/dotfiles` (re-run = refresh to current template;
