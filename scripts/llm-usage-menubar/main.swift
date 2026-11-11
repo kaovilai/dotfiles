@@ -684,7 +684,7 @@ func providerColor(_ key: String) -> NSColor {
     }
 }
 
-let amber429 = rgb(0xFFB000)
+let amber429 = dynamicColor(light: rgb(0x9A6700), dark: rgb(0xFFB000))
 
 struct SpanItem {
     let provider: String, label: String, kind: String
@@ -1300,8 +1300,63 @@ final class MonitorView: NSView {
     func drawHeader(_ ctx: CGContext, summary: Summary, live: [SpanItem], d: J, in r: NSRect) {
         stateColor(summary).setFill()
         NSBezierPath(ovalIn: NSRect(x: r.minX, y: r.midY - 3.5, width: 7, height: 7)).fill()
-        drawStr(headerText(summary, live: live, d: d) + (stale ? " · stale" : ""), in: NSRect(x: r.minX + 11, y: r.minY, width: r.width - 11, height: r.height),
+        let main = headerText(summary, live: live, d: d) + (stale ? " · stale" : "")
+        drawStr(main, in: NSRect(x: r.minX + 11, y: r.minY, width: r.width - 11, height: r.height),
                 font: boldFont, color: summary.state == "normal" ? .labelColor : stateColor(summary))
+        // The header row is mostly empty space after "OK · N req/15m": carry the
+        // 15m reroute kinds (vision / fallback) and error counts there too, so a
+        // redirect is visible without opening the menu. Abnormal states already
+        // say what is wrong, so the extras ride along only when things look OK.
+        guard summary.state == "normal" else { return }
+        let rr = d["reroutes_15m"].int ?? 0
+        var kinds: [(String, Int)] = []
+        for k in d["reroutes_kinds_15m"].keys {
+            let c = d["reroutes_kinds_15m"][k].int ?? 0
+            if c > 0 { kinds.append((k, c)) }
+        }
+        kinds.sort { $0.1 != $1.1 ? $0.1 > $1.1 : $0.0 < $1.0 }  // name breaks ties: no flicker between polls
+        var reroutePart: (String, NSColor)?
+        if rr > 0 {
+            let top = kinds.prefix(2).map { "\($0.0) \($0.1)" }.joined(separator: " · ")
+            reroutePart = ("↪\(rr)" + (top.isEmpty ? "" : " \(top)"), .systemOrange)
+        }
+        let errs = d["totals"]["m15"]["errors"]
+        let e429 = errs["429"].int ?? 0, e5 = errs["5xx"].int ?? 0, eo = errs["other"].int ?? 0
+        var errParts: [(String, NSColor)] = []
+        if e429 > 0 { errParts.append(("429 ×\(e429)", amber429)) }
+        if e5 > 0 { errParts.append(("5xx ×\(e5)", .systemRed)) }
+        if eo > 0 { errParts.append(("err ×\(eo)", .systemRed)) }
+        let parts = (reroutePart.map { [$0] } ?? []) + errParts
+        guard !parts.isEmpty else { return }
+        var x = r.minX + 11 + textWidth(main, boldFont)
+        func drawParts(_ parts: [(String, NSColor)]) {
+            for (text, color) in parts {
+                x += 6
+                drawStr(text, in: NSRect(x: x, y: r.minY, width: min(r.maxX - x, textWidth(text, boldFont)), height: r.height), font: boldFont, color: color)
+                x += textWidth(text, boldFont)
+            }
+        }
+        let avail = r.maxX - x
+        func fits(_ ps: [(String, NSColor)]) -> Bool { ps.map({ textWidth($0.0, boldFont) + 6 }).reduce(0, +) <= avail }
+        // Wider window: kinds + every error count. Narrow (vertical layout): drop
+        // the kind names, then fold the errors into one count, then keep the ↪
+        // count alone — some indicator always survives while any fits.
+        var candidates: [[(String, NSColor)]] = [parts]
+        let compactRR = reroutePart.map { ("↪\(rr)", $0.1) }
+        if let c = compactRR {
+            candidates.append([c] + errParts)
+        }
+        if !errParts.isEmpty {
+            let color = e5 > 0 || eo > 0 ? NSColor.systemRed : amber429
+            let combined = ("×\(e429 + e5 + eo) err", color)
+            // reroutes outrank the error breakdown: try ↪+combined, then ↪ alone,
+            // and only fall back to the bare error count when there is no ↪ at all
+            if let c = compactRR { candidates.append([c, combined]) } else { candidates.append([combined]) }
+        }
+        // reroute-only last: also covers an older payload with no kind counts, so
+        // the ↪ count still shows when every error-including candidate is too wide
+        if let c = compactRR { candidates.append([c]) }
+        if let pick = candidates.first(where: fits) { drawParts(pick) }
     }
 
     /// History layout: no text rows, so a small pill carries the state (and in-flight count) over the graph.
@@ -1801,6 +1856,8 @@ final class MonitorView: NSView {
         // Reroutes: why traffic moved — the same kinds the menu's REROUTES
         // section lists (alias / vision / fallback:reason), compacted into one
         // row so the window shows redirect reasons without opening the menu.
+        // This row is the 1h view (d.reroutes), unlike the header's 15m ↪, so it
+        // must say so: same-screen "↪ N" numbers with different windows misread.
         let rrs = d["reroutes"].arr
         if !rrs.isEmpty, rowsLeft >= 1, let r = next() {
             var kinds: [String: Int] = [:]
@@ -1810,9 +1867,9 @@ final class MonitorView: NSView {
                 } else { kinds[rr["kind"].str ?? "?", default: 0] += rr["count"].int ?? 0 }
             }
             let total = kinds.values.reduce(0, +)
-            let top = kinds.sorted { $0.value > $1.value }.prefix(2)
+            let top = kinds.sorted { $0.value != $1.value ? $0.value > $1.value : $0.key < $1.key }.prefix(2)
                 .map { "\($0.key) \($0.value)" }.joined(separator: " · ")
-            drawStr("↪ \(total) reroute\(total == 1 ? "" : "s") · \(top)", in: r, font: tinyFont, color: .secondaryLabelColor)
+            drawStr("↪ \(total) reroute\(total == 1 ? "" : "s")/1h · \(top)", in: r, font: tinyFont, color: .secondaryLabelColor)
         }
         // Fleet: pulled peers (dot = up/stale/down), after the share rows — a long
         // host list must not crowd Models/Providers out — and capped at two.

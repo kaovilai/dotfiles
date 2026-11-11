@@ -2676,6 +2676,7 @@ def menubar_data(now=None, up_ports=None, share_window="15m", share_metric="requ
     # it: a route that failed over for two reasons must stay ONE row, or the
     # menubar's row cap would hide whole routes behind reason variants.
     reroutes = defaultdict(lambda: {"count": 0, "count_15m": 0, "kinds": Counter()})
+    kinds_15m = Counter()  # per-kind 15m counts, for the floating window header's ↪ line
     for e in hour:
         model, pname = strip_model(e.get("served")), proxy_name({**e, "port": e.get("port")}) if e.get("via") != "transcript" else "copilot-api"
         kind = reroute_kind(e)
@@ -2693,6 +2694,8 @@ def menubar_data(now=None, up_ports=None, share_window="15m", share_metric="requ
             r["count"] += 1
             r["count_15m"] += e["t"] >= now - MB_RECENT
             r["kinds"][kind] += 1
+            if e["t"] >= now - MB_RECENT:
+                kinds_15m[kind] += 1
     total = len(hour) or 1
     minute0 = int(now // 60) * 60 - 59 * 60
     series = {k: [0] * 60 for k in ("requests", "e429", "e5xx", "eother")}
@@ -2879,6 +2882,9 @@ def menubar_data(now=None, up_ports=None, share_window="15m", share_metric="requ
         "throttle_spans": span_rows, "throttle_notes": notes,
         "drift": collect_drift(week, now),
         "reroutes_15m": sum(v["count_15m"] for v in reroutes.values()),
+        # why those 15m reroutes happened (vision / alias / fallback:reason): the
+        # floating window's header shows it next to "OK · N req/15m"
+        "reroutes_kinds_15m": dict(kinds_15m),
         "share": traffic_share(hour, now, share_window, share_metric),
         "copilot": {"state": "up" if copilot_up else "down", "source": "transcript",
                     "attribution": "Claude Code/Codex transcript calls for models absent from the proxy log; approximates copilot-api traffic (may include direct-API sessions)",

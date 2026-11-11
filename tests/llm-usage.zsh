@@ -362,7 +362,7 @@ assert proxy(d, 4148)["state"] == "up" and proxy(d, 4142)["state"] == "down" and
 assert d["totals"]["m15"]["requests"] == 4 and d["top_models"][0] == {"model": "glm-5.3", "requests": 4}, d["top_models"]
 assert d["last_error"]["status"] == "500" and d["last_error"]["proxy"] == "hosted-only", d["last_error"]
 assert len(d["series"]["requests"]) == 60 and sum(d["series"]["requests"]) == 4 and sum(d["series"]["e5xx"]) == 1
-assert d["reroutes"] == [] and d["reroutes_15m"] == 0 and d["by_model"][0]["reroutes"] == 0
+assert d["reroutes"] == [] and d["reroutes_15m"] == 0 and d["reroutes_kinds_15m"] == {} and d["by_model"][0]["reroutes"] == 0
 
 # throttled: 429 with retry_after still in the future (estimate = event time + retry_after)
 # LiteLLM logs metadata endpoints with an empty model; they must not surface as
@@ -436,8 +436,10 @@ d = run("reroute-alias", [ev(60, requested=SON), ev(50, requested=SON), ev(40, r
 kinds = {(r["from"], r["to"], r["kind"]): r["count"] for r in d["reroutes"]}
 assert kinds == {("sonnet", "glm-5.3", "alias"): 2, ("sonnet", "deepseek-v4.1-flash", "alias"): 1}, kinds
 assert d["reroutes_15m"] == 3 and next(m for m in d["by_model"] if m["model"] == "glm-5.3")["reroutes"] == 2, d["by_model"]
+assert d["reroutes_kinds_15m"] == {"alias": 3}, d["reroutes_kinds_15m"]
 d = run("reroute-vision", [ev(60, served=DS), ev(30)])
 assert [(r["from"], r["to"], r["kind"], r["count"]) for r in d["reroutes"]] == [("glm-5.3", "deepseek-v4.1-flash", "vision", 1)], d["reroutes"]
+assert d["reroutes_kinds_15m"] == {"vision": 1}, d["reroutes_kinds_15m"]
 d = run("reroute-fallback", [ev(60, fallback=True), ev(30, served=SON, requested=SON, fallback=True), ev(20)])
 assert {r["kind"] for r in d["reroutes"]} == {"fallback"} and sum(r["count"] for r in d["reroutes"]) == 2, d["reroutes"]
 # fallback_reason rides along as the redirect's reason (outage/500, rate-limit, ...)
@@ -445,8 +447,15 @@ d = run("reroute-fallback-reason", [ev(60, fallback=True, fallback_reason="outag
 # one row per route: the two reasons group with their counts
 assert [(r["kind"], r["kinds"], r["count"]) for r in d["reroutes"]] == [
     ("fallback:outage-500", {"fallback:outage-500": 2, "fallback:rate-limit": 1}, 3)], d["reroutes"]
+assert d["reroutes_kinds_15m"] == {"fallback:outage-500": 2, "fallback:rate-limit": 1}, d["reroutes_kinds_15m"]
+# the kinds breakdown and the total are incremented independently; they must agree
+assert sum(d["reroutes_kinds_15m"].values()) == d["reroutes_15m"], (d["reroutes_kinds_15m"], d["reroutes_15m"])
+# a reroute older than the 15m window stays in the 1h row but not in the header's 15m fields
+d = run("reroute-old", [ev(1200, requested=SON), ev(30)])
+assert sum(r["count"] for r in d["reroutes"]) == 1 and d["reroutes"][0]["kind"] == "alias", d["reroutes"]
+assert d["reroutes_15m"] == 0 and d["reroutes_kinds_15m"] == {}, (d["reroutes_15m"], d["reroutes_kinds_15m"])
 d = run("reroute-none", [ev(60), ev(30, port="4147", requested="gpt-6-luna", served="gpt-6-luna")])
-assert d["reroutes"] == [] and d["reroutes_15m"] == 0
+assert d["reroutes"] == [] and d["reroutes_15m"] == 0 and d["reroutes_kinds_15m"] == {}
 assert d["by_proxy"][0]["models"], d["by_proxy"]
 d = run("reroute-other", [ev(60, requested="gemini-3", served="gpt-6-luna")])
 assert d["reroutes"][0]["kind"] == "other", d["reroutes"]
@@ -1487,6 +1496,43 @@ if [[ -x /usr/bin/swiftc ]] || command -v swiftc >/dev/null; then
     "$mb" --window-png "$tmp/w-fleet-cz-on.png" --layout horizontal --hover host:peerA --data-file "$tmp/fleet-hostzero.json" >/dev/null || fail "window-png compact host-hover"
     "$mb" --window-png "$tmp/w-fleet-cz-off.png" --layout horizontal --hover host:zzz --data-file "$tmp/fleet-hostzero.json" >/dev/null || fail "window-png compact host-hover control"
     cmp -s "$tmp/w-fleet-cz-on.png" "$tmp/w-fleet-cz-off.png" && fail "compact fleet row must highlight under its host hover"
+    # the header draws the 15m reroute kinds and error counts, not just tolerates
+    # the fields: the same payload with only the header's sources zeroed must
+    # render differently in both layouts — including the narrow vertical window,
+    # where the bare ↪ count is the only thing that fits
+    python3 -c 'import json,sys; d = json.load(open(sys.argv[1])); d.update(reroutes_15m=0, reroutes_kinds_15m={}); d["totals"]["m15"]["errors"] = {"429": 0, "5xx": 0, "other": 0}; json.dump(d, open(sys.argv[2], "w"))' "$mbjson/reroute-vision.json" "$tmp/header-stripped.json"
+    "$mb" --window-png "$tmp/w-header-on-v.png" --layout vertical --data-file "$mbjson/reroute-vision.json" >/dev/null || fail "window-png header vertical"
+    "$mb" --window-png "$tmp/w-header-off-v.png" --layout vertical --data-file "$tmp/header-stripped.json" >/dev/null || fail "window-png header-stripped vertical"
+    cmp -s "$tmp/w-header-on-v.png" "$tmp/w-header-off-v.png" && fail "the ↪ header count must change the vertical window render"
+    "$mb" --window-png "$tmp/w-header-on-h.png" --layout horizontal --data-file "$mbjson/reroute-vision.json" >/dev/null || fail "window-png header horizontal"
+    "$mb" --window-png "$tmp/w-header-off-h.png" --layout horizontal --data-file "$tmp/header-stripped.json" >/dev/null || fail "window-png header-stripped horizontal"
+    cmp -s "$tmp/w-header-on-h.png" "$tmp/w-header-off-h.png" && fail "the ↪ header count must change the horizontal window render"
+    # the error half needs its own fixtures: reroute-vision has no errors, so
+    # zeroing its error counters proves nothing. mixed = reroutes + errors (the
+    # horizontal header draws both, so zeroing only the errors must still change
+    # the render); errors-only = no reroutes, so both layouts draw the error
+    # counts (horizontal per class, vertical folded) and zeroing must change each
+    python3 -c 'import json,sys
+d = json.load(open(sys.argv[1]))
+d["totals"]["m15"]["errors"] = {"429": 1, "5xx": 1, "other": 1}
+json.dump(d, open(sys.argv[2], "w"))
+d["totals"]["m15"]["errors"] = {"429": 0, "5xx": 0, "other": 0}
+json.dump(d, open(sys.argv[3], "w"))' "$mbjson/reroute-vision.json" "$tmp/header-mixed.json" "$tmp/header-mixed-zero.json"
+    "$mb" --window-png "$tmp/w-hm-on.png" --layout horizontal --data-file "$tmp/header-mixed.json" >/dev/null || fail "window-png header mixed"
+    "$mb" --window-png "$tmp/w-hm-off.png" --layout horizontal --data-file "$tmp/header-mixed-zero.json" >/dev/null || fail "window-png header mixed-zero"
+    cmp -s "$tmp/w-hm-on.png" "$tmp/w-hm-off.png" && fail "error counts must change the horizontal header render"
+    python3 -c 'import json,sys
+d = json.load(open(sys.argv[1]))
+d.update(reroutes_15m=0, reroutes_kinds_15m={}, reroutes=[])
+d["totals"]["m15"]["errors"] = {"429": 1, "5xx": 1, "other": 1}
+json.dump(d, open(sys.argv[2], "w"))
+d["totals"]["m15"]["errors"] = {"429": 0, "5xx": 0, "other": 0}
+json.dump(d, open(sys.argv[3], "w"))' "$mbjson/reroute-vision.json" "$tmp/header-errs.json" "$tmp/header-errs-zero.json"
+    for lay in horizontal vertical; do
+      "$mb" --window-png "$tmp/w-he-on-$lay.png" --layout "$lay" --data-file "$tmp/header-errs.json" >/dev/null || fail "window-png header errors $lay"
+      "$mb" --window-png "$tmp/w-he-off-$lay.png" --layout "$lay" --data-file "$tmp/header-errs-zero.json" >/dev/null || fail "window-png header errors-zero $lay"
+      cmp -s "$tmp/w-he-on-$lay.png" "$tmp/w-he-off-$lay.png" && fail "error counts must change the $lay header render"
+    done
     # in-flight bars stack by age: the oldest request sits at the bottom of the
     # strip, a new one enters from the top. The strip fits four rows, so with six
     # in flight the two NEWEST drop off the top — a payload whose two youngest are
