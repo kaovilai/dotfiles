@@ -43,9 +43,10 @@ jobs:
        contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association))
     steps:
       - uses: actions/checkout@v4
-      - name: GitHub App token (skipped when APP_ID secret absent)
+      - name: GitHub App token (skipped when APP_ID secret absent; falls back to github.token when app not installed on repo)
         id: app-token
         if: env.HAS_APP == 'true'
+        continue-on-error: true
         uses: actions/create-github-app-token@v2
         with:
           app-id: ${{ secrets.APP_ID }}
