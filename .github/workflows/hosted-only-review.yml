@@ -1,0 +1,75 @@
+# Hosted-only reviewer — Path B (default): full hosted-only proxy from kaovilai/dotfiles.
+# Install/update: ~/.claude/skills/claude-gha-hosted-only/scripts/install-reviewer.sh <owner/repo>
+# GitHub App OPTIONAL: set APP_ID + APP_PRIVATE_KEY secrets (scripts/set-app-secrets.sh)
+#   -> @claude mention conversations + app identity; absent -> github.token fallback.
+# Router fallback: proxy rewrites any GLM request carrying an image to DeepSeek
+#   (rewrite.go VisionFallback, default on) + shrinks images to a ~2.5MB budget —
+#   image reads by the harness cannot 400 the reviewer. Follows dotfiles; disable
+#   via HOSTED_ONLY_VISION_FALLBACK=0 env on the proxy step.
+# Models + proxy behavior auto-follow kaovilai/dotfiles@DOTFILES_REF (default main) — no ids hardcoded here.
+# Go binary cached per dotfiles sha (actions/cache) — build (~30s) only on dotfiles change.
+# Secret: ENMAAS_API_KEY (scripts/set-enmaas-secret.sh <owner/repo>).
+name: hosted-only-review
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  issue_comment:
+    types: [created]
+  pull_request_review_comment:
+    types: [created]
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+concurrency:
+  group: hosted-only-review-${{ github.event.pull_request.number || github.event.issue.number }}
+  cancel-in-progress: true
+env:
+  DOTFILES_REF: main
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request' || (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@claude')) || (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.body, '@claude'))
+    steps:
+      - uses: actions/checkout@v4
+      - name: GitHub App token (skipped when APP_ID secret absent)
+        id: app-token
+        if: ${{ secrets.APP_ID != '' }}
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+      - name: EnMaaS reachability (401/403 = reachable)
+        run: |
+          code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 https://api.enmaas.devshift.net/v1/models)
+          case "$code" in 401|403) echo "reachable (HTTP $code)" ;; *) echo "EnMaaS unreachable from runner (HTTP $code); use self-hosted runner" >&2; exit 1 ;; esac
+      - name: Clone dotfiles (proxy source)
+        run: |
+          git clone -q --depth 1 -b "${DOTFILES_REF:-main}" https://github.com/kaovilai/dotfiles "$RUNNER_TEMP/dotfiles"
+          echo "DOTFILES_SHA=$(git -C "$RUNNER_TEMP/dotfiles" rev-parse HEAD)" >> "$GITHUB_ENV"
+      - name: Cache proxy binary (keyed on dotfiles sha)
+        uses: actions/cache@v4
+        with:
+          path: ~/.local/state/hosted-only-go
+          key: hosted-only-proxy-${{ env.DOTFILES_SHA }}
+      - name: Start hosted-only proxy (EnMaaS GLM, port 4148)
+        env:
+          ENMAAS_API_KEY: ${{ secrets.ENMAAS_API_KEY }}
+        run: |
+          set -euo pipefail
+          command -v zsh >/dev/null 2>&1 || sudo apt-get install -y -qq zsh
+          zsh -c '
+            set -eu
+            source "$RUNNER_TEMP/dotfiles/scripts/hosted-only-proxy.zsh"
+            _hosted_only_proxy_ensure claude
+            print -r -- "ANTHROPIC_BASE_URL=$_hop_base" >> "$GITHUB_ENV"
+            print -r -- "ANTHROPIC_API_KEY=$_hop_token" >> "$GITHUB_ENV"
+            print -r -- "ANTHROPIC_DEFAULT_SONNET_MODEL=${_hop_glm}[1m]" >> "$GITHUB_ENV"
+            print -r -- "ANTHROPIC_DEFAULT_OPUS_MODEL=${_hop_glm}[1m]" >> "$GITHUB_ENV"
+            print -r -- "ANTHROPIC_DEFAULT_HAIKU_MODEL=${_hop_glm}[1m]" >> "$GITHUB_ENV"
+          '
+      - uses: anthropics/claude-code-action@v1
+        with:
+          github_token: ${{ steps.app-token.outputs.token || github.token }}
+          prompt: "Review this PR. Read the diff and changed files, verify each concern against the code, then post one GitHub review: inline comments on real problems only (correctness, security, breakage — no style nits, no praise), each tagged [high]/[medium]/[low], plus a short summary comment."
+          claude_args: "--effort high --max-turns 30"
