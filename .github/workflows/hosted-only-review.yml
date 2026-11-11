@@ -1,7 +1,13 @@
 # Hosted-only reviewer — Path B (default): full hosted-only proxy from kaovilai/dotfiles.
 # Install/update: ~/.claude/skills/claude-gha-hosted-only/scripts/install-reviewer.sh <owner/repo>
 # GitHub App OPTIONAL: set APP_ID + APP_PRIVATE_KEY secrets (scripts/set-app-secrets.sh)
-#   -> @claude mention conversations + app identity; absent -> github.token fallback.
+#   -> reviews posted under the app identity; absent -> github.token fallback.
+#   NOTE: `secrets` context is NOT allowed in step-level `if:` — the gate runs via
+#   the workflow-level HAS_APP env var (actionlint-verified).
+# @claude mentions OFF by default (vars.HOSTED_ONLY_CLAUDE_MENTIONS != 'true') —
+#   avoids double replies where a Claude workflow (e.g. claude.yml w/ OAuth) already
+#   listens. Enable: gh variable set HOSTED_ONLY_CLAUDE_MENTIONS --repo OWNER/REPO --body true
+#   (and disable the other workflow). Bot comments never trigger (association guard).
 # Router fallback: proxy rewrites any GLM request carrying an image to DeepSeek
 #   (rewrite.go VisionFallback, default on) + shrinks images to a ~2.5MB budget —
 #   image reads by the harness cannot 400 the reviewer. Follows dotfiles; disable
@@ -26,15 +32,20 @@ concurrency:
   cancel-in-progress: true
 env:
   DOTFILES_REF: main
+  HAS_APP: ${{ secrets.APP_ID != '' }}
 jobs:
   review:
     runs-on: ubuntu-latest
-    if: github.event_name == 'pull_request' || (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@claude')) || (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.body, '@claude'))
+    if: >-
+      github.event_name == 'pull_request' ||
+      (vars.HOSTED_ONLY_CLAUDE_MENTIONS == 'true' &&
+       contains(github.event.comment.body, '@claude') &&
+       contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association))
     steps:
       - uses: actions/checkout@v4
       - name: GitHub App token (skipped when APP_ID secret absent)
         id: app-token
-        if: ${{ secrets.APP_ID != '' }}
+        if: env.HAS_APP == 'true'
         uses: actions/create-github-app-token@v2
         with:
           app-id: ${{ secrets.APP_ID }}
