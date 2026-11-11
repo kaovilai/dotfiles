@@ -176,7 +176,7 @@ assert launch['argv'][2:]==['--model=gemini-3-pro','--print','argument with spac
 settings=json.loads(launch['argv'][1]); assert settings['apiKeyHelper']==''
 assert settings['mcpServers']=={'parallel':{'type':'http','url':'https://mcp.parallel.ai/mcp'}}, settings.get('mcpServers')
 assert settings['env']['CLAUDE_CODE_AUTO_COMPACT_WINDOW']=='908000', settings['env']
-assert settings['modelSettings']=={glm:{'effortLevel':'medium'}, ds:{'effortLevel':'medium'}}
+assert settings['modelSettings']=={glm:{'effortLevel':'high'}, ds:{'effortLevel':'medium'}}, settings['modelSettings']
 opts=settings['modelPicker']['options']; ids=[r['model'] for r in opts]; assert ids.count('ambiguous')==1
 assert any('GLM 5.3' in row['label'] for row in opts)
 assert any(row['model']==ds and 'DeepSeek' in row['label'] for row in opts)
@@ -232,7 +232,7 @@ e=json.loads((p/'claude.json').read_text())['env']
 assert m['unknown-exact']['model']=='openai/responses/unknown-exact'
 assert m['ambiguous']['model']=='openai/ambiguous'
 assert m['default-exact']['model']=='anthropic/default-exact'
-assert e['ANTHROPIC_DEFAULT_OPUS_MODEL']=='custom-opus' and e['ANTHROPIC_DEFAULT_FABLE_MODEL']=='custom-fable'
+assert e['ANTHROPIC_DEFAULT_OPUS_MODEL']=='custom-opus' and e['ANTHROPIC_DEFAULT_FABLE_MODEL']=='custom-fable', e
 assert e['ANTHROPIC_MODEL']=='unknown-exact'
 assert e['ANTHROPIC_BASE_URL']=='http://127.0.0.1:4146'
 print('ok - exact dialect overrides, tier overrides and separated --model')
@@ -253,7 +253,7 @@ assert s['effortLevel']=='low' and s['env']['KEEP_ME']=='yes'
 assert s['env']['ANTHROPIC_BASE_URL']==launch['env']['ANTHROPIC_BASE_URL']
 assert s['env']['CLAUDE_CODE_USE_VERTEX']=='0' and s['apiKeyHelper']==''
 assert s['modelSettings']['custom']['effortLevel']=='low'
-assert s['modelSettings']['rits/zai-org/glm-5-3']['effortLevel']=='medium'
+assert s['modelSettings']['rits/zai-org/glm-5-3']['effortLevel']=='high', s['modelSettings']
 assert s['modelPicker']['options']
 print('ok - caller settings merge preserves isolation, picker and GLM effort')
 PY

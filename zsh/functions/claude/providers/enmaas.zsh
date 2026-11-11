@@ -72,6 +72,14 @@ _claude_enmaas_hook_env() {
     [[ -n "${HOSTED_ONLY_CLASSIFIER_ROUTE_MODEL:-}" ]] && export HOSTED_ONLY_CLASSIFIER_ROUTE_MODEL
     export ENMAAS_RESPONSES_ROUTES="$(_claude_enmaas_glm_id),$(_claude_enmaas_deepseek_id)"
     export ENMAAS_DNS_FALLBACK_HOSTS="$(_claude_enmaas_gateway_host)"
+    # Timeout knobs, same Go binary as the hosted-only flavors: the request
+    # deadline bounds only the upstream's response HEADERS (an actively
+    # streaming answer is never cut by a total deadline) and STREAM_IDLE_TIMEOUT
+    # cuts a body that produces no bytes for that long. ENMAAS_REQUEST_TIMEOUT
+    # is the existing knob; it also stays in config.json's per-route
+    # request_timeout for documentation.
+    export HOSTED_ONLY_REQUEST_TIMEOUT="${ENMAAS_REQUEST_TIMEOUT:-300}"
+    export HOSTED_ONLY_STREAM_IDLE_TIMEOUT="${ENMAAS_STREAM_IDLE_TIMEOUT:-300}"
 }
 
 # Host the gateway URL points at: the only name the DoH fallback may resolve.
