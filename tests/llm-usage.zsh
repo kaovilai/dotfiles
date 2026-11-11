@@ -1498,6 +1498,29 @@ if [[ -x /usr/bin/swiftc ]] || command -v swiftc >/dev/null; then
     local mb="$mbdir/llm-usage-menubar" dump
     [[ -x "$mb" ]] || fail "menubar binary missing"
     LLM_USAGE_MENUBAR_DIR="$mbdir" $usage menubar build | grep -q "up to date" || fail "menubar rebuilt although source is unchanged"
+    # inflight scan: the pid comes from the FILENAME (a dead writer costs one
+    # kill(2), not a read + JSON parse) and dead-pid files are unlinked on
+    # sight — 39 of the 42 on disk were dead on 2026-11-11 and nothing else
+    # ever cleaned them; a live writer's file must survive, and a name whose
+    # pid does not parse must be left alone
+    local ifdir="$tmp/ifstate" deadpid livepid out
+    mkdir -p "$ifdir"
+    /usr/bin/true & deadpid=$!; wait $deadpid
+    /bin/sleep 30 & livepid=$!
+    python3 - "$ifdir" "$deadpid" "$livepid" <<'PY' || fail "inflight-scan fixtures"
+import json, sys, time
+d, dead, live = sys.argv[1], int(sys.argv[2]), int(sys.argv[3])
+now = time.time()
+open(f"{d}/inflight-4148-{dead}.json", "w").write(json.dumps({"pid": dead, "port": "4148", "requests": {"r1": {"t": now - 5, "model": "glm-5.3"}}}))
+open(f"{d}/inflight-4148-{live}.json", "w").write(json.dumps({"pid": live, "port": "4148", "requests": {"r2": {"t": now - 3, "model": "ds"}, "r3": {"t": now - 2, "model": "glm"}}}))
+open(f"{d}/inflight-4141-notapid.json", "w").write("{}")
+PY
+    out=$("$mb" --inflight-scan "$ifdir")
+    [[ "$out" == *"removed $ifdir/inflight-4148-$deadpid.json"* ]] || fail "dead-pid inflight file not collected: $out"
+    [[ "$out" == *"2 live flights"* ]] || fail "live inflight flights: $out"
+    [[ -e "$ifdir/inflight-4148-$livepid.json" ]] || fail "a live writer's file must survive the scan"
+    [[ -e "$ifdir/inflight-4141-notapid.json" ]] || fail "an unparseable pid must be left alone"
+    kill $livepid 2>/dev/null
     dump_of() { "$mb" --dump-menu --data-file "$mbjson/$1.json" "${@:2}"; }
     dump=$(dump_of normal)
     [[ "$dump" == "title: ● 4"$'\n'* ]] || fail "normal title: ${dump%%$'\n'*}"

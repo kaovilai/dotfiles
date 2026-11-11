@@ -11,6 +11,7 @@
 //   --status-png PATH [--dark]         render the status item image (+ text) to PNG from --data-file (no GUI)
 //                                      [--no-text]; --dump-menu also takes --no-image / --no-text
 //   --list-logos                       which source each logo key resolves to
+//   --inflight-scan DIR                one inflight file scan of DIR (tests): unlink dead-pid files, report live flights
 //   --window-png PATH [--dark] [--layout horizontal|vertical|history] [--size WxH] [--graph bars|lines|both] [--stale]
 //                                      [--hover vendor:<key>|provider:<key>|host:<name>] [--window-metric requests|tokens]
 //                                      [--graph-hover MINUTE]  pin the graph hover readout to minute MINUTE (0 = oldest)
@@ -2833,25 +2834,7 @@ final class AppController: NSObject, NSMenuDelegate, NSWindowDelegate {
     /// metric cheaply and often, refresh everything else rarely.
     func refreshInflight() {
         let now = Date()
-        var flights: [(age: Double, id: String, model: String)] = []
-        for dir in inflightDirs() {
-            let entries = (try? FileManager.default.contentsOfDirectory(atPath: dir)) ?? []
-            for name in entries where name.hasPrefix("inflight-") && name.hasSuffix(".json") {
-                let path = dir + "/" + name
-                guard let data = FileManager.default.contents(atPath: path),
-                      let doc = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
-                      let pid = (doc["pid"] as? NSNumber)?.int32Value,
-                      kill(pid, 0) == 0 || errno == EPERM,
-                      let requests = doc["requests"] as? [String: Any]
-                else { continue }
-                let port = (doc["port"] as? String) ?? "?"
-                for (rid, raw) in requests {
-                    guard let req = raw as? [String: Any], let t = (req["t"] as? NSNumber)?.doubleValue else { continue }
-                    let model = (req["actual_model"] as? String) ?? (req["requested"] as? String) ?? (req["model"] as? String) ?? ""
-                    flights.append((max(0, now.timeIntervalSince1970 - t), "\(port):\(rid)", model))
-                }
-            }
-        }
+        var flights = scanInflightFiles(dirs: inflightDirs(), now: now).flights
         // peer snapshots: fleet/<host>/inflight.json, rewritten at request boundaries
         // by `fleet stream` (and by every pull). Gated on the last payload's fleet
         // config — a cached host dir from a disabled/reconfigured fleet must not
@@ -3301,6 +3284,49 @@ func stateDir() -> String {
         ?? (ProcessInfo.processInfo.environment["XDG_STATE_HOME"].flatMap { $0.isEmpty ? nil : $0 } ?? NSHomeDirectory() + "/.local/state") + "/llm-usage"
 }
 
+/// One pass over the local in-flight files (inflight-<port>-<pid>.json, written
+/// atomically by litellm_usage_log, the copilot-api monitor and hosted-only-go,
+/// each named after its writer's own pid). The pid is taken from the FILENAME
+/// and checked BEFORE the file is read — a dead writer costs one kill(2), not a
+/// read plus a JSON parse — and its file is unlinked on sight: the writers only
+/// clean their own port's leftovers when a successor starts on that port, so a
+/// dead proxy without one leaves the file forever (39 of the 42 on disk were
+/// dead on 2026-11-11, some since Oct 22). Unlinking is safe: a live writer's
+/// file exists only while its pid answers kill(pid, 0), and the writer recreates
+/// its own file on the next request anyway. The pid sits after the LAST hyphen
+/// (the port is numeric or "unknown", never hyphenated — hosted-only-go's
+/// cleanup parses the same way). Returns the live flights and the removed paths.
+func scanInflightFiles(dirs: [String], now: Date = Date()) -> (flights: [(age: Double, id: String, model: String)], removed: [String]) {
+    var flights: [(age: Double, id: String, model: String)] = []
+    var removed: [String] = []
+    for dir in dirs {
+        let entries = (try? FileManager.default.contentsOfDirectory(atPath: dir)) ?? []
+        for name in entries where name.hasPrefix("inflight-") && name.hasSuffix(".json") {
+            let path = dir + "/" + name
+            let stem = name.dropFirst("inflight-".count).dropLast(".json".count)  // <port>-<pid>
+            guard let dash = stem.lastIndex(of: "-"), let pid = Int32(stem[stem.index(after: dash)...]) else { continue }
+            if !(kill(pid, 0) == 0 || errno == EPERM) {
+                try? FileManager.default.removeItem(atPath: path)  // dead writer: garbage-collect it
+                removed.append(path)
+                continue
+            }
+            guard let data = FileManager.default.contents(atPath: path),
+                  let doc = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+                  let docPid = (doc["pid"] as? NSNumber)?.int32Value,
+                  kill(docPid, 0) == 0 || errno == EPERM,
+                  let requests = doc["requests"] as? [String: Any]
+            else { continue }
+            let port = (doc["port"] as? String) ?? "?"
+            for (rid, raw) in requests {
+                guard let req = raw as? [String: Any], let t = (req["t"] as? NSNumber)?.doubleValue else { continue }
+                let model = (req["actual_model"] as? String) ?? (req["requested"] as? String) ?? (req["model"] as? String) ?? ""
+                flights.append((max(0, now.timeIntervalSince1970 - t), "\(port):\(rid)", model))
+            }
+        }
+    }
+    return (flights, removed)
+}
+
 func acquireSingleInstanceLock() -> Bool {
     let state = stateDir()
     try? FileManager.default.createDirectory(atPath: state, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
@@ -3343,6 +3369,16 @@ if let i = args.firstIndex(of: "--status-png"), i + 1 < args.count {
 func argValue(_ name: String) -> String? {
     if let i = args.firstIndex(of: name), i + 1 < args.count { return args[i + 1] }
     return nil
+}
+
+if let dir = argValue("--inflight-scan") {
+    // headless, tests only: one scan of a state dir — dead-pid files are
+    // unlinked, live ones parsed — printing what happened so a test can
+    // assert both without a GUI (same shape as --status-png/--window-png).
+    let (flights, removed) = scanInflightFiles(dirs: [dir])
+    for path in removed { print("inflight-scan: removed \(path)") }
+    print("inflight-scan: \(flights.count) live flights (\(Set(flights.map { $0.id }).count) requests)")
+    exit(0)
 }
 
 if let path = argValue("--window-png") {
