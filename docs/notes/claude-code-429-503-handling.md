@@ -124,3 +124,59 @@ Side effect to know about: before the `LLM_USAGE_DIR` instruction arrived, my 41
 - 529 and `retry-after: 5` **through** the proxy (only direct stub measured); `x-should-retry:false` header on the wire for >60 s 503 (fail-fast was observed, but via the `retry-after` rule, not the header); SDK-level side-query retry on 503.
 - Patch B effect; whether the 10-retry × 60 s stall actually plays out end to end (measured with `MAX_RETRIES=2` only).
 - Successful (200) responses carrying unified headers (could emit `rate_limit_event` for subscribers) — not tested; irrelevant for limit errors.
+
+## Addendum 2026-11-11: claude 2.1.322 re-read, egress switched to 429 + watchdog
+
+Re-validated statically against `~/.local/share/claude/versions/2.1.322` (minified
+bundle offsets below), then changed the Go proxy's `/v1/messages` rewrite:
+
+- `mD` (backoff, @264213961): a parseable `retry-after` overrides the backoff
+  (`Math.max(b*1000, y)`), same for every retryable status.
+- The >60 s fail-fast (@273716400) sits in the generic delay branch and is
+  **status-agnostic**: `Bu>Math.max(T1r=60000, ceil((Xr??0)*(1+RHs=0.25)))`
+  throws `api_request_retry_after_too_long` for 429 and 503 alike. Confirms
+  item 1f on the newer build: a real 429 with a long `retry-after` would NOT
+  have auto-resumed either.
+- `Fb()` (@~273699774): `env.CLAUDE_CODE_RETRY_WATCHDOG && SCOPE!=="capacity"`
+  (both `H.bool()` / `H.enum(["capacity"])` in the env table) gates the
+  persistent wait instead of the throw: `Bu=Math.min(Bu, glt=21600000)` (6 h),
+  slept in 30 s slices (`xcs=30000`), logged `tengu_api_persistent_retry_wait`.
+- `x-should-retry:"false"` still beats the status rules for 429/529 (and a
+  gated 503), with or without the watchdog — so a fail-fast answer keeps it.
+- The only 429 auto-resume path (`onQuotaWindowWait` / `isUsageLimitLifted`,
+  `api_request_usage_limit_wait_too_long`) still requires
+  `anthropic-ratelimit-unified-status:"rejected"` headers — first-party only.
+
+T3 side (peer session research, `ClaudeAdapterV2.ts` upstream/main, verified in
+the local checkout; upstream discussion filed as
+https://github.com/pingdotgg/t3code/discussions/34250): the historical 503-text
+regex needs type-first inner JSON
+(`{"type":"error","error":{"type":"rate_limit_error",...}`), which Go's
+`json.Marshal(map[string]any)` never produced (keys sort alphabetically) — so
+the 503 egress had been silently unmatched and T3 filed those as
+`provider_error` without a reset. T3 also has a status path:
+`api_error_status===429` → `usage_limit`, with the reset parsed by the loose
+`/\(reset after (?:(\d+)h ?)?(?:(\d+)m ?)?(?:(\d+)s)?\)/` on the result text —
+key-order agnostic, needs only the reset suffix.
+
+**Change applied** (`scripts/hosted-only-go/limits.go` renderLimit,
+`/v1/messages` branch):
+
+1. Egress is now `http.StatusTooManyRequests` (429), body unchanged in shape:
+   `[<model>] [429]: <inner> (reset after X)`. T3 classifies it via the status
+   path and reads the reset from the suffix; Claude Code's SDK side-query
+   retries rewrite a long-wait 429 themselves (item 1g's `rTt`), so the header
+   guard is no longer needed for them.
+2. Inner and outer error envelopes are struct-marshalled type-first, fixing the
+   key order for any consumer that does parse the JSON.
+3. `x-should-retry:false` only for a monthly quota or a wait past
+   `CLIENT_RETRY_MAX_SECONDS` (default raised 60 → 21600, matching the
+   watchdog's 6 h cap): short rate-limit/outage resets stay retryable.
+4. Launchers (`zsh/functions/claude/providers/{hosted-only,enmaas}.zsh`) set
+   `CLAUDE_CODE_RETRY_WATCHDOG=1` in the generated settings env, so the main
+   loop waits out any reset ≤ 6 h in-process instead of failing the turn.
+
+Net effect: a bare `claude-hosted-only`/`claude-enmaas` session survives an
+8-minute outage reset by sleeping through it (previously: fatal `API Error:
+503 ... (reset after 8m)`); a month-end quota still surfaces immediately and
+T3 snoozes the thread on it.

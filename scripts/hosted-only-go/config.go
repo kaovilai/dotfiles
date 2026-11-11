@@ -272,12 +272,17 @@ func loadConfig(flavor, port, runtimeDir string) *config {
 		ImageCacheDir:        imageCacheDir(),
 		AttachmentsDir:       os.Getenv("HOME") + "/.t3/userdata/attachments",
 		DefaultRetry:         intKnob("RATE_LIMIT_DEFAULT_RETRY_SECONDS", 60, 1),
-		ClientRetryMax:       intKnob("CLIENT_RETRY_MAX_SECONDS", 60, 0),
-		WarmRSSKB:            envInt("CLAUDE_MLX_LOADED_RSS_KB", 10485760, 0),
-		WarmRetryAfter:       envInt("CLAUDE_MLX_WARM_RETRY_AFTER", 30, 1),
-		WarmMax:              envInt("CLAUDE_MLX_WARM_MAX_SECONDS", 900, 0),
-		WarmServerCmd:        strings.TrimSpace(os.Getenv("CLAUDE_MLX_SERVER_CMD")),
-		WarmServerLog:        strings.TrimSpace(os.Getenv("CLAUDE_MLX_SERVER_LOG")), OutageBase: intKnob("OUTAGE_RETRY_SECONDS", 60, 1),
+		// Default 21600 (6 h) matches Claude Code's watchdog persistent-wait
+		// cap: the launchers run CLAUDE_CODE_RETRY_WATCHDOG=1, so a rewritten
+		// 429 with a reset inside 6 h is waited out in-process instead of
+		// failing the turn. Only longer resets (a month-end quota) get
+		// x-should-retry:false and surface at once.
+		ClientRetryMax: intKnob("CLIENT_RETRY_MAX_SECONDS", 21600, 0),
+		WarmRSSKB:      envInt("CLAUDE_MLX_LOADED_RSS_KB", 10485760, 0),
+		WarmRetryAfter: envInt("CLAUDE_MLX_WARM_RETRY_AFTER", 30, 1),
+		WarmMax:        envInt("CLAUDE_MLX_WARM_MAX_SECONDS", 900, 0),
+		WarmServerCmd:  strings.TrimSpace(os.Getenv("CLAUDE_MLX_SERVER_CMD")),
+		WarmServerLog:  strings.TrimSpace(os.Getenv("CLAUDE_MLX_SERVER_LOG")), OutageBase: intKnob("OUTAGE_RETRY_SECONDS", 60, 1),
 		OutageMax:         intKnob("OUTAGE_RETRY_MAX_SECONDS", 600, 1),
 		OutageState:       strings.TrimSpace(knob("OUTAGE_STATE", "")),
 		OutageCoalesce:    coalesceKnob(),

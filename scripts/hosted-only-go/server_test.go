@@ -77,8 +77,8 @@ func TestOutageRewriteSurvivesLimitRewriteOff(t *testing.T) {
 		c.FallbackOn = false
 	})
 	rec := h.messages("rits/zai-org/glm-5-3")
-	if rec.Code != http.StatusServiceUnavailable {
-		t.Fatalf("a 529 outage must become a reset-bearing 503, got %d: %s", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("a 529 outage must become a reset-bearing 429, got %d: %s", rec.Code, rec.Body.String())
 	}
 	if rec.Header().Get("retry-after") == "" {
 		t.Fatalf("missing retry-after: %v", rec.Header())
@@ -98,7 +98,7 @@ func TestBothRewritesOffPassesTheUpstreamAnswerThrough(t *testing.T) {
 
 func TestGatewayMeteringOutageIsRewritten(t *testing.T) {
 	h := newProxyHarness(t, 503, `{"error":{"message":"metering system unavailable"}}`, func(c *config) { c.FallbackOn = false })
-	if rec := h.messages("rits/zai-org/glm-5-3"); rec.Code != http.StatusServiceUnavailable || rec.Header().Get("retry-after") == "" {
+	if rec := h.messages("rits/zai-org/glm-5-3"); rec.Code != http.StatusTooManyRequests || rec.Header().Get("retry-after") == "" {
 		t.Fatalf("503 metering unavailable must carry a reset: %d %v", rec.Code, rec.Header())
 	}
 }

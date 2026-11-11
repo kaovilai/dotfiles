@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"net/http"
 	"strings"
 	"testing"
 	"time"
@@ -80,21 +81,28 @@ func TestRenderAnthropicLimit(t *testing.T) {
 	cfg := testConfig()
 	info := limitInfo{Reset: now.Add(120 * time.Second), Kind: "rate-limit", Source: "upstream-header:retry-after"}
 	status, body, headers := renderLimit(cfg, "/v1/messages", cfg.GLM, info, 0, now)
-	if status != 503 {
-		t.Fatalf("status = %d, want 503", status)
+	if status != http.StatusTooManyRequests {
+		t.Fatalf("status = %d, want 429", status)
 	}
 	if headers["retry-after"] != "120" {
 		t.Fatalf("retry-after = %q", headers["retry-after"])
 	}
 	if headers["x-should-retry"] != "false" {
-		t.Fatalf("x-should-retry = %q, want false (120 > 60)", headers["x-should-retry"])
+		t.Fatalf("x-should-retry = %q, want false (120 > knob 60)", headers["x-should-retry"])
 	}
 	text := string(body)
 	if !strings.Contains(text, "[rits/zai-org/glm-5-3] [429]:") || !strings.Contains(text, "(reset after 2m)") {
 		t.Fatalf("body = %s", text)
 	}
-	if !strings.Contains(text, "rate_limit_error") {
-		t.Fatalf("body lost the rate_limit_error shape: %s", text)
+	// Type-first key order: json.Marshal sorts map keys alphabetically, which
+	// broke every consumer parsing the inner error shape (T3's adapter).
+	var decoded map[string]any
+	if err := json.Unmarshal(body, &decoded); err != nil {
+		t.Fatalf("body: %v", err)
+	}
+	message := asString(asMap(decoded["error"])["message"])
+	if !strings.Contains(message, `[429]: {"type":"error","error":{"type":"rate_limit_error","message":`) {
+		t.Fatalf("inner error must be type-first, got: %s", message)
 	}
 }
 
@@ -105,6 +113,36 @@ func TestRenderAnthropicShortWaitStaysRetryable(t *testing.T) {
 	_, _, headers := renderLimit(cfg, "/v1/messages", cfg.GLM, info, 0, now)
 	if _, ok := headers["x-should-retry"]; ok {
 		t.Fatalf("x-should-retry = %q, want absent for a 30s wait", headers["x-should-retry"])
+	}
+}
+
+// The production default knob (21600) matches the client watchdog's 6 h wait
+// cap: an outage or rate-limit reset inside it must stay retryable so
+// CLAUDE_CODE_RETRY_WATCHDOG sleeps through it.
+func TestRenderAnthropicWatchdogWaitStaysRetryable(t *testing.T) {
+	now := time.Now()
+	cfg := testConfig()
+	cfg.ClientRetryMax = 21600
+	info := limitInfo{Reset: now.Add(480 * time.Second), Kind: "outage"}
+	_, _, headers := renderLimit(cfg, "/v1/messages", cfg.GLM, info, 502, now)
+	if _, ok := headers["x-should-retry"]; ok {
+		t.Fatalf("x-should-retry = %q, want absent for a watchdog-sized wait", headers["x-should-retry"])
+	}
+}
+
+// A month-end quota is never worth waiting out: the answer must fail fast so
+// T3 snoozes the thread instead of Claude Code sleeping toward the reset.
+func TestRenderAnthropicMonthlyQuotaFailsFast(t *testing.T) {
+	now := time.Now()
+	cfg := testConfig()
+	cfg.ClientRetryMax = 21600
+	info := limitInfo{Reset: monthEnd(now, time.UTC), Monthly: true, Kind: "quota"}
+	status, _, headers := renderLimit(cfg, "/v1/messages", cfg.GLM, info, 0, now)
+	if status != http.StatusTooManyRequests {
+		t.Fatalf("status = %d, want 429", status)
+	}
+	if headers["x-should-retry"] != "false" {
+		t.Fatalf("x-should-retry = %q, want false for a monthly quota", headers["x-should-retry"])
 	}
 }
 

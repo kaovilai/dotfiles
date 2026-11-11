@@ -216,16 +216,25 @@ out=$(curl -s -X POST "$url" -H 'content-type: application/json' -H 'x-api-key: 
 out=$(curl -s -X POST "$url" -H 'content-type: application/json' -H 'authorization: Bearer test-token' -d "$body")
 [[ "$out" == *'"usage"'* ]] || fail "bearer auth failed: $out"
 
-# 429 -> 503 with a reset, retry-after and x-should-retry, in the Messages shape.
+# 429 stays 429 with a reset and retry-after, in the Messages shape; a
+# watchdog-sized wait (default CLIENT_RETRY_MAX_SECONDS=21600) stays retryable.
 local hdr="$tmp/headers"
 code=$(curl -s -D "$hdr" -o "$tmp/body429" -w '%{http_code}' -X POST "$url" -H 'content-type: application/json' -H 'x-api-key: test-token' \
     -d '{"model":"rits/zai-org/glm-5-3","max_tokens":16,"messages":[{"role":"user","content":"TRIGGER429"}]}')
-[[ "$code" == 503 ]] || fail "429 rewrite status: $code ($(<"$tmp/body429"))"
+[[ "$code" == 429 ]] || fail "429 rewrite status: $code ($(<"$tmp/body429"))"
 grep -qi '^retry-after: 120' "$hdr" || fail "retry-after missing: $(<"$hdr")"
-grep -qi '^x-should-retry: false' "$hdr" || fail "x-should-retry missing: $(<"$hdr")"
+if grep -qi '^x-should-retry:' "$hdr"; then fail "120s wait must stay retryable: $(<"$hdr")"; fi
 [[ "$(<"$tmp/body429")" == *'(reset after 2m)'* ]] || fail "reset text missing: $(<"$tmp/body429")"
 [[ "$(<"$tmp/body429")" == *'[429]'* ]] || fail "429 tag missing: $(<"$tmp/body429")"
-[[ "$(<"$tmp/body429")" == *'rate_limit_error'* ]] || fail "inner error shape: $(<"$tmp/body429")"
+[[ "$(<"$tmp/body429")" == *'[429]: {\"type\":\"error\",\"error\":{\"type\":\"rate_limit_error\",\"message\":'* ]] || fail "inner error must be type-first: $(<"$tmp/body429")"
+
+# Messages route: a monthly quota fails fast (x-should-retry:false) so T3
+# snoozes on it instead of the client sleeping toward the month end.
+code=$(curl -s -D "$hdr" -o "$tmp/bodyquota" -w '%{http_code}' -X POST "$url" -H 'content-type: application/json' -H 'x-api-key: test-token' \
+    -d '{"model":"rits/zai-org/glm-5-3","max_tokens":16,"messages":[{"role":"user","content":"MONTHLY"}]}')
+[[ "$code" == 429 ]] || fail "quota rewrite status: $code ($(<"$tmp/bodyquota"))"
+grep -qi '^x-should-retry: false' "$hdr" || fail "quota must fail fast: $(<"$hdr")"
+[[ "$(<"$tmp/bodyquota")" == *'Monthly token budget exhausted.'* ]] || fail "quota text: $(<"$tmp/bodyquota")"
 
 # Chat route: rate limit stays 429 with the codex headers.
 local chat="http://127.0.0.1:$pport/v1/chat/completions"
@@ -263,7 +272,7 @@ assert ok[0]["requested"] == "claude-sonnet-5-5", ok[0]
 assert ok[0]["served"] == "rits/zai-org/glm-5-3", ok[0]
 assert ok[0]["in"] == 7 and ok[0]["out"] == 3, ok[0]
 assert ok[0]["port"] and ok[0]["client"] == "curl", ok[0]
-bad = [e for e in lines if e.get("upstream_status") == 429 and e.get("status") == 503]
+bad = [e for e in lines if e.get("upstream_status") == 429 and e.get("status") == 429 and e.get("call_type") == "anthropic_messages"]
 assert bad, [e for e in lines if not e.get("ok")]
 assert bad[0]["rewritten"] is True and bad[0]["retry_after"] == 120, bad[0]
 assert bad[0]["reset_source"] == "upstream-header:retry-after", bad[0]

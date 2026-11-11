@@ -547,6 +547,22 @@ func formatWait(seconds int) string {
 	return strings.Join(parts, " ")
 }
 
+// anthropicErrorBody is Anthropic's error envelope with type-first field
+// order. The rewritten /v1/messages text is parsed by consumers (T3's
+// ClaudeAdapterV2), and json.Marshal sorts map keys alphabetically, which
+// silently broke that order — a map-built inner emitted
+// {"error":{...},"type":"error"} where the reader expects
+// {"type":"error","error":{...}}.
+type anthropicErrorBody struct {
+	Type  string               `json:"type"`
+	Error anthropicErrorDetail `json:"error"`
+}
+
+type anthropicErrorDetail struct {
+	Type    string `json:"type"`
+	Message string `json:"message"`
+}
+
 // renderLimit builds the client-facing answer for a limit or outage, matching
 // the shapes hosted_only_hooks.rewrite_limit writes per dialect.
 func renderLimit(cfg *config, path, model string, info limitInfo, outageStatus int, now time.Time) (int, []byte, map[string]string) {
@@ -561,20 +577,28 @@ func renderLimit(cfg *config, path, model string, info limitInfo, outageStatus i
 	}
 
 	if strings.Contains(path, "/v1/messages") {
-		inner, _ := json.Marshal(map[string]any{
-			"type":  "error",
-			"error": map[string]any{"type": "rate_limit_error", "message": reason},
-		})
+		// Egress is a real 429, not the historical 503: Claude Code's main
+		// loop honors retry-after on any retryable status and fails fast past
+		// 60 s unless CLAUDE_CODE_RETRY_WATCHDOG is on (the launchers set it:
+		// the client then waits out the reset in-process, up to 6 h), and its
+		// SDK side-query retries rewrite a long-wait 429 themselves. T3's
+		// adapter classifies api_error_status===429 as usage_limit and reads
+		// the reset from the "(reset after ...)" suffix, status-based and
+		// key-order-agnostic — unlike the old 503-text regex, which the
+		// map-marshalled key order never matched. The "[429]" marker and the
+		// reset suffix stay: llm-usage and T3's loose reset regex parse them.
+		inner, _ := json.Marshal(anthropicErrorBody{"error", anthropicErrorDetail{"rate_limit_error", reason}})
 		message := fmt.Sprintf("[%s] [429]: %s (reset after %s)", model, inner, formatWait(seconds))
-		body, _ := json.Marshal(map[string]any{
-			"type":  "error",
-			"error": map[string]any{"type": "api_error", "message": message},
-		})
+		body, _ := json.Marshal(anthropicErrorBody{"error", anthropicErrorDetail{"api_error", message}})
 		headers["retry-after"] = strconv.Itoa(seconds)
-		if seconds > cfg.ClientRetryMax {
+		// A month-end reset must not be waited out (the watchdog would stall
+		// 6 h of it) and a wait past the knob is not worth a client retry;
+		// x-should-retry:false stops both retry layers so the error reaches
+		// T3 at once. Short rate-limit/outage waits stay retryable.
+		if info.Monthly || seconds > cfg.ClientRetryMax {
 			headers["x-should-retry"] = "false"
 		}
-		return http.StatusServiceUnavailable, body, headers
+		return http.StatusTooManyRequests, body, headers
 	}
 
 	if info.Monthly && strings.Contains(path, "/v1/chat/completions") {

@@ -143,7 +143,9 @@ _hosted_only_proxy_vars() {
     typeset -g _hop_vision_fallback="$(_hosted_only_knob VISION_FALLBACK 1)"
     typeset -g _hop_limit_rewrite="$(_hosted_only_knob LIMIT_REWRITE 1)"
     typeset -g _hop_limit_retry="$(_hosted_only_knob RATE_LIMIT_DEFAULT_RETRY_SECONDS 60)"
-    typeset -g _hop_client_retry="$(_hosted_only_knob CLIENT_RETRY_MAX_SECONDS 60)"
+    # 21600 (6 h) matches Claude Code's watchdog wait cap; the launchers run
+    # CLAUDE_CODE_RETRY_WATCHDOG=1 so shorter resets are slept through.
+    typeset -g _hop_client_retry="$(_hosted_only_knob CLIENT_RETRY_MAX_SECONDS 21600)"
     # Model fallback GLM <-> DeepSeek and the outage rewrite it shares knobs
     # with (both live in the Go binary now). ALIAS_MODELS: ids served from the GLM
     # deployment (claude flavor's claude-sonnet-5-5 alias) that get GLM's vision
@@ -331,7 +333,7 @@ _hosted_only_go_shared_env() {
         "HOSTED_ONLY_IMAGE_CACHE_DIR=$(_hosted_only_knob IMAGE_CACHE_DIR '')"
         "HOSTED_ONLY_LIMIT_REWRITE=$(_hosted_only_knob LIMIT_REWRITE 1)"
         "HOSTED_ONLY_RATE_LIMIT_DEFAULT_RETRY_SECONDS=$(_hosted_only_knob RATE_LIMIT_DEFAULT_RETRY_SECONDS 60)"
-        "HOSTED_ONLY_CLIENT_RETRY_MAX_SECONDS=$(_hosted_only_knob CLIENT_RETRY_MAX_SECONDS 60)"
+        "HOSTED_ONLY_CLIENT_RETRY_MAX_SECONDS=$(_hosted_only_knob CLIENT_RETRY_MAX_SECONDS 21600)"
         "HOSTED_ONLY_MAX_MODEL_LEN=$(_hosted_only_knob MAX_MODEL_LEN 1048576)"
         "HOSTED_ONLY_OUTPUT_RESERVE=$(_hosted_only_knob OUTPUT_RESERVE 512)"
         "HOSTED_ONLY_BYTES_PER_TOKEN=$(_hosted_only_knob BYTES_PER_TOKEN 3)"

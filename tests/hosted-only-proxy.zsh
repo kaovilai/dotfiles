@@ -159,6 +159,7 @@ _claude_invoke() { print -r -- "$2"; }
 local launched
 launched=$(_claude_hosted_launch) || fail "launcher stub run"
 [[ "$(jq -r .env.CLAUDE_CODE_MAX_RETRIES <<< "$launched")" == 3 ]] || fail "CLAUDE_CODE_MAX_RETRIES default: $launched"
+[[ "$(jq -r .env.CLAUDE_CODE_RETRY_WATCHDOG <<< "$launched")" == 1 ]] || fail "CLAUDE_CODE_RETRY_WATCHDOG default: $launched"
 launched=$(HOSTED_ONLY_CLIENT_MAX_RETRIES=7 _claude_hosted_launch) || fail "launcher stub run (knob)"
 [[ "$(jq -r .env.CLAUDE_CODE_MAX_RETRIES <<< "$launched")" == 7 ]] || fail "HOSTED_ONLY_CLIENT_MAX_RETRIES ignored: $launched"
 # Claude Code's own 32k output ceiling, raised for the hosted models

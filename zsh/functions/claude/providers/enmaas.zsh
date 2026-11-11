@@ -38,7 +38,11 @@
 # strip and thinking-off for rits/ models, GLM->DeepSeek image reroute, Codex
 # additional_tools flattening, the 429 reset rewrite T3 auto-resumes on, image
 # budget prune before the gateway's 10 MiB body cap 413s, #responses sibling
-# routing, and the usage JSONL for llm-usage.
+# routing, and the usage JSONL for llm-usage. The rewrite answers /v1/messages
+# with a 429 + retry-after; the launcher sets CLAUDE_CODE_RETRY_WATCHDOG=1 so
+# Claude Code sleeps through any reset up to 6 h in-process instead of failing
+# the turn (month-end quotas still fail fast for T3 to snooze on). Verified
+# against claude 2.1.322 (docs/notes/claude-code-429-503-handling.md).
 #   CLAUDE_ENMAAS_VISION_FALLBACK_MODEL=<id> additionally routes that model
 #   through this proxy (off by default; image requests already move to
 #   DeepSeek). The LiteLLM-era automatic retry of a failed GLM request on it
@@ -464,7 +468,7 @@ claude-enmaas() (
         apiKeyHelper: "",
         mcpServers: (if $mcpurl == "" then {} else {parallel: {type: "http", url: $mcpurl}} end),
         env: {ANTHROPIC_CUSTOM_HEADERS: "", CLAUDE_CODE_USE_VERTEX: "0", CLAUDE_CODE_USE_BEDROCK: "0", CLAUDE_CODE_USE_FOUNDRY: "0",
-          CLAUDE_CODE_MAX_OUTPUT_TOKENS: $maxout},
+          CLAUDE_CODE_MAX_OUTPUT_TOKENS: $maxout, CLAUDE_CODE_RETRY_WATCHDOG: "1"},
         modelSettings: {($glm): {effortLevel: "high"}, ($ds): {effortLevel: "medium"}}
       }' <<< "$settings") || return 1
 

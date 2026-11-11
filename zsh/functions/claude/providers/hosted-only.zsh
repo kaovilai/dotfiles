@@ -27,9 +27,13 @@
 # subagents (screenshots, UI checks) may need
 # (docs/notes/deepseek-v41-flash-vs-glm.md). Values: glm, deepseek, or an id.
 # HOSTED_ONLY_CLIENT_MAX_RETRIES (default 3) sets CLAUDE_CODE_MAX_RETRIES (Claude
-# Code default 10). Per-minute limits reach it as 503 + retry-after 60, which it
-# sleeps through, so 10 retries stall a turn ~10 min before T3 sees the limit;
-# 3 caps that near 3 min. It also bounds retries of real 5xx errors.
+# Code default 10) — bounds retries of real 5xx errors. Rate-limit and outage
+# answers arrive as 429 + retry-after: with CLAUDE_CODE_RETRY_WATCHDOG=1 (set
+# below) Claude Code sleeps through any reset up to 6 h in-process instead of
+# failing the turn, so per-minute limits and short outages no longer stall into
+# an error at all; a month-end quota still fails fast (x-should-retry:false)
+# for T3 to snooze on. Verified against claude 2.1.322
+# (docs/notes/claude-code-429-503-handling.md).
 # CLAUDE_CODE_AUTO_MODE_SERVER=0 keeps auto-mode review client-side, where
 # the classifier model above applies.
 #
@@ -94,7 +98,7 @@ _claude_hosted_launch() (
         mcpServers: (if $mcpurl == "" then {} else {parallel: {type: "http", url: $mcpurl}} end),
         env: {ANTHROPIC_CUSTOM_HEADERS: "", CLAUDE_CODE_USE_VERTEX: "0", CLAUDE_CODE_USE_BEDROCK: "0",
           CLAUDE_CODE_USE_FOUNDRY: "0", CLAUDE_CODE_AUTO_MODE_SERVER: "0",
-          CLAUDE_CODE_MAX_RETRIES: $retries,
+          CLAUDE_CODE_MAX_RETRIES: $retries, CLAUDE_CODE_RETRY_WATCHDOG: "1",
           CLAUDE_CODE_MAX_OUTPUT_TOKENS: $maxout,
           ANTHROPIC_SMALL_FAST_MODEL: $small, CLAUDE_CODE_SUBAGENT_MODEL: $sub,
           CLAUDE_CODE_SUBAGENT_MODEL_FORCE: "1", CLAUDE_CODE_WORKFLOW_SUBAGENT_MODEL: $sub},
