@@ -921,7 +921,16 @@ final class MonitorView: NSView {
     func startWaitAnimation() {
         guard waitTimer == nil else { return }
         waitTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 10.0, repeats: true) { [weak self] _ in self?.tickWait() }
+        waitTimer?.tolerance = 0.02  // ~10%: eased motion, not a deadline
         if let t = waitTimer { RunLoop.main.add(t, forMode: .common) }  // keep moving while a menu tracks
+    }
+
+    /// The float's only consumer is the panel: a hidden window parks the 10 Hz
+    /// animation (and refreshInflight skips it entirely) so an orderOut'd panel
+    /// does not keep burning wakes; showWindow() restarts both.
+    func stopWaitAnimation() {
+        waitTimer?.invalidate()
+        waitTimer = nil
     }
 
     private func waitTarget(at t: Date, for f: Flight? = nil) -> CGFloat {
@@ -2653,14 +2662,20 @@ final class AppController: NSObject, NSMenuDelegate, NSWindowDelegate {
         // render ...) and burned a full core (2026-11-06 audit, 94-98% CPU).
         rebuildMenu()
         poll()
-        Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in self?.poll() }
+        // ~10% tolerance on every timer: the OS may coalesce these wakes with
+        // other work, and none of them has deadline semantics — a poll a few
+        // hundred ms late is indistinguishable, but the wakeups cost battery.
+        let pollTimer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in self?.poll() }
+        pollTimer.tolerance = 3
         // countdown in the title without hitting the CLI
-        Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in self?.tick() }
+        let tickTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in self?.tick() }
+        tickTimer.tolerance = 0.5
         // `llm-usage menubar window show|hide|toggle` drops a one-line command file; no IPC beyond that
-        Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
+        let cmdTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
             self?.checkWindowCommand()
             self?.refreshInflight()  // cheap file reads: catches a missed FS event
         }
+        cmdTimer.tolerance = 0.1
         watchInflightDirs()
         watchFleetHosts()
         spawnFleetStream()
@@ -2833,6 +2848,11 @@ final class AppController: NSObject, NSMenuDelegate, NSWindowDelegate {
     /// poll keeps its own slow cadence, Activity-Monitor style: sample the hot
     /// metric cheaply and often, refresh everything else rarely.
     func refreshInflight() {
+        // same guard as updateWindow: the float is the ONLY consumer of the
+        // bar list, so a hidden (or never-shown) window skips the scan — the
+        // 30 s data refresh and the menu/status item keep their own cadence.
+        // showWindow() runs one scan on the way back in, so nothing is stale.
+        guard let p = panel, p.isVisible else { return }
         let now = Date()
         var flights = scanInflightFiles(dirs: inflightDirs(), now: now).flights
         // peer snapshots: fleet/<host>/inflight.json, rewritten at request boundaries
@@ -3128,18 +3148,21 @@ final class AppController: NSObject, NSMenuDelegate, NSWindowDelegate {
         p.ignoresMouseEvents = windowClickThrough
         defaults.set(true, forKey: "windowVisible")
         p.orderFrontRegardless()
+        refreshInflight()  // the 1 Hz scan skips a hidden window; catch the bars up on show
         updateWindow()
         rebuildMenu()
     }
 
     func hideWindow() {
         defaults.set(false, forKey: "windowVisible")
+        monitorView.stopWaitAnimation()  // a hidden panel must not keep the 10 Hz needle running
         panel?.orderOut(nil)
         rebuildMenu()
     }
 
     func windowWillClose(_ notification: Notification) {
         defaults.set(false, forKey: "windowVisible")
+        monitorView.stopWaitAnimation()
         rebuildMenu()
     }
 
