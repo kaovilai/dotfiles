@@ -46,6 +46,11 @@
 #   fallback table.
 source "${${(%):-%N}:A:h}/enmaas-proxy.zsh"
 typeset -g _CLAUDE_ENMAAS_SCRIPTS="${${(%):-%N}:A:h:h:h:h:h}/scripts"
+# Same Go binary as the hosted-only flavors (scripts/hosted-only-go): source
+# its launcher library for the SHARED knob list (_hosted_only_go_shared_env),
+# so any improvement forwarded on the hosted-only route reaches this flavor
+# too (tests/go-proxy-knob-parity.zsh enforces it in both directions).
+source "${_CLAUDE_ENMAAS_SCRIPTS}/hosted-only-proxy.zsh"
 
 # Hosted vLLM models routed with the Anthropic dialect on /v1/messages. Same
 # knobs and defaults as the hooks read.
@@ -72,14 +77,22 @@ _claude_enmaas_hook_env() {
     [[ -n "${HOSTED_ONLY_CLASSIFIER_ROUTE_MODEL:-}" ]] && export HOSTED_ONLY_CLASSIFIER_ROUTE_MODEL
     export ENMAAS_RESPONSES_ROUTES="$(_claude_enmaas_glm_id),$(_claude_enmaas_deepseek_id)"
     export ENMAAS_DNS_FALLBACK_HOSTS="$(_claude_enmaas_gateway_host)"
-    # Timeout knobs, same Go binary as the hosted-only flavors: the request
-    # deadline bounds only the upstream's response HEADERS (an actively
-    # streaming answer is never cut by a total deadline) and STREAM_IDLE_TIMEOUT
-    # cuts a body that produces no bytes for that long. ENMAAS_REQUEST_TIMEOUT
-    # is the existing knob; it also stays in config.json's per-route
+    # Timeout knobs (aliases first; the shared list below resolves them):
+    # the request deadline bounds only the upstream's response HEADERS and
+    # STREAM_IDLE_TIMEOUT cuts a body with no bytes for that long.
+    # ENMAAS_REQUEST_TIMEOUT also stays in config.json's per-route
     # request_timeout for documentation.
-    export HOSTED_ONLY_REQUEST_TIMEOUT="${ENMAAS_REQUEST_TIMEOUT:-300}"
-    export HOSTED_ONLY_STREAM_IDLE_TIMEOUT="${ENMAAS_STREAM_IDLE_TIMEOUT:-300}"
+    [[ -n "${ENMAAS_REQUEST_TIMEOUT:-}" ]] && export HOSTED_ONLY_REQUEST_TIMEOUT="$ENMAAS_REQUEST_TIMEOUT"
+    [[ -n "${ENMAAS_STREAM_IDLE_TIMEOUT:-}" ]] && export HOSTED_ONLY_STREAM_IDLE_TIMEOUT="$ENMAAS_STREAM_IDLE_TIMEOUT"
+    # The shared Go-knob list (hosted-only-proxy.zsh): everything an
+    # improvement to the hosted-only route needs forwarded lands here too, and
+    # tests/go-proxy-knob-parity.zsh keeps it honest in both directions. All
+    # entries are CHILD_ENV_PREFIXES vars, so the python controller passes
+    # them to the serve child and the knob digest carries them in the proxy
+    # identity.
+    local kv
+    _hosted_only_go_shared_env
+    for kv in "${_hog_shared[@]}"; do export "$kv"; done
 }
 
 # Host the gateway URL points at: the only name the DoH fallback may resolve.

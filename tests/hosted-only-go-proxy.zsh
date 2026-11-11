@@ -94,7 +94,10 @@ for knobname in $(grep -oE '(knob|intKnob|boolKnob|floatKnob)\("[A-Z_]+"' "$repo
 done
 (( ${#missing} == 0 )) || fail "config.go reads knobs _hosted_only_go_env does not forward (ignored when set without export): ${missing[*]}"
 # and a NON-exported setting actually lands in the child's environment
-HOSTED_ONLY_IMAGE_CACHE_DAYS=0 _hosted_only_proxy_vars claude
+# a plain (non-exported) assignment models a .zshrc setting; the zsh
+# VAR=x func prefix form is function-scoped and gone before _hosted_only_go_env
+HOSTED_ONLY_IMAGE_CACHE_DAYS=0
+_hosted_only_proxy_vars claude
 _hosted_only_go_env
 hits=(${(M)_hop_go_env:#HOSTED_ONLY_IMAGE_CACHE_DAYS=0})
 (( ${#hits} )) || fail "a non-exported HOSTED_ONLY_IMAGE_CACHE_DAYS=0 was not forwarded"

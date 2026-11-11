@@ -302,38 +302,41 @@ _hosted_only_proxy_fp_load() {
 # made in .zshrc without `export` is visible to _hosted_only_knob but not to the
 # child process, so a knob left out is silently ignored (tests/hosted-only-go-
 # proxy.zsh fails when config.go reads one this list does not carry).
-# _hosted_only_go_env: fills _hop_go_env (env-assignment words) with the knobs
-# the Go binary's serve child reads — the same set the LiteLLM branch pins —
-# plus the Go-only pieces (outage-streak state file, DoH allow-list). Call
-# _hosted_only_proxy_vars and _hosted_only_proxy_fp first.
-_hosted_only_go_env() {
-    typeset -g -a _hop_go_env
-    _hop_go_env=(
-        "ENMAAS_API_KEY=$ENMAAS_API_KEY"
-        "HOSTED_ONLY_ENMAAS_BASE_URL=$(_hosted_only_knob ENMAAS_BASE_URL "${ENMAAS_API_BASE_URL:-https://api.enmaas.devshift.net}")"
-        "HOSTED_ONLY_PROXY_TOKEN=$_hop_token"
-        "HOSTED_ONLY_GLM_MODEL=$_hop_glm"
-        "HOSTED_ONLY_DEEPSEEK_MODEL=$_hop_deepseek"
-        "HOSTED_ONLY_VISION_FALLBACK=$_hop_vision_fallback"
-        "HOSTED_ONLY_ALIAS_MODELS=$_hop_aliases"
+# _hosted_only_go_shared_env: fills _hog_shared (env-assignment words) with
+# every Go-proxy knob that is NOT flavor- or deployment-specific. The
+# hosted-only launcher (_hosted_only_go_env) AND the EnMaaS controller
+# (_claude_enmaas_hook_env) forward this same list, so an improvement added
+# here reaches every flavor of the one binary — the 2026-11-11 timeout knobs
+# reached hosted-only and missed EnMaaS precisely because no such list existed.
+# tests/go-proxy-knob-parity.zsh fails when config.go grows a HOSTED_ONLY_*
+# knob this list does not carry, and when this list carries one config.go no
+# longer reads.
+#
+# A flavor may pre-export HOSTED_ONLY_<NAME> (EnMaaS maps its
+# ENMAAS_REQUEST_TIMEOUT / ENMAAS_STREAM_IDLE_TIMEOUT aliases onto the
+# HOSTED_ONLY_ names before calling): _hosted_only_knob honors an already-set
+# value over the default here.
+_hosted_only_go_shared_env() {
+    typeset -g -a _hog_shared
+    _hog_shared=(
+        "HOSTED_ONLY_VISION_FALLBACK=$(_hosted_only_knob VISION_FALLBACK 1)"
         "HOSTED_ONLY_FALLBACK=$(_hosted_only_knob FALLBACK 1)"
         "HOSTED_ONLY_OUTAGE_REWRITE=$(_hosted_only_knob OUTAGE_REWRITE 1)"
-        "HOSTED_ONLY_OUTAGE_STATE=$_hop_runtime/outage-streak.json"
         "HOSTED_ONLY_OUTAGE_RETRY_SECONDS=$(_hosted_only_knob OUTAGE_RETRY_SECONDS 60)"
         "HOSTED_ONLY_OUTAGE_RETRY_MAX_SECONDS=$(_hosted_only_knob OUTAGE_RETRY_MAX_SECONDS 600)"
         "HOSTED_ONLY_OUTAGE_COALESCE_SECONDS=$(_hosted_only_knob OUTAGE_COALESCE_SECONDS 5)"
-        "HOSTED_ONLY_IMAGE_BUDGET_BYTES=$_hop_image_budget"
-        "HOSTED_ONLY_IMAGE_CACHE_DAYS=$_hop_image_cache_days"
+        "HOSTED_ONLY_IMAGE_BUDGET_BYTES=$(_hosted_only_knob IMAGE_BUDGET_BYTES 2500000)"
+        "HOSTED_ONLY_IMAGE_CACHE_DAYS=$(_hosted_only_knob IMAGE_CACHE_DAYS 1)"
         "HOSTED_ONLY_IMAGE_TOKENS=$(_hosted_only_knob IMAGE_TOKENS 2500)"
         "HOSTED_ONLY_IMAGE_CACHE_DIR=$(_hosted_only_knob IMAGE_CACHE_DIR '')"
-        "HOSTED_ONLY_LIMIT_REWRITE=$_hop_limit_rewrite"
-        "HOSTED_ONLY_RATE_LIMIT_DEFAULT_RETRY_SECONDS=$_hop_limit_retry"
-        "HOSTED_ONLY_CLIENT_RETRY_MAX_SECONDS=$_hop_client_retry"
+        "HOSTED_ONLY_LIMIT_REWRITE=$(_hosted_only_knob LIMIT_REWRITE 1)"
+        "HOSTED_ONLY_RATE_LIMIT_DEFAULT_RETRY_SECONDS=$(_hosted_only_knob RATE_LIMIT_DEFAULT_RETRY_SECONDS 60)"
+        "HOSTED_ONLY_CLIENT_RETRY_MAX_SECONDS=$(_hosted_only_knob CLIENT_RETRY_MAX_SECONDS 60)"
         "HOSTED_ONLY_MAX_MODEL_LEN=$(_hosted_only_knob MAX_MODEL_LEN 1048576)"
         "HOSTED_ONLY_OUTPUT_RESERVE=$(_hosted_only_knob OUTPUT_RESERVE 512)"
         "HOSTED_ONLY_BYTES_PER_TOKEN=$(_hosted_only_knob BYTES_PER_TOKEN 3)"
         "HOSTED_ONLY_MIN_OUTPUT=$(_hosted_only_knob MIN_OUTPUT 16000)"
-        "HOSTED_ONLY_REQUEST_TIMEOUT=$_hop_request_timeout"
+        "HOSTED_ONLY_REQUEST_TIMEOUT=$(_hosted_only_knob REQUEST_TIMEOUT 300)"
         "HOSTED_ONLY_STREAM_IDLE_TIMEOUT=$(_hosted_only_knob STREAM_IDLE_TIMEOUT 300)"
         "HOSTED_ONLY_SEARCH_NUDGE=$(_hosted_only_knob SEARCH_NUDGE 1)"
         "HOSTED_ONLY_SEARCH_SHIM=$(_hosted_only_knob SEARCH_SHIM 0)"
@@ -345,6 +348,26 @@ _hosted_only_go_env() {
         "HOSTED_ONLY_PARALLEL_MCP=$(_hosted_only_knob PARALLEL_MCP https://mcp.parallel.ai/mcp)"
         "HOSTED_ONLY_PARALLEL_ACCOUNT=$(_hosted_only_knob PARALLEL_ACCOUNT https://api.parallel.ai/account)"
         "HOSTED_ONLY_CLASSIFIER_ROUTE_MODEL=$(_hosted_only_knob CLASSIFIER_ROUTE_MODEL '')"
+        "HOSTED_ONLY_QUOTA_MONTH_TZ=$(_hosted_only_knob QUOTA_MONTH_TZ UTC)"
+    )
+}
+
+# _hosted_only_go_env: fills _hop_go_env (env-assignment words) with the knobs
+# the Go binary's serve child reads — the same set the LiteLLM branch pins —
+# plus the Go-only pieces (outage-streak state file, DoH allow-list). Call
+# _hosted_only_proxy_vars and _hosted_only_proxy_fp first.
+_hosted_only_go_env() {
+    _hosted_only_go_shared_env
+    typeset -g -a _hop_go_env
+    _hop_go_env=(
+        "ENMAAS_API_KEY=$ENMAAS_API_KEY"
+        "HOSTED_ONLY_ENMAAS_BASE_URL=$(_hosted_only_knob ENMAAS_BASE_URL "${ENMAAS_API_BASE_URL:-https://api.enmaas.devshift.net}")"
+        "HOSTED_ONLY_PROXY_TOKEN=$_hop_token"
+        "HOSTED_ONLY_GLM_MODEL=$_hop_glm"
+        "HOSTED_ONLY_DEEPSEEK_MODEL=$_hop_deepseek"
+        "HOSTED_ONLY_ALIAS_MODELS=$_hop_aliases"
+        "${_hog_shared[@]}"
+        "HOSTED_ONLY_OUTAGE_STATE=$_hop_runtime/outage-streak.json"
         "HOSTED_ONLY_DIALECT_SUFFIX=$_hop_dialect"
         "ENMAAS_DNS_FALLBACK_HOSTS=$_hop_dns_host"
     )
