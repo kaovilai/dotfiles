@@ -210,6 +210,9 @@ export PATH="$HOME/.local/bin:$PATH"
 # rust for t3code dev
 export PATH=/opt/homebrew/opt/rustup/bin:$PATH
 
+# podm shims (podman/docker over Apple containerization — https://github.com/kaovilai/podm)
+export PATH="$HOME/.podm/bin:$PATH"
+
 # Vite+ bin (https://viteplus.dev) — if-block so an absent file doesn't make
 # this (last) line of .zshrc return non-zero for `source ~/.zshrc` callers
 if [[ -f "$HOME/.config/vite-plus/env" ]]; then
