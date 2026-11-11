@@ -196,6 +196,14 @@ m = json.load(urllib.request.urlopen(f"http://127.0.0.1:{port}/api/menubar?share
 assert m["share"]["total"] == 4 and m["series"]["requests"] and "proxies" in m and "inflight" in m, m.get("share")
 m2 = json.load(urllib.request.urlopen(f"http://127.0.0.1:{port}/api/menubar?share_window=1h&share_metric=tokens", timeout=10))
 assert m2["share"]["window"] == "1h" and m2["share"]["metric"] == "tokens", m2["share"]
+# /api/menubar keeps its body for SERVE_MENUBAR_TTL (30 s) even though --cache
+# defaults to 3 s: the helper polls every 30 s, so a shorter TTL only recomputes
+# between its polls. generated_at (second precision) proves the second GET hit
+# the cache rather than recomputing 3.5 s later.
+m3 = json.load(urllib.request.urlopen(f"http://127.0.0.1:{port}/api/menubar?share_window=15m&share_metric=requests", timeout=10))
+time.sleep(3.5)
+m4 = json.load(urllib.request.urlopen(f"http://127.0.0.1:{port}/api/menubar?share_window=15m&share_metric=requests", timeout=10))
+assert m3["generated_at"] == m4["generated_at"], (m3["generated_at"], m4["generated_at"])
 req = urllib.request.Request(f"http://127.0.0.1:{port}/api/data", headers={"Host": "evil.example"})
 try:
     urllib.request.urlopen(req); raise SystemExit("rebinding host accepted")
@@ -1019,6 +1027,30 @@ log._inflight["old"] = {"t": time.time() - u.INFLIGHT_STALE_S - 5, "model": "glm
 log.log_pre_api_call("glm", [], {"litellm_call_id": "call-3"})
 assert set(json.load(open(path))["requests"]) == {"call-3"}, "entries older than the stale limit are pruned on write"
 log.log_pre_api_call("glm", [], None)  # malformed hook args never raise
+
+# serve-side probe caching (MENUBAR_PROBE_TTL): menubar_data must not re-spawn
+# the probe/lsof/ps checks on every poll — the helper polls every 30 s and the
+# subprocesses were ~1/3 of a poll's compute. CLI runs are one-shot processes
+# (cold cache), so exercise it in-process: a second menubar_data within the TTL
+# must not re-invoke probe/proxy_logging_on, and TTL expiry must.
+import importlib.machinery, importlib.util
+os.environ["LLM_USAGE_COPILOT_URL"] = "http://127.0.0.1:9/usage"
+loader = importlib.machinery.SourceFileLoader("llu_probe_cache", usage)
+spec = importlib.util.spec_from_loader("llu_probe_cache", loader)
+mod = importlib.util.module_from_spec(spec)
+loader.exec_module(mod)
+counts = {"probe": 0, "logging": 0}
+mod.probe = lambda port: counts.__setitem__("probe", counts["probe"] + 1) or True
+mod.proxy_logging_on = lambda port, config: counts.__setitem__("logging", counts["logging"] + 1) or False
+n = len(mod.PROXIES)
+d = mod.menubar_data()
+d = mod.menubar_data()
+assert counts == {"probe": n, "logging": n}, (counts, n)  # within the TTL: nothing re-spawned
+assert d["proxies"] and all(p["state"] == "up" and p["logging"] is False for p in d["proxies"]), d["proxies"]
+mod.MENUBAR_PROBE_TTL = 0.05
+time.sleep(0.06)
+mod.menubar_data()
+assert counts == {"probe": 2 * n, "logging": 2 * n}, (counts, n)  # expiry: everything re-spawned
 PY
 
 # menubar reload: rebuild-when-stale + restart decisions, fully offline.

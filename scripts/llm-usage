@@ -39,6 +39,7 @@ import stat as stat_mod
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import urllib.request
 from collections import Counter, defaultdict
@@ -2085,6 +2086,41 @@ def proxy_logging_on(port, config):
     return False
 
 
+# menubar_data's probe + proxy_logging_on checks spawn an HTTP request plus
+# lsof/ps subprocesses per port (~95 ms each on macOS, ~1/3 of a poll's
+# compute), and their answers change at process-start cadence, not poll
+# cadence: the helper polls every 30 s, so a 30 s reuse window can never show
+# a state the poll would not have shown anyway. Only the long-lived `serve`
+# process ever hits a warm entry — CLI runs are one-shot processes. Same
+# single-slot TTL shape as status_rows, but keyed per port so a restarted
+# proxy on one port does not refresh the others' entries.
+MENUBAR_PROBE_TTL = 30.0
+_probe_cache = {}
+_logging_cache = {}
+_menubar_cache_lock = threading.Lock()
+
+
+def _menubar_cached(cache, key, fn):
+    ttl = MENUBAR_PROBE_TTL  # read at call time: tests shrink it to assert expiry
+    with _menubar_cache_lock:
+        hit = cache.get(key)
+    if hit and time.monotonic() - hit[0] < ttl:
+        return hit[1]
+    val = fn()
+    with _menubar_cache_lock:
+        cache[key] = (time.monotonic(), val)
+    return val
+
+
+def probe_cached(port):
+    return _menubar_cached(_probe_cache, port, lambda: probe(port))
+
+
+def proxy_logging_on_cached(port, config):
+    key = (port, tuple(config) if isinstance(config, list) else config)
+    return _menubar_cached(_logging_cache, key, lambda: proxy_logging_on(port, config))
+
+
 _status_cache = [None]  # single slot: (monotonic ts, (rows, events)) — see status_rows(ttl)
 
 
@@ -2807,7 +2843,7 @@ def menubar_data(now=None, up_ports=None, share_window="15m", share_metric="requ
     if up_ports is None:
         from concurrent.futures import ThreadPoolExecutor
         with ThreadPoolExecutor(max_workers=len(ports)) as pool:
-            up = dict(zip(ports, pool.map(probe, ports)))
+            up = dict(zip(ports, pool.map(probe_cached, ports)))  # TTL-cached: see MENUBAR_PROBE_TTL
     else:
         up = {p: p in up_ports for p in ports}
     flights, reporting = read_inflight(now)
@@ -2834,7 +2870,7 @@ def menubar_data(now=None, up_ports=None, share_window="15m", share_metric="requ
             evs, source = extra, "transcript"
         mine = [f for f in flights if f["port"] == port and not f.get("host")]  # this machine's, not a peer's
         name, config = PROXIES.get(port, (f":{port}", None))
-        logging_on = proxy_logging_on(port, config) if up[port] else None  # up-but-NOT-logging: traffic missing from the views
+        logging_on = proxy_logging_on_cached(port, config) if up[port] else None  # up-but-NOT-logging: traffic missing from the views
         row = {"port": int(port) if port.isdigit() else port, "name": name, "state": "up" if up[port] else "down",
                "logging": logging_on, "source": source, "on_demand": port in ON_DEMAND_PORTS,
                # An on-demand proxy is expected up only while it runs: its idle
@@ -3787,6 +3823,12 @@ def _serve_watch_code(start_mtime):
 
 SERVE_PORT = [4150, "127.0.0.1"]  # what the watchdog re-exec needs to reproduce this server
 
+# /api/menubar's cache floor. The helper polls every 30 s, so the 3 s --cache
+# default (kept for /api/data: the browser dashboard refreshes at 5 s) would
+# recompute the whole menubar aggregation between helper polls for nobody.
+# The floor only lengthens a shorter --cache, never shortens a longer one.
+SERVE_MENUBAR_TTL = 30.0
+
 
 def cmd_serve(args):
     import threading
@@ -3841,7 +3883,7 @@ def cmd_serve(args):
                 try:
                     with lock:
                         hit = cache.get(key)
-                        if not hit or time.time() - hit[0] > args.cache:
+                        if not hit or time.time() - hit[0] > max(args.cache, SERVE_MENUBAR_TTL):
                             body = json.dumps(menubar_data(share_window=window, share_metric=metric),
                                               separators=(",", ":"), default=str).encode()
                             hit = (time.time(), body)
