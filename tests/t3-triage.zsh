@@ -51,12 +51,16 @@ chmod +x "$tmp/work/proj/node_modules/.bin/claude"
 # Direct cwd shadow: fatal, message names the path.
 try "$tmp/work/proj"
 [[ $rc -eq 1 ]] || fail "direct shadow not fatal (rc=$rc)"
-grep -q "$tmp/work/proj/node_modules/.bin/claude shadows" "$tmp/err" || fail "direct shadow message wrong"
+# ${tmp:A}: the guard reports the symlink-resolved physical path (${PWD:A});
+# on macOS mktemp returns /var/... which resolves to /private/var/..., so grep
+# the resolved form, not the raw $tmp string.
+rtmp=${tmp:A}
+grep -q "$rtmp/work/proj/node_modules/.bin/claude shadows" "$tmp/err" || fail "direct shadow message wrong"
 
 # Ancestor shadow from a subdirectory: same fatal path.
 try "$tmp/work/proj/src"
 [[ $rc -eq 1 ]] || fail "ancestor shadow not fatal (rc=$rc)"
-grep -q "$tmp/work/proj/node_modules/.bin/claude shadows" "$tmp/err" || fail "ancestor shadow message wrong"
+grep -q "$rtmp/work/proj/node_modules/.bin/claude shadows" "$tmp/err" || fail "ancestor shadow message wrong"
 
 # Symlinked entry: walk follows the physical path, still fatal.
 ln -sfn "$tmp/work/proj/src" "$tmp/link-src"
