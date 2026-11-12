@@ -1884,6 +1884,11 @@ def cmd_routes(args):
     fallbacks = sum(1 for e in events if e.get("fallback"))
     if fallbacks:
         print(color(f"{fallbacks} request(s) were served by a router fallback after a failed first attempt", "33"))
+    kinds = Counter(k for k in (reroute_kind(e) for e in events) if k)
+    if kinds:
+        # why each reroute happened, so a burst can be read as one cause
+        # (vision vs outage) without dropping to the raw JSONL
+        print(color("reroutes by kind: " + ", ".join(f"{k} {n}" for k, n in kinds.most_common()), "35"))
 
 
 def fmt_wait(seconds):
@@ -1906,8 +1911,15 @@ def event_line(ev):
     extra = []
     if ev.get("role"):
         extra.append(ev["role"])
-    if ev.get("fallback"):
-        extra.append("fallback")
+    kind = reroute_kind(ev)
+    if kind:
+        # vision | alias | fallback | fallback:<reason>: why served != requested,
+        # from the event itself, not a re-derivation the reader has to trust.
+        extra.append(kind)
+        if ev.get("session"):
+            # the conversation that caused it; transcript = <session>.jsonl
+            # under ~/.claude/projects on the host column's machine
+            extra.append("sess " + str(ev["session"])[:8])
     if ctx_of(ev) > LONG_CTX:
         extra.append("1M-ctx")
     if ev.get("retry_after"):
