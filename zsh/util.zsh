@@ -47,6 +47,35 @@ wait-for-url() {
     done
 }
 
+# `npx t3 triage` with the dedicated claude shim
+# (~/.local/share/t3-triage/claude, execs a claude-t3-<backend> wrapper —
+# swap backend = edit that shim's exec line) first on PATH so TRIAGE_AGENTS
+# resolves it. Env-prefix form: PATH change never leaks to this shell.
+# Without the shim dir, PATH-spawned claude falls through to the
+# claude-dispatch shim (scripts/claude-dispatch.zsh) and follows claude-mode
+# (warned, not fatal). A node_modules/.bin/claude anywhere from cwd up to /
+# IS fatal: npm prepends each of those bin dirs ahead of any supplied PATH
+# (verified: npm/run-script set-path walks ancestors), so triage would
+# silently launch that binary instead of the shim.
+t3-triage() {
+    command -v npx &>/dev/null || { echo "t3-triage: npx not found — install node (brew install node)" >&2; return 1; }
+    local shim="$HOME/.local/share/t3-triage/claude"
+    [[ -x "$shim" ]] || echo "t3-triage: $shim missing or not executable — claude falls back to claude-dispatch (claude-mode)" >&2
+    # ${PWD:A}: physical path — npm resolves cwd w/o symlinks (process.cwd()),
+    # so a symlinked entry dir must be resolved before walking ancestors.
+    local d="${PWD:A}" cand
+    while :; do
+        cand="$d/node_modules/.bin/claude"
+        if [[ -x "$cand" ]]; then
+            echo "t3-triage: $cand shadows the shim (npm prepends node_modules/.bin dirs up the tree) — remove it or run from a tree without it" >&2
+            return 1
+        fi
+        [[ "$d" == "/" ]] && break
+        d="${d:h}"
+    done
+    PATH="$HOME/.local/share/t3-triage:$PATH" npx t3 triage --agent claude "$@"
+}
+
 code-git() {
     if [[ -z "$1" ]]; then
         echo "Usage: code-git <repo-name>" >&2

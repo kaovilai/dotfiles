@@ -9,7 +9,7 @@ One repo covers four things that usually live in five places:
 - **An LLM telemetry stack** — `llm-usage` reads every local proxy's request log (plus Claude/Codex transcripts) and answers "which model actually served my traffic, at what cost, and what is throttled right now" — in the terminal, a browser dashboard, and a native macOS menubar monitor, across your whole fleet of machines.
 - **OpenShift / OADP / Velero cluster automation** — repeatable create/connect/destroy flows for AWS, GCP (WIF), Azure (STS), and ROSA clusters with Velero backup setup, version-matched `oc` binaries, and offline-testable installer logic.
 
-Everything here is ZSH (not Bash), kebab-case for public commands, and covered by [26 offline test suites](tests/) that run without a cluster, a proxy, or a GUI.
+Everything here is ZSH (not Bash), kebab-case for public commands, and covered by [27 offline test suites](tests/) that run without a cluster, a proxy, or a GUI.
 
 ## Highlights
 
@@ -101,7 +101,7 @@ Details that matter: every `oc adm release extract` goes through a **version-mat
 
 ### 6. A dotfiles repo that tests itself
 
-26 offline test suites (`tests/`) stub out `node`, `claude`, `systemctl`, `curl` and more to verify real behavior: provider lifecycle and proxy routing, mode completion, model pickers, fleet-sync decisions, the context-mode daemon sync, T3 launchers, and `zsh -n` over the whole `.zshrc`. The shell itself is performance-tuned: lazy-loaded function groups, backgrounded non-essential init, and completion caching.
+27 offline test suites (`tests/`) stub out `node`, `claude`, `systemctl`, `curl` and more to verify real behavior: provider lifecycle and proxy routing, mode completion, model pickers, fleet-sync decisions, the context-mode daemon sync, T3 launchers, and `zsh -n` over the whole `.zshrc`. The shell itself is performance-tuned: lazy-loaded function groups, backgrounded non-essential init, and completion caching.
 
 ## Function catalog
 
@@ -286,7 +286,7 @@ zsh tests/<suite>.zsh                           # run the matching offline suite
 time zsh -i -c exit                             # keep startup fast
 ```
 
-No formal framework — each test suite is a self-contained zsh script that stubs external commands and asserts behavior. When adding a feature that has a testable core (sync decisions, route generation, installer resolution), add a suite; the existing 26 are the pattern.
+No formal framework — each test suite is a self-contained zsh script that stubs external commands and asserts behavior. When adding a feature that has a testable core (sync decisions, route generation, installer resolution), add a suite; the existing 27 are the pattern.
 
 ## Structure
 
@@ -305,7 +305,7 @@ zsh/
   completions/          # custom completions (llm-usage, tailscale)
 scripts/                # llm-usage, proxies, fleet-sync, menubar monitor, ...
 docs/                   # setup guides + docs/notes/ design notes
-tests/                  # 26 offline test suites
+tests/                  # 27 offline test suites
 ```
 
 See `zsh/aliases/README.md` for adding aliases; conventions (ZSH not Bash, kebab-case public names, `znap` never prefixed on function definitions) are in `CLAUDE.md`.
