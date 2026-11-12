@@ -66,7 +66,7 @@ t3-triage() {
     while :; do
         cand="$d/node_modules/.bin/claude"
         if [[ -x "$cand" ]]; then
-            echo "t3-triage: $cand shadows the shim (npm prepends node_modules/.bin dirs up the tree) — run outside this project or remove it" >&2
+            echo "t3-triage: $cand shadows the shim (npm prepends node_modules/.bin dirs up the tree) — remove it or run from a tree without it" >&2
             return 1
         fi
         [[ "$d" == "/" ]] && break
