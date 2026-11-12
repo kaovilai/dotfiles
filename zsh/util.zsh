@@ -58,6 +58,7 @@ wait-for-url() {
 # (verified: npm/run-script set-path walks ancestors), so triage would
 # silently launch that binary instead of the shim.
 t3-triage() {
+    command -v npx &>/dev/null || { echo "t3-triage: npx not found — install node (brew install node)" >&2; return 1; }
     local shim="$HOME/.local/share/t3-triage/claude"
     [[ -x "$shim" ]] || echo "t3-triage: $shim missing or not executable — claude falls back to claude-dispatch (claude-mode)" >&2
     # ${PWD:A}: physical path — npm resolves cwd w/o symlinks (process.cwd()),
