@@ -49,6 +49,15 @@ type config struct {
 	ImageCacheDays int
 	ImageCacheDir  string
 	AttachmentsDir string
+	// ImageWindowTurns keeps inline images only within the trailing N human
+	// turns of the history, budget aside: a thread that has moved on from its
+	// screenshots must return to the non-vision model (GLM) instead of
+	// carrying every image it ever viewed — and the DeepSeek reroute any
+	// surviving image forces — for the rest of the session. A turn starts at
+	// a user message that is not a tool-result carrier, so an active agentic
+	// task keeps its images for its whole turn no matter how many tool rounds
+	// it runs. 0 disables.
+	ImageWindowTurns int
 
 	DefaultRetry   int
 	ClientRetryMax int
@@ -267,6 +276,7 @@ func loadConfig(flavor, port, runtimeDir string) *config {
 		MinOutput:            intKnob("MIN_OUTPUT", 16000, 1),
 		BytesPerToken:        floatKnob("BYTES_PER_TOKEN", 3),
 		ImageBudget:          intKnob("IMAGE_BUDGET_BYTES", 2500000, 0),
+		ImageWindowTurns:     intKnob("IMAGE_WINDOW_TURNS", 6, 0),
 		ImageTokens:          intKnob("IMAGE_TOKENS", 2500, 1),
 		ImageCacheDays:       intKnob("IMAGE_CACHE_DAYS", 1, 0),
 		ImageCacheDir:        imageCacheDir(),

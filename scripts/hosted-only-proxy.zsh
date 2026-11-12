@@ -285,7 +285,7 @@ _hosted_only_proxy_fp() {
     # Every knob _hosted_only_go_env forwards is a fingerprint input: one left
     # out (IMAGE_TOKENS, IMAGE_CACHE_DIR, SEARCH_NUDGE) would let a running
     # proxy serve the old value as "fresh".
-    local knobs="$(_hosted_only_knob OUTAGE_COALESCE_SECONDS 5) $_hop_vision_fallback $_hop_limit_rewrite $_hop_limit_retry $_hop_client_retry $_hop_fallback $_hop_aliases $_hop_request_timeout $(_hosted_only_knob STREAM_IDLE_TIMEOUT 300) $_hop_image_budget $_hop_image_cache_days $_hop_dialect $dns_host ${ENMAAS_DNS_DOH_URLS:-} $(_hosted_only_knob IMAGE_TOKENS 2500) $(_hosted_only_knob IMAGE_CACHE_DIR '') $(_hosted_only_knob SEARCH_NUDGE 1) $(_hosted_only_knob SEARCH_SHIM 0) $(_hosted_only_knob SEARCH_DAILY_CAP 500) $(_hosted_only_knob PARALLEL_BASE https://api.parallel.ai) $(_hosted_only_knob PARALLEL_PLATFORM https://platform.parallel.ai) $(_hosted_only_knob CLASSIFIER_ROUTE_MODEL '')"
+    local knobs="$(_hosted_only_knob OUTAGE_COALESCE_SECONDS 5) $_hop_vision_fallback $_hop_limit_rewrite $_hop_limit_retry $_hop_client_retry $_hop_fallback $_hop_aliases $_hop_request_timeout $(_hosted_only_knob STREAM_IDLE_TIMEOUT 300) $_hop_image_budget $_hop_image_cache_days $(_hosted_only_knob IMAGE_WINDOW_TURNS 6) $_hop_dialect $dns_host ${ENMAAS_DNS_DOH_URLS:-} $(_hosted_only_knob IMAGE_TOKENS 2500) $(_hosted_only_knob IMAGE_CACHE_DIR '') $(_hosted_only_knob SEARCH_NUDGE 1) $(_hosted_only_knob SEARCH_SHIM 0) $(_hosted_only_knob SEARCH_DAILY_CAP 500) $(_hosted_only_knob PARALLEL_BASE https://api.parallel.ai) $(_hosted_only_knob PARALLEL_PLATFORM https://platform.parallel.ai) $(_hosted_only_knob CLASSIFIER_ROUTE_MODEL '')"
     local fp token_fp
     fp=$(print -rn -- "$config"$'\x1f'"$hooks_hash"$'\x1f'"$ENMAAS_API_KEY"$'\x1f'"$knobs" \
         | shasum -a 256 | cut -d' ' -f1) || return 1
@@ -328,6 +328,7 @@ _hosted_only_go_shared_env() {
         "HOSTED_ONLY_OUTAGE_RETRY_MAX_SECONDS=$(_hosted_only_knob OUTAGE_RETRY_MAX_SECONDS 600)"
         "HOSTED_ONLY_OUTAGE_COALESCE_SECONDS=$(_hosted_only_knob OUTAGE_COALESCE_SECONDS 5)"
         "HOSTED_ONLY_IMAGE_BUDGET_BYTES=$(_hosted_only_knob IMAGE_BUDGET_BYTES 2500000)"
+        "HOSTED_ONLY_IMAGE_WINDOW_TURNS=$(_hosted_only_knob IMAGE_WINDOW_TURNS 6)"
         "HOSTED_ONLY_IMAGE_CACHE_DAYS=$(_hosted_only_knob IMAGE_CACHE_DAYS 1)"
         "HOSTED_ONLY_IMAGE_TOKENS=$(_hosted_only_knob IMAGE_TOKENS 2500)"
         "HOSTED_ONLY_IMAGE_CACHE_DIR=$(_hosted_only_knob IMAGE_CACHE_DIR '')"

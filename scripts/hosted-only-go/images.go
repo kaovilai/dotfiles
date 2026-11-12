@@ -371,7 +371,7 @@ func safePath(path string) string {
 	return cleaned
 }
 
-func prunePlaceholder(source, attachment, cached string, days int) string {
+func prunePlaceholder(source, attachment, cached string, days int, reason string) string {
 	var where []string
 	if source != "" {
 		where = append(where, "source file "+safePath(source))
@@ -390,7 +390,7 @@ func prunePlaceholder(source, attachment, cached string, days int) string {
 	if len(where) > 0 {
 		tail = "; it is still at " + strings.Join(where, ", ") + ". View that path again if you need the image."
 	}
-	return pruneMarker + " Image removed by the local proxy to keep this request under the gateway's body limit" + tail
+	return pruneMarker + " Image removed by the local proxy " + reason + tail
 }
 
 func pruneReplacement(block map[string]any, text string) map[string]any {
@@ -444,62 +444,242 @@ func imageLoad(value any) (size, count int) {
 	return size, count
 }
 
-// pruneImages replaces inline images, oldest first, until the content fits the
-// budget, and returns how many it replaced.
-func pruneImages(cfg *config, data map[string]any) int {
-	if cfg.ImageBudget <= 0 {
+// pruneReasons name why an image was replaced; the model reads the reason, so
+// it must match the prune that actually fired (a wrong reason would send the
+// model shrinking a request that was never over any limit).
+const (
+	budgetPruneReason = "to keep this request under the gateway's body limit"
+	windowPruneReason = "because the conversation moved on and only the last few messages keep their images"
+)
+
+// replaceImage swaps one inline image block for its placeholder text (source
+// path, T3 attachment match, proxy cache copy — the model can re-view from any
+// of them). ok reports that the block was replaced; saved is the byte delta,
+// which is negative when the note outgrew a tiny image's base64. Shared by the
+// budget prune and the stale-window prune: the replacement always counts, the
+// caller decides what the size delta means.
+func replaceImage(cfg *config, index map[string]string, ref imageRef, now time.Time, reason string) (saved int, ok bool) {
+	encoded, mime, payloadOK := imagePayload(ref.block)
+	if !payloadOK {
+		return 0, false
+	}
+	var sha, cached, attachment string
+	if raw, err := base64.StdEncoding.DecodeString(encoded); err == nil && len(raw) > 0 {
+		sum := sha1.Sum(raw)
+		sha = hex.EncodeToString(sum[:])
+		cached = cacheImage(cfg, raw, sha, mime, now)
+	} else if raw, err := base64.RawStdEncoding.DecodeString(encoded); err == nil && len(raw) > 0 {
+		sum := sha1.Sum(raw)
+		sha = hex.EncodeToString(sum[:])
+		cached = cacheImage(cfg, raw, sha, mime, now)
+	}
+	if sha != "" {
+		attachment = attachmentMatch(cfg.AttachmentsDir, sha)
+	}
+	text := prunePlaceholder(index[ref.anchor], attachment, cached, cfg.ImageCacheDays, reason)
+	ref.parent[ref.index] = pruneReplacement(ref.block, text)
+	return len(encoded) - len(text), true
+}
+
+// pruneStaleImages replaces inline images that fell outside the trailing
+// ImageWindowTurns messages of the history, regardless of the size budget.
+// Claude Code resends the whole history every turn, so an image viewed once
+// keeps forcing the vision reroute (GLM -> DeepSeek) for the rest of the
+// session even after the thread moved on; pruning it returns the thread to
+// GLM. The placeholder names where the image still lives, so a follow-up that
+// needs it again can re-view it, and the same bytes always produce the same
+// text (prompt-cache-stable across turns). Returns how many it replaced.
+// isTurnStart reports whether a history message begins a human turn: a user
+// message carrying real human content. Not turn starts: the tool-result half
+// of an agentic round (Claude Code sends each round as assistant tool_use +
+// user tool_result), and harness-injected bookkeeping (system reminders,
+// slash-command plumbing, task notifications) — Claude Code injects those as
+// plain user messages mid-task, and counting them would let an active task
+// walk its own screenshot out of the window after N injections.
+func isTurnStart(msg any) bool {
+	m := asMap(msg)
+	if m == nil || asString(m["role"]) != "user" {
+		return false
+	}
+	if text, ok := m["content"].(string); ok {
+		// the plain-string chat shape: a turn unless it is only wrappers
+		return !wrapperOnlyText(text)
+	}
+	human := false
+	for _, b := range asList(m["content"]) {
+		block := asMap(b)
+		if block == nil {
+			human = true // not a block shape we model; assume human
+			continue
+		}
+		switch asString(block["type"]) {
+		case "tool_result":
+			// tool half of a round; a wrapper text block appended to it does
+			// not make the message a turn either
+		case "text":
+			if !wrapperOnlyText(asString(block["text"])) {
+				human = true
+			}
+		default:
+			human = true // images and everything else are human content
+		}
+	}
+	return human
+}
+
+// wrapperTags are the harness-injected user-message wrappers that must not
+// count as human turns. A wrapper segment spans from its opening tag to the
+// matching close; text outside any segment is human content.
+var wrapperTags = []string{
+	"<system-reminder>", "<command-name>", "<command-message>", "<command-args>",
+	"<local-command-stdout>", "<local-command-caveat>", "<task-notification>",
+	"<environment_context>",
+}
+
+// wrapperOnlyText reports whether text holds nothing but wrapper segments and
+// whitespace. An unclosed wrapper swallows the remainder.
+func wrapperOnlyText(text string) bool {
+	rest := strings.TrimSpace(text)
+	for rest != "" {
+		matched := false
+		for _, tag := range wrapperTags {
+			if !strings.HasPrefix(rest, tag) {
+				continue
+			}
+			matched = true
+			closeTag := "</" + tag[1:]
+			end := strings.Index(rest, closeTag)
+			if end < 0 {
+				return true
+			}
+			rest = strings.TrimSpace(rest[end+len(closeTag):])
+			break
+		}
+		if !matched {
+			return false
+		}
+	}
+	return true
+}
+
+// turnWindowStart returns the index of the first message of the trailing
+// `turns` human turns; 0 when the whole history is inside the window.
+func turnWindowStart(history []any, turns int) int {
+	start := len(history)
+	remaining := turns
+	for i := len(history) - 1; i >= 0 && remaining > 0; i-- {
+		if isTurnStart(history[i]) {
+			remaining--
+			start = i
+		}
+	}
+	if remaining > 0 {
+		return 0
+	}
+	return start
+}
+
+func pruneStaleImages(cfg *config, data map[string]any) int {
+	if cfg.ImageWindowTurns <= 0 {
+		return 0
+	}
+	// Gate on the same condition the vision reroute uses (rewrite.go): the
+	// window prune exists to release the GLM->DeepSeek reroute, so it must not
+	// strip images from flavors whose models see them natively (vertex
+	// publisher models, enmaas route-table entries, explicit DeepSeek) — there
+	// the trade buys nothing. The alias is expanded exactly as the reroute's
+	// own check will see it a few lines later.
+	model := asString(data["model"])
+	if !cfg.VisionFallback || !cfg.isGLM(model) || cfg.DeepSeek == cfg.GLM {
 		return 0
 	}
 	history := asList(data["messages"])
 	if len(history) == 0 {
 		history = asList(data["input"])
 	}
-	if !hasImage(history) {
+	if len(history) == 0 || !hasImage(history) {
 		return 0
+	}
+	cutoff := turnWindowStart(history, cfg.ImageWindowTurns)
+	if cutoff <= 0 {
+		return 0
+	}
+	// Same bytes must always produce the same note (prompt-cache stability).
+	// On a request over the size budget the budget prune will be replacing the
+	// same images with the body-limit reason, so the stale replacements use it
+	// too — otherwise an image crossing the window edge on an over-budget
+	// thread would flip its note's reason mid-history, busting the cache
+	// prefix and re-explaining the same removal differently.
+	reason := windowPruneReason
+	if cfg.ImageBudget > 0 && contentSize(data) > cfg.ImageBudget {
+		reason = budgetPruneReason
+	}
+	index := toolPathIndex(data)
+	now := time.Now()
+	pruned := 0
+	for i := 0; i < cutoff; i++ {
+		var refs []imageRef
+		// A message map is never an image block itself, so the parent/index
+		// arguments are unused here; images inside the message's content list
+		// still resolve to their real parent lists for in-place replacement.
+		collectImages(history[i], nil, 0, "", &refs)
+		for _, ref := range refs {
+			if _, replaced := replaceImage(cfg, index, ref, now, reason); replaced {
+				pruned++
+			}
+		}
+	}
+	if pruned > 0 {
+		log.Printf("hosted-only-go: pruned %d stale inline image(s) before the last %d turns for %s",
+			pruned, cfg.ImageWindowTurns, asString(data["model"]))
+	}
+	return pruned
+}
+
+// pruneImages replaces inline images, oldest first, until the content fits the
+// budget, and returns how many it replaced.
+func pruneImages(cfg *config, data map[string]any) int {
+	// The stale-window prune runs first: it edits the body even under the size
+	// budget, and its replacements must reach the marshaled output, so its
+	// count rides along in this function's return (rewrite.go re-marshals on
+	// any nonzero prune).
+	pruned := pruneStaleImages(cfg, data)
+	if cfg.ImageBudget <= 0 {
+		return pruned
+	}
+	history := asList(data["messages"])
+	if len(history) == 0 {
+		history = asList(data["input"])
+	}
+	if !hasImage(history) {
+		return pruned
 	}
 	size := contentSize(data)
 	before := size
 	if size <= cfg.ImageBudget {
-		return 0
+		return pruned
 	}
 	var blocks []imageRef
 	collectImages(data["messages"], nil, 0, "", &blocks)
 	collectImages(data["input"], nil, 0, "", &blocks)
 	if len(blocks) == 0 {
-		return 0
+		return pruned
 	}
 	index := toolPathIndex(data)
 	now := time.Now()
-	pruned := 0
+	budgetPruned := 0
 	for _, ref := range blocks {
 		if size <= cfg.ImageBudget {
 			break
 		}
-		encoded, mime, ok := imagePayload(ref.block)
-		if !ok {
-			continue
+		if saved, replaced := replaceImage(cfg, index, ref, now, budgetPruneReason); replaced {
+			size -= saved
+			budgetPruned++
 		}
-		var sha, cached, attachment string
-		if raw, err := base64.StdEncoding.DecodeString(encoded); err == nil && len(raw) > 0 {
-			sum := sha1.Sum(raw)
-			sha = hex.EncodeToString(sum[:])
-			cached = cacheImage(cfg, raw, sha, mime, now)
-		} else if raw, err := base64.RawStdEncoding.DecodeString(encoded); err == nil && len(raw) > 0 {
-			sum := sha1.Sum(raw)
-			sha = hex.EncodeToString(sum[:])
-			cached = cacheImage(cfg, raw, sha, mime, now)
-		}
-		if sha != "" {
-			attachment = attachmentMatch(cfg.AttachmentsDir, sha)
-		}
-		text := prunePlaceholder(index[ref.anchor], attachment, cached, cfg.ImageCacheDays)
-		ref.parent[ref.index] = pruneReplacement(ref.block, text)
-		size -= len(encoded) - len(text)
-		pruned++
 	}
-	if pruned > 0 {
+	if budgetPruned > 0 {
 		log.Printf("hosted-only-go: pruned %d of %d inline images for %s (content %d -> ~%d bytes, budget %d)",
-			pruned, len(blocks), asString(data["model"]), before, size, cfg.ImageBudget)
+			budgetPruned, len(blocks), asString(data["model"]), before, size, cfg.ImageBudget)
 	}
-	return pruned
+	return pruned + budgetPruned
 }
