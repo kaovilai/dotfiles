@@ -36,6 +36,9 @@ env:
 jobs:
   review:
     runs-on: ubuntu-latest
+    # Agentic step bound: --max-turns 300 at --effort high can otherwise hold
+    # a wedged run (EnMaaS 429/503 retry loops) for GitHub's 6h job default.
+    timeout-minutes: 60
     if: >-
       github.event_name == 'pull_request' ||
       (vars.HOSTED_ONLY_CLAUDE_MENTIONS == 'true' &&
@@ -88,7 +91,7 @@ jobs:
         with:
           github_token: ${{ steps.app-token.outputs.token || github.token }}
           prompt: "Review this PR. Read the diff and changed files, verify each concern against the code, then post one GitHub review: inline comments on real problems only (correctness, security, breakage — no style nits, no praise), each tagged [high]/[medium]/[low], plus a short summary comment."
-          claude_args: '--effort high --max-turns 50 --allowedTools "Read,Glob,Grep,Bash(git diff:*),Bash(git log:*),Bash(git show:*),Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr checks:*),mcp__github__*"'
+          claude_args: '--effort high --max-turns 300 --allowedTools "Read,Glob,Grep,Bash(git diff:*),Bash(git log:*),Bash(git show:*),Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr checks:*),mcp__github__*"'
       - name: Upload claude execution output (debug transcript)
         if: always()
         uses: actions/upload-artifact@v4
