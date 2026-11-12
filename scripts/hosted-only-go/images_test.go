@@ -451,7 +451,7 @@ func (f *imageFixture) staleReq(t *testing.T, turns int) map[string]any {
 
 func TestPruneStaleImagesOutsideWindow(t *testing.T) {
 	f := newImageFixture(t)
-	f.cfg.ImageWindowMessages = 6
+	f.cfg.ImageWindowTurns = 6
 	f.cfg.VisionFallback = true
 	f.cfg.GLM = "rits/zai-org/glm-5-3"
 	f.cfg.DeepSeek = "rits/deepseek-ai/DeepSeek-V4.1-Flash-1017"
@@ -486,7 +486,7 @@ func TestPruneStaleImagesOutsideWindow(t *testing.T) {
 	}
 
 	// window 0 is off
-	f.cfg.ImageWindowMessages = 0
+	f.cfg.ImageWindowTurns = 0
 	if n := pruneImages(f.cfg, f.staleReq(t, 10)); n != 0 {
 		t.Fatalf("window 0 must disable the stale prune, pruned %d", n)
 	}
@@ -496,12 +496,12 @@ func TestPruneStaleImagesOutsideWindow(t *testing.T) {
 // vision reroute must not fire and the thread stays on GLM.
 func TestStalePruneReturnsThreadToGLM(t *testing.T) {
 	f := newImageFixture(t)
-	f.cfg.ImageWindowMessages = 6
+	f.cfg.ImageWindowTurns = 6
 	f.cfg.VisionFallback = true
 	f.cfg.GLM = "rits/zai-org/glm-5-3"
 	f.cfg.DeepSeek = "rits/deepseek-ai/DeepSeek-V4.1-Flash-1017"
 	cfg := testConfig()
-	cfg.ImageWindowMessages = 6
+	cfg.ImageWindowTurns = 6
 	cfg.ImageBudget = f.cfg.ImageBudget
 	cfg.ImageCacheDays = 0 // no disk writes in this test
 	data := f.staleReq(t, 10)
@@ -519,7 +519,7 @@ func TestStalePruneReturnsThreadToGLM(t *testing.T) {
 func TestTinyImageReplacementStillCounts(t *testing.T) {
 	f := newImageFixture(t)
 	tiny := base64.StdEncoding.EncodeToString(png(byte(9), 4)) // ~12 chars of base64
-	f.cfg.ImageWindowMessages = 4
+	f.cfg.ImageWindowTurns = 2
 	f.cfg.VisionFallback = true
 	f.cfg.GLM = "rits/zai-org/glm-5-3"
 	f.cfg.DeepSeek = "rits/deepseek-ai/DeepSeek-V4.1-Flash-1017"
@@ -554,7 +554,7 @@ func TestTinyImageReplacementStillCounts(t *testing.T) {
 // the window reason, not the body-limit one.
 func TestStalePruneGatedToVisionRerouteAndNamesItsReason(t *testing.T) {
 	f := newImageFixture(t)
-	f.cfg.ImageWindowMessages = 4
+	f.cfg.ImageWindowTurns = 4
 	f.cfg.VisionFallback = true
 	f.cfg.GLM = "rits/zai-org/glm-5-3"
 	f.cfg.DeepSeek = "rits/deepseek-ai/DeepSeek-V4.1-Flash-1017"
@@ -581,5 +581,36 @@ func TestStalePruneGatedToVisionRerouteAndNamesItsReason(t *testing.T) {
 	f.cfg.VisionFallback = false
 	if n := pruneImages(f.cfg, f.staleReq(t, 10)); n != 0 {
 		t.Fatalf("vision fallback off must disable the window prune, pruned %d", n)
+	}
+}
+
+// The bot's case: an active agentic task runs many tool rounds inside ONE
+// human turn — the window counts human turns, so the screenshot the task is
+// still working from never walks out of the window mid-task.
+func TestActiveTaskKeepsItsImage(t *testing.T) {
+	f := newImageFixture(t)
+	f.cfg.ImageWindowTurns = 2
+	f.cfg.VisionFallback = true
+	f.cfg.GLM = "rits/zai-org/glm-5-3"
+	f.cfg.DeepSeek = "rits/deepseek-ai/DeepSeek-V4.1-Flash-1017"
+	messages := []any{
+		map[string]any{"role": "user", "content": []any{
+			map[string]any{"type": "text", "text": "crop this"},
+			map[string]any{"type": "image", "source": map[string]any{
+				"type": "base64", "media_type": "image/png", "data": f.b64[0]}}}},
+	}
+	// seven tool rounds inside the same human turn: assistant tool_use + user
+	// tool_result each, far more raw messages than the window
+	for i := 0; i < 7; i++ {
+		messages = append(messages,
+			map[string]any{"role": "assistant", "content": []any{map[string]any{
+				"type": "tool_use", "id": "t", "name": "edit", "input": map[string]any{"i": i}}}},
+			map[string]any{"role": "user", "content": []any{map[string]any{
+				"type": "tool_result", "tool_use_id": "t", "content": "ok"}}},
+		)
+	}
+	data := map[string]any{"model": f.cfg.GLM, "messages": messages}
+	if n := pruneImages(f.cfg, data); n != 0 {
+		t.Fatalf("an image the current turn is working from must survive, pruned %d", n)
 	}
 }

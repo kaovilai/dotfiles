@@ -482,15 +482,53 @@ func replaceImage(cfg *config, index map[string]string, ref imageRef, now time.T
 }
 
 // pruneStaleImages replaces inline images that fell outside the trailing
-// ImageWindowMessages messages of the history, regardless of the size budget.
+// ImageWindowTurns messages of the history, regardless of the size budget.
 // Claude Code resends the whole history every turn, so an image viewed once
 // keeps forcing the vision reroute (GLM -> DeepSeek) for the rest of the
 // session even after the thread moved on; pruning it returns the thread to
 // GLM. The placeholder names where the image still lives, so a follow-up that
 // needs it again can re-view it, and the same bytes always produce the same
 // text (prompt-cache-stable across turns). Returns how many it replaced.
+// isTurnStart reports whether a history message begins a human turn: a user
+// message that is not just the tool-result half of an agentic round. Claude
+// Code sends each tool round as assistant tool_use + user tool_result, so
+// counting raw messages would let an active task walk its own screenshot out
+// of the window mid-turn.
+func isTurnStart(msg any) bool {
+	m := asMap(msg)
+	if m == nil || asString(m["role"]) != "user" {
+		return false
+	}
+	blocks := asList(m["content"])
+	for _, b := range blocks {
+		if block := asMap(b); block != nil && asString(block["type"]) == "tool_result" {
+			continue
+		}
+		return true
+	}
+	// no content, or only tool_result blocks: not a human turn
+	return len(blocks) == 0
+}
+
+// turnWindowStart returns the index of the first message of the trailing
+// `turns` human turns; 0 when the whole history is inside the window.
+func turnWindowStart(history []any, turns int) int {
+	start := len(history)
+	remaining := turns
+	for i := len(history) - 1; i >= 0 && remaining > 0; i-- {
+		if isTurnStart(history[i]) {
+			remaining--
+			start = i
+		}
+	}
+	if remaining > 0 {
+		return 0
+	}
+	return start
+}
+
 func pruneStaleImages(cfg *config, data map[string]any) int {
-	if cfg.ImageWindowMessages <= 0 {
+	if cfg.ImageWindowTurns <= 0 {
 		return 0
 	}
 	// Gate on the same condition the vision reroute uses (rewrite.go): the
@@ -510,7 +548,7 @@ func pruneStaleImages(cfg *config, data map[string]any) int {
 	if len(history) == 0 || !hasImage(history) {
 		return 0
 	}
-	cutoff := len(history) - cfg.ImageWindowMessages
+	cutoff := turnWindowStart(history, cfg.ImageWindowTurns)
 	if cutoff <= 0 {
 		return 0
 	}
@@ -530,8 +568,8 @@ func pruneStaleImages(cfg *config, data map[string]any) int {
 		}
 	}
 	if pruned > 0 {
-		log.Printf("hosted-only-go: pruned %d stale inline image(s) outside the last %d messages for %s",
-			pruned, cfg.ImageWindowMessages, asString(data["model"]))
+		log.Printf("hosted-only-go: pruned %d stale inline image(s) before the last %d turns for %s",
+			pruned, cfg.ImageWindowTurns, asString(data["model"]))
 	}
 	return pruned
 }

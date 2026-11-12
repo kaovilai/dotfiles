@@ -210,11 +210,14 @@ text every turn for prompt caching; the copies live in
 `HOSTED_ONLY_IMAGE_CACHE_DIR`, which must be a directory dedicated to this
 proxy: the hourly sweep deletes expired files named `<sha1>.<image ext>`, so a
 shared directory could lose a file that happens to match), the **stale-image
-window prune** (`HOSTED_ONLY_IMAGE_WINDOW_MESSAGES`, default 12, 0 off —
-images outside the trailing N messages of the history are replaced by the same
-path note even under the size budget, because Claude Code resends the whole
-history every turn and any surviving image keeps forcing the GLM→DeepSeek
-vision reroute for the rest of the session) and the **per-image pricing** in the window
+window prune** (`HOSTED_ONLY_IMAGE_WINDOW_TURNS`, default 6, 0 off —
+images outside the trailing N human turns of the history are replaced by the
+same path note even under the size budget, because Claude Code resends the
+whole history every turn and any surviving image keeps forcing the GLM→DeepSeek
+vision reroute for the rest of the session; a turn starts at a user message
+that is not a tool-result carrier, so an active agentic task keeps its images
+for its whole turn however many tool rounds it runs, and the prune is gated to
+the same GLM/vision-fallback condition the reroute itself uses) and the **per-image pricing** in the window
 clamp (`HOSTED_ONLY_IMAGE_TOKENS`); the **outage shapes** — 529, the gateway's
 503 `metering system unavailable` / `service unavailable`, connect/DNS 500s —
 and the `LIMIT_REWRITE` / `OUTAGE_REWRITE` gate split; the **quota-aware
