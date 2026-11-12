@@ -666,3 +666,34 @@ func TestInjectionsDoNotAdvanceTheWindow(t *testing.T) {
 		t.Fatalf("after two later human turns the older images are stale: want 2 pruned, got %d", n)
 	}
 }
+
+// Cache stability at the window edge: on an over-budget request the stale
+// replacements must use the budget reason — the same note the budget prune
+// writes for the same bytes — so an image crossing the edge never flips its
+// note's reason mid-history.
+func TestStalePruneMatchesBudgetReasonWhenOverBudget(t *testing.T) {
+	f := newImageFixture(t)
+	f.cfg.ImageWindowTurns = 2
+	f.cfg.VisionFallback = true
+	f.cfg.GLM = "rits/zai-org/glm-5-3"
+	f.cfg.DeepSeek = "rits/deepseek-ai/DeepSeek-V4.1-Flash-1017"
+	req := f.staleReq(t, 10)
+	f.cfg.ImageBudget = 1 // force over budget
+	if n := pruneImages(f.cfg, req); n == 0 {
+		t.Fatal("expected pruning")
+	}
+	note := asString(asMap(asList(asMap(asList(req["messages"])[0])["content"])[1])["text"])
+	if !strings.Contains(note, "body limit") || strings.Contains(note, "conversation moved on") {
+		t.Fatalf("over-budget stale replacement must use the budget reason: %q", note)
+	}
+	// and under budget the same bytes use the window reason
+	req = f.staleReq(t, 10)
+	f.cfg.ImageBudget = 2500000
+	if n := pruneImages(f.cfg, req); n != 2 {
+		t.Fatalf("under budget: want 2 stale pruned, got %d", n)
+	}
+	note = asString(asMap(asList(asMap(asList(req["messages"])[0])["content"])[1])["text"])
+	if !strings.Contains(note, "conversation moved on") || strings.Contains(note, "body limit") {
+		t.Fatalf("under-budget stale replacement must use the window reason: %q", note)
+	}
+}

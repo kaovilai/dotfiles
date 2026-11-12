@@ -604,6 +604,16 @@ func pruneStaleImages(cfg *config, data map[string]any) int {
 	if cutoff <= 0 {
 		return 0
 	}
+	// Same bytes must always produce the same note (prompt-cache stability).
+	// On a request over the size budget the budget prune will be replacing the
+	// same images with the body-limit reason, so the stale replacements use it
+	// too — otherwise an image crossing the window edge on an over-budget
+	// thread would flip its note's reason mid-history, busting the cache
+	// prefix and re-explaining the same removal differently.
+	reason := windowPruneReason
+	if cfg.ImageBudget > 0 && contentSize(data) > cfg.ImageBudget {
+		reason = budgetPruneReason
+	}
 	index := toolPathIndex(data)
 	now := time.Now()
 	pruned := 0
@@ -614,7 +624,7 @@ func pruneStaleImages(cfg *config, data map[string]any) int {
 		// still resolve to their real parent lists for in-place replacement.
 		collectImages(history[i], nil, 0, "", &refs)
 		for _, ref := range refs {
-			if _, replaced := replaceImage(cfg, index, ref, now, windowPruneReason); replaced {
+			if _, replaced := replaceImage(cfg, index, ref, now, reason); replaced {
 				pruned++
 			}
 		}
