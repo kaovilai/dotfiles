@@ -446,12 +446,14 @@ func imageLoad(value any) (size, count int) {
 
 // replaceImage swaps one inline image block for its placeholder text (source
 // path, T3 attachment match, proxy cache copy — the model can re-view from any
-// of them) and returns the byte size the content shrank by. Shared by the
-// budget prune and the stale-window prune.
-func replaceImage(cfg *config, index map[string]string, ref imageRef, now time.Time) int {
-	encoded, mime, ok := imagePayload(ref.block)
-	if !ok {
-		return 0
+// of them). ok reports that the block was replaced; saved is the byte delta,
+// which is negative when the note outgrew a tiny image's base64. Shared by the
+// budget prune and the stale-window prune: the replacement always counts, the
+// caller decides what the size delta means.
+func replaceImage(cfg *config, index map[string]string, ref imageRef, now time.Time) (saved int, ok bool) {
+	encoded, mime, payloadOK := imagePayload(ref.block)
+	if !payloadOK {
+		return 0, false
 	}
 	var sha, cached, attachment string
 	if raw, err := base64.StdEncoding.DecodeString(encoded); err == nil && len(raw) > 0 {
@@ -468,7 +470,7 @@ func replaceImage(cfg *config, index map[string]string, ref imageRef, now time.T
 	}
 	text := prunePlaceholder(index[ref.anchor], attachment, cached, cfg.ImageCacheDays)
 	ref.parent[ref.index] = pruneReplacement(ref.block, text)
-	return len(encoded) - len(text)
+	return len(encoded) - len(text), true
 }
 
 // pruneStaleImages replaces inline images that fell outside the trailing
@@ -504,7 +506,7 @@ func pruneStaleImages(cfg *config, data map[string]any) int {
 		// still resolve to their real parent lists for in-place replacement.
 		collectImages(history[i], nil, 0, "", &refs)
 		for _, ref := range refs {
-			if replaceImage(cfg, index, ref, now) > 0 {
+			if _, replaced := replaceImage(cfg, index, ref, now); replaced {
 				pruned++
 			}
 		}
@@ -552,7 +554,7 @@ func pruneImages(cfg *config, data map[string]any) int {
 		if size <= cfg.ImageBudget {
 			break
 		}
-		if saved := replaceImage(cfg, index, ref, now); saved > 0 {
+		if saved, replaced := replaceImage(cfg, index, ref, now); replaced {
 			size -= saved
 			budgetPruned++
 		}

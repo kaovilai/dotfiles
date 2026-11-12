@@ -506,3 +506,36 @@ func TestStalePruneReturnsThreadToGLM(t *testing.T) {
 		t.Fatalf("model = %q, want GLM (vision reroute must not fire on a pruned history)", got)
 	}
 }
+
+// A tiny image's note can outgrow its base64; the replacement must still count
+// (so the re-marshal trigger fires and the pruned body is forwarded) even
+// though the size delta is negative.
+func TestTinyImageReplacementStillCounts(t *testing.T) {
+	f := newImageFixture(t)
+	tiny := base64.StdEncoding.EncodeToString(png(byte(9), 4)) // ~12 chars of base64
+	f.cfg.ImageWindowMessages = 4
+	before := 0
+	data := map[string]any{"model": "rits/zai-org/glm-5-3", "messages": []any{
+		map[string]any{"role": "user", "content": []any{
+			map[string]any{"type": "text", "text": "look"},
+			map[string]any{"type": "image", "source": map[string]any{
+				"type": "base64", "media_type": "image/png", "data": tiny}}}},
+		map[string]any{"role": "assistant", "content": "ok"},
+		map[string]any{"role": "user", "content": "and"},
+		map[string]any{"role": "assistant", "content": "ok"},
+		map[string]any{"role": "user", "content": "and"},
+		map[string]any{"role": "assistant", "content": "ok"},
+		map[string]any{"role": "user", "content": "and"},
+	}}
+	before = contentSize(data)
+	if n := pruneImages(f.cfg, data); n != 1 {
+		t.Fatalf("a tiny stale image must still count as pruned, got %d", n)
+	}
+	first := asMap(asList(asMap(asList(data["messages"])[0])["content"])[1])
+	if asString(first["type"]) != "text" || !strings.Contains(asString(first["text"]), pruneMarker) {
+		t.Fatalf("tiny image must be replaced by its note: %v", first)
+	}
+	if contentSize(data) <= before {
+		t.Fatal("expected the note to outgrow the tiny image's base64 — test premise broken")
+	}
+}
