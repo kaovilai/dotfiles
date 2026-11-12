@@ -490,26 +490,76 @@ func replaceImage(cfg *config, index map[string]string, ref imageRef, now time.T
 // needs it again can re-view it, and the same bytes always produce the same
 // text (prompt-cache-stable across turns). Returns how many it replaced.
 // isTurnStart reports whether a history message begins a human turn: a user
-// message that is not just the tool-result half of an agentic round. Claude
-// Code sends each tool round as assistant tool_use + user tool_result, so
-// counting raw messages would let an active task walk its own screenshot out
-// of the window mid-turn.
+// message carrying real human content. Not turn starts: the tool-result half
+// of an agentic round (Claude Code sends each round as assistant tool_use +
+// user tool_result), and harness-injected bookkeeping (system reminders,
+// slash-command plumbing, task notifications) — Claude Code injects those as
+// plain user messages mid-task, and counting them would let an active task
+// walk its own screenshot out of the window after N injections.
 func isTurnStart(msg any) bool {
 	m := asMap(msg)
 	if m == nil || asString(m["role"]) != "user" {
 		return false
 	}
-	blocks := asList(m["content"])
-	for _, b := range blocks {
-		if block := asMap(b); block != nil && asString(block["type"]) == "tool_result" {
+	if text, ok := m["content"].(string); ok {
+		// the plain-string chat shape: a turn unless it is only wrappers
+		return !wrapperOnlyText(text)
+	}
+	human := false
+	for _, b := range asList(m["content"]) {
+		block := asMap(b)
+		if block == nil {
+			human = true // not a block shape we model; assume human
 			continue
 		}
-		return true
+		switch asString(block["type"]) {
+		case "tool_result":
+			// tool half of a round; a wrapper text block appended to it does
+			// not make the message a turn either
+		case "text":
+			if !wrapperOnlyText(asString(block["text"])) {
+				human = true
+			}
+		default:
+			human = true // images and everything else are human content
+		}
 	}
-	// string or empty content is a human turn (asList returns nil for the
-	// plain-string chat shape, which must count); only tool_result carriers
-	// are not
-	return len(blocks) == 0
+	return human
+}
+
+// wrapperTags are the harness-injected user-message wrappers that must not
+// count as human turns. A wrapper segment spans from its opening tag to the
+// matching close; text outside any segment is human content.
+var wrapperTags = []string{
+	"<system-reminder>", "<command-name>", "<command-message>", "<command-args>",
+	"<local-command-stdout>", "<local-command-caveat>", "<task-notification>",
+	"<environment_context>",
+}
+
+// wrapperOnlyText reports whether text holds nothing but wrapper segments and
+// whitespace. An unclosed wrapper swallows the remainder.
+func wrapperOnlyText(text string) bool {
+	rest := strings.TrimSpace(text)
+	for rest != "" {
+		matched := false
+		for _, tag := range wrapperTags {
+			if !strings.HasPrefix(rest, tag) {
+				continue
+			}
+			matched = true
+			closeTag := "</" + tag[1:]
+			end := strings.Index(rest, closeTag)
+			if end < 0 {
+				return true
+			}
+			rest = strings.TrimSpace(rest[end+len(closeTag):])
+			break
+		}
+		if !matched {
+			return false
+		}
+	}
+	return true
 }
 
 // turnWindowStart returns the index of the first message of the trailing

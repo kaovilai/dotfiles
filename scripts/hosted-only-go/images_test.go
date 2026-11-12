@@ -614,3 +614,55 @@ func TestActiveTaskKeepsItsImage(t *testing.T) {
 		t.Fatalf("an image the current turn is working from must survive, pruned %d", n)
 	}
 }
+
+// Mid-task harness injections (system reminders riding in tool-result
+// carriers, standalone reminder/command messages) must not advance the turn
+// window: the active task keeps its image no matter how many land.
+func TestInjectionsDoNotAdvanceTheWindow(t *testing.T) {
+	f := newImageFixture(t)
+	f.cfg.ImageWindowTurns = 2
+	f.cfg.VisionFallback = true
+	f.cfg.GLM = "rits/zai-org/glm-5-3"
+	f.cfg.DeepSeek = "rits/deepseek-ai/DeepSeek-V4.1-Flash-1017"
+	reminder := "<system-reminder>Caveman mode active</system-reminder>"
+	messages := []any{
+		map[string]any{"role": "user", "content": []any{
+			map[string]any{"type": "text", "text": "crop this"},
+			map[string]any{"type": "image", "source": map[string]any{
+				"type": "base64", "media_type": "image/png", "data": f.b64[0]}}}},
+	}
+	for i := 0; i < 8; i++ {
+		messages = append(messages,
+			map[string]any{"role": "assistant", "content": []any{map[string]any{
+				"type": "tool_use", "id": "t", "name": "edit", "input": map[string]any{"i": i}}}},
+			// tool-result carrier with a reminder text block appended
+			map[string]any{"role": "user", "content": []any{
+				map[string]any{"type": "tool_result", "tool_use_id": "t", "content": "ok"},
+				map[string]any{"type": "text", "text": reminder}}},
+			// and a standalone injected reminder message
+			map[string]any{"role": "user", "content": []any{map[string]any{"type": "text", "text": reminder}}},
+		)
+	}
+	data := map[string]any{"model": f.cfg.GLM, "messages": messages}
+	if n := pruneImages(f.cfg, data); n != 0 {
+		t.Fatalf("injections must not push the image out of the window, pruned %d", n)
+	}
+
+	// but a real human turn after the image does advance it
+	messages = append(messages, map[string]any{"role": "user", "content": []any{
+		map[string]any{"type": "text", "text": "and now this"},
+		map[string]any{"type": "image", "source": map[string]any{
+			"type": "base64", "media_type": "image/png", "data": f.b64[1]}}}},
+		map[string]any{"role": "assistant", "content": "ok"},
+		map[string]any{"role": "user", "content": []any{
+			map[string]any{"type": "text", "text": "one more"},
+			map[string]any{"type": "image", "source": map[string]any{
+				"type": "base64", "media_type": "image/png", "data": f.b64[2]}}}},
+		map[string]any{"role": "assistant", "content": "ok"},
+		map[string]any{"role": "user", "content": "go"},
+	)
+	data = map[string]any{"model": f.cfg.GLM, "messages": messages}
+	if n := pruneImages(f.cfg, data); n != 2 {
+		t.Fatalf("after two later human turns the older images are stale: want 2 pruned, got %d", n)
+	}
+}
