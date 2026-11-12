@@ -36,6 +36,9 @@ env:
 jobs:
   review:
     runs-on: ubuntu-latest
+    # Agentic step bound: --max-turns 300 at --effort high can otherwise hold
+    # a wedged run (EnMaaS 429/503 retry loops) for GitHub's 6h job default.
+    timeout-minutes: 60
     if: >-
       github.event_name == 'pull_request' ||
       (vars.HOSTED_ONLY_CLAUDE_MENTIONS == 'true' &&
