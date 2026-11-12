@@ -371,7 +371,7 @@ func safePath(path string) string {
 	return cleaned
 }
 
-func prunePlaceholder(source, attachment, cached string, days int) string {
+func prunePlaceholder(source, attachment, cached string, days int, reason string) string {
 	var where []string
 	if source != "" {
 		where = append(where, "source file "+safePath(source))
@@ -390,7 +390,7 @@ func prunePlaceholder(source, attachment, cached string, days int) string {
 	if len(where) > 0 {
 		tail = "; it is still at " + strings.Join(where, ", ") + ". View that path again if you need the image."
 	}
-	return pruneMarker + " Image removed by the local proxy to keep this request under the gateway's body limit" + tail
+	return pruneMarker + " Image removed by the local proxy " + reason + tail
 }
 
 func pruneReplacement(block map[string]any, text string) map[string]any {
@@ -444,13 +444,21 @@ func imageLoad(value any) (size, count int) {
 	return size, count
 }
 
+// pruneReasons name why an image was replaced; the model reads the reason, so
+// it must match the prune that actually fired (a wrong reason would send the
+// model shrinking a request that was never over any limit).
+const (
+	budgetPruneReason = "to keep this request under the gateway's body limit"
+	windowPruneReason = "because the conversation moved on and only the last few messages keep their images"
+)
+
 // replaceImage swaps one inline image block for its placeholder text (source
 // path, T3 attachment match, proxy cache copy — the model can re-view from any
 // of them). ok reports that the block was replaced; saved is the byte delta,
 // which is negative when the note outgrew a tiny image's base64. Shared by the
 // budget prune and the stale-window prune: the replacement always counts, the
 // caller decides what the size delta means.
-func replaceImage(cfg *config, index map[string]string, ref imageRef, now time.Time) (saved int, ok bool) {
+func replaceImage(cfg *config, index map[string]string, ref imageRef, now time.Time, reason string) (saved int, ok bool) {
 	encoded, mime, payloadOK := imagePayload(ref.block)
 	if !payloadOK {
 		return 0, false
@@ -468,7 +476,7 @@ func replaceImage(cfg *config, index map[string]string, ref imageRef, now time.T
 	if sha != "" {
 		attachment = attachmentMatch(cfg.AttachmentsDir, sha)
 	}
-	text := prunePlaceholder(index[ref.anchor], attachment, cached, cfg.ImageCacheDays)
+	text := prunePlaceholder(index[ref.anchor], attachment, cached, cfg.ImageCacheDays, reason)
 	ref.parent[ref.index] = pruneReplacement(ref.block, text)
 	return len(encoded) - len(text), true
 }
@@ -483,6 +491,16 @@ func replaceImage(cfg *config, index map[string]string, ref imageRef, now time.T
 // text (prompt-cache-stable across turns). Returns how many it replaced.
 func pruneStaleImages(cfg *config, data map[string]any) int {
 	if cfg.ImageWindowMessages <= 0 {
+		return 0
+	}
+	// Gate on the same condition the vision reroute uses (rewrite.go): the
+	// window prune exists to release the GLM->DeepSeek reroute, so it must not
+	// strip images from flavors whose models see them natively (vertex
+	// publisher models, enmaas route-table entries, explicit DeepSeek) — there
+	// the trade buys nothing. The alias is expanded exactly as the reroute's
+	// own check will see it a few lines later.
+	model := asString(data["model"])
+	if !cfg.VisionFallback || !cfg.isGLM(model) || cfg.DeepSeek == cfg.GLM {
 		return 0
 	}
 	history := asList(data["messages"])
@@ -506,7 +524,7 @@ func pruneStaleImages(cfg *config, data map[string]any) int {
 		// still resolve to their real parent lists for in-place replacement.
 		collectImages(history[i], nil, 0, "", &refs)
 		for _, ref := range refs {
-			if _, replaced := replaceImage(cfg, index, ref, now); replaced {
+			if _, replaced := replaceImage(cfg, index, ref, now, windowPruneReason); replaced {
 				pruned++
 			}
 		}
@@ -554,7 +572,7 @@ func pruneImages(cfg *config, data map[string]any) int {
 		if size <= cfg.ImageBudget {
 			break
 		}
-		if saved, replaced := replaceImage(cfg, index, ref, now); replaced {
+		if saved, replaced := replaceImage(cfg, index, ref, now, budgetPruneReason); replaced {
 			size -= saved
 			budgetPruned++
 		}
