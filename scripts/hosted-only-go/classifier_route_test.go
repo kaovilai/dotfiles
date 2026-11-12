@@ -727,6 +727,28 @@ func TestBuildEventCarriesFallbackReason(t *testing.T) {
 	}
 }
 
+// metadata.user_id ("..._session_<uuid>") becomes the event's session field, so
+// a reroute burst in the usage log points at the thread that caused it. Absent
+// for clients that send no metadata, and not garbled when the id has no marker.
+func TestBuildEventCarriesSession(t *testing.T) {
+	a := &app{cfg: &config{}}
+	data := map[string]any{"metadata": map[string]any{
+		"user_id": "user_abc_account_11111111-2222-3333-4444-555555555555_session_049f12fa-582d-4fe2-b7bb-227321aab70f",
+	}}
+	ev := a.buildEvent("/v1/messages", data, "glm", "deepseek", time.Now(), usageInfo{}, true, 200, 0, "", false, 0, "", false, 0, false, "", false, "", 0, "ua")
+	if ev["session"] != "049f12fa-582d-4fe2-b7bb-227321aab70f" {
+		t.Fatalf("session must be the uuid after the last session_ marker: %v", ev["session"])
+	}
+	ev = a.buildEvent("/v1/messages", map[string]any{}, "glm", "glm", time.Now(), usageInfo{}, true, 200, 0, "", false, 0, "", false, 0, false, "", false, "", 0, "ua")
+	if ev["session"] != nil {
+		t.Fatalf("no metadata must mean a null session: %v", ev["session"])
+	}
+	ev = a.buildEvent("/v1/messages", map[string]any{"metadata": map[string]any{"user_id": "opaque"}}, "glm", "glm", time.Now(), usageInfo{}, true, 200, 0, "", false, 0, "", false, 0, false, "", false, "", 0, "ua")
+	if ev["session"] != nil {
+		t.Fatalf("an id without the marker must not yield a session: %v", ev["session"])
+	}
+}
+
 // The native streaming path (streamResponse) must keep the fallback reason:
 // assert on the actual call site, not only the builder it delegates to.
 func TestStreamingFailoverRecordsFallbackReason(t *testing.T) {

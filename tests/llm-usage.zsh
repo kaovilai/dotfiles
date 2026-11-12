@@ -83,6 +83,31 @@ out=$(LLM_USAGE_DIR=$errdir $usage routes --since 2h)
 [[ "$out" == *"glm-5.3"*"deepseek-v4.1-flash"*REROUTED* ]] || fail "glm->deepseek vision fallback not flagged: $out"
 [[ "$out" != *"1017"* && "$out" != *"[1m]"* ]] || fail "deepseek id not shortened: $out"
 [[ "$out" == *429*5XX*OTH*ERR%* ]] || fail "routes lacks error columns: $out"
+# reroute cause + originating session: tail names the kind (vision / fallback:<reason>)
+# and the thread's session id; routes summarizes kinds so a burst reads as one cause.
+local kinddir="$tmp/state-kinds"
+mkdir -p "$kinddir"
+python3 - "$kinddir/events-$month.jsonl" <<'PY'
+import json, sys, datetime as dt
+now = dt.datetime.now(dt.timezone.utc)
+ts = now.strftime("%Y-%m-%dT%H:%M:%S.000Z")
+base = {"ts": ts, "port": "4148", "client": "claude-code", "ok": True, "status": 200, "ms": 900, "in": 10, "out": 5}
+rows = [
+    {**base, "requested": "rits/zai-org/glm-5-3", "served": "rits/deepseek-ai/DeepSeek-V4.1-Flash-1017",
+     "session": "049f12fa-582d-4fe2-b7bb-227321aab70f"},
+    {**base, "requested": "rits/zai-org/glm-5-3", "served": "rits/deepseek-ai/DeepSeek-V4.1-Flash-1017",
+     "fallback": True, "fallback_reason": "outage-502", "session": "049f12fa-582d-4fe2-b7bb-227321aab70f"},
+    {**base, "requested": "rits/zai-org/glm-5-3", "served": "rits/zai-org/glm-5-3",
+     "session": "11111111-2222-3333-4444-555555555555"},
+]
+open(sys.argv[1], "w").write("\n".join(json.dumps(r) for r in rows) + "\n")
+PY
+out=$(LLM_USAGE_DIR=$kinddir $usage tail -n 3)
+[[ "$out" == *"vision"*"sess 049f12fa"* ]] || fail "tail must tag the vision reroute with its session: $out"
+[[ "$out" == *"fallback:outage-502"* ]] || fail "tail must name the fallback reason: $out"
+[[ "$(print -r -- "$out" | grep -c 'sess ')" == 2 ]] || fail "only rerouted lines carry the session tag: $out"
+out=$(LLM_USAGE_DIR=$kinddir $usage routes --since 1h)
+[[ "$out" == *"reroutes by kind: vision 1, fallback:outage-502 1"* ]] || fail "routes must summarize reroute kinds: $out"
 out=$(LLM_USAGE_DIR=$errdir $usage summary --since 2h --by route --json)
 print -r -- "$out" | python3 -c '
 import json, sys

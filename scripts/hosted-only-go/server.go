@@ -982,6 +982,17 @@ func (a *app) buildEvent(path string, data map[string]any, requested, served str
 	if strings.Contains(head, classifierMarker) {
 		role = "classifier"
 	}
+	// Claude Code tags every request with the conversation's session id
+	// (metadata.user_id, "..._session_<uuid>"). Keeping it on the event lets a
+	// reroute burst in the usage log be traced to the thread that caused it:
+	// the transcript is <session>.jsonl under ~/.claude/projects on the
+	// client host. Absent for clients that send no metadata.
+	session := ""
+	if uid := asString(asMap(data["metadata"])["user_id"]); uid != "" {
+		if i := strings.LastIndex(uid, "session_"); i >= 0 {
+			session = uid[i+len("session_"):]
+		}
+	}
 	ev := map[string]any{
 		"ts":             isoNow(time.Now()),
 		"start":          isoNow(started),
@@ -1006,6 +1017,7 @@ func (a *app) buildEvent(path string, data map[string]any, requested, served str
 		"max_tokens":     nullIfZero(maxTokens),
 		"thinking":       nullIfEmpty(thinking),
 		"role":           role,
+		"session":        nullIfEmpty(session),
 		"fallback":       fallback,
 		"status":         status,
 	}
