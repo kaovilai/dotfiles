@@ -47,6 +47,16 @@ wait-for-url() {
     done
 }
 
+# `npx t3 triage` with the dedicated claude shim
+# (~/.local/share/t3-triage/claude, execs a claude-t3-<backend> wrapper —
+# swap backend = edit that shim's exec line) first on PATH so TRIAGE_AGENTS
+# resolves it. Env-prefix form: PATH change never leaks to this shell.
+# Without the shim dir, PATH-spawned claude falls through to the
+# claude-dispatch shim (scripts/claude-dispatch.zsh) and follows claude-mode.
+t3-triage() {
+    PATH="$HOME/.local/share/t3-triage:$PATH" npx t3 triage --agent claude "$@"
+}
+
 code-git() {
     if [[ -z "$1" ]]; then
         echo "Usage: code-git <repo-name>" >&2
