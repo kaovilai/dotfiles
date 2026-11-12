@@ -60,7 +60,9 @@ wait-for-url() {
 t3-triage() {
     local shim="$HOME/.local/share/t3-triage/claude"
     [[ -x "$shim" ]] || echo "t3-triage: $shim missing or not executable — claude falls back to claude-dispatch (claude-mode)" >&2
-    local d="$PWD" cand
+    # ${PWD:A}: physical path — npm resolves cwd w/o symlinks (process.cwd()),
+    # so a symlinked entry dir must be resolved before walking ancestors.
+    local d="${PWD:A}" cand
     while :; do
         cand="$d/node_modules/.bin/claude"
         if [[ -x "$cand" ]]; then
