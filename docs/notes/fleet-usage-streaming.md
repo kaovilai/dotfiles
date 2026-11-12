@@ -309,8 +309,11 @@ auth and transport:
 - Transport: ssh (encrypted, key-authenticated, BatchMode — no prompts).
 - Remote surface: one read-only subcommand over stdin/stdout. Optional
   forced-command key restriction pins even that.
-- Data: model names, token counts, latencies, error classes — no prompts, no
-  transcript content (transcript parsing extracts usage only, as today).
+- Data: model names, token counts, latencies, error classes, and (proxy events
+  only) the Claude Code session id — the conversation's uuid, kept so a reroute
+  can be traced to its transcript (`~/.claude/projects/**/<uuid>.jsonl` on the
+  originating host). No prompts, no transcript content (transcript parsing
+  extracts usage only, as today).
 - Config with hostnames stays in `~/.config` (uncommitted); repo gets only an
   example file.
 
