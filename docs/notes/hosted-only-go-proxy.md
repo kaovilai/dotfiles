@@ -209,7 +209,12 @@ path, a matching T3 attachment and a one-day content-addressed proxy copy, same
 text every turn for prompt caching; the copies live in
 `HOSTED_ONLY_IMAGE_CACHE_DIR`, which must be a directory dedicated to this
 proxy: the hourly sweep deletes expired files named `<sha1>.<image ext>`, so a
-shared directory could lose a file that happens to match) and the **per-image pricing** in the window
+shared directory could lose a file that happens to match), the **stale-image
+window prune** (`HOSTED_ONLY_IMAGE_WINDOW_MESSAGES`, default 12, 0 off —
+images outside the trailing N messages of the history are replaced by the same
+path note even under the size budget, because Claude Code resends the whole
+history every turn and any surviving image keeps forcing the GLM→DeepSeek
+vision reroute for the rest of the session) and the **per-image pricing** in the window
 clamp (`HOSTED_ONLY_IMAGE_TOKENS`); the **outage shapes** — 529, the gateway's
 503 `metering system unavailable` / `service unavailable`, connect/DNS 500s —
 and the `LIMIT_REWRITE` / `OUTAGE_REWRITE` gate split; the **quota-aware

@@ -421,3 +421,88 @@ func TestToolChoiceFollowsTheRemovedToolNotAPrefix(t *testing.T) {
 		t.Fatalf("a type-only choice for the removed tool must be freed: %v", typeOnly)
 	}
 }
+
+// staleReq is an Anthropic Messages history with a screenshot in the oldest
+// user turn and text-only turns after it: the shape a long thread has once it
+// has moved on from its images.
+func (f *imageFixture) staleReq(t *testing.T, turns int) map[string]any {
+	t.Helper()
+	imgBlock := map[string]any{"type": "image", "source": map[string]any{
+		"type": "base64", "media_type": "image/png", "data": f.b64[0]}}
+	toolUse := map[string]any{"type": "tool_use", "id": "t1", "name": "view_image",
+		"input": map[string]any{"path": "/tmp/slides/1.png"}}
+	messages := []any{
+		map[string]any{"role": "user", "content": []any{
+			map[string]any{"type": "text", "text": "look"}, imgBlock}},
+		map[string]any{"role": "assistant", "content": []any{toolUse}},
+		map[string]any{"role": "user", "content": []any{map[string]any{
+			"type": "tool_result", "tool_use_id": "t1",
+			"content": []any{map[string]any{"type": "image", "source": map[string]any{
+				"type": "base64", "media_type": "image/png", "data": f.b64[1]}}}}}},
+	}
+	for i := 0; i < turns; i++ {
+		messages = append(messages,
+			map[string]any{"role": "assistant", "content": []any{map[string]any{"type": "text", "text": "ok"}}},
+			map[string]any{"role": "user", "content": []any{map[string]any{"type": "text", "text": "next"}}},
+		)
+	}
+	return map[string]any{"model": "rits/zai-org/glm-5-3", "messages": messages}
+}
+
+func TestPruneStaleImagesOutsideWindow(t *testing.T) {
+	f := newImageFixture(t)
+	f.cfg.ImageWindowMessages = 6
+
+	// deep history: both images are far outside the trailing window and get
+	// replaced even though the body fits the size budget untouched
+	req := f.staleReq(t, 10)
+	full := contentSize(f.staleReq(t, 10))
+	if n := pruneImages(f.cfg, req); n != 2 {
+		t.Fatalf("want 2 stale images pruned, got %d", n)
+	}
+	if size := contentSize(req); size >= full {
+		t.Fatalf("prune must shrink the body: %d -> %d", full, size)
+	}
+	if hasImage(asList(req["messages"])) {
+		t.Fatal("no image may survive outside the window")
+	}
+	first := asMap(asList(asMap(asList(req["messages"])[0])["content"])[1])
+	if asString(first["type"]) != "text" || !strings.Contains(asString(first["text"]), pruneMarker) {
+		t.Fatalf("stale image must become a text note: %v", first)
+	}
+	toolResult := asMap(asList(asMap(asList(req["messages"])[2])["content"])[0])
+	note := asMap(asList(toolResult["content"])[0])
+	if !strings.Contains(asString(note["text"]), "source file /tmp/slides/1.png") {
+		t.Fatalf("the tool-result note must name the source path: %v", note)
+	}
+
+	// short history: the images sit inside the window and survive
+	req = f.staleReq(t, 1)
+	if n := pruneImages(f.cfg, req); n != 0 {
+		t.Fatalf("images inside the window must survive, pruned %d", n)
+	}
+
+	// window 0 is off
+	f.cfg.ImageWindowMessages = 0
+	if n := pruneImages(f.cfg, f.staleReq(t, 10)); n != 0 {
+		t.Fatalf("window 0 must disable the stale prune, pruned %d", n)
+	}
+}
+
+// The point of the window prune: once every image has fallen outside it, the
+// vision reroute must not fire and the thread stays on GLM.
+func TestStalePruneReturnsThreadToGLM(t *testing.T) {
+	f := newImageFixture(t)
+	f.cfg.ImageWindowMessages = 6
+	cfg := testConfig()
+	cfg.ImageWindowMessages = 6
+	cfg.ImageBudget = f.cfg.ImageBudget
+	cfg.ImageCacheDays = 0 // no disk writes in this test
+	data := f.staleReq(t, 10)
+	if _, err, _ := rewriteRequest(cfg, "/v1/messages", data); err != nil {
+		t.Fatal(err)
+	}
+	if got := asString(data["model"]); got != cfg.GLM {
+		t.Fatalf("model = %q, want GLM (vision reroute must not fire on a pruned history)", got)
+	}
+}

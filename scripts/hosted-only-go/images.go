@@ -444,62 +444,122 @@ func imageLoad(value any) (size, count int) {
 	return size, count
 }
 
-// pruneImages replaces inline images, oldest first, until the content fits the
-// budget, and returns how many it replaced.
-func pruneImages(cfg *config, data map[string]any) int {
-	if cfg.ImageBudget <= 0 {
+// replaceImage swaps one inline image block for its placeholder text (source
+// path, T3 attachment match, proxy cache copy — the model can re-view from any
+// of them) and returns the byte size the content shrank by. Shared by the
+// budget prune and the stale-window prune.
+func replaceImage(cfg *config, index map[string]string, ref imageRef, now time.Time) int {
+	encoded, mime, ok := imagePayload(ref.block)
+	if !ok {
+		return 0
+	}
+	var sha, cached, attachment string
+	if raw, err := base64.StdEncoding.DecodeString(encoded); err == nil && len(raw) > 0 {
+		sum := sha1.Sum(raw)
+		sha = hex.EncodeToString(sum[:])
+		cached = cacheImage(cfg, raw, sha, mime, now)
+	} else if raw, err := base64.RawStdEncoding.DecodeString(encoded); err == nil && len(raw) > 0 {
+		sum := sha1.Sum(raw)
+		sha = hex.EncodeToString(sum[:])
+		cached = cacheImage(cfg, raw, sha, mime, now)
+	}
+	if sha != "" {
+		attachment = attachmentMatch(cfg.AttachmentsDir, sha)
+	}
+	text := prunePlaceholder(index[ref.anchor], attachment, cached, cfg.ImageCacheDays)
+	ref.parent[ref.index] = pruneReplacement(ref.block, text)
+	return len(encoded) - len(text)
+}
+
+// pruneStaleImages replaces inline images that fell outside the trailing
+// ImageWindowMessages messages of the history, regardless of the size budget.
+// Claude Code resends the whole history every turn, so an image viewed once
+// keeps forcing the vision reroute (GLM -> DeepSeek) for the rest of the
+// session even after the thread moved on; pruning it returns the thread to
+// GLM. The placeholder names where the image still lives, so a follow-up that
+// needs it again can re-view it, and the same bytes always produce the same
+// text (prompt-cache-stable across turns). Returns how many it replaced.
+func pruneStaleImages(cfg *config, data map[string]any) int {
+	if cfg.ImageWindowMessages <= 0 {
 		return 0
 	}
 	history := asList(data["messages"])
 	if len(history) == 0 {
 		history = asList(data["input"])
 	}
-	if !hasImage(history) {
+	if len(history) == 0 || !hasImage(history) {
 		return 0
 	}
-	size := contentSize(data)
-	before := size
-	if size <= cfg.ImageBudget {
-		return 0
-	}
-	var blocks []imageRef
-	collectImages(data["messages"], nil, 0, "", &blocks)
-	collectImages(data["input"], nil, 0, "", &blocks)
-	if len(blocks) == 0 {
+	cutoff := len(history) - cfg.ImageWindowMessages
+	if cutoff <= 0 {
 		return 0
 	}
 	index := toolPathIndex(data)
 	now := time.Now()
 	pruned := 0
+	for i := 0; i < cutoff; i++ {
+		var refs []imageRef
+		// A message map is never an image block itself, so the parent/index
+		// arguments are unused here; images inside the message's content list
+		// still resolve to their real parent lists for in-place replacement.
+		collectImages(history[i], nil, 0, "", &refs)
+		for _, ref := range refs {
+			if replaceImage(cfg, index, ref, now) > 0 {
+				pruned++
+			}
+		}
+	}
+	if pruned > 0 {
+		log.Printf("hosted-only-go: pruned %d stale inline image(s) outside the last %d messages for %s",
+			pruned, cfg.ImageWindowMessages, asString(data["model"]))
+	}
+	return pruned
+}
+
+// pruneImages replaces inline images, oldest first, until the content fits the
+// budget, and returns how many it replaced.
+func pruneImages(cfg *config, data map[string]any) int {
+	// The stale-window prune runs first: it edits the body even under the size
+	// budget, and its replacements must reach the marshaled output, so its
+	// count rides along in this function's return (rewrite.go re-marshals on
+	// any nonzero prune).
+	pruned := pruneStaleImages(cfg, data)
+	if cfg.ImageBudget <= 0 {
+		return pruned
+	}
+	history := asList(data["messages"])
+	if len(history) == 0 {
+		history = asList(data["input"])
+	}
+	if !hasImage(history) {
+		return pruned
+	}
+	size := contentSize(data)
+	before := size
+	if size <= cfg.ImageBudget {
+		return pruned
+	}
+	var blocks []imageRef
+	collectImages(data["messages"], nil, 0, "", &blocks)
+	collectImages(data["input"], nil, 0, "", &blocks)
+	if len(blocks) == 0 {
+		return pruned
+	}
+	index := toolPathIndex(data)
+	now := time.Now()
+	budgetPruned := 0
 	for _, ref := range blocks {
 		if size <= cfg.ImageBudget {
 			break
 		}
-		encoded, mime, ok := imagePayload(ref.block)
-		if !ok {
-			continue
+		if saved := replaceImage(cfg, index, ref, now); saved > 0 {
+			size -= saved
+			budgetPruned++
 		}
-		var sha, cached, attachment string
-		if raw, err := base64.StdEncoding.DecodeString(encoded); err == nil && len(raw) > 0 {
-			sum := sha1.Sum(raw)
-			sha = hex.EncodeToString(sum[:])
-			cached = cacheImage(cfg, raw, sha, mime, now)
-		} else if raw, err := base64.RawStdEncoding.DecodeString(encoded); err == nil && len(raw) > 0 {
-			sum := sha1.Sum(raw)
-			sha = hex.EncodeToString(sum[:])
-			cached = cacheImage(cfg, raw, sha, mime, now)
-		}
-		if sha != "" {
-			attachment = attachmentMatch(cfg.AttachmentsDir, sha)
-		}
-		text := prunePlaceholder(index[ref.anchor], attachment, cached, cfg.ImageCacheDays)
-		ref.parent[ref.index] = pruneReplacement(ref.block, text)
-		size -= len(encoded) - len(text)
-		pruned++
 	}
-	if pruned > 0 {
+	if budgetPruned > 0 {
 		log.Printf("hosted-only-go: pruned %d of %d inline images for %s (content %d -> ~%d bytes, budget %d)",
-			pruned, len(blocks), asString(data["model"]), before, size, cfg.ImageBudget)
+			budgetPruned, len(blocks), asString(data["model"]), before, size, cfg.ImageBudget)
 	}
-	return pruned
+	return pruned + budgetPruned
 }

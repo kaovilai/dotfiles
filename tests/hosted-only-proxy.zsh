@@ -87,7 +87,7 @@ HOSTED_ONLY_IMAGE_BUDGET_BYTES=123 HOSTED_ONLY_IMAGE_CACHE_DAYS=2 _hosted_only_p
 [[ "$_hop_image_budget" == 123 && "$_hop_image_cache_days" == 2 ]] || fail "image knobs: $_hop_image_budget $_hop_image_cache_days"
 _hosted_only_proxy_vars codex
 [[ "$_hop_image_budget" == 2500000 && "$_hop_image_cache_days" == 1 ]] || fail "image knob defaults: $_hop_image_budget $_hop_image_cache_days"
-[[ "$(<"$repo/scripts/hosted-only-proxy.zsh")" == *'$_hop_client_retry $_hop_fallback $_hop_aliases $_hop_request_timeout $(_hosted_only_knob STREAM_IDLE_TIMEOUT 300) $_hop_image_budget $_hop_image_cache_days $_hop_dialect $dns_host'* ]] || fail "fingerprint knob list changed without this test following"
+[[ "$(<"$repo/scripts/hosted-only-proxy.zsh")" == *'$_hop_client_retry $_hop_fallback $_hop_aliases $_hop_request_timeout $(_hosted_only_knob STREAM_IDLE_TIMEOUT 300) $_hop_image_budget $_hop_image_cache_days $(_hosted_only_knob IMAGE_WINDOW_MESSAGES 12) $_hop_dialect $dns_host'* ]] || fail "fingerprint knob list changed without this test following"
 
 # The fp helper runs inside a command substitution, so every field the spawn
 # path needs travels on its stdout line; the globals cannot cross back.
