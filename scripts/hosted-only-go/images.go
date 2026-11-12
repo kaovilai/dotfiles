@@ -506,7 +506,9 @@ func isTurnStart(msg any) bool {
 		}
 		return true
 	}
-	// no content, or only tool_result blocks: not a human turn
+	// string or empty content is a human turn (asList returns nil for the
+	// plain-string chat shape, which must count); only tool_result carriers
+	// are not
 	return len(blocks) == 0
 }
 
