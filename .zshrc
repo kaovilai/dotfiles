@@ -152,12 +152,12 @@ if [[ "$TERM_PROGRAM" != "vscode" ]]; then
     fi
     if [[ -n $timeout_cmd ]]; then
       if $timeout_cmd 2 git -C ~/git/dotfiles status --porcelain 2>/dev/null | grep -qE '^(M.|.M)'; then
-        print "dotfiles repo has uncommitted changes, run ${RED}edit-dotfiles${NC} to review"
+        print "dotfiles repo has uncommitted changes, run ${RED}edit-dotfiles${NC} to review" >&2
       fi
     else
       print -P "%F{yellow}[dotfiles] Install coreutils for git timeout support%f" >&2
       if git -C ~/git/dotfiles status --porcelain 2>/dev/null | grep -qE '^(M.|.M)'; then
-        print "dotfiles repo has uncommitted changes, run ${RED}edit-dotfiles${NC} to review"
+        print "dotfiles repo has uncommitted changes, run ${RED}edit-dotfiles${NC} to review" >&2
       fi
     fi
   } &!
@@ -183,7 +183,7 @@ if [[ "$TERM_PROGRAM" != "vscode" ]]; then
       outdated=$(npm outdated -g happy 2>/dev/null)
       touch "$stamp"
       if [[ -n "$outdated" ]]; then
-        print -P "%F{yellow}[happy] New version available. Run: npm update -g happy%f"
+        print -P "%F{yellow}[happy] New version available. Run: npm update -g happy%f" >&2
       fi
     fi
   } &!
