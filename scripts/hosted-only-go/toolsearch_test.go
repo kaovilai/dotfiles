@@ -304,3 +304,21 @@ func TestForcedTypeOnlySearchChoiceIsFreed(t *testing.T) {
 		t.Fatal("a type-only forced choice on the dropped search tool must be freed")
 	}
 }
+
+// A request whose only tool was the search server tool loses the whole key, the
+// shape stripWebSearchTools leaves behind, instead of forwarding "tools": [].
+func TestOnlySearchToolDropsTheToolsKey(t *testing.T) {
+	cfg := toolSearchConfig(t)
+	data := map[string]any{
+		"model":      cfg.GLM,
+		"max_tokens": 16,
+		"messages":   []any{map[string]any{"role": "user", "content": "hi"}},
+		"tools":      []any{map[string]any{"type": "tool_search_tool_regex_20251119", "name": "tool_search_tool_regex"}},
+	}
+	if _, reqErr, _ := rewriteRequest(cfg, "/v1/messages", data); reqErr != nil {
+		t.Fatalf("unexpected refusal: %+v", reqErr)
+	}
+	if _, ok := data["tools"]; ok {
+		t.Fatalf("the empty tool list must be dropped: %s", marshal(data["tools"]))
+	}
+}

@@ -325,7 +325,11 @@ func openDeferredTools(data map[string]any) bool {
 			delete(data, "tool_choice")
 		}
 	}
-	if len(kept) != len(tools) {
+	// Nothing left once the search tool goes: drop the key rather than forward
+	// an empty list, the same shape stripWebSearchTools leaves behind.
+	if len(kept) == 0 {
+		delete(data, "tools")
+	} else if len(kept) != len(tools) {
 		data["tools"] = kept
 	}
 	return changed
