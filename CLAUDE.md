@@ -238,8 +238,9 @@ and `scripts/llm-usage`. Read `docs/notes/hosted-only-go-proxy.md` and
   pairing and output clamp; a non-exported shell assignment does not. Either way the
   EnMaaS route labels (`ENMAAS_RESPONSES_ROUTES`) follow the same env.
 - A new model also needs its rollup entries in `scripts/llm-usage` (`strip_model`,
-  `family`, `reroute_kind`'s slot set, `BRANDS`, `MODEL_VENDORS`) or its traffic
-  disappears from the dashboard and menubar.
+  `family`, `reroute_kind`'s slot set, `BRANDS`, `MODEL_VENDORS`). Traffic still shows
+  without them, but lumped under "Other" or its raw id: no brand color, no logo, and
+  `reroute_kind` cannot classify its moves.
 
 ### Web search: Parallel-injected or not at all — for every served model
 
