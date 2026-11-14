@@ -742,14 +742,29 @@ func runEnsure(args []string) int {
 	}
 	o := ensureOpts{flavor: *flavor, port: *port, runtimeDir: *runtimeDir, configPath: *configPath,
 		fingerprint: *fingerprint, tokenFP: *tokenFP, bootWait: *bootWait, legacyDirs: legacyDirs}
-	if o.port == "" {
-		o.port = defaultPort(o.flavor)
-	}
+	// defaultPort("") is 4148, the shared hosted-only port, while loadConfig
+	// treats an empty flavor like the route-table flavors and bakes the EnMaaS
+	// pair — so a hand-run ensure without --flavor would restart that port
+	// serving the wrong pair. Default it like watch/status do.
+	o.flavor, o.port = ensureFlavorPort(o.flavor, o.port)
 	if _, err := ensureOnce(o); err != nil {
 		fmt.Fprintf(os.Stderr, "hosted-only-go ensure: %v\n", err)
 		return 1
 	}
 	return 0
+}
+
+// ensureFlavorPort applies ensure's defaults: an empty flavor means the shared
+// claude hosted-only port (4148), as watch/status already assume — never the
+// route-table pair loadConfig would bake for an unknown flavor.
+func ensureFlavorPort(flavor, port string) (string, string) {
+	if flavor == "" {
+		flavor = "claude"
+	}
+	if port == "" {
+		port = defaultPort(flavor)
+	}
+	return flavor, port
 }
 
 func defaultPort(flavor string) string {
