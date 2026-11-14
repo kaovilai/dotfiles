@@ -222,14 +222,19 @@ and `scripts/llm-usage`. Read `docs/notes/hosted-only-go-proxy.md` and
 - Primary = the stronger coder (benchmarks in the pair-swap PR); fallback = the model
   that takes images and can reason longer. Both are `rits/` ids with the 1M window.
 - Short-name knob values (`glm`, `deepseek`) follow the **slots**, not the model names —
-  a pin made before a swap means a different model afterwards. Pin a full id when the
-  model must not move.
+  a pin made before a swap means a different model afterwards. Pin a full id to fix
+  which model a slot holds; it does not stop a request moving between slots (the vision
+  reroute and the router fallback still do that).
 - A retired model must keep working for sessions that stored it: add its id to
   `ALIAS_MODELS` (an alias is served by the primary slot) instead of letting the cost
   guard answer 400 on continue.
-- `config.go`'s built-in defaults stay at the **EnMaaS** pair: the EnMaaS controller
-  does not forward the model knobs, so that flavor runs on them. Hosted-only always
-  passes both ids explicitly.
+- `config.go`'s built-in defaults are per flavor: claude/codex default to the swapped
+  pair plus the launcher's alias set, so a hand-run `ensure`/`watch` regenerates what
+  those ports serve. The route-table flavors keep the **EnMaaS** pair (GLM 5.3 +
+  DeepSeek V4.1 Flash, no aliases) because their controllers never forward the model
+  knobs to the Go child — note `ENMAAS_RESPONSES_ROUTES` does read them for EnMaaS's
+  route metadata, so setting them globally moves those labels without moving what that
+  flavor serves.
 - A new model also needs its rollup entries in `scripts/llm-usage` (`strip_model`,
   `family`, `reroute_kind`'s slot set, `BRANDS`, `MODEL_VENDORS`) or its traffic
   disappears from the dashboard and menubar.
@@ -271,5 +276,7 @@ and `scripts/llm-usage`. Read `docs/notes/hosted-only-go-proxy.md` and
 `tests/llm-usage.zsh` fails on clean `main` in the menubar scenarios — diff against a
 baseline instead of chasing it.
 
-The required `review` status check is this repo's own hosted-only-review workflow (its
-EnMaaS GLM reviewer); CodeRabbit is advisory and frequently rate-limited.
+The required `review` status check is this repo's own hosted-only-review workflow. It
+runs on EnMaaS-hosted models and follows `DOTFILES_REF` (default `main`), so its model
+is whatever the hosted-only pair currently holds — never name it here. CodeRabbit is
+advisory and frequently rate-limited.
