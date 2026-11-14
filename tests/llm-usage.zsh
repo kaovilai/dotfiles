@@ -727,6 +727,10 @@ assert [m["key"] for m in sh["models"]] == ["glm", "claude", "openai"], sh["mode
 assert abs(sum(m["share"] for m in sh["models"]) - 1) < 1e-3 and abs(sum(p["share"] for p in sh["providers"]) - 1) < 1e-3, sh
 assert [round(m["share"], 3) for m in sh["models"]] == [0.5, 0.333, 0.167], sh["models"]
 assert [(p["key"], round(p["share"], 3)) for p in sh["providers"]] == [("enmaas", 0.667), ("vertex", 0.333)], sh["providers"]
+# Muse is its own vendor key: reusing "other" (model_vendor's unmatched fallback)
+# would merge it with unknown models and flip the row's label with event order
+sh = run("share-muse", [ev(60, requested=DS, served="made-up-7b"), ev(30, requested=DS, served=MUSE)])["share"]
+assert [(m["key"], m["label"], m["vendor"]) for m in sh["models"]] == [("muse", "Muse", "muse"), ("other", "Other", "other")], sh["models"]
 # window / metric flags; events older than the window drop out, and an all-zero-token window falls back to requests
 d = run("share-1h", [ev(30), ev(1800, port="4142", requested=SON, served=SON)], cli=["--share-window", "1h"])
 assert d["share"]["window"] == "1h" and {m["key"] for m in d["share"]["models"]} == {"glm", "claude"}, d["share"]

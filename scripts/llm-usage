@@ -2764,7 +2764,7 @@ MODEL_VENDORS = [
     ("openai", "GPT", r"gpt|luna|codex|openai|^o[134](-|$)"),
     ("glm", "GLM", r"glm|zai"),
     ("deepseek", "DeepSeek", r"deepseek"),
-    ("other", "Muse", r"muse"),  # Muse Spark Open: no upstream logo asset yet
+    ("muse", "Muse", r"muse"),  # Muse Spark Open: no upstream logo asset yet; own key, never "other" (= model_vendor's unmatched fallback)
     ("gemini", "Gemini", r"gemini"),
     ("qwen", "Qwen", r"qwen"),  # the MLX flavor's local Qwen3-Coder models
 ]
