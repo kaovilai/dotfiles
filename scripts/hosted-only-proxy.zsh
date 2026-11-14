@@ -192,6 +192,13 @@ _hosted_only_proxy_vars() {
     if [[ "$_hop_glm" == "$_hop_deepseek" ]]; then
         print -ru2 -- "hosted-only: GLM and DEEPSEEK slots both resolve to $_hop_glm — pair fallback and vision reroute are off (likely a pre-swap DEEPSEEK_MODEL pin); set HOSTED_ONLY_DEEPSEEK_MODEL to the fallback model."
     fi
+    # A long-lived shell can still export the pre-swap alias list (claude-* only).
+    # The knob wins over today's default and silently drops the retired GLM id,
+    # whose alias row exists only so stored sessions keep working — they would
+    # get the cost guard's 400 on continue.
+    if [[ -n "${HOSTED_ONLY_ALIAS_MODELS-}${GLM_HYBRID_ALIAS_MODELS-}" && "$_hop_aliases" != *rits/zai-org/glm-5-3* ]]; then
+        print -ru2 -- "hosted-only: ALIAS_MODELS is set without rits/zai-org/glm-5-3 — sessions that stored the retired GLM id will get 400 on continue; add it to the list."
+    fi
 }
 
 # A pin of a retired id (or a claude-* alias) is still a real request: the proxy

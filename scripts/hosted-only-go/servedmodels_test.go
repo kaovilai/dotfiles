@@ -65,6 +65,23 @@ func TestMissingServedModelsReadsTheGivenRouteTable(t *testing.T) {
 	}
 }
 
+// A launch that starts replacing the proxy, and a stop, both invalidate the
+// stamps the old proxy owned: the boot wait can time out and leave a detached
+// child that binds later with nobody recording its pair, so a stale record must
+// never outlive it (2026-11-14 review).
+func TestClearProxyStamps(t *testing.T) {
+	dir := t.TempDir()
+	writeServedModels(dir, []string{"rits/a"})
+	writeFingerprint(dir, "fp", "token")
+	clearProxyStamps(dir)
+	if readServedModels(dir) != nil {
+		t.Fatal("the served-models record must be gone")
+	}
+	if _, err := os.Stat(filepath.Join(dir, "fingerprint")); !os.IsNotExist(err) {
+		t.Fatalf("the fingerprint must be gone: %v", err)
+	}
+}
+
 // servedModelNames folds the "#openai" sibling onto its bare group and drops the
 // wildcard, which serves anything.
 func TestServedModelNamesFoldsDialectSiblings(t *testing.T) {

@@ -631,7 +631,10 @@ func startProxy(o ensureOpts, oldPids []int) (string, error) {
 	if routeTableFlavor(o.flavor) && routesPath == "" {
 		return "", fmt.Errorf("hosted-only-go: --config is required for the %s flavor", o.flavor)
 	}
-	_ = os.Remove(filepath.Join(o.runtimeDir, "fingerprint"))
+	// Both stamps describe the proxy that was running: once a launch starts
+	// replacing it, neither is trustworthy (the boot wait can time out and the
+	// detached child still binds later, serving a pair nobody recorded).
+	clearProxyStamps(o.runtimeDir)
 
 	self, err := os.Executable()
 	if err != nil {
@@ -768,13 +771,19 @@ func defaultPort(flavor string) string {
 
 // --- stop --------------------------------------------------------------------
 
+// clearProxyStamps drops the stamps a running proxy owns (config fingerprint,
+// served-models record). A launch that starts replacing the proxy and a stop
+// both invalidate them: a timed-out boot wait can leave a detached child that
+// binds later with nobody recording its pair.
+func clearProxyStamps(dir string) {
+	_ = os.Remove(filepath.Join(dir, "fingerprint"))
+	_ = os.Remove(filepath.Join(dir, "models"))
+}
+
 // stopOnce mirrors _hosted_only_proxy_stop: stop only listeners whose command
 // line names this proxy's config under the current or a legacy runtime dir.
 func stopOnce(flavor, port, runtimeDir string, legacyDirs []string) int {
-	fingerprints := []string{filepath.Join(runtimeDir, "fingerprint")}
-	for _, dir := range legacyDirs {
-		fingerprints = append(fingerprints, filepath.Join(dir, "fingerprint"))
-	}
+	dirs := append([]string{runtimeDir}, legacyDirs...)
 	stopped := false
 	for _, pid := range listenPIDs(port) {
 		cmd := procCmdline(pid)
@@ -786,8 +795,8 @@ func stopOnce(flavor, port, runtimeDir string, legacyDirs []string) int {
 			stopped = true
 		}
 	}
-	for _, f := range fingerprints {
-		_ = os.Remove(f)
+	for _, dir := range dirs {
+		clearProxyStamps(dir)
 	}
 	if stopped {
 		fmt.Fprintf(os.Stderr, "hosted-only: stopped %s proxy on port %s.\n", flavor, port)
