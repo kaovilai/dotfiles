@@ -54,18 +54,20 @@ _hosted_only_proxy_vars claude
 local cfg
 _hosted_only_proxy_vars claude
 cfg=$(_hosted_only_proxy_config)
-[[ "$cfg" == *'"anthropic/rits/zai-org/glm-5-3"'* && "$cfg" == *'DeepSeek-V4.1-Flash-1017'* ]] || fail "claude config lacks hosted models: $cfg"
+[[ "$cfg" == *'"anthropic/rits/deepseek-ai/DeepSeek-V4.1-Flash-1017"'* && "$cfg" == *'Muse-Spark-Open-816B-A42B-NVFP4'* ]] || fail "claude config lacks hosted models: $cfg"
 [[ "$cfg" == *'os.environ/HOSTED_ONLY_PROXY_TOKEN'* && "$cfg" == *'claude-sonnet-5-5'* ]] || fail "claude config shape"
 [[ "$cfg" != *luna* && "$cfg" != *api.openai.com* ]] || fail "OpenAI route leaked into config"
 [[ "$cfg" != *callbacks* && "$cfg" != *router_settings* && "$cfg" != *litellm_settings* ]] || fail "LiteLLM-only config blocks survived the retirement: $cfg"
 _hosted_only_proxy_vars codex
 cfg=$(_hosted_only_proxy_config)
-[[ "$cfg" == *'"openai/rits/zai-org/glm-5-3"'* && "$cfg" == *'/v1"'* ]] || fail "codex dialect missing from merged config: $cfg"
-[[ "$cfg" == *'glm-5-3#openai'* && "$cfg" == *'DeepSeek-V4.1-Flash-1017#openai'* ]] || fail "suffixed groups missing: $cfg"
+[[ "$cfg" == *'"openai/rits/deepseek-ai/DeepSeek-V4.1-Flash-1017"'* && "$cfg" == *'/v1"'* ]] || fail "codex dialect missing from merged config: $cfg"
+[[ "$cfg" == *'DeepSeek-V4.1-Flash-1017#openai'* && "$cfg" == *'Muse-Spark-Open-816B-A42B-NVFP4#openai'* ]] || fail "suffixed groups missing: $cfg"
 [[ "$cfg" == *'claude-sonnet-5-5'* ]] || fail "merged config must serve the claude alias for both flavors: $cfg"
-[[ "${cfg##*model_name: \"rits/zai-org/glm-5-3\"}" == *'#openai'* ]] || fail "bare glm group and suffixed group must be distinct entries: $cfg"
+[[ "$cfg" == *'model_name: "rits/zai-org/glm-5-3"'* ]] || fail "merged config must carry the legacy GLM alias row the proxy serves: $cfg"
+[[ "${cfg##*model_name: \"rits/deepseek-ai/DeepSeek-V4.1-Flash-1017\"}" == *'#openai'* ]] || fail "bare primary group and suffixed group must be distinct entries: $cfg"
 # the anthropic and openai deployments of the same model must not share a group
-[[ "$(grep -c 'model_name:' <<< "$cfg")" == 5 ]] || fail "merged config must have 5 deployments (glm, glm#openai, ds, ds#openai, alias): $cfg"
+# (4 slot deployments + one anthropic/#openai pair per alias)
+[[ "$(grep -c 'model_name:' <<< "$cfg")" == 8 ]] || fail "merged config must have 8 deployments (2 slots x 2 wires + 2 aliases x 2 wires): $cfg"
 
 # knob defaults and overrides (fingerprint inputs)
 [[ "$_hop_fallback" == "1 1 60 600 1048576 512 3 16000" ]] || fail "fallback knob defaults: $_hop_fallback"
@@ -74,12 +76,40 @@ HOSTED_ONLY_FALLBACK=0 HOSTED_ONLY_MAX_MODEL_LEN=999999 _hosted_only_proxy_vars 
 _hosted_only_proxy_vars codex
 # The merged config serves the claude alias for both flavors, so the alias knob
 # (and the fingerprint it feeds) is flavor-independent
-[[ "$_hop_aliases" == "claude-sonnet-5-5" ]] || fail "codex flavor alias default (merged): $_hop_aliases"
+[[ "$_hop_aliases" == "claude-sonnet-5-5,rits/zai-org/glm-5-3" ]] || fail "codex flavor alias default (merged): $_hop_aliases"
 [[ "$_hop_request_timeout" == 180 ]] || fail "request timeout default: $_hop_request_timeout"
 _hosted_only_proxy_vars claude
-[[ "$_hop_aliases" == "claude-sonnet-5-5" ]] || fail "claude flavor alias default: $_hop_aliases"
+[[ "$_hop_aliases" == "claude-sonnet-5-5,rits/zai-org/glm-5-3" ]] || fail "claude flavor alias default: $_hop_aliases"
 HOSTED_ONLY_ALIAS_MODELS=x,y _hosted_only_proxy_vars claude
 [[ "$_hop_aliases" == "x,y" ]] || fail "HOSTED_ONLY_ALIAS_MODELS not read: $_hop_aliases"
+# The Go side TrimSpace's entries, so a spaced list must match ids here too
+HOSTED_ONLY_ALIAS_MODELS="claude-sonnet-5-5, rits/zai-org/glm-5-3" _hosted_only_proxy_vars claude
+[[ "$_hop_aliases" == "claude-sonnet-5-5,rits/zai-org/glm-5-3" ]] || fail "spaced alias list not normalized: $_hop_aliases"
+[[ "$(_hop_slot_model rits/zai-org/glm-5-3)" == "$_hop_glm" ]] || fail "spaced alias list breaks the slot mapping"
+_hosted_only_proxy_vars claude   # restore the default alias list
+# A pre-swap alias pin (claude-* only) wins over today's default and would drop
+# the legacy GLM alias, so it warns instead of letting stored sessions 400
+alias_pin=$(HOSTED_ONLY_ALIAS_MODELS=claude-sonnet-5-5 _hosted_only_proxy_vars claude 2>&1 >/dev/null)
+[[ "$alias_pin" == *"without rits/zai-org/glm-5-3"* ]] || fail "alias pin warning missing: $alias_pin"
+default_alias=$(_hosted_only_proxy_vars claude 2>&1 >/dev/null)
+[[ "$default_alias" != *"without rits/zai-org/glm-5-3"* ]] || fail "the default alias list must not warn: $default_alias"
+# a SLOT pinned to that id serves it without the alias row, so no warning there
+slot_pinned=$(HOSTED_ONLY_GLM_MODEL=rits/zai-org/glm-5-3 HOSTED_ONLY_ALIAS_MODELS=claude-sonnet-5-5 _hosted_only_proxy_vars codex 2>&1 >/dev/null)
+[[ "$slot_pinned" != *"without rits/zai-org/glm-5-3"* ]] || fail "a slot pin of the retired id must not warn: $slot_pinned"
+_hosted_only_proxy_vars claude   # the probes ran in subshells: restore the globals
+# A pre-swap DEEPSEEK_MODEL pin of the old fallback default now equals the
+# primary; a degenerate pair kills the outage fallback and vision reroute, so
+# the launcher says so instead of silently serving one model in both slots
+degenerate=$(HOSTED_ONLY_GLM_MODEL=rits/same HOSTED_ONLY_DEEPSEEK_MODEL=rits/same _hosted_only_proxy_vars codex 2>&1 >/dev/null)
+[[ "$degenerate" == *"both resolve to rits/same"* ]] || fail "degenerate pair warning missing: $degenerate"
+normal=$(_hosted_only_proxy_vars codex 2>&1 >/dev/null)
+[[ "$normal" != *"both resolve"* ]] || fail "distinct pair must not warn: $normal"
+_hosted_only_proxy_vars codex   # the probe ran in subshells: restore the parent's globals
+# A pre-swap pin (retired GLM id / claude-* alias) is routed by the primary slot,
+# so launchers map it onto the primary id the catalogs actually list
+[[ "$(_hop_slot_model rits/zai-org/glm-5-3)" == "$_hop_glm" ]] || fail "legacy pin not mapped to the primary slot: $(_hop_slot_model rits/zai-org/glm-5-3)"
+[[ "$(_hop_slot_model claude-sonnet-5-5)" == "$_hop_glm" ]] || fail "claude alias pin not mapped to the primary slot"
+[[ "$(_hop_slot_model "$_hop_deepseek")" == "$_hop_deepseek" ]] || fail "a slot id must pass through unchanged: $(_hop_slot_model "$_hop_deepseek")"
 HOSTED_ONLY_REQUEST_TIMEOUT=99 _hosted_only_proxy_vars claude
 [[ "$_hop_request_timeout" == 99 ]] || fail "HOSTED_ONLY_REQUEST_TIMEOUT not read: $_hop_request_timeout"
 _hosted_only_proxy_vars codex

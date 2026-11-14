@@ -5,8 +5,10 @@
 # a busy one waits for the watcher. Sourced functions are live in NEW shells
 # only.
 #
-# Hosted-only = EnMaaS-hosted free models only: GLM 5.3 (text) and DeepSeek
-# V4.1 Flash (1M context, vision). Codex's auto-review and Claude Code's
+# Hosted-only = EnMaaS-hosted free models only: DeepSeek V4.1 Flash (the
+# stronger coder, preferred first: DeepSWE 77 vs 60, Terminal-Bench 2.1 91 vs
+# 76) and Muse Spark Open (816B-A42B, multimodal, 1M context) as the fallback
+# and vision target. Codex's auto-review and Claude Code's
 # auto-mode classifier send their review request to the same endpoint as the
 # main model, so one local endpoint routes by model id and every tier, reviewer
 # and helper call stays on the two hosted models (no paid side-channel calls,
@@ -27,9 +29,10 @@
 # launchers still run LiteLLM for their own flavors). It does what the old
 # Python hooks did inside the proxy: strips the grammar vLLM rejects from
 # Codex's apply_patch, cuts default reasoning on Messages requests that send
-# no thinking field, reroutes GLM image requests to DeepSeek, image budget
-# pruning with a disk cache, the 429/quota/outage rewrites T3 Code auto-resumes
-# on, model fallback, and the per-request JSONL for `llm-usage`.
+# no thinking field, reroutes image-carrying primary requests to the vision
+# slot, image budget pruning with a disk cache, the 429/quota/outage rewrites
+# T3 Code auto-resumes on, model fallback, and the per-request JSONL for
+# `llm-usage`.
 #
 # Upstream key: ENMAAS_API_KEY (caller loads it, e.g. from ~/secrets.zsh); only
 # the proxy gets it, clients get the local token
@@ -37,9 +40,10 @@
 #
 # Knobs (every one also reads its retired GLM_HYBRID_* name as a fallback, so
 # old shells keep working): HOSTED_ONLY_{CODEX,CLAUDE}_PROXY_PORT,
-# HOSTED_ONLY_PROXY_TOKEN, HOSTED_ONLY_GLM_MODEL (route id of GLM; old name
-# GLM_HYBRID_MODEL), HOSTED_ONLY_DEEPSEEK_MODEL (default
-# rits/deepseek-ai/DeepSeek-V4.1-Flash-1017), HOSTED_ONLY_ENMAAS_BASE_URL
+# HOSTED_ONLY_PROXY_TOKEN, HOSTED_ONLY_GLM_MODEL (primary slot; old name
+# GLM_HYBRID_MODEL), HOSTED_ONLY_DEEPSEEK_MODEL (fallback + vision slot) —
+# the short names follow the slots, not the vendors, and both ids default per
+# flavor in scripts/hosted-only-go/config.go; HOSTED_ONLY_ENMAAS_BASE_URL
 # (gateway root; default $ENMAAS_API_BASE_URL). HOSTED_ONLY_MODEL (main model
 # pick), HOSTED_ONLY_REVIEW_MODEL, HOSTED_ONLY_CLASSIFIER_MODEL,
 # HOSTED_ONLY_SMALL_FAST_MODEL are read by the launchers, not here. The full
@@ -47,8 +51,9 @@
 # _hosted_only_go_env below.
 #
 # History: a "GLM hybrid" mode once added an OpenAI reviewer (gpt-6-luna) to
-# this proxy. DeepSeek V4.1 Flash now covers reviewer, classifier and vision
-# inside hosted-only, so that mode is retired; its old names are aliases. The
+# this proxy. DeepSeek V4.1 Flash (primary slot) covers reviewer and classifier
+# and Muse Spark Open (fallback slot) covers vision inside hosted-only, so that
+# mode is retired; its old names are aliases. The
 # LiteLLM impl (HOSTED_ONLY_PROXY_IMPL=litellm / LLM_PROXY_IMPL=litellm) was
 # the escape hatch before the Go proxy reached parity; both knobs now error.
 #
@@ -138,8 +143,12 @@ _hosted_only_proxy_vars() {
         print -ru2 -- 'hosted-only: impl validation failed; continuing in stop mode.'
         _hop_impl=go
     }
-    typeset -g _hop_glm="$(_hosted_only_knob GLM_MODEL "${GLM_HYBRID_MODEL:-rits/zai-org/glm-5-3}")"
-    typeset -g _hop_deepseek="$(_hosted_only_knob DEEPSEEK_MODEL rits/deepseek-ai/DeepSeek-V4.1-Flash-1017)"
+    # Slot names predate the 2026-11-14 pair swap (GLM 5.3 left for the enmaas
+    # flavor): the "GLM" slot is the PRIMARY (stronger coder, preferred first),
+    # the "DeepSeek" slot the FALLBACK + vision target. Slot-based, not
+    # name-based, so the proxy's pair picker and vision reroute keep working.
+    typeset -g _hop_glm="$(_hosted_only_knob GLM_MODEL "${GLM_HYBRID_MODEL:-rits/deepseek-ai/DeepSeek-V4.1-Flash-1017}")"
+    typeset -g _hop_deepseek="$(_hosted_only_knob DEEPSEEK_MODEL rits/meta-models/Muse-Spark-Open-816B-A42B-NVFP4)"
     typeset -g _hop_vision_fallback="$(_hosted_only_knob VISION_FALLBACK 1)"
     typeset -g _hop_limit_rewrite="$(_hosted_only_knob LIMIT_REWRITE 1)"
     typeset -g _hop_limit_retry="$(_hosted_only_knob RATE_LIMIT_DEFAULT_RETRY_SECONDS 60)"
@@ -154,7 +163,17 @@ _hosted_only_proxy_vars() {
     # The merged config always serves the claude-sonnet-5-5 alias from the GLM
     # (anthropic) deployment, so both flavors record the same value and the
     # shared fingerprint stays flavor-independent.
-    typeset -g _hop_aliases="$(_hosted_only_knob ALIAS_MODELS claude-sonnet-5-5)"
+    # rits/zai-org/glm-5-3 is a LEGACY alias since the 2026-11-14 pair swap
+    # (GLM left the hosted-only pair): T3 threads and Claude Code sessions that
+    # stored it as their model would otherwise get the cost guard's 400
+    # "Invalid model name" on continue. The proxy serves it from the primary
+    # slot (DeepSeek); the usage log keeps requested vs served visible.
+    typeset -g _hop_aliases="$(_hosted_only_knob ALIAS_MODELS claude-sonnet-5-5,rits/zai-org/glm-5-3)"
+    # The Go side TrimSpace's every entry, so a spaced list ("a, b") serves both
+    # ids; normalize here too, or the alias rows and _hop_slot_model compare
+    # against a leading space and never match. This feeds the fingerprint, so the
+    # normalized form is what a restart compares.
+    _hop_aliases="${_hop_aliases// /}"
     # Dialect-suffix routing: this proxy turns it on for the #openai groups
     # (the EnMaaS flavor leaves it off and uses #responses siblings instead).
     typeset -g _hop_dialect="$(_hosted_only_knob DIALECT_SUFFIX "#openai")"
@@ -170,6 +189,35 @@ _hosted_only_proxy_vars() {
     # notes; days a pruned copy is kept.
     typeset -g _hop_image_budget="$(_hosted_only_knob IMAGE_BUDGET_BYTES 2500000)"
     typeset -g _hop_image_cache_days="$(_hosted_only_knob IMAGE_CACHE_DAYS 1)"
+    # A pin can make the pair degenerate: the retired fallback default (DeepSeek
+    # V4.1 Flash) is now the primary default, so carrying that pin over as
+    # HOSTED_ONLY_DEEPSEEK_MODEL leaves both slots holding one id. The proxy
+    # then skips the outage fallback and the vision reroute (rewrite.go checks
+    # cfg.GLM != cfg.DeepSeek) with no other signal, so say it here.
+    if [[ "$_hop_glm" == "$_hop_deepseek" ]]; then
+        print -ru2 -- "hosted-only: GLM and DEEPSEEK slots both resolve to $_hop_glm — pair fallback and vision reroute are off (likely a pre-swap DEEPSEEK_MODEL pin); set HOSTED_ONLY_DEEPSEEK_MODEL to the fallback model (the EnMaaS flavor reads the same knob: scope it per launch if that side keeps its own id)."
+    fi
+    # A long-lived shell can still export the pre-swap alias list (claude-* only).
+    # The knob wins over today's default and silently drops the retired GLM id,
+    # whose alias row exists only so stored sessions keep working — they would
+    # get the cost guard's 400 on continue. Pinning that id as a SLOT serves it
+    # anyway, so the warning would be wrong there.
+    if [[ -n "${HOSTED_ONLY_ALIAS_MODELS-}${GLM_HYBRID_ALIAS_MODELS-}" && "$_hop_aliases" != *rits/zai-org/glm-5-3* \
+          && "$_hop_glm" != "rits/zai-org/glm-5-3" && "$_hop_deepseek" != "rits/zai-org/glm-5-3" ]]; then
+        print -ru2 -- "hosted-only: ALIAS_MODELS is set without rits/zai-org/glm-5-3 — sessions that stored the retired GLM id will get 400 on continue; add it to the list."
+    fi
+}
+
+# A pin of a retired id (or a claude-* alias) is still a real request: the proxy
+# serves aliases from the primary slot, so callers that need an id the upstream
+# catalog actually lists (Codex's generated catalog carries only the two slots)
+# map it onto the primary.
+_hop_slot_model() {
+    local want="$1" alias
+    for alias in ${(s:,:)_hop_aliases}; do
+        [[ -n "$alias" && "$want" == "$alias" ]] && { print -r -- "$_hop_glm"; return }
+    done
+    print -r -- "$want"
 }
 
 _hosted_only_proxy_config() {
@@ -209,14 +257,25 @@ $timeout_line
 $ds_openai
       api_key: os.environ/ENMAAS_API_KEY
 $timeout_line"
-    # Claude Code only remaps aliases via ANTHROPIC_DEFAULT_*_MODEL; clients that
-    # pass an explicit id (T3's picker sends claude-sonnet-5-5) would hit "Invalid
-    # model name". Serve that id from GLM so the client keeps Sonnet 5.5 behavior.
-    print -r -- "  - model_name: \"claude-sonnet-5-5\"
+    # Same alias rows the Go proxy writes from ALIASES: every alias id is served
+    # from the primary slot on both wires. Claude Code only remaps aliases via
+    # ANTHROPIC_DEFAULT_*_MODEL, so a client passing an explicit id (T3's picker
+    # sends claude-sonnet-5-5; sessions that stored rits/zai-org/glm-5-3 keep
+    # that id) would otherwise hit "Invalid model name".
+    local alias
+    for alias in ${(s:,:)_hop_aliases}; do
+        [[ -n "$alias" ]] || continue
+        print -r -- "  - model_name: \"$alias\"
     litellm_params:
 $glm_anthropic
       api_key: os.environ/ENMAAS_API_KEY
+$timeout_line
+  - model_name: \"$alias#openai\"
+    litellm_params:
+$glm_openai
+      api_key: os.environ/ENMAAS_API_KEY
 $timeout_line"
+    done
     # The Go binary serves from the routes.json it writes itself; this YAML is
     # inert documentation and a fingerprint input (it tracks model/knob changes).
     print -r -- "general_settings:

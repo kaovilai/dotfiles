@@ -2,30 +2,42 @@
 # (next T3 turn); the bridge exports the settings env into the client, so
 # startup-read knobs (CLAUDE_CODE_MAX_OUTPUT_TOKENS) win there too.
 # ---------------------------------------------------------------------------
-# claude-hosted-only: EnMaaS-hosted free models only (GLM 5.3 main; DeepSeek
-# V4.1 Flash selectable with --model rits/deepseek-ai/DeepSeek-V4.1-Flash-1017[1m]).
+# claude-hosted-only: EnMaaS-hosted free models only (DeepSeek V4.1 Flash
+# main -- the stronger coder; Muse Spark Open selectable with --model
+# rits/meta-models/Muse-Spark-Open-816B-A42B-NVFP4[1m], and the proxy's vision
+# reroute sends image-carrying requests there).
 # Retired names stay as aliases: claude-glm-hybrid, claude-glm-only (the old
 # "hybrid" mode put the auto-mode classifier on an OpenAI model; DeepSeek now
-# covers classifier, helpers and vision, so no OpenAI key or route is used).
+# covers classifier and helpers, so no OpenAI key or route is used).
 #
 # Claude Code picks the auto-mode classifier from ANTHROPIC_DEFAULT_SONNET_MODEL
 # (claude-sonnet-5-5 / claude-opus-5-5 ids are refused there) and sends it to
 # the same ANTHROPIC_BASE_URL as the main model. Hosted-only access (e.g. over
 # the monthly EnMaaS budget) cannot reach Claude/GPT through EnMaaS, so all
 # models go through the local "claude" hosted-only Go proxy
-# (scripts/hosted-only-proxy.zsh, port 4148): GLM and DeepSeek -> anthropic/
-# Messages on the EnMaaS root (same as claude-enmaas).
-# The proxy's hook cuts reasoning on requests without a thinking field (GLM 5.3
-# is thinking-only: thinking disabled leaves ~one sentence of reasoning, not
-# none); without it the classifier times out on GLM. It also sends GLM requests
-# that contain an image (GLM 400s on any) to DeepSeek. Main model and the
-# opus/haiku/fable tiers stay on GLM.
+# (scripts/hosted-only-proxy.zsh, port 4148): both slots -> anthropic/
+# Messages on the EnMaaS root (same as claude-enmaas). The slots are named for
+# the models they used to hold (2026-11-14 pair swap): "glm" = PRIMARY
+# (DeepSeek V4.1 Flash), "deepseek" = FALLBACK + vision target (Muse Spark
+# Open). Short-name knob values follow the SLOTS, not the names: a
+# HOSTED_ONLY_*_MODEL=glm pin made before the swap now means DeepSeek Flash,
+# and =deepseek means Muse Spark — pin a full id when the model must not move,
+# but keep the two slots distinct: a pre-swap pin of the old fallback default
+# (DEEPSEEK_MODEL=DeepSeek V4.1 Flash) now equals the primary, and a pair with
+# one id in both slots has no outage fallback and no vision target (the
+# launcher warns).
+# The proxy's hook cuts reasoning on requests without a thinking field (the
+# primary slot; Muse Spark reasons before every answer); without it the
+# per-tool-call classifier calls get slow enough to stall a turn. It also sends
+# primary-slot requests that contain an image to the fallback slot (Muse Spark,
+# multimodal). Main model and the opus/haiku/fable tiers stay on the primary
+# slot.
 # Knobs: HOSTED_ONLY_CLASSIFIER_MODEL (sonnet tier = auto-mode classifier),
 # HOSTED_ONLY_SMALL_FAST_MODEL and HOSTED_ONLY_SUBAGENT_MODEL (subagents,
-# forced; workflow subagents too), all default DeepSeek: 2-4x faster than GLM,
-# thinking:disabled removes its reasoning entirely, and it takes images, which
-# subagents (screenshots, UI checks) may need
-# (docs/notes/deepseek-v41-flash-vs-glm.md). Values: glm, deepseek, or an id.
+# forced; workflow subagents too), all default the primary (DeepSeek V4.1
+# Flash): the fast model, while Muse Spark reasons before every answer — the
+# wrong latency profile for per-tool-call classification. Values: glm,
+# deepseek, or an id.
 # HOSTED_ONLY_CLIENT_MAX_RETRIES (default 3) sets CLAUDE_CODE_MAX_RETRIES (Claude
 # Code default 10) — bounds retries of real 5xx errors. Rate-limit and outage
 # answers arrive as 429 + retry-after: with CLAUDE_CODE_RETRY_WATCHDOG=1 (set
@@ -54,20 +66,18 @@ _claude_hosted_launch() (
     # be 200k" warning; Claude Code strips it before the request, so the proxy
     # still sees the bare id. modelSettings keys use the bare id.
     local glm1m="${glm}[1m]" ds1m="${ds}[1m]"
-    local -a picks=("fable=${glm1m}|GLM 5.3" "opus=${glm1m}|GLM 5.3" "haiku=${glm1m}|GLM 5.3" "=${ds1m}|DeepSeek V4.1 Flash")   # DeepSeek: picker entry only, no tier
+    local -a picks=("fable=${glm1m}|DeepSeek V4.1 Flash" "opus=${glm1m}|DeepSeek V4.1 Flash" "haiku=${glm1m}|DeepSeek V4.1 Flash" "=${ds1m}|Muse Spark Open")   # Muse Spark: picker entry only, no tier
     local classifier small subagent
-    # Auto-mode classification and the small/fast tier default to GLM, not
-    # DeepSeek (2026-11-06): the client-side auto-mode classifier (CLAUDE_CODE_
-    # AUTO_MODE_SERVER=0 above) runs on ANTHROPIC_SMALL_FAST_MODEL, sees text
-    # only (tool name + input, never images or output), and a DeepSeek outage
-    # froze every tool call that needed classification while GLM stayed up.
-    # Fallback: the proxy's router-level glm->deepseek fallback covers a GLM
-    # outage inside one request. Image-carrying small-model calls are still
-    # safe: the proxy's vision reroute sends GLM requests with images to
-    # DeepSeek. Knobs override both defaults.
+    # Auto-mode classification and the small/fast tier default to the PRIMARY
+    # (DeepSeek Flash, the fast model, 2026-11-14): the classifier sees text
+    # only, and Muse Spark always reasons before answering, which is the wrong
+    # latency profile for a per-tool-call classification. A primary outage is
+    # covered in-request by the proxy's pair fallback (classifier calls are
+    # image-free and fail over to Muse Spark). Knobs override.
     classifier="$(_claude_hosted_ref "${HOSTED_ONLY_CLASSIFIER_MODEL:-$glm}" "$glm" "$ds")"
     small="$(_claude_hosted_ref "${HOSTED_ONLY_SMALL_FAST_MODEL:-$glm}" "$glm" "$ds")"
-    subagent="$(_claude_hosted_ref "${HOSTED_ONLY_SUBAGENT_MODEL:-$ds}" "$glm" "$ds")"
+    # Subagents do the coding: the stronger coder, on the primary slot.
+    subagent="$(_claude_hosted_ref "${HOSTED_ONLY_SUBAGENT_MODEL:-$glm}" "$glm" "$ds")"
     local -a reply
     _claude_picker_args "${picks[@]}"
     local settings='{}'

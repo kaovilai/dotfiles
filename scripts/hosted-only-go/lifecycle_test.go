@@ -200,3 +200,18 @@ func TestNotifyUserWritesLog(t *testing.T) {
 		t.Fatalf("notification line: %q", data)
 	}
 }
+
+// ensure without --flavor must not bake the EnMaaS pair onto the shared
+// hosted-only port: defaultPort("") is 4148, and loadConfig's unknown-flavor
+// branch is the route-table pair (2026-11-14 review).
+func TestEnsureFlavorPortDefaults(t *testing.T) {
+	if f, p := ensureFlavorPort("", ""); f != "claude" || p != "4148" {
+		t.Fatalf("empty flavor must default to claude on the shared port: %q %q", f, p)
+	}
+	if f, p := ensureFlavorPort("enmaas", ""); f != "enmaas" || p != "4146" {
+		t.Fatalf("a named flavor keeps its own port: %q %q", f, p)
+	}
+	if f, p := ensureFlavorPort("codex", "4999"); f != "codex" || p != "4999" {
+		t.Fatalf("an explicit port must survive: %q %q", f, p)
+	}
+}

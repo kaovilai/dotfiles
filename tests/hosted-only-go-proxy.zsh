@@ -193,6 +193,8 @@ JSON
 env ENMAAS_API_KEY=test-key HOSTED_ONLY_PROXY_TOKEN=test-token \
     HOSTED_ONLY_ENMAAS_BASE_URL="http://127.0.0.1:$stub_port" \
     HOSTED_ONLY_ALIAS_MODELS=claude-sonnet-5-5 \
+    HOSTED_ONLY_GLM_MODEL=rits/zai-org/glm-5-3 \
+    HOSTED_ONLY_DEEPSEEK_MODEL=rits/deepseek-ai/DeepSeek-V4.1-Flash-1017 \
     LLM_USAGE_DIR="$tmp/usage" \
     "$bin" --flavor claude --config "$hcfg" --port "$pport" --runtime-dir "$rtdir" >"$tmp/proxy.log" 2>&1 &
 proxy=$!
@@ -366,9 +368,15 @@ proxy=
 # fingerprint record — and the stale/busy decision on later launches.
 lp() { lsof -ti "tcp:$1" -sTCP:LISTEN 2>/dev/null | head -1 }
 ensure_go() {
+    # The pair is pinned so the knob-derived routes (and every assertion below
+    # on them) stay stable when the fleet's DEFAULT pair changes (2026-11-14:
+    # DeepSeek primary + Muse Spark fallback); the test exercises the
+    # mechanism, not the current default models.
     ( export HOSTED_ONLY_PROXY_IMPL=go HOSTED_ONLY_CLAUDE_PROXY_PORT=$pport ENMAAS_API_KEY=test-key \
         HOSTED_ONLY_PROXY_TOKEN=test-token HOSTED_ONLY_ENMAAS_BASE_URL="http://127.0.0.1:$stub_port" \
-        HOSTED_ONLY_ALIAS_MODELS=claude-sonnet-5-5 LLM_USAGE_DIR="$tmp/usage"
+        HOSTED_ONLY_ALIAS_MODELS=claude-sonnet-5-5 LLM_USAGE_DIR="$tmp/usage" \
+        HOSTED_ONLY_GLM_MODEL=rits/zai-org/glm-5-3 \
+        HOSTED_ONLY_DEEPSEEK_MODEL=rits/deepseek-ai/DeepSeek-V4.1-Flash-1017
       _hosted_only_proxy_ensure "$@" )
 }
 stop_go() {

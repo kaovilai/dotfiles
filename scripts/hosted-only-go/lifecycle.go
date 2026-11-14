@@ -252,6 +252,97 @@ func writeFingerprint(runtimeDir, fp, tokenFP string) {
 	_ = os.WriteFile(filepath.Join(runtimeDir, "fingerprint"), []byte(fp+" "+tokenFP+"\n"), 0o600)
 }
 
+// servedModelNames lists the model ids a route table serves, deduplicated on
+// the bare group (the "#openai" sibling is the same model on another wire) and
+// without the wildcard, which serves anything.
+func servedModelNames(configPath, flavor string) []string {
+	if configPath == "" {
+		return nil
+	}
+	table, err := loadRouteTable(configPath, dialectSuffixFor(flavor))
+	if err != nil {
+		return nil
+	}
+	seen := map[string]bool{}
+	var names []string
+	for _, name := range table.modelNames() {
+		base := name
+		if i := strings.IndexByte(base, '#'); i >= 0 {
+			base = base[:i]
+		}
+		if base == "" || base == "*" || seen[base] {
+			continue
+		}
+		seen[base] = true
+		names = append(names, base)
+	}
+	return names
+}
+
+func writeServedModels(runtimeDir string, names []string) {
+	if len(names) == 0 {
+		return
+	}
+	_ = os.WriteFile(filepath.Join(runtimeDir, "models"), []byte(strings.Join(names, "\n")+"\n"), 0o600)
+}
+
+// readServedModels returns the pair the RECORDED proxy serves (written by the
+// launch that started it), so a reused-busy launch can say which ids the stale
+// proxy will refuse.
+func readServedModels(runtimeDir string) map[string]bool {
+	data, err := os.ReadFile(filepath.Join(runtimeDir, "models"))
+	if err != nil {
+		return nil
+	}
+	served := map[string]bool{}
+	for _, line := range strings.Split(string(data), "\n") {
+		if line = strings.TrimSpace(line); line != "" {
+			served[line] = true
+		}
+	}
+	return served
+}
+
+// desiredServedModels is the pair THIS launch would serve. The launcher hands
+// `ensure` the routes.json of the RUNNING proxy for every flavor (it is written
+// by startProxy), so for the env-routed flavors that file describes the pair
+// being replaced, never the one wanted — the table is regenerated from this
+// process's knobs instead, the same ones writeRoutesFromEnv reads at spawn.
+func desiredServedModels(flavor, port, runtimeDir, configPath string) []string {
+	if !routeTableFlavor(flavor) {
+		file, err := os.CreateTemp("", "hosted-only-desired-*.json")
+		if err != nil {
+			return nil
+		}
+		path := file.Name()
+		_ = file.Close()
+		defer os.Remove(path)
+		if err := writeRoutesFromEnv(loadConfig(flavor, port, runtimeDir), path); err != nil {
+			return nil
+		}
+		return servedModelNames(path, flavor)
+	}
+	return servedModelNames(configPath, flavor)
+}
+
+// missingServedModels is the rollout gap the fingerprint cannot express: a
+// proxy left running under live sessions keeps serving the model pair it was
+// started with, so requests naming a NEW pair member are refused by the cost
+// guard until the restart the reuse path asks for.
+func missingServedModels(runtimeDir, flavor, port, configPath string) []string {
+	served := readServedModels(runtimeDir)
+	if len(served) == 0 {
+		return nil
+	}
+	var missing []string
+	for _, name := range desiredServedModels(flavor, port, runtimeDir, configPath) {
+		if !served[name] {
+			missing = append(missing, name)
+		}
+	}
+	return missing
+}
+
 // --- detached spawn ----------------------------------------------------------
 
 // spawnDetached starts argv in its own session with output appended to logPath,
@@ -415,6 +506,18 @@ func ensureOnce(o ensureOpts) (string, error) {
 			}
 			fmt.Fprintf(os.Stderr, "hosted-only: %s proxy config, hooks or key changed, but it is serving requests; reusing it (%s-hosted-only-restart applies the change now).\n",
 				o.flavor, o.flavor)
+			// A pair swap is the sharp edge of that reuse: the running proxy
+			// still refuses the new ids, so name them instead of leaving the
+			// caller to decode a 400 from the cost guard. A proxy started
+			// before the pair was recorded cannot be compared — say so, since
+			// that IS the rollout case this exists for.
+			if len(readServedModels(o.runtimeDir)) == 0 {
+				fmt.Fprintf(os.Stderr, "hosted-only: the running %s proxy predates the pair record, so the ids it serves cannot be checked; %s-hosted-only-restart applies the current pair once it is idle.\n",
+					o.flavor, o.flavor)
+			} else if missing := missingServedModels(o.runtimeDir, o.flavor, o.port, o.configPath); len(missing) > 0 {
+				fmt.Fprintf(os.Stderr, "hosted-only: the running proxy does not serve %s; a request naming one of those ids is refused (400) until the restart above runs.\n",
+					strings.Join(missing, ", "))
+			}
 			return "reused-busy", nil
 		}
 		// Zero-refuse restart (#612): start the new proxy ALONGSIDE the old
@@ -528,7 +631,10 @@ func startProxy(o ensureOpts, oldPids []int) (string, error) {
 	if routeTableFlavor(o.flavor) && routesPath == "" {
 		return "", fmt.Errorf("hosted-only-go: --config is required for the %s flavor", o.flavor)
 	}
-	_ = os.Remove(filepath.Join(o.runtimeDir, "fingerprint"))
+	// Both stamps describe the proxy that was running: once a launch starts
+	// replacing it, neither is trustworthy (the boot wait can time out and the
+	// detached child still binds later, serving a pair nobody recorded).
+	clearProxyStamps(o.runtimeDir)
 
 	self, err := os.Executable()
 	if err != nil {
@@ -543,6 +649,10 @@ func startProxy(o ensureOpts, oldPids []int) (string, error) {
 	for {
 		if hasListenerOutside(o.port, oldPids) && healthOK(o.port, time.Second) {
 			writeFingerprint(o.runtimeDir, o.fingerprint, o.tokenFP)
+			// Remember the pair this launch serves: a later reused-busy
+			// launch cannot read it off a live proxy (the cost guard answers
+			// 400, which looks like a client error), so it is recorded here.
+			writeServedModels(o.runtimeDir, servedModelNames(routesPath, o.flavor))
 			return "restarted", nil
 		}
 		if !pidAlive(child.Process.Pid) {
@@ -632,14 +742,29 @@ func runEnsure(args []string) int {
 	}
 	o := ensureOpts{flavor: *flavor, port: *port, runtimeDir: *runtimeDir, configPath: *configPath,
 		fingerprint: *fingerprint, tokenFP: *tokenFP, bootWait: *bootWait, legacyDirs: legacyDirs}
-	if o.port == "" {
-		o.port = defaultPort(o.flavor)
-	}
+	// defaultPort("") is 4148, the shared hosted-only port, while loadConfig
+	// treats an empty flavor like the route-table flavors and bakes the EnMaaS
+	// pair — so a hand-run ensure without --flavor would restart that port
+	// serving the wrong pair. Default it like watch/status do.
+	o.flavor, o.port = ensureFlavorPort(o.flavor, o.port)
 	if _, err := ensureOnce(o); err != nil {
 		fmt.Fprintf(os.Stderr, "hosted-only-go ensure: %v\n", err)
 		return 1
 	}
 	return 0
+}
+
+// ensureFlavorPort applies ensure's defaults: an empty flavor means the shared
+// claude hosted-only port (4148), as watch/status already assume — never the
+// route-table pair loadConfig would bake for an unknown flavor.
+func ensureFlavorPort(flavor, port string) (string, string) {
+	if flavor == "" {
+		flavor = "claude"
+	}
+	if port == "" {
+		port = defaultPort(flavor)
+	}
+	return flavor, port
 }
 
 func defaultPort(flavor string) string {
@@ -661,13 +786,19 @@ func defaultPort(flavor string) string {
 
 // --- stop --------------------------------------------------------------------
 
+// clearProxyStamps drops the stamps a running proxy owns (config fingerprint,
+// served-models record). A launch that starts replacing the proxy and a stop
+// both invalidate them: a timed-out boot wait can leave a detached child that
+// binds later with nobody recording its pair.
+func clearProxyStamps(dir string) {
+	_ = os.Remove(filepath.Join(dir, "fingerprint"))
+	_ = os.Remove(filepath.Join(dir, "models"))
+}
+
 // stopOnce mirrors _hosted_only_proxy_stop: stop only listeners whose command
 // line names this proxy's config under the current or a legacy runtime dir.
 func stopOnce(flavor, port, runtimeDir string, legacyDirs []string) int {
-	fingerprints := []string{filepath.Join(runtimeDir, "fingerprint")}
-	for _, dir := range legacyDirs {
-		fingerprints = append(fingerprints, filepath.Join(dir, "fingerprint"))
-	}
+	dirs := append([]string{runtimeDir}, legacyDirs...)
 	stopped := false
 	for _, pid := range listenPIDs(port) {
 		cmd := procCmdline(pid)
@@ -679,8 +810,8 @@ func stopOnce(flavor, port, runtimeDir string, legacyDirs []string) int {
 			stopped = true
 		}
 	}
-	for _, f := range fingerprints {
-		_ = os.Remove(f)
+	for _, dir := range dirs {
+		clearProxyStamps(dir)
 	}
 	if stopped {
 		fmt.Fprintf(os.Stderr, "hosted-only: stopped %s proxy on port %s.\n", flavor, port)

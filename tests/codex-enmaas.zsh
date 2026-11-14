@@ -137,6 +137,21 @@ try:
         assert models[GLM]['auto_review_model_override'] == DS
         print('PASS: launcher overrides T3 launchArgs, keeps caller defaults, writes merged catalog')
 
+        # Catalog cache key: a catalog written under the pre-bump shape must
+        # regenerate. The pair-swap revision mislabeled the EnMaaS entries
+        # while the shape inputs (ids, reviewer, shim) stayed identical, so a
+        # build cached in that window would have survived the revert
+        # (2026-11-14 CodeRabbit review).
+        cached = tmp / 'state' / 'codex-enmaas' / 'models.json'
+        assert cached.exists(), cached
+        cached.write_text(json.dumps({'models': [{'slug': GLM, 'display_name': 'DeepSeek V4.1 Flash',
+                                                  'input_modalities': ['text', 'image']}]}))
+        (cached.parent / 'models.json.version').write_text(f'codex-cli 0.0.0-test|shape1|{GLM}|{DS}|{DS}|0')
+        launch('exec', *t3_args, '-m', GLM, 'a prompt')
+        regenerated = {m['slug']: m for m in json.loads(cached.read_text())['models']}
+        assert regenerated[GLM]['input_modalities'] == ['text'], 'a catalog cached under the pre-bump shape survived'
+        print('PASS: a catalog cached under the pre-bump shape regenerates')
+
         # --config=/-c= spellings and a bare invocation (no subcommand) are handled too.
         cap2 = launch('exec', '--config=model_providers.enmaas.base_url="https://elsewhere.example/v1"',
                       '--config', 'model_provider="other"', 'prompt')

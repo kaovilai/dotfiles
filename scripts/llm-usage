@@ -113,6 +113,9 @@ def strip_model(model):
     elif "deepseek" in m:
         # rits/deepseek-ai/DeepSeek-V4.1-Flash-1017 -> deepseek-v4.1-flash
         m = re.sub(r"-\d{4,}$", "", m.split("/")[-1])
+    elif "muse" in m:
+        # rits/meta-models/Muse-Spark-Open-816B-A42B-NVFP4 -> muse-spark-open-816b-a42b-nvfp4
+        m = re.sub(r"-\d{4,}$", "", m.split("/")[-1])
     else:
         for prefix in ("anthropic/", "vertex_ai/", "openai/", "bedrock/", "github_copilot/", "copilot/"):
             if m.startswith(prefix):
@@ -138,6 +141,9 @@ def family(model):
         return "glm"
     if "deepseek" in m:
         return "deepseek"
+    if "muse" in m:
+        # the hosted-only fallback slot since 2026-11-14 (Muse Spark Open)
+        return "muse"
     if "luna" in m:
         return "luna"
     if m.startswith(("gpt", "o1", "o3", "o4")):
@@ -2627,11 +2633,38 @@ def quota_spans(quota, now, window=MB_HOUR):
 
 
 CLAUDE_FAMILIES = ("opus", "sonnet", "haiku", "fable")
+# The hosted-only pair's slots: the routers move a request between these only to
+# serve one the requested slot cannot (images), never across vendors otherwise.
+HOSTED_SLOT_FAMILIES = ("glm", "deepseek", "muse")
+# Proxies whose pair was swapped on 2026-11-14: glm-5-3 rides the primary slot
+# there as an ALIAS id. EnMaaS still serves glm-5-3 first-class, so the same
+# requested/served families mean different things per route.
+SWAPPED_PAIR_ROUTES = ("hosted-only", "codex-hosted-only")
+# When the swap landed: the pair-swap commit's own timestamp (2026-11-14
+# 12:13:40 +0700), not midnight — the swap code exists from that instant on, so
+# a midnight anchor would claim the whole morning's old-pair vision reroutes as
+# aliases. Events logged before it ran the old pair (glm primary, deepseek
+# fallback), so their glm->deepseek move was the vision reroute; the alias
+# meaning on those ports starts here. A machine whose proxy restarts later (the
+# deferred idle restart, or the merge itself) logs that gap as alias: the pair a
+# proxy actually served is not in the event, and the window is bounded and
+# self-healing, so the cutoff errs toward the common case.
+PAIR_SWAP_T = datetime(2026, 11, 14, 5, 13, 40, tzinfo=timezone.utc).timestamp()
+def paired_route(ev):
+    """True when the event's port was running the swapped pair when it was logged."""
+    if PROXIES.get(str(ev.get("port")), (None, None))[0] not in SWAPPED_PAIR_ROUTES:
+        return False
+    return (ev.get("t") or 0) >= PAIR_SWAP_T
 def reroute_kind(ev):
     """None for a direct call, else why the served model differs from the requested one.
 
-    alias     a Claude name (sonnet, T3's claude-sonnet-5-5, the classifier tier) served by GLM/DeepSeek
-    vision    glm requested, deepseek served (image input fallback)
+    alias     a Claude name (sonnet, T3's claude-sonnet-5-5, the classifier tier) served by a hosted slot,
+              or glm->deepseek logged on a swapped-pair proxy after the 2026-11-14 swap
+              (glm-5-3 is an alias id there from that instant on)
+    vision    one hosted slot requested, the other served (image-input fallback;
+              the pair is slot-based, so glm/deepseek/muse in either direction —
+              on EnMaaS glm is still first-class, and pre-swap events on the
+              hosted-only ports ran the old pair, so both stay vision reroutes)
     fallback  the router retried on another deployment after a failed first attempt;
               with a fallback_reason on the event (proxies that classify the primary
               failure), the reason rides along: fallback:outage-500, fallback:rate-limit
@@ -2643,10 +2676,19 @@ def reroute_kind(ev):
         return f"fallback:{reason}" if reason else "fallback"
     if not req or family(req) == family(srv):
         return None
-    if family(req) == "glm" and family(srv) == "deepseek":
-        return "vision"
-    if family(req) in CLAUDE_FAMILIES and family(srv) in ("glm", "deepseek"):
+    req_f, srv_f = family(req), family(srv)
+    if req_f in CLAUDE_FAMILIES and srv_f in HOSTED_SLOT_FAMILIES:
         return "alias"
+    if req_f == "glm" and srv_f == "deepseek" and paired_route(ev):
+        # after the swap glm-5-3 is an ALIAS of the primary slot on these ports,
+        # so serving it there is an alias resolution. Everything else stays a
+        # reroute: EnMaaS keeps glm first-class, and a pre-swap event on these
+        # ports ran the old pair (glm primary -> deepseek fallback = vision)
+        return "alias"
+    if req_f in HOSTED_SLOT_FAMILIES and srv_f in HOSTED_SLOT_FAMILIES:
+        # image-input fallback between the pair's slots (deepseek -> muse, and
+        # the retired id -> muse once its alias resolution carries an image)
+        return "vision"
     return "other"
 
 
@@ -2737,6 +2779,7 @@ MODEL_VENDORS = [
     ("openai", "GPT", r"gpt|luna|codex|openai|^o[134](-|$)"),
     ("glm", "GLM", r"glm|zai"),
     ("deepseek", "DeepSeek", r"deepseek"),
+    ("muse", "Muse", r"muse"),  # Muse Spark Open: no upstream logo asset yet; own key, never "other" (= model_vendor's unmatched fallback)
     ("gemini", "Gemini", r"gemini"),
     ("qwen", "Qwen", r"qwen"),  # the MLX flavor's local Qwen3-Coder models
 ]
@@ -3591,6 +3634,7 @@ SLOTS = 8 # categorical colors in the dataviz palette; beyond that models fold i
 BRANDS = {
     "claude": ("claude", "anthropic"),
     "deepseek": ("deepseek",),
+    "muse": ("muse", "spark", "meta-models"),  # Muse Spark Open, the hosted fallback slot
     "glm": ("glm", "zai", "zhipu"),
     "gpt": ("gpt", "openai", "o1", "o3", "o4"),
     "qwen": ("qwen",),  # the MLX flavor's local Qwen3-Coder models
@@ -3701,7 +3745,7 @@ def dashboard_data(since_text, source, hide, host=None):
         s["ttft"] = [pct(ttft_s.get((m, i), []), 50) for i in range(count)]
     # Fixed brand order keeps the color sequence that validate_palette.js
     # checked (adjacent CVD/normal-vision separation); volume ranks inside it.
-    brand_rank = {"claude": 0, "glm": 1, "deepseek": 2, "gpt": 3}
+    brand_rank = {"claude": 0, "glm": 1, "deepseek": 2, "gpt": 3, "muse": 4}
     order = sorted(series, key=lambda m: (m == "Other", brand_rank.get(model_brand(m), 9), -sum(series[m]["req"])))
 
     ctx_hist = {m: [0] * len(CTX_BINS) for m in order}
