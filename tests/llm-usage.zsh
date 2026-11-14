@@ -473,6 +473,14 @@ assert d["reroutes_kinds_15m"] == {"alias": 3}, d["reroutes_kinds_15m"]
 d = run("reroute-vision", [ev(60, served=DS), ev(30)])
 assert [(r["from"], r["to"], r["kind"], r["count"]) for r in d["reroutes"]] == [("glm-5.3", "deepseek-v4.1-flash", "vision", 1)], d["reroutes"]
 assert d["reroutes_kinds_15m"] == {"vision": 1}, d["reroutes_kinds_15m"]
+# the pair is slot-based: after the 2026-11-14 swap the vision reroute is
+# primary->fallback (deepseek -> muse) and the retired GLM id rides the alias
+MUSE = "rits/meta-models/Muse-Spark-Open-816B-A42B-NVFP4"
+d = run("reroute-vision-swapped", [ev(60, requested=DS, served=MUSE), ev(30, requested=GLM, served=MUSE)])
+assert [(r["from"], r["to"], r["kind"]) for r in d["reroutes"]] == [
+    ("deepseek-v4.1-flash", "muse-spark-open-816b-a42b-nvfp4", "vision"),
+    ("glm-5.3", "muse-spark-open-816b-a42b-nvfp4", "vision")], d["reroutes"]
+assert d["reroutes_kinds_15m"] == {"vision": 2}, d["reroutes_kinds_15m"]
 d = run("reroute-fallback", [ev(60, fallback=True), ev(30, served=SON, requested=SON, fallback=True), ev(20)])
 assert {r["kind"] for r in d["reroutes"]} == {"fallback"} and sum(r["count"] for r in d["reroutes"]) == 2, d["reroutes"]
 # fallback_reason rides along as the redirect's reason (outage/500, rate-limit, ...)

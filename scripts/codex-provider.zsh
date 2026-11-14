@@ -208,8 +208,10 @@ unset ENMAAS_API_KEY OPENAI_API_KEY
 export HOSTED_ONLY_PROXY_TOKEN="$_hop_token"
 
 # hosted-only: catalog from the bundled one, keyed on Codex version + shape.
-# DeepSeek id: the shared lib's _hop_deepseek, else its knob/default.
-typeset ds="${_hop_deepseek:-${HOSTED_ONLY_DEEPSEEK_MODEL:-${GLM_HYBRID_DEEPSEEK_MODEL:-rits/deepseek-ai/DeepSeek-V4.1-Flash-1017}}}"
+# Fallback slot: the shared lib's _hop_deepseek, else its knob/default — the
+# last resort must match the lib's default (Muse Spark Open), not the pre-swap
+# one, or a taken chain would target an id the proxy no longer routes.
+typeset ds="${_hop_deepseek:-${HOSTED_ONLY_DEEPSEEK_MODEL:-${GLM_HYBRID_DEEPSEEK_MODEL:-rits/meta-models/Muse-Spark-Open-816B-A42B-NVFP4}}}"
 typeset reviewer="${HOSTED_ONLY_REVIEW_MODEL:-$ds}"
 typeset main="${HOSTED_ONLY_MODEL:-$_hop_glm}"
 # Both hosted models serve the same window on EnMaaS (vLLM max_model_len
