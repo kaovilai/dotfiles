@@ -184,6 +184,14 @@ _hosted_only_proxy_vars() {
     # notes; days a pruned copy is kept.
     typeset -g _hop_image_budget="$(_hosted_only_knob IMAGE_BUDGET_BYTES 2500000)"
     typeset -g _hop_image_cache_days="$(_hosted_only_knob IMAGE_CACHE_DAYS 1)"
+    # A pin can make the pair degenerate: the retired fallback default (DeepSeek
+    # V4.1 Flash) is now the primary default, so carrying that pin over as
+    # HOSTED_ONLY_DEEPSEEK_MODEL leaves both slots holding one id. The proxy
+    # then skips the outage fallback and the vision reroute (rewrite.go checks
+    # cfg.GLM != cfg.DeepSeek) with no other signal, so say it here.
+    if [[ "$_hop_glm" == "$_hop_deepseek" ]]; then
+        print -ru2 -- "hosted-only: GLM and DEEPSEEK slots both resolve to $_hop_glm — pair fallback and vision reroute are off (likely a pre-swap DEEPSEEK_MODEL pin); set HOSTED_ONLY_DEEPSEEK_MODEL to the fallback model."
+    fi
 }
 
 # A pin of a retired id (or a claude-* alias) is still a real request: the proxy

@@ -21,7 +21,11 @@
 # (DeepSeek V4.1 Flash), "deepseek" = FALLBACK + vision target (Muse Spark
 # Open). Short-name knob values follow the SLOTS, not the names: a
 # HOSTED_ONLY_*_MODEL=glm pin made before the swap now means DeepSeek Flash,
-# and =deepseek means Muse Spark — pin a full id when the model must not move.
+# and =deepseek means Muse Spark — pin a full id when the model must not move,
+# but keep the two slots distinct: a pre-swap pin of the old fallback default
+# (DEEPSEEK_MODEL=DeepSeek V4.1 Flash) now equals the primary, and a pair with
+# one id in both slots has no outage fallback and no vision target (the
+# launcher warns).
 # The proxy's hook cuts reasoning on requests without a thinking field (the
 # primary slot; Muse Spark reasons before every answer); without it the
 # per-tool-call classifier calls get slow enough to stall a turn. It also sends
