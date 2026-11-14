@@ -80,6 +80,12 @@ _hosted_only_proxy_vars claude
 [[ "$_hop_aliases" == "claude-sonnet-5-5,rits/zai-org/glm-5-3" ]] || fail "claude flavor alias default: $_hop_aliases"
 HOSTED_ONLY_ALIAS_MODELS=x,y _hosted_only_proxy_vars claude
 [[ "$_hop_aliases" == "x,y" ]] || fail "HOSTED_ONLY_ALIAS_MODELS not read: $_hop_aliases"
+_hosted_only_proxy_vars codex
+# A pre-swap pin (retired GLM id / claude-* alias) is routed by the primary slot,
+# so launchers map it onto the primary id the catalogs actually list
+[[ "$(_hop_slot_model rits/zai-org/glm-5-3)" == "$_hop_glm" ]] || fail "legacy pin not mapped to the primary slot: $(_hop_slot_model rits/zai-org/glm-5-3)"
+[[ "$(_hop_slot_model claude-sonnet-5-5)" == "$_hop_glm" ]] || fail "claude alias pin not mapped to the primary slot"
+[[ "$(_hop_slot_model "$_hop_deepseek")" == "$_hop_deepseek" ]] || fail "a slot id must pass through unchanged: $(_hop_slot_model "$_hop_deepseek")"
 HOSTED_ONLY_REQUEST_TIMEOUT=99 _hosted_only_proxy_vars claude
 [[ "$_hop_request_timeout" == 99 ]] || fail "HOSTED_ONLY_REQUEST_TIMEOUT not read: $_hop_request_timeout"
 _hosted_only_proxy_vars codex

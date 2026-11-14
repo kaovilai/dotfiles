@@ -186,6 +186,18 @@ _hosted_only_proxy_vars() {
     typeset -g _hop_image_cache_days="$(_hosted_only_knob IMAGE_CACHE_DAYS 1)"
 }
 
+# A pin of a retired id (or a claude-* alias) is still a real request: the proxy
+# serves aliases from the primary slot, so callers that need an id the upstream
+# catalog actually lists (Codex's generated catalog carries only the two slots)
+# map it onto the primary.
+_hop_slot_model() {
+    local want="$1" alias
+    for alias in ${(s:,:)_hop_aliases}; do
+        [[ -n "$alias" && "$want" == "$alias" ]] && { print -r -- "$_hop_glm"; return }
+    done
+    print -r -- "$want"
+}
+
 _hosted_only_proxy_config() {
     local enmaas="$(_hosted_only_knob ENMAAS_BASE_URL "${ENMAAS_API_BASE_URL:-https://api.enmaas.devshift.net}")"
     enmaas="${enmaas%/}"

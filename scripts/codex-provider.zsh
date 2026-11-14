@@ -213,8 +213,11 @@ export HOSTED_ONLY_PROXY_TOKEN="$_hop_token"
 # last resort must match the lib's default (Muse Spark Open), not the pre-swap
 # one, or a taken chain would target an id the proxy no longer routes.
 typeset ds="${_hop_deepseek:-${HOSTED_ONLY_DEEPSEEK_MODEL:-${GLM_HYBRID_DEEPSEEK_MODEL:-rits/meta-models/Muse-Spark-Open-816B-A42B-NVFP4}}}"
-typeset reviewer="${HOSTED_ONLY_REVIEW_MODEL:-$ds}"
-typeset main="${HOSTED_ONLY_MODEL:-$_hop_glm}"
+# A pin made before the pair swap names a retired id (or a claude-* alias) that
+# the proxy still routes from the primary slot; the generated catalog below only
+# carries the two slots, so map such pins onto the primary instead of failing.
+typeset reviewer="$(_hop_slot_model "${HOSTED_ONLY_REVIEW_MODEL:-$ds}")"
+typeset main="$(_hop_slot_model "${HOSTED_ONLY_MODEL:-$_hop_glm}")"
 # Both hosted models serve the same window on EnMaaS (vLLM max_model_len
 # 1048576; verified 2026-11-05: GLM took 300k and 900k prompts, 1.1M answered
 # 400 "maximum context length is 1048576 tokens").
