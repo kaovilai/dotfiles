@@ -252,6 +252,75 @@ func writeFingerprint(runtimeDir, fp, tokenFP string) {
 	_ = os.WriteFile(filepath.Join(runtimeDir, "fingerprint"), []byte(fp+" "+tokenFP+"\n"), 0o600)
 }
 
+// servedModelNames lists the model ids a route table serves, deduplicated on
+// the bare group (the "#openai" sibling is the same model on another wire) and
+// without the wildcard, which serves anything.
+func servedModelNames(configPath, flavor string) []string {
+	if configPath == "" {
+		return nil
+	}
+	table, err := loadRouteTable(configPath, dialectSuffixFor(flavor))
+	if err != nil {
+		return nil
+	}
+	seen := map[string]bool{}
+	var names []string
+	for _, name := range table.modelNames() {
+		base := name
+		if i := strings.IndexByte(base, '#'); i >= 0 {
+			base = base[:i]
+		}
+		if base == "" || base == "*" || seen[base] {
+			continue
+		}
+		seen[base] = true
+		names = append(names, base)
+	}
+	return names
+}
+
+func writeServedModels(runtimeDir string, names []string) {
+	if len(names) == 0 {
+		return
+	}
+	_ = os.WriteFile(filepath.Join(runtimeDir, "models"), []byte(strings.Join(names, "\n")+"\n"), 0o600)
+}
+
+// readServedModels returns the pair the RECORDED proxy serves (written by the
+// launch that started it), so a reused-busy launch can say which ids the stale
+// proxy will refuse.
+func readServedModels(runtimeDir string) map[string]bool {
+	data, err := os.ReadFile(filepath.Join(runtimeDir, "models"))
+	if err != nil {
+		return nil
+	}
+	served := map[string]bool{}
+	for _, line := range strings.Split(string(data), "\n") {
+		if line = strings.TrimSpace(line); line != "" {
+			served[line] = true
+		}
+	}
+	return served
+}
+
+// missingServedModels is the rollout gap the fingerprint cannot express: a
+// proxy left running under live sessions keeps serving the model pair it was
+// started with, so requests naming a NEW pair member are refused by the cost
+// guard until the restart the reuse path asks for.
+func missingServedModels(runtimeDir, configPath, flavor string) []string {
+	served := readServedModels(runtimeDir)
+	if len(served) == 0 {
+		return nil
+	}
+	var missing []string
+	for _, name := range servedModelNames(configPath, flavor) {
+		if !served[name] {
+			missing = append(missing, name)
+		}
+	}
+	return missing
+}
+
 // --- detached spawn ----------------------------------------------------------
 
 // spawnDetached starts argv in its own session with output appended to logPath,
@@ -415,6 +484,13 @@ func ensureOnce(o ensureOpts) (string, error) {
 			}
 			fmt.Fprintf(os.Stderr, "hosted-only: %s proxy config, hooks or key changed, but it is serving requests; reusing it (%s-hosted-only-restart applies the change now).\n",
 				o.flavor, o.flavor)
+			// A pair swap is the sharp edge of that reuse: the running proxy
+			// still refuses the new ids, so name them instead of leaving the
+			// caller to decode a 400 from the cost guard.
+			if missing := missingServedModels(o.runtimeDir, o.configPath, o.flavor); len(missing) > 0 {
+				fmt.Fprintf(os.Stderr, "hosted-only: the running proxy does not serve %s; a request naming one of those ids is refused (400) until the restart above runs.\n",
+					strings.Join(missing, ", "))
+			}
 			return "reused-busy", nil
 		}
 		// Zero-refuse restart (#612): start the new proxy ALONGSIDE the old
@@ -543,6 +619,10 @@ func startProxy(o ensureOpts, oldPids []int) (string, error) {
 	for {
 		if hasListenerOutside(o.port, oldPids) && healthOK(o.port, time.Second) {
 			writeFingerprint(o.runtimeDir, o.fingerprint, o.tokenFP)
+			// Remember the pair this launch serves: a later reused-busy
+			// launch cannot read it off a live proxy (the cost guard answers
+			// 400, which looks like a client error), so it is recorded here.
+			writeServedModels(o.runtimeDir, servedModelNames(routesPath, o.flavor))
 			return "restarted", nil
 		}
 		if !pidAlive(child.Process.Pid) {

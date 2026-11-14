@@ -15,19 +15,25 @@
 # the same ANTHROPIC_BASE_URL as the main model. Hosted-only access (e.g. over
 # the monthly EnMaaS budget) cannot reach Claude/GPT through EnMaaS, so all
 # models go through the local "claude" hosted-only Go proxy
-# (scripts/hosted-only-proxy.zsh, port 4148): GLM and DeepSeek -> anthropic/
-# Messages on the EnMaaS root (same as claude-enmaas).
-# The proxy's hook cuts reasoning on requests without a thinking field (GLM 5.3
-# is thinking-only: thinking disabled leaves ~one sentence of reasoning, not
-# none); without it the classifier times out on GLM. It also sends GLM requests
-# that contain an image (GLM 400s on any) to DeepSeek. Main model and the
-# opus/haiku/fable tiers stay on GLM.
+# (scripts/hosted-only-proxy.zsh, port 4148): both slots -> anthropic/
+# Messages on the EnMaaS root (same as claude-enmaas). The slots are named for
+# the models they used to hold (2026-11-14 pair swap): "glm" = PRIMARY
+# (DeepSeek V4.1 Flash), "deepseek" = FALLBACK + vision target (Muse Spark
+# Open). Short-name knob values follow the SLOTS, not the names: a
+# HOSTED_ONLY_*_MODEL=glm pin made before the swap now means DeepSeek Flash,
+# and =deepseek means Muse Spark — pin a full id when the model must not move.
+# The proxy's hook cuts reasoning on requests without a thinking field (the
+# primary slot; Muse Spark reasons before every answer); without it the
+# per-tool-call classifier calls get slow enough to stall a turn. It also sends
+# primary-slot requests that contain an image to the fallback slot (Muse Spark,
+# multimodal). Main model and the opus/haiku/fable tiers stay on the primary
+# slot.
 # Knobs: HOSTED_ONLY_CLASSIFIER_MODEL (sonnet tier = auto-mode classifier),
 # HOSTED_ONLY_SMALL_FAST_MODEL and HOSTED_ONLY_SUBAGENT_MODEL (subagents,
-# forced; workflow subagents too), all default DeepSeek: 2-4x faster than GLM,
-# thinking:disabled removes its reasoning entirely, and it takes images, which
-# subagents (screenshots, UI checks) may need
-# (docs/notes/deepseek-v41-flash-vs-glm.md). Values: glm, deepseek, or an id.
+# forced; workflow subagents too), all default the primary (DeepSeek V4.1
+# Flash): the fast model, while Muse Spark reasons before every answer — the
+# wrong latency profile for per-tool-call classification. Values: glm,
+# deepseek, or an id.
 # HOSTED_ONLY_CLIENT_MAX_RETRIES (default 3) sets CLAUDE_CODE_MAX_RETRIES (Claude
 # Code default 10) — bounds retries of real 5xx errors. Rate-limit and outage
 # answers arrive as 429 + retry-after: with CLAUDE_CODE_RETRY_WATCHDOG=1 (set
