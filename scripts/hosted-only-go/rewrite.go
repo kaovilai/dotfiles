@@ -300,6 +300,13 @@ func openDeferredTools(data map[string]any) bool {
 			changed = true // server-side tool this upstream cannot run
 			if name := asString(tool["name"]); name != "" {
 				removed[name] = true
+			} else {
+				// Declared type-only, the tool is addressed by a canonical
+				// name (stripWebSearchTools does the same for web_search).
+				// Record every spelling a forced choice could use.
+				for _, canonical := range []string{"tool_search", "tool_search_tool_regex", "tool_search_tool_bm25"} {
+					removed[canonical] = true
+				}
 			}
 			continue
 		}

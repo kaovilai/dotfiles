@@ -322,3 +322,28 @@ func TestOnlySearchToolDropsTheToolsKey(t *testing.T) {
 		t.Fatalf("the empty tool list must be dropped: %s", marshal(data["tools"]))
 	}
 }
+
+// A search tool declared type-only (no "name") is addressed by a canonical
+// name, so a forced choice naming it must still be freed — the same fallback
+// stripWebSearchTools applies to web_search (2026-11-14 review).
+func TestForcedChoiceOnANamelessSearchDeclarationIsFreed(t *testing.T) {
+	cfg := toolSearchConfig(t)
+	for _, choiceName := range []string{"tool_search", "tool_search_tool_regex", "tool_search_tool_bm25"} {
+		data := map[string]any{
+			"model":      cfg.GLM,
+			"max_tokens": 16,
+			"messages":   []any{map[string]any{"role": "user", "content": "hi"}},
+			"tools": []any{
+				map[string]any{"type": "tool_search_tool_regex_20251119"},
+				map[string]any{"name": "Bash", "input_schema": map[string]any{"type": "object"}},
+			},
+			"tool_choice": map[string]any{"type": "tool", "name": choiceName},
+		}
+		if _, reqErr, _ := rewriteRequest(cfg, "/v1/messages", data); reqErr != nil {
+			t.Fatalf("%s: unexpected refusal: %+v", choiceName, reqErr)
+		}
+		if _, ok := data["tool_choice"]; ok {
+			t.Fatalf("%s: a forced choice on the nameless search declaration must be freed", choiceName)
+		}
+	}
+}
