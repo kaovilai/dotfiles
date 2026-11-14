@@ -157,11 +157,14 @@ gateway name over DoH itself.
   upstream key never reaches the client.
 - **Request rewrites** for `rits/` models and GLM aliases: alias → GLM id,
   image-in-history → DeepSeek, grammar strip, hosted `web_search` removed plus
-  the in-band note, `thinking: disabled` on Messages requests that send none,
-  empty developer items dropped, **tool search opened inline** (`tool_search_tool_regex/bm25_*`
-  dropped and every `defer_loading` cleared, plus the `[tool-search-shim]`
-  note) with the `tool_reference` blocks it would have produced dropped,
-  `max_tokens` clamped to the window with the compaction 400.
+  the in-band note (every `rits/` id, so a new pair member needs no change here —
+  whatever `HOSTED_ONLY_SEARCH_SHIM` decides applies to all of them),
+  `thinking: disabled` on Messages requests that send none, empty developer
+  items dropped, **tool search opened inline**
+  (`tool_search_tool_regex/bm25_*` dropped and every `defer_loading` cleared,
+  plus the `[tool-search-shim]` note) with the `tool_reference` blocks it would
+  have produced dropped, `max_tokens` clamped to the window with the compaction
+  400.
 - **Cost guard:** the hosted-only flavors answer 400 for any model id they do
   not serve (LiteLLM's `model_list` restriction), instead of forwarding it with
   the real upstream key.
