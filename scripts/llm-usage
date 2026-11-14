@@ -2636,12 +2636,21 @@ CLAUDE_FAMILIES = ("opus", "sonnet", "haiku", "fable")
 # The hosted-only pair's slots: the routers move a request between these only to
 # serve one the requested slot cannot (images), never across vendors otherwise.
 HOSTED_SLOT_FAMILIES = ("glm", "deepseek", "muse")
+# Proxies whose pair was swapped on 2026-11-14: glm-5-3 rides the primary slot
+# there as an ALIAS id. EnMaaS still serves glm-5-3 first-class, so the same
+# requested/served families mean different things per route.
+SWAPPED_PAIR_ROUTES = ("hosted-only", "codex-hosted-only")
+def paired_route(ev):
+    """True when the event's port is a proxy running the swapped pair."""
+    return PROXIES.get(str(ev.get("port")), (None, None))[0] in SWAPPED_PAIR_ROUTES
 def reroute_kind(ev):
     """None for a direct call, else why the served model differs from the requested one.
 
-    alias     a Claude name (sonnet, T3's claude-sonnet-5-5, the classifier tier) served by a hosted slot
+    alias     a Claude name (sonnet, T3's claude-sonnet-5-5, the classifier tier) served by a hosted slot,
+              or glm->deepseek on a swapped-pair proxy (glm-5-3 is an alias id there)
     vision    one hosted slot requested, the other served (image-input fallback;
-              the pair is slot-based, so glm/deepseek/muse in either direction)
+              the pair is slot-based, so glm/deepseek/muse in either direction —
+              on EnMaaS glm is still first-class, so its glm->deepseek is a vision reroute)
     fallback  the router retried on another deployment after a failed first attempt;
               with a fallback_reason on the event (proxies that classify the primary
               failure), the reason rides along: fallback:outage-500, fallback:rate-limit
@@ -2656,9 +2665,10 @@ def reroute_kind(ev):
     req_f, srv_f = family(req), family(srv)
     if req_f in CLAUDE_FAMILIES and srv_f in HOSTED_SLOT_FAMILIES:
         return "alias"
-    if req_f == "glm" and srv_f == "deepseek":
-        # since the 2026-11-14 pair swap glm-5-3 is an ALIAS of the primary
-        # slot, so serving it there is an alias resolution, not a reroute
+    if req_f == "glm" and srv_f == "deepseek" and paired_route(ev):
+        # on the swapped pair glm-5-3 is an ALIAS of the primary slot, so serving
+        # it there is an alias resolution; EnMaaS keeps glm first-class, where
+        # the same move is that router's own image reroute
         return "alias"
     if req_f in HOSTED_SLOT_FAMILIES and srv_f in HOSTED_SLOT_FAMILIES:
         # image-input fallback between the pair's slots (deepseek -> muse, and

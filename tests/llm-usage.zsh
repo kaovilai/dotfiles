@@ -471,11 +471,17 @@ kinds = {(r["from"], r["to"], r["kind"]): r["count"] for r in d["reroutes"]}
 assert kinds == {("sonnet", "glm-5.3", "alias"): 2, ("sonnet", "deepseek-v4.1-flash", "alias"): 1}, kinds
 assert d["reroutes_15m"] == 3 and next(m for m in d["by_model"] if m["model"] == "glm-5.3")["reroutes"] == 2, d["by_model"]
 assert d["reroutes_kinds_15m"] == {"alias": 3}, d["reroutes_kinds_15m"]
-# glm-5-3 is an alias id since the pair swap: serving it on the primary slot is
+# glm-5-3 is an alias id on the swapped pair: serving it on the primary slot is
 # an alias resolution; the vision reroute is the pair's own slot-to-slot move
 d = run("reroute-alias-glm", [ev(60, served=DS), ev(30)])
 assert [(r["from"], r["to"], r["kind"], r["count"]) for r in d["reroutes"]] == [("glm-5.3", "deepseek-v4.1-flash", "alias", 1)], d["reroutes"]
 assert d["reroutes_kinds_15m"] == {"alias": 1}, d["reroutes_kinds_15m"]
+# ...but EnMaaS still serves glm-5-3 first-class, so the same move there is that
+# router's own image reroute, not an alias; the split is per-route (port -> name)
+d = run("reroute-glm-enmaas", [ev(60, port="4146", served=DS), ev(30, port="4147", served=DS)])
+assert {(r["from"], r["to"], r["kind"], r["count"]) for r in d["reroutes"]} == {
+    ("glm-5.3", "deepseek-v4.1-flash", "vision", 1),
+    ("glm-5.3", "deepseek-v4.1-flash", "alias", 1)}, d["reroutes"]
 # the pair is slot-based: after the 2026-11-14 swap the vision reroute is
 # primary->fallback (deepseek -> muse) and the retired GLM id rides the alias
 MUSE = "rits/meta-models/Muse-Spark-Open-816B-A42B-NVFP4"
