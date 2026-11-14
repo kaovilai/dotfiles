@@ -236,10 +236,12 @@ and `scripts/llm-usage`. Read `docs/notes/hosted-only-go-proxy.md` and
   **exported** `HOSTED_ONLY_*` knobs do reach the EnMaaS child (its controller forwards
   `CHILD_ENV_PREFIXES`), so exporting `HOSTED_ONLY_{GLM,DEEPSEEK}_MODEL` or
   `HOSTED_ONLY_ALIAS_MODELS` also changes that flavor's slots, aliases, vision reroute,
-  fallback pairing and output clamp. A non-exported shell assignment never reaches the
-  child, but the EnMaaS launcher still builds its route table from it
+  fallback pairing and output clamp. The **model/alias** knobs only reach the child when
+  exported: a non-exported assignment still lands in the EnMaaS route table
   (`_claude_enmaas_{glm,deepseek}_id`), so the advertised routes and the child's slots
-  can diverge; either way `ENMAAS_RESPONSES_ROUTES` follows the same env.
+  can diverge; either way `ENMAAS_RESPONSES_ROUTES` follows the same env. Knobs on the
+  launchers' shared list (`SEARCH_NUDGE`, image, timeout, …) are re-exported by both, so
+  a non-exported value there does reach the child.
 - A new model also needs its rollup entries in `scripts/llm-usage` (`strip_model`,
   `family`, `reroute_kind`'s slot set, `BRANDS`, `MODEL_VENDORS`). Traffic still shows
   without them, but lumped under "Other" or its raw id: no brand color, no logo, and
@@ -250,15 +252,19 @@ and `scripts/llm-usage`. Read `docs/notes/hosted-only-go-proxy.md` and
 - `HOSTED_ONLY_SEARCH_SHIM=1` ⇒ the proxy rewrites the hosted `web_search` tool into a
   `{query}` function tool and serves it from Parallel, with per-(model, gateway)
   verdicts. An unknown/declined verdict falls back to the strip — which is the
-  `SEARCH_NUDGE`-gated strip below, so `SEARCH_SHIM=1` with `SEARCH_NUDGE=0` leaves an
-  unprobed `rits/` id holding the tool with neither behavior. Off/unset ⇒ every `rits/`
+  `SEARCH_NUDGE`-gated strip below, so `SEARCH_SHIM=1` with `SEARCH_NUDGE=0` leaves a
+  `rits/` model whose verdict is unknown (probe failed or declined) holding the tool
+  with neither behavior. Off/unset ⇒ every `rits/`
   model gets the tool stripped plus the "no web search — route it through the Parallel
   MCP tools" note.
   The strip and its note are gated on `SEARCH_NUDGE` (`rewrite.go`): with
   `HOSTED_ONLY_SEARCH_NUDGE=0` and the shim off, a `rits/` model keeps the hosted tool
   and gets no note. The shim half is gated separately — `SEARCH_SHIM` plus the
   per-model verdict (`searchshim.go`), so it still serves with `SEARCH_NUDGE=0`, and a
-  `native` verdict passes the tool through instead of rewriting it.
+  `native` verdict passes the tool through instead of rewriting it. The verdict is
+  looked up for the *requested* model before the vision reroute, so a primary's
+  `native` verdict also covers a request later rerouted to the fallback slot, even when
+  that slot alone would report `ignored`.
 - The decision is per `rits/` id, never per slot: a new pair member, the retired alias
   and the `claude-*` aliases all get the same treatment, pinned by
   `scripts/hosted-only-go/searchparity_test.go`. Never ship a served model with neither
