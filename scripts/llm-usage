@@ -2642,7 +2642,10 @@ HOSTED_SLOT_FAMILIES = ("glm", "deepseek", "muse")
 SWAPPED_PAIR_ROUTES = ("hosted-only", "codex-hosted-only")
 # When the swap landed. Events logged before it ran the old pair (glm primary,
 # deepseek fallback), so their glm->deepseek move was the vision reroute; the
-# alias meaning on those ports starts at this instant.
+# alias meaning on those ports starts at this instant. A machine whose proxy
+# restarts later (the deferred idle restart) logs that gap as alias: the pair a
+# proxy actually served is not in the event, and the window is minutes long and
+# self-healing, so the cutoff errs toward the common case.
 PAIR_SWAP_T = datetime(2026, 11, 14, tzinfo=timezone.utc).timestamp()
 def paired_route(ev):
     """True when the event's port was running the swapped pair when it was logged."""

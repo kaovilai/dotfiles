@@ -98,9 +98,9 @@ zsh loop that spawns lsof/jq twice a second):
 Ports are load-bearing even with one binary:
 
 - **Policy boundary.** :4146 serves the whole discovered EnMaaS catalog; the
-  hosted-only proxy serves only the merged groups in its own config (GLM,
-  DeepSeek, the Claude alias — no wildcard). That allowlist is the hosted-only
-  cost guard.
+  hosted-only proxy serves only the merged groups in its own config (the two
+  slots plus the Claude and legacy-GLM aliases — no wildcard). That allowlist
+  is the hosted-only cost guard.
 - **Client configuration.** Each launcher points Claude Code at
   `ANTHROPIC_BASE_URL` and Codex at its provider `base_url`; the port *is* the
   mode selector. The two hosted-only clients already share :4148 (main's #599

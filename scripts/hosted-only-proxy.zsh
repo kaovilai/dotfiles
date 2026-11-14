@@ -29,9 +29,10 @@
 # launchers still run LiteLLM for their own flavors). It does what the old
 # Python hooks did inside the proxy: strips the grammar vLLM rejects from
 # Codex's apply_patch, cuts default reasoning on Messages requests that send
-# no thinking field, reroutes GLM image requests to DeepSeek, image budget
-# pruning with a disk cache, the 429/quota/outage rewrites T3 Code auto-resumes
-# on, model fallback, and the per-request JSONL for `llm-usage`.
+# no thinking field, reroutes image-carrying primary requests to the vision
+# slot, image budget pruning with a disk cache, the 429/quota/outage rewrites
+# T3 Code auto-resumes on, model fallback, and the per-request JSONL for
+# `llm-usage`.
 #
 # Upstream key: ENMAAS_API_KEY (caller loads it, e.g. from ~/secrets.zsh); only
 # the proxy gets it, clients get the local token
@@ -39,9 +40,10 @@
 #
 # Knobs (every one also reads its retired GLM_HYBRID_* name as a fallback, so
 # old shells keep working): HOSTED_ONLY_{CODEX,CLAUDE}_PROXY_PORT,
-# HOSTED_ONLY_PROXY_TOKEN, HOSTED_ONLY_GLM_MODEL (route id of GLM; old name
-# GLM_HYBRID_MODEL), HOSTED_ONLY_DEEPSEEK_MODEL (default
-# rits/deepseek-ai/DeepSeek-V4.1-Flash-1017), HOSTED_ONLY_ENMAAS_BASE_URL
+# HOSTED_ONLY_PROXY_TOKEN, HOSTED_ONLY_GLM_MODEL (primary slot; old name
+# GLM_HYBRID_MODEL), HOSTED_ONLY_DEEPSEEK_MODEL (fallback + vision slot) —
+# the short names follow the slots, not the vendors, and both ids default per
+# flavor in scripts/hosted-only-go/config.go; HOSTED_ONLY_ENMAAS_BASE_URL
 # (gateway root; default $ENMAAS_API_BASE_URL). HOSTED_ONLY_MODEL (main model
 # pick), HOSTED_ONLY_REVIEW_MODEL, HOSTED_ONLY_CLASSIFIER_MODEL,
 # HOSTED_ONLY_SMALL_FAST_MODEL are read by the launchers, not here. The full
@@ -49,8 +51,9 @@
 # _hosted_only_go_env below.
 #
 # History: a "GLM hybrid" mode once added an OpenAI reviewer (gpt-6-luna) to
-# this proxy. DeepSeek V4.1 Flash now covers reviewer, classifier and vision
-# inside hosted-only, so that mode is retired; its old names are aliases. The
+# this proxy. DeepSeek V4.1 Flash (primary slot) covers reviewer and classifier
+# and Muse Spark Open (fallback slot) covers vision inside hosted-only, so that
+# mode is retired; its old names are aliases. The
 # LiteLLM impl (HOSTED_ONLY_PROXY_IMPL=litellm / LLM_PROXY_IMPL=litellm) was
 # the escape hatch before the Go proxy reached parity; both knobs now error.
 #
