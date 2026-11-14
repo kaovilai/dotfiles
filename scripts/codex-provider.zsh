@@ -127,7 +127,11 @@ if [[ "$backend" == enmaas ]]; then
     typeset catalog="$catalog_dir/models.json" version shape
     mkdir -p "$catalog_dir" && chmod 700 "$catalog_dir" || exit 1
     version=$("$native" --version 2>/dev/null) || version=unknown
-    shape="$version|shape1|$glm_id|$ds_id|$review|$shim"
+    # shape2 (2026-11-14): the shape must change when entry CONTENT changes,
+    # not just the ids — a catalog generated between the pair-swap revision
+    # that mislabeled the EnMaaS entries and its revert carried the same
+    # shape1 inputs, so it would never have regenerated.
+    shape="$version|shape2|$glm_id|$ds_id|$review|$shim"
     if [[ ! -s "$catalog" || "$(<"$catalog.version" 2>/dev/null)" != "$shape" ]]; then
         "$native" debug models --bundled 2>/dev/null | jq --arg glm "$glm_id" --arg ds "$ds_id" --arg review "$review" \
             --argjson shim "$shim" '
