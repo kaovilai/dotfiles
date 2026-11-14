@@ -152,6 +152,9 @@ class H(BaseHTTPRequestHandler):
             "model": body.get("model"), "path": self.path,
             "additional_tools": any(isinstance(i, dict) and i.get("type") == "additional_tools"
                                     for i in (body.get("input") or [])),
+            "tool_search": any(isinstance(i, dict) and str(i.get("type") or "").startswith("tool_search_tool_")
+                               for i in (body.get("tools") or [])),
+            "deferred": sum(1 for i in (body.get("tools") or []) if isinstance(i, dict) and "defer_loading" in i),
             "tools": len(body.get("tools") or []),
             "content": [{"type": "text", "text": "ok"}],
             "usage": {"input_tokens": 7, "output_tokens": 3},
@@ -288,6 +291,7 @@ cat >| "$ecfg" <<JSON
 {"model_list":[
  {"model_name":"*","litellm_params":{"model":"openai/*","api_base":"http://127.0.0.1:$stub_port/v1"}},
  {"model_name":"claude-x","litellm_params":{"model":"anthropic/claude-x","api_base":"http://127.0.0.1:$stub_port"}},
+ {"model_name":"rits/anthropic-test","litellm_params":{"model":"anthropic/rits/anthropic-test","api_base":"http://127.0.0.1:$stub_port"}},
  {"model_name":"gpt-6","litellm_params":{"model":"openai/responses/gpt-6","api_base":"http://127.0.0.1:$stub_port/v1"}},
  {"model_name":"gpt-6#responses","litellm_params":{"model":"openai/gpt-6","api_base":"http://127.0.0.1:$stub_port/v1"}}
 ],"general_settings":{"master_key":"sk-enmaas-test"}}
@@ -322,6 +326,14 @@ out=$(curl -s -X POST "$eurl/v1/chat/completions" -H 'content-type: application/
 out=$(curl -s -X POST "$eurl/v1/chat/completions" -H 'content-type: application/json' -H 'authorization: Bearer sk-enmaas-test' \
     -d '{"model":"rits/zai-org/glm-5-3","max_tokens":8,"messages":[{"role":"user","content":"hi"}],"input":[{"type":"additional_tools","tools":[{"type":"function","name":"f"}]}]}')
 [[ "$out" == *'"additional_tools": false'* && "$out" == *'"tools": 1'* ]] || fail "additional_tools not flattened: $out"
+
+# Tool search (Claude Code's ToolSearch) is opened inline for rits/ models: the
+# upstream cannot run the search server tool and rejects tool_reference blocks,
+# so the search tool is dropped and every defer_loading cleared — the deferred
+# definition reaches the model directly instead of a stripped placeholder.
+out=$(curl -s -X POST "$eurl/v1/messages" -H 'content-type: application/json' -H 'x-api-key: sk-enmaas-test' \
+    -d '{"model":"rits/anthropic-test","max_tokens":8,"messages":[{"role":"user","content":"hi"}],"tools":[{"type":"tool_search_tool_regex_20251119","name":"tool_search_tool_regex"},{"name":"Bash","input_schema":{"type":"object"}},{"name":"mcp__x__y","defer_loading":true,"input_schema":{"type":"object"}}]}')
+[[ "$out" == *'"tool_search": false'* && "$out" == *'"deferred": 0'* && "$out" == *'"tools": 2'* ]] || fail "tool search not opened inline: $out"
 
 # Graceful drain: SIGTERM stops accepting but lets an in-flight request finish
 # (Close alone cut active streams mid-answer — a forced swap can retire a

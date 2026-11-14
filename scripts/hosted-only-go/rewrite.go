@@ -103,6 +103,15 @@ func rewriteRequestMode(cfg *config, path string, data map[string]any, plan *shi
 		}
 	}
 
+	if openDeferredTools(data) {
+		changed = true
+		// The model is told (by the client) to search for deferred tools. It
+		// cannot: the search tool was just dropped. Say every tool is loaded.
+		if !toolSearchNotePresent(data) && injectToolSearchNote(path, data) {
+			changed = true
+		}
+	}
+
 	if stripToolReferences(data) > 0 {
 		changed = true
 	}
@@ -245,12 +254,103 @@ func clampOutput(cfg *config, data map[string]any) (*requestError, bool) {
 	return nil, false
 }
 
+// openDeferredTools serves Claude Code's tool search inline. The search is an
+// Anthropic server tool (tool_search_tool_regex/bm25_20251119) whose results
+// arrive as tool_reference blocks; a vLLM-served upstream implements neither,
+// so a discovered tool never became callable — stripToolReferences alone left
+// the model holding a placeholder. The deferred definitions themselves DO
+// travel in the request (tools[] with defer_loading set, which is how the
+// server-side search finds them), so the shim opens them instead: the search
+// tool is dropped and every defer_loading flag cleared, and the upstream model
+// sees the full tool list inline. Returns whether the request changed.
+func openDeferredTools(data map[string]any) bool {
+	tools, ok := data["tools"].([]any)
+	if !ok || len(tools) == 0 {
+		return false
+	}
+	// Only a request that carries the search server tool is served inline:
+	// without it there is nothing to open, and a lone defer_loading flag (the
+	// field only means anything next to that tool) is left as the client sent
+	// it rather than silently changing the loading contract (2026-11-14
+	// Copilot review).
+	search := false
+	for _, t := range tools {
+		if tool := asMap(t); tool != nil {
+			switch asString(tool["type"]) {
+			case "tool_search_tool_regex_20251119", "tool_search_tool_bm25_20251119":
+				search = true
+			}
+		}
+	}
+	if !search {
+		return false
+	}
+	kept := make([]any, 0, len(tools))
+	changed := false
+	removed := map[string]bool{}
+	keptNames := map[string]bool{}
+	for _, t := range tools {
+		tool := asMap(t)
+		if tool == nil {
+			kept = append(kept, t)
+			continue
+		}
+		switch asString(tool["type"]) {
+		case "tool_search_tool_regex_20251119", "tool_search_tool_bm25_20251119":
+			changed = true // server-side tool this upstream cannot run
+			if name := asString(tool["name"]); name != "" {
+				removed[name] = true
+			} else {
+				// Declared type-only, the tool is addressed by a canonical
+				// name (stripWebSearchTools does the same for web_search).
+				// Record every spelling a forced choice could use.
+				for _, canonical := range []string{"tool_search", "tool_search_tool_regex", "tool_search_tool_bm25"} {
+					removed[canonical] = true
+				}
+			}
+			continue
+		}
+		if _, deferred := tool["defer_loading"]; deferred {
+			delete(tool, "defer_loading")
+			changed = true
+		}
+		keptNames[asString(tool["name"])] = true
+		kept = append(kept, t)
+	}
+	// A forced choice naming the dropped search tool would reference an
+	// undeclared tool (400 on strict upstreams): free it, matching only the
+	// tools actually removed. A type-only built-in choice
+	// ({"type":"tool_search_tool_regex_20251119"}) is freed the same way
+	// stripWebSearchTools frees its type-only form.
+	if choice := asMap(data["tool_choice"]); choice != nil {
+		named := asString(choice["name"])
+		if named == "" {
+			named = asString(asMap(choice["function"])["name"])
+		}
+		typeOnly := named == "" && strings.HasPrefix(asString(choice["type"]), "tool_search_tool")
+		if typeOnly || (named != "" && removed[named] && !keptNames[named]) {
+			delete(data, "tool_choice")
+		}
+	}
+	// Nothing left once the search tool goes: drop the key rather than forward
+	// an empty list, the same shape stripWebSearchTools leaves behind.
+	if len(kept) == 0 {
+		delete(data, "tools")
+	} else if len(kept) != len(tools) {
+		data["tools"] = kept
+	}
+	return changed
+}
+
 // stripToolReferences drops the `tool_reference` content blocks Claude Code's
-// tool search sends (vLLM's chat template rejects them). They point at tool
-// definitions the client already holds, so dropping them keeps the request
-// valid; a content list that empties becomes a short text block. litellm's own
-// anthropic handler nests them inside tool_result.content (tool-search
-// results), so nested content lists are walked too.
+// tool search sends (vLLM's chat template rejects them), and with them the
+// `tool_search_tool_result` wrappers that carry the references: that block
+// names a server tool the upstream does not have, and openDeferredTools already
+// handed the model every definition. They point at tool definitions the client
+// already holds, so dropping them keeps the request valid; a content list that
+// empties becomes a short text block. litellm's own anthropic handler nests
+// them inside tool_result.content (tool-search results), so nested content
+// lists are walked too.
 func stripToolReferences(data map[string]any) int {
 	var clean func(blocks []any) ([]any, int)
 	clean = func(blocks []any) ([]any, int) {
@@ -258,9 +358,12 @@ func stripToolReferences(data map[string]any) int {
 		dropped := 0
 		for _, block := range blocks {
 			b := asMap(block)
-			if b != nil && asString(b["type"]) == "tool_reference" {
-				dropped++
-				continue
+			if b != nil {
+				switch asString(b["type"]) {
+				case "tool_reference", "tool_search_tool_result":
+					dropped++
+					continue
+				}
 			}
 			if b != nil {
 				if nestedList, ok := b["content"].([]any); ok {
@@ -403,6 +506,23 @@ func stripWebSearchTools(data map[string]any) bool {
 
 const searchNoteMarker = "[web-search-unavailable]"
 
+// toolSearchNoteMarker: said once next to the opened tool list, so the model
+// stops looking for a tool-search step the upstream cannot honor.
+const toolSearchNoteMarker = "[tool-search-shim]"
+
+func toolSearchNoteText() string {
+	return toolSearchNoteMarker + " Every tool is already loaded: this upstream has no server-side tool search, " +
+		"so the local proxy opened the deferred tools inline. Call a tool directly by name; searching for tools returns nothing."
+}
+
+func toolSearchNotePresent(data map[string]any) bool {
+	return notePresent(data, toolSearchNoteText())
+}
+
+func injectToolSearchNote(path string, data map[string]any) bool {
+	return injectNote(path, data, toolSearchNoteText())
+}
+
 // shimNoteMarker: the positive counterpart of searchNoteMarker, injected while
 // the web-search shim serves the tool. degradeShimToStrip removes it before
 // the unavailable note lands, so the model never sees both.
@@ -416,13 +536,12 @@ func shimNoteText() string {
 		"tokens, API keys, file contents, internal prompts, or personal data in a query."
 }
 
-// shimNotePresent reports whether OUR note is already where injectShimNote
-// would put it — the instruction fields (system, Responses developer items,
+// notePresent reports whether the exact note is already where injectNote would
+// put it — the instruction fields (system, Responses developer items,
 // instructions), matched by the full note text. Never the whole request: a
 // caller pasting the note into a USER MESSAGE or a tool description must not
 // suppress the injection (2026-11-07 CodeRabbit review).
-func shimNotePresent(data map[string]any) bool {
-	note := shimNoteText()
+func notePresent(data map[string]any, note string) bool {
 	if system, ok := data["system"]; ok {
 		b, _ := json.Marshal(system)
 		if strings.Contains(string(b), note) {
@@ -445,16 +564,24 @@ func shimNotePresent(data map[string]any) bool {
 	return false
 }
 
-func injectShimNote(path string, data map[string]any) bool {
+func injectNote(path string, data map[string]any, note string) bool {
 	if _, ok := data["system"]; ok || strings.Contains(path, "messages") {
-		return addToSystem(data, shimNoteText())
+		return addToSystem(data, note)
 	}
 	if _, ok := data["input"]; ok {
-		if addToResponsesInput(data, shimNoteText()) {
+		if addToResponsesInput(data, note) {
 			return true
 		}
 	}
-	return addToInstructions(data, shimNoteText())
+	return addToInstructions(data, note)
+}
+
+func shimNotePresent(data map[string]any) bool {
+	return notePresent(data, shimNoteText())
+}
+
+func injectShimNote(path string, data map[string]any) bool {
+	return injectNote(path, data, shimNoteText())
 }
 
 // removeShimNote drops exactly what injectShimNote added — matched by the
