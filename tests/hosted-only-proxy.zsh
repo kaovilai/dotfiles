@@ -88,6 +88,9 @@ alias_pin=$(HOSTED_ONLY_ALIAS_MODELS=claude-sonnet-5-5 _hosted_only_proxy_vars c
 [[ "$alias_pin" == *"without rits/zai-org/glm-5-3"* ]] || fail "alias pin warning missing: $alias_pin"
 default_alias=$(_hosted_only_proxy_vars claude 2>&1 >/dev/null)
 [[ "$default_alias" != *"without rits/zai-org/glm-5-3"* ]] || fail "the default alias list must not warn: $default_alias"
+# a SLOT pinned to that id serves it without the alias row, so no warning there
+slot_pinned=$(HOSTED_ONLY_GLM_MODEL=rits/zai-org/glm-5-3 HOSTED_ONLY_ALIAS_MODELS=claude-sonnet-5-5 _hosted_only_proxy_vars codex 2>&1 >/dev/null)
+[[ "$slot_pinned" != *"without rits/zai-org/glm-5-3"* ]] || fail "a slot pin of the retired id must not warn: $slot_pinned"
 _hosted_only_proxy_vars claude   # the probes ran in subshells: restore the globals
 # A pre-swap DEEPSEEK_MODEL pin of the old fallback default now equals the
 # primary; a degenerate pair kills the outage fallback and vision reroute, so

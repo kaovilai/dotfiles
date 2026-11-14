@@ -190,13 +190,15 @@ _hosted_only_proxy_vars() {
     # then skips the outage fallback and the vision reroute (rewrite.go checks
     # cfg.GLM != cfg.DeepSeek) with no other signal, so say it here.
     if [[ "$_hop_glm" == "$_hop_deepseek" ]]; then
-        print -ru2 -- "hosted-only: GLM and DEEPSEEK slots both resolve to $_hop_glm — pair fallback and vision reroute are off (likely a pre-swap DEEPSEEK_MODEL pin); set HOSTED_ONLY_DEEPSEEK_MODEL to the fallback model."
+        print -ru2 -- "hosted-only: GLM and DEEPSEEK slots both resolve to $_hop_glm — pair fallback and vision reroute are off (likely a pre-swap DEEPSEEK_MODEL pin); set HOSTED_ONLY_DEEPSEEK_MODEL to the fallback model (the EnMaaS flavor reads the same knob: scope it per launch if that side keeps its own id)."
     fi
     # A long-lived shell can still export the pre-swap alias list (claude-* only).
     # The knob wins over today's default and silently drops the retired GLM id,
     # whose alias row exists only so stored sessions keep working — they would
-    # get the cost guard's 400 on continue.
-    if [[ -n "${HOSTED_ONLY_ALIAS_MODELS-}${GLM_HYBRID_ALIAS_MODELS-}" && "$_hop_aliases" != *rits/zai-org/glm-5-3* ]]; then
+    # get the cost guard's 400 on continue. Pinning that id as a SLOT serves it
+    # anyway, so the warning would be wrong there.
+    if [[ -n "${HOSTED_ONLY_ALIAS_MODELS-}${GLM_HYBRID_ALIAS_MODELS-}" && "$_hop_aliases" != *rits/zai-org/glm-5-3* \
+          && "$_hop_glm" != "rits/zai-org/glm-5-3" && "$_hop_deepseek" != "rits/zai-org/glm-5-3" ]]; then
         print -ru2 -- "hosted-only: ALIAS_MODELS is set without rits/zai-org/glm-5-3 — sessions that stored the retired GLM id will get 400 on continue; add it to the list."
     fi
 }
