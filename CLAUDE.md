@@ -205,3 +205,71 @@ When adding features that require new tools, update the `Brewfile` with the nece
 - **`scripts/llm-usage-menubar/main.swift`**: fixed by fleet-sync now — every pass runs `llm-usage menubar reload` (rebuild when stale + restart the running helper; no-op on a Mac that never built it). Only do it by hand when you want the new code before the next fleet-sync pass: `llm-usage menubar reload`.
 - **Peer-side fleet subcommands** (`export`, `watch-inflight`): the aggregator runs them from the peer's checkout, so a not-yet-synced peer fails its pull/stream until its next fleet-sync — expected and self-healing; do not chase it as a bug.
 - **`scripts/litellm_usage_log.py` / proxy callbacks**: running proxies keep old code until `llm-proxy-restart` (or the idle-restart in `llm-proxy-sync`) on each machine.
+
+## Hosted-only / EnMaaS models and search
+
+Requirements for `scripts/hosted-only-proxy.zsh`, `scripts/hosted-only-go/`,
+`zsh/functions/claude/providers/{hosted-only,enmaas}.zsh`, `scripts/codex-provider.zsh`
+and `scripts/llm-usage`. Read `docs/notes/hosted-only-go-proxy.md` and
+`docs/notes/web-search-shim.md` before changing them.
+
+### Model pair (slot-based)
+
+- `HOSTED_ONLY_GLM_MODEL` is the **primary** slot, `HOSTED_ONLY_DEEPSEEK_MODEL` the
+  **fallback + vision** slot. The names predate the 2026-11-14 pair swap; the pair
+  picker, the vision reroute and the `[1m]` picker refs all key off the slots, so a
+  swap changes the ids, not the machinery.
+- Primary = the stronger coder (benchmarks in the pair-swap PR); fallback = the model
+  that takes images and can reason longer. Both are `rits/` ids with the 1M window.
+- Short-name knob values (`glm`, `deepseek`) follow the **slots**, not the model names —
+  a pin made before a swap means a different model afterwards. Pin a full id when the
+  model must not move.
+- A retired model must keep working for sessions that stored it: add its id to
+  `ALIAS_MODELS` (an alias is served by the primary slot) instead of letting the cost
+  guard answer 400 on continue.
+- `config.go`'s built-in defaults stay at the **EnMaaS** pair: the EnMaaS controller
+  does not forward the model knobs, so that flavor runs on them. Hosted-only always
+  passes both ids explicitly.
+- A new model also needs its rollup entries in `scripts/llm-usage` (`strip_model`,
+  `family`, `reroute_kind`'s slot set, `BRANDS`, `MODEL_VENDORS`) or its traffic
+  disappears from the dashboard and menubar.
+
+### Web search: Parallel-injected or not at all — for every served model
+
+- `HOSTED_ONLY_SEARCH_SHIM=1` ⇒ the proxy rewrites the hosted `web_search` tool into a
+  `{query}` function tool and serves it from Parallel, with per-(model, gateway)
+  verdicts that fail closed to the strip. Off/unset ⇒ every `rits/` model gets the tool
+  stripped plus the "no web search — route it through the Parallel MCP tools" note.
+- The decision is per `rits/` id, never per slot: a new pair member, the retired alias
+  and the `claude-*` aliases all get the same treatment, pinned by
+  `scripts/hosted-only-go/searchparity_test.go`. Never ship a served model with neither
+  behavior.
+- Tool search (deferred tool **definitions**: `tool_search_tool_*` + `defer_loading`) is
+  a different feature. `openDeferredTools` opens those definitions inline for `rits/`
+  models because a vLLM upstream cannot run the server tool; non-`rits/` Claude models
+  and the vertex flavor stay on the native path.
+
+### Catalogs and rollout
+
+- Codex catalog shape versions (`shape1` → `shape2`) bump whenever entry **content**
+  changes, not just the ids — otherwise a mislabeled cache from an intermediate revision
+  survives the revert. Each flavor labels its own pair (the EnMaaS catalog is GLM 5.3
+  text-only + DeepSeek V4.1 Flash).
+- Never restart a proxy a live session is routed through. A changed config, hook, key or
+  model pair changes the fingerprint; under a busy proxy the launcher refuses to restart,
+  names the ids the running proxy does not serve, and `<flavor>-hosted-only-restart`
+  applies the change once it is idle.
+- Every knob the Go child reads must be forwarded by the launcher and hashed into the
+  fingerprint; `tests/go-proxy-knob-parity.zsh` enforces parity in both directions.
+
+### Tests for any change in this area
+
+`zsh tests/hosted-only-proxy.zsh`, `zsh tests/hosted-only-go-proxy.zsh`,
+`zsh tests/codex-enmaas.zsh`, `zsh tests/t3-claude-launchers.zsh`,
+`zsh tests/go-proxy-knob-parity.zsh`, and
+`cd scripts/hosted-only-go && go vet ./... && go test ./...`.
+`tests/llm-usage.zsh` fails on clean `main` in the menubar scenarios — diff against a
+baseline instead of chasing it.
+
+The required `review` status check is this repo's own hosted-only-review workflow (its
+EnMaaS GLM reviewer); CodeRabbit is advisory and frequently rate-limited.
