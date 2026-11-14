@@ -2640,13 +2640,16 @@ HOSTED_SLOT_FAMILIES = ("glm", "deepseek", "muse")
 # there as an ALIAS id. EnMaaS still serves glm-5-3 first-class, so the same
 # requested/served families mean different things per route.
 SWAPPED_PAIR_ROUTES = ("hosted-only", "codex-hosted-only")
-# When the swap landed. Events logged before it ran the old pair (glm primary,
-# deepseek fallback), so their glm->deepseek move was the vision reroute; the
-# alias meaning on those ports starts at this instant. A machine whose proxy
-# restarts later (the deferred idle restart) logs that gap as alias: the pair a
-# proxy actually served is not in the event, and the window is minutes long and
+# When the swap landed: the pair-swap commit's own timestamp (2026-11-14
+# 12:13:40 +0700), not midnight — the swap code exists from that instant on, so
+# a midnight anchor would claim the whole morning's old-pair vision reroutes as
+# aliases. Events logged before it ran the old pair (glm primary, deepseek
+# fallback), so their glm->deepseek move was the vision reroute; the alias
+# meaning on those ports starts here. A machine whose proxy restarts later (the
+# deferred idle restart, or the merge itself) logs that gap as alias: the pair a
+# proxy actually served is not in the event, and the window is bounded and
 # self-healing, so the cutoff errs toward the common case.
-PAIR_SWAP_T = datetime(2026, 11, 14, tzinfo=timezone.utc).timestamp()
+PAIR_SWAP_T = datetime(2026, 11, 14, 5, 13, 40, tzinfo=timezone.utc).timestamp()
 def paired_route(ev):
     """True when the event's port was running the swapped pair when it was logged."""
     if PROXIES.get(str(ev.get("port")), (None, None))[0] not in SWAPPED_PAIR_ROUTES:
