@@ -303,17 +303,42 @@ func readServedModels(runtimeDir string) map[string]bool {
 	return served
 }
 
+// desiredServedModels is the pair THIS launch would serve. The launcher passes
+// its generated config for the route-table flavors; the env-routed ones
+// (claude/codex, the hosted-only ports) have only the RUNNING proxy's
+// routes.json on disk, so the table is regenerated from this process's knobs —
+// the same ones writeRoutesFromEnv reads at spawn time.
+func desiredServedModels(flavor, port, runtimeDir, configPath string) []string {
+	if configPath != "" {
+		return servedModelNames(configPath, flavor)
+	}
+	if routeTableFlavor(flavor) {
+		return nil
+	}
+	file, err := os.CreateTemp("", "hosted-only-desired-*.json")
+	if err != nil {
+		return nil
+	}
+	path := file.Name()
+	_ = file.Close()
+	defer os.Remove(path)
+	if err := writeRoutesFromEnv(loadConfig(flavor, port, runtimeDir), path); err != nil {
+		return nil
+	}
+	return servedModelNames(path, flavor)
+}
+
 // missingServedModels is the rollout gap the fingerprint cannot express: a
 // proxy left running under live sessions keeps serving the model pair it was
 // started with, so requests naming a NEW pair member are refused by the cost
 // guard until the restart the reuse path asks for.
-func missingServedModels(runtimeDir, configPath, flavor string) []string {
+func missingServedModels(runtimeDir, flavor, port, configPath string) []string {
 	served := readServedModels(runtimeDir)
 	if len(served) == 0 {
 		return nil
 	}
 	var missing []string
-	for _, name := range servedModelNames(configPath, flavor) {
+	for _, name := range desiredServedModels(flavor, port, runtimeDir, configPath) {
 		if !served[name] {
 			missing = append(missing, name)
 		}
@@ -486,8 +511,13 @@ func ensureOnce(o ensureOpts) (string, error) {
 				o.flavor, o.flavor)
 			// A pair swap is the sharp edge of that reuse: the running proxy
 			// still refuses the new ids, so name them instead of leaving the
-			// caller to decode a 400 from the cost guard.
-			if missing := missingServedModels(o.runtimeDir, o.configPath, o.flavor); len(missing) > 0 {
+			// caller to decode a 400 from the cost guard. A proxy started
+			// before the pair was recorded cannot be compared — say so, since
+			// that IS the rollout case this exists for.
+			if len(readServedModels(o.runtimeDir)) == 0 {
+				fmt.Fprintf(os.Stderr, "hosted-only: the running %s proxy predates the pair record, so the ids it serves cannot be checked; %s-hosted-only-restart applies the current pair once it is idle.\n",
+					o.flavor, o.flavor)
+			} else if missing := missingServedModels(o.runtimeDir, o.flavor, o.port, o.configPath); len(missing) > 0 {
 				fmt.Fprintf(os.Stderr, "hosted-only: the running proxy does not serve %s; a request naming one of those ids is refused (400) until the restart above runs.\n",
 					strings.Join(missing, ", "))
 			}
