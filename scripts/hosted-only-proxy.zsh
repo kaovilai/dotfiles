@@ -160,7 +160,12 @@ _hosted_only_proxy_vars() {
     # The merged config always serves the claude-sonnet-5-5 alias from the GLM
     # (anthropic) deployment, so both flavors record the same value and the
     # shared fingerprint stays flavor-independent.
-    typeset -g _hop_aliases="$(_hosted_only_knob ALIAS_MODELS claude-sonnet-5-5)"
+    # rits/zai-org/glm-5-3 is a LEGACY alias since the 2026-11-14 pair swap
+    # (GLM left the hosted-only pair): T3 threads and Claude Code sessions that
+    # stored it as their model would otherwise get the cost guard's 400
+    # "Invalid model name" on continue. The proxy serves it from the primary
+    # slot (DeepSeek); the usage log keeps requested vs served visible.
+    typeset -g _hop_aliases="$(_hosted_only_knob ALIAS_MODELS claude-sonnet-5-5,rits/zai-org/glm-5-3)"
     # Dialect-suffix routing: this proxy turns it on for the #openai groups
     # (the EnMaaS flavor leaves it off and uses #responses siblings instead).
     typeset -g _hop_dialect="$(_hosted_only_knob DIALECT_SUFFIX "#openai")"

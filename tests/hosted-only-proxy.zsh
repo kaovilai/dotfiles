@@ -74,10 +74,10 @@ HOSTED_ONLY_FALLBACK=0 HOSTED_ONLY_MAX_MODEL_LEN=999999 _hosted_only_proxy_vars 
 _hosted_only_proxy_vars codex
 # The merged config serves the claude alias for both flavors, so the alias knob
 # (and the fingerprint it feeds) is flavor-independent
-[[ "$_hop_aliases" == "claude-sonnet-5-5" ]] || fail "codex flavor alias default (merged): $_hop_aliases"
+[[ "$_hop_aliases" == "claude-sonnet-5-5,rits/zai-org/glm-5-3" ]] || fail "codex flavor alias default (merged): $_hop_aliases"
 [[ "$_hop_request_timeout" == 180 ]] || fail "request timeout default: $_hop_request_timeout"
 _hosted_only_proxy_vars claude
-[[ "$_hop_aliases" == "claude-sonnet-5-5" ]] || fail "claude flavor alias default: $_hop_aliases"
+[[ "$_hop_aliases" == "claude-sonnet-5-5,rits/zai-org/glm-5-3" ]] || fail "claude flavor alias default: $_hop_aliases"
 HOSTED_ONLY_ALIAS_MODELS=x,y _hosted_only_proxy_vars claude
 [[ "$_hop_aliases" == "x,y" ]] || fail "HOSTED_ONLY_ALIAS_MODELS not read: $_hop_aliases"
 HOSTED_ONLY_REQUEST_TIMEOUT=99 _hosted_only_proxy_vars claude
