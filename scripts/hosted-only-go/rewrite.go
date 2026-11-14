@@ -268,6 +268,23 @@ func openDeferredTools(data map[string]any) bool {
 	if !ok || len(tools) == 0 {
 		return false
 	}
+	// Only a request that carries the search server tool is served inline:
+	// without it there is nothing to open, and a lone defer_loading flag (the
+	// field only means anything next to that tool) is left as the client sent
+	// it rather than silently changing the loading contract (2026-11-14
+	// Copilot review).
+	search := false
+	for _, t := range tools {
+		if tool := asMap(t); tool != nil {
+			switch asString(tool["type"]) {
+			case "tool_search_tool_regex_20251119", "tool_search_tool_bm25_20251119":
+				search = true
+			}
+		}
+	}
+	if !search {
+		return false
+	}
 	kept := make([]any, 0, len(tools))
 	changed := false
 	removed := map[string]bool{}
@@ -295,13 +312,16 @@ func openDeferredTools(data map[string]any) bool {
 	}
 	// A forced choice naming the dropped search tool would reference an
 	// undeclared tool (400 on strict upstreams): free it, matching only the
-	// tools actually removed.
+	// tools actually removed. A type-only built-in choice
+	// ({"type":"tool_search_tool_regex_20251119"}) is freed the same way
+	// stripWebSearchTools frees its type-only form.
 	if choice := asMap(data["tool_choice"]); choice != nil {
 		named := asString(choice["name"])
 		if named == "" {
 			named = asString(asMap(choice["function"])["name"])
 		}
-		if named != "" && removed[named] && !keptNames[named] {
+		typeOnly := named == "" && strings.HasPrefix(asString(choice["type"]), "tool_search_tool")
+		if typeOnly || (named != "" && removed[named] && !keptNames[named]) {
 			delete(data, "tool_choice")
 		}
 	}

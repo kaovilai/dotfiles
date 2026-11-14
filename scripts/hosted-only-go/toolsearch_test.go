@@ -264,3 +264,43 @@ func TestSearchResultWrapperIsDropped(t *testing.T) {
 		t.Fatalf("the rest of the turn must survive: %s", body)
 	}
 }
+
+// A lone defer_loading flag without the search server tool is the client's own
+// arrangement: nothing to open, so the loading contract is left alone and no
+// note is injected (2026-11-14 Copilot review).
+func TestDeferLoadingWithoutTheSearchToolIsLeftAlone(t *testing.T) {
+	cfg := toolSearchConfig(t)
+	data := map[string]any{
+		"model":      cfg.GLM,
+		"max_tokens": 16,
+		"messages":   []any{map[string]any{"role": "user", "content": "hi"}},
+		"tools": []any{
+			map[string]any{"name": "Bash", "input_schema": map[string]any{"type": "object"}},
+			map[string]any{"name": "mcp__x__y", "defer_loading": true, "input_schema": map[string]any{"type": "object"}},
+		},
+	}
+	if _, reqErr, _ := rewriteRequest(cfg, "/v1/messages", data); reqErr != nil {
+		t.Fatalf("unexpected refusal: %+v", reqErr)
+	}
+	body := string(marshal(asList(data["tools"])))
+	if !strings.Contains(body, "defer_loading") {
+		t.Fatalf("defer_loading must survive without a search tool: %s", body)
+	}
+	if toolSearchNotePresent(data) {
+		t.Fatal("nothing was opened, the note must not appear")
+	}
+}
+
+// A type-only forced choice naming the search tool (no "name" field) is freed
+// like stripWebSearchTools frees the web_search form.
+func TestForcedTypeOnlySearchChoiceIsFreed(t *testing.T) {
+	cfg := toolSearchConfig(t)
+	data := toolSearchRequest(cfg.GLM)
+	data["tool_choice"] = map[string]any{"type": "tool_search_tool_regex_20251119"}
+	if _, reqErr, _ := rewriteRequest(cfg, "/v1/messages", data); reqErr != nil {
+		t.Fatalf("unexpected refusal: %+v", reqErr)
+	}
+	if _, ok := data["tool_choice"]; ok {
+		t.Fatal("a type-only forced choice on the dropped search tool must be freed")
+	}
+}
