@@ -290,11 +290,11 @@ and `scripts/llm-usage`. Read `docs/notes/hosted-only-go-proxy.md` and
   does not wait for idle, so run it only once the sessions have finished.
 - Every knob the Go child reads must be forwarded by the launcher — parity in both
   directions is enforced by `tests/go-proxy-knob-parity.zsh` — **and** hashed into the
-  fingerprint (`_hosted_only_proxy_fp`'s knob list). That second half is not covered by
-  the parity test: a forwarded knob missing from the list leaves a running proxy
-  "fresh", so the old value keeps serving until a restart. Check the list when adding a
-  knob; `SEARCH_VERDICTS`, `PARALLEL_STATE`, `PARALLEL_MCP`, `PARALLEL_ACCOUNT` and
-  `QUOTA_MONTH_TZ` are currently forwarded without being hashed.
+  fingerprint. `_hosted_only_proxy_fp` derives its input from `_hosted_only_go_shared_env`
+  itself, so adding a knob to that list is enough; a hand-maintained copy already drifted
+  once (`SEARCH_VERDICTS`, `PARALLEL_*`, `QUOTA_MONTH_TZ` were forwarded but unhashed), and
+  `tests/hosted-only-proxy.zsh` now asserts the fingerprint moves for knobs from both
+  sides of that drift.
 
 ### Tests for any change in this area
 
