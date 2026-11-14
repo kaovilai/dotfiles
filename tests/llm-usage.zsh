@@ -1340,6 +1340,12 @@ def host_lines(host):
         rows += [json.loads(l) for l in open(p)]
     return rows
 
+# reroute_kind: the pair swap is what turned glm->deepseek into an alias on the
+# hosted-only ports, so events logged before it stay the old pair's vision reroute
+old_pair = {"requested": "rits/zai-org/glm-5-3", "served": "rits/deepseek-ai/DeepSeek-V4.1-Flash-1017"}
+assert mod.reroute_kind(ev(mod.PAIR_SWAP_T + 60, **old_pair)) == "alias"
+assert mod.reroute_kind(ev(mod.PAIR_SWAP_T - 60, **old_pair)) == "vision"
+
 # eid identity: `start` (ms precision, both writers emit it) separates same-second requests;
 # a transcript message `id` is the identity and must not depend on token counts (usage grows while streaming)
 a, b = ev(now), ev(now)
