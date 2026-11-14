@@ -341,10 +341,12 @@ _hosted_only_proxy_fp() {
         dns_host="${dns_host%%/*}"
     fi
     local config="${1:-$(_hosted_only_proxy_config)}"
-    # Every knob _hosted_only_go_env forwards is a fingerprint input: one left
-    # out (IMAGE_TOKENS, IMAGE_CACHE_DIR, SEARCH_NUDGE) would let a running
-    # proxy serve the old value as "fresh".
-    local knobs="$(_hosted_only_knob OUTAGE_COALESCE_SECONDS 5) $_hop_vision_fallback $_hop_limit_rewrite $_hop_limit_retry $_hop_client_retry $_hop_fallback $_hop_aliases $_hop_request_timeout $(_hosted_only_knob STREAM_IDLE_TIMEOUT 300) $_hop_image_budget $_hop_image_cache_days $(_hosted_only_knob IMAGE_WINDOW_TURNS 6) $_hop_dialect $dns_host ${ENMAAS_DNS_DOH_URLS:-} $(_hosted_only_knob IMAGE_TOKENS 2500) $(_hosted_only_knob IMAGE_CACHE_DIR '') $(_hosted_only_knob SEARCH_NUDGE 1) $(_hosted_only_knob SEARCH_SHIM 0) $(_hosted_only_knob SEARCH_DAILY_CAP 500) $(_hosted_only_knob PARALLEL_BASE https://api.parallel.ai) $(_hosted_only_knob PARALLEL_PLATFORM https://platform.parallel.ai) $(_hosted_only_knob CLASSIFIER_ROUTE_MODEL '')"
+    # Every knob both launchers forward is a fingerprint input. The set is taken
+    # from the shared list itself, not re-listed: a hand copy drifted and left
+    # SEARCH_VERDICTS, PARALLEL_{STATE,MCP,ACCOUNT} and QUOTA_MONTH_TZ forwarded
+    # but unhashed, so changing one kept a running proxy "fresh" on the old value.
+    _hosted_only_go_shared_env
+    local knobs="${_hog_shared[*]} $_hop_glm $_hop_deepseek $_hop_aliases $_hop_dialect $dns_host ${ENMAAS_DNS_DOH_URLS:-}"
     local fp token_fp
     fp=$(print -rn -- "$config"$'\x1f'"$hooks_hash"$'\x1f'"$ENMAAS_API_KEY"$'\x1f'"$knobs" \
         | shasum -a 256 | cut -d' ' -f1) || return 1

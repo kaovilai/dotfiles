@@ -117,7 +117,20 @@ HOSTED_ONLY_IMAGE_BUDGET_BYTES=123 HOSTED_ONLY_IMAGE_CACHE_DAYS=2 _hosted_only_p
 [[ "$_hop_image_budget" == 123 && "$_hop_image_cache_days" == 2 ]] || fail "image knobs: $_hop_image_budget $_hop_image_cache_days"
 _hosted_only_proxy_vars codex
 [[ "$_hop_image_budget" == 2500000 && "$_hop_image_cache_days" == 1 ]] || fail "image knob defaults: $_hop_image_budget $_hop_image_cache_days"
-[[ "$(<"$repo/scripts/hosted-only-proxy.zsh")" == *'$_hop_client_retry $_hop_fallback $_hop_aliases $_hop_request_timeout $(_hosted_only_knob STREAM_IDLE_TIMEOUT 300) $_hop_image_budget $_hop_image_cache_days $(_hosted_only_knob IMAGE_WINDOW_TURNS 6) $_hop_dialect $dns_host'* ]] || fail "fingerprint knob list changed without this test following"
+# The fingerprint hashes the shared knob list itself: a forwarded knob missing
+# from a hand-maintained copy (SEARCH_VERDICTS, PARALLEL_*, QUOTA_MONTH_TZ were)
+# left a running proxy "fresh" on the old value. Two knobs, one from each side of
+# that drift, must move the fingerprint.
+[[ "$(<"$repo/scripts/hosted-only-proxy.zsh")" == *'knobs="${_hog_shared[*]}'* ]] || fail "fingerprint no longer derives from the shared knob list"
+(
+    export ENMAAS_API_KEY=test-key
+    _hosted_only_proxy_vars claude
+    base=$(_hosted_only_proxy_fp) || exit 1
+    legacy=$(export HOSTED_ONLY_IMAGE_TOKENS=999; _hosted_only_proxy_vars claude; _hosted_only_proxy_fp) || exit 2
+    missed=$(export HOSTED_ONLY_PARALLEL_ACCOUNT=https://example.test/account; _hosted_only_proxy_vars claude; _hosted_only_proxy_fp) || exit 3
+    [[ "$base" != "$legacy" ]] || exit 4
+    [[ "$base" != "$missed" ]] || exit 5
+) || fail "fingerprint must move for every forwarded knob (exit $?)"
 
 # The fp helper runs inside a command substitution, so every field the spawn
 # path needs travels on its stdout line; the globals cannot cross back.
