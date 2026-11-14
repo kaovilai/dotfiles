@@ -236,12 +236,13 @@ and `scripts/llm-usage`. Read `docs/notes/hosted-only-go-proxy.md` and
   **exported** `HOSTED_ONLY_*` knobs do reach the EnMaaS child (its controller forwards
   `CHILD_ENV_PREFIXES`), so exporting `HOSTED_ONLY_{GLM,DEEPSEEK}_MODEL` or
   `HOSTED_ONLY_ALIAS_MODELS` also changes that flavor's slots, aliases, vision reroute,
-  fallback pairing and output clamp. The **model/alias** knobs only reach the child when
-  exported: a non-exported assignment still lands in the EnMaaS route table
-  (`_claude_enmaas_{glm,deepseek}_id`), so the advertised routes and the child's slots
-  can diverge; either way `ENMAAS_RESPONSES_ROUTES` follows the same env. Knobs on the
-  launchers' shared list (`SEARCH_NUDGE`, image, timeout, …) are re-exported by both, so
-  a non-exported value there does reach the child.
+  fallback pairing and output clamp. These model/alias knobs only reach the child when
+  exported, and they do not behave alike: a non-exported `HOSTED_ONLY_{GLM,DEEPSEEK}_MODEL`
+  still lands in the EnMaaS route table (`_claude_enmaas_{glm,deepseek}_id`, and
+  `ENMAAS_RESPONSES_ROUTES` from it), so the advertised routes and the child's slots can
+  diverge, while a non-exported `HOSTED_ONLY_ALIAS_MODELS` is ignored by EnMaaS entirely.
+  Knobs on the launchers' shared list (`SEARCH_NUDGE`, image, timeout, …) are re-exported
+  by both, so a non-exported value there does reach the child.
 - A new model also needs its rollup entries in `scripts/llm-usage` (`strip_model`,
   `family`, `reroute_kind`'s slot set, `BRANDS`, `MODEL_VENDORS`). Traffic still shows
   without them, but lumped under "Other" or its raw id: no brand color, no logo, and
@@ -254,7 +255,8 @@ and `scripts/llm-usage`. Read `docs/notes/hosted-only-go-proxy.md` and
   verdicts. An unknown verdict falls back to the strip — which is the
   `SEARCH_NUDGE`-gated strip below, so `SEARCH_SHIM=1` with `SEARCH_NUDGE=0` leaves a
   `rits/` model with an unknown verdict — or a request the shim declines before the
-  verdict (client owns the `web_search` name, no hosted tool, non-anthropic dialect) —
+  verdict (client owns the `web_search` name, no hosted tool, chat `/v1/chat/completions`
+  dialect — the shim serves both anthropic and responses wire shapes) —
   holding the tool with neither behavior. Off/unset ⇒ every `rits/`
   model gets the tool stripped plus the "no web search — route it through the Parallel
   MCP tools" note.
