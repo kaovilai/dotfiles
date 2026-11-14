@@ -63,9 +63,11 @@ cfg=$(_hosted_only_proxy_config)
 [[ "$cfg" == *'"openai/rits/deepseek-ai/DeepSeek-V4.1-Flash-1017"'* && "$cfg" == *'/v1"'* ]] || fail "codex dialect missing from merged config: $cfg"
 [[ "$cfg" == *'DeepSeek-V4.1-Flash-1017#openai'* && "$cfg" == *'Muse-Spark-Open-816B-A42B-NVFP4#openai'* ]] || fail "suffixed groups missing: $cfg"
 [[ "$cfg" == *'claude-sonnet-5-5'* ]] || fail "merged config must serve the claude alias for both flavors: $cfg"
+[[ "$cfg" == *'model_name: "rits/zai-org/glm-5-3"'* ]] || fail "merged config must carry the legacy GLM alias row the proxy serves: $cfg"
 [[ "${cfg##*model_name: \"rits/deepseek-ai/DeepSeek-V4.1-Flash-1017\"}" == *'#openai'* ]] || fail "bare primary group and suffixed group must be distinct entries: $cfg"
 # the anthropic and openai deployments of the same model must not share a group
-[[ "$(grep -c 'model_name:' <<< "$cfg")" == 5 ]] || fail "merged config must have 5 deployments (primary, primary#openai, fallback, fallback#openai, alias): $cfg"
+# (4 slot deployments + one anthropic/#openai pair per alias)
+[[ "$(grep -c 'model_name:' <<< "$cfg")" == 8 ]] || fail "merged config must have 8 deployments (2 slots x 2 wires + 2 aliases x 2 wires): $cfg"
 
 # knob defaults and overrides (fingerprint inputs)
 [[ "$_hop_fallback" == "1 1 60 600 1048576 512 3 16000" ]] || fail "fallback knob defaults: $_hop_fallback"

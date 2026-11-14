@@ -76,8 +76,9 @@ codex-enmaas() {
 }
 alias codex-enmass='codex-enmaas'   # pre-rename name
 
-# codex-hosted-only: EnMaaS-hosted free models (GLM 5.3, DeepSeek V4.1 Flash;
-# auto-review included) through the local hosted-only proxy; see
+# codex-hosted-only: EnMaaS-hosted free models through the local hosted-only
+# proxy, as the slot pair in scripts/hosted-only-go/config.go (auto-review
+# included); see
 # scripts/codex-provider.zsh (backend hosted-only) for the wiring. Pick the
 # model with -m. codex-glm-hybrid / codex-glm-only are retired names. Stop the shared proxy:
 # codex-hosted-only --stop-proxy

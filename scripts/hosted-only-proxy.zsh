@@ -235,14 +235,25 @@ $timeout_line
 $ds_openai
       api_key: os.environ/ENMAAS_API_KEY
 $timeout_line"
-    # Claude Code only remaps aliases via ANTHROPIC_DEFAULT_*_MODEL; clients that
-    # pass an explicit id (T3's picker sends claude-sonnet-5-5) would hit "Invalid
-    # model name". Serve that id from GLM so the client keeps Sonnet 5.5 behavior.
-    print -r -- "  - model_name: \"claude-sonnet-5-5\"
+    # Same alias rows the Go proxy writes from ALIASES: every alias id is served
+    # from the primary slot on both wires. Claude Code only remaps aliases via
+    # ANTHROPIC_DEFAULT_*_MODEL, so a client passing an explicit id (T3's picker
+    # sends claude-sonnet-5-5; sessions that stored rits/zai-org/glm-5-3 keep
+    # that id) would otherwise hit "Invalid model name".
+    local alias
+    for alias in ${(s:,:)_hop_aliases}; do
+        [[ -n "$alias" ]] || continue
+        print -r -- "  - model_name: \"$alias\"
     litellm_params:
 $glm_anthropic
       api_key: os.environ/ENMAAS_API_KEY
+$timeout_line
+  - model_name: \"$alias#openai\"
+    litellm_params:
+$glm_openai
+      api_key: os.environ/ENMAAS_API_KEY
 $timeout_line"
+    done
     # The Go binary serves from the routes.json it writes itself; this YAML is
     # inert documentation and a fingerprint input (it tracks model/knob changes).
     print -r -- "general_settings:
