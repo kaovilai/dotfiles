@@ -158,8 +158,10 @@ gateway name over DoH itself.
 - **Request rewrites** for `rits/` models and GLM aliases: alias → GLM id,
   image-in-history → DeepSeek, grammar strip, hosted `web_search` removed plus
   the in-band note, `thinking: disabled` on Messages requests that send none,
-  empty developer items dropped, `tool_reference` blocks dropped, `max_tokens`
-  clamped to the window with the compaction 400.
+  empty developer items dropped, **tool search opened inline** (`tool_search_tool_regex/bm25_*`
+  dropped and every `defer_loading` cleared, plus the `[tool-search-shim]`
+  note) with the `tool_reference` blocks it would have produced dropped,
+  `max_tokens` clamped to the window with the compaction 400.
 - **Cost guard:** the hosted-only flavors answer 400 for any model id they do
   not serve (LiteLLM's `model_list` restriction), instead of forwarding it with
   the real upstream key.
@@ -189,6 +191,33 @@ gateway name over DoH itself.
 - **Performance:** one keep-alive/HTTP/2 transport per process; a request whose
   body the rewrites did not change is forwarded byte-for-byte instead of being
   re-marshaled (the common EnMaaS path).
+
+## Tool search (Claude Code's ToolSearch)
+
+Tool search is a server-side Anthropic feature: the client sends
+`tool_search_tool_regex_20251119` / `tool_search_tool_bm25_20251119` in `tools`,
+marks the tools it wants deferred with `defer_loading: true`, and the search
+returns `tool_search_tool_result` blocks whose `tool_reference` entries the API
+expands into the discovered definitions. A vLLM-served upstream implements none
+of that — the chat template rejects `tool_reference` ("supports text and image
+content only"), so the old strip left the model with `(tool reference omitted)`
+and every ToolSearch came back empty: deferred MCP tools were unusable on the
+`rits/` route (T3 Claude sessions enable tool search by default, so this hit
+every session, 2026-11-14).
+
+The shim serves it inline (`openDeferredTools`, `rewrite.go`): the deferred
+definitions are already in the request (that is where the server-side search
+finds them), so the proxy drops the search tool, clears every `defer_loading`,
+and appends the `[tool-search-shim]` note ("every tool is already loaded … call
+a tool directly by name"). The model then calls deferred tools like any other;
+the client's `tool_reference` blocks, and the `tool_search_tool_result`
+wrappers around them, stay redundant and are stripped (the wrapper names a
+server tool the upstream does not have).
+Cost: the whole tool list rides in every prompt — the same trade the route
+already made when tool search was simply broken. Only `rits/` models are
+touched (a real Claude model behind the gateway keeps its native tool search);
+the vertex flavor keeps its own path (`hasToolSearchTool` + the
+`tool-search-tool-2025-10-19` beta header).
 
 ## Known differences from the LiteLLM path
 
@@ -222,7 +251,9 @@ clamp (`HOSTED_ONLY_IMAGE_TOKENS`); the **outage shapes** — 529, the gateway's
 503 `metering system unavailable` / `service unavailable`, connect/DNS 500s —
 and the `LIMIT_REWRITE` / `OUTAGE_REWRITE` gate split; the **quota-aware
 fallback skip** (an account-wide monthly quota gains nothing from trying the
-other model); nested `tool_reference` stripping; and the forced `tool_choice`
+other model); the **tool-search shim** (search tool dropped, `defer_loading`
+cleared, note once per conversation, native passthrough for non-`rits/` ids);
+nested `tool_reference` stripping; and the forced `tool_choice`
 cleanup after a `web_search` tool is dropped. Graceful drain: SIGTERM stops
 accepting and lets in-flight requests finish within a 10 s budget; a swap or
 stop waits 15 s before escalating to SIGKILL. A response that takes longer than
