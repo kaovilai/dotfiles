@@ -231,10 +231,12 @@ and `scripts/llm-usage`. Read `docs/notes/hosted-only-go-proxy.md` and
 - `config.go`'s built-in defaults are per flavor: claude/codex default to the swapped
   pair plus the launcher's alias set, so a hand-run `ensure`/`watch` regenerates what
   those ports serve. The route-table flavors keep the **EnMaaS** pair (GLM 5.3 +
-  DeepSeek V4.1 Flash, no aliases) because their controllers never forward the model
-  knobs to the Go child — note `ENMAAS_RESPONSES_ROUTES` does read them for EnMaaS's
-  route metadata, so setting them globally moves those labels without moving what that
-  flavor serves.
+  DeepSeek V4.1 Flash, no aliases) because nothing sets those knobs for them — but
+  **exported** `HOSTED_ONLY_*` knobs do reach the EnMaaS child (its controller forwards
+  `CHILD_ENV_PREFIXES`), so exporting `HOSTED_ONLY_{GLM,DEEPSEEK}_MODEL` or
+  `ALIAS_MODELS` also changes that flavor's slots, aliases, vision reroute, fallback
+  pairing and output clamp; a non-exported shell assignment does not. Either way the
+  EnMaaS route labels (`ENMAAS_RESPONSES_ROUTES`) follow the same env.
 - A new model also needs its rollup entries in `scripts/llm-usage` (`strip_model`,
   `family`, `reroute_kind`'s slot set, `BRANDS`, `MODEL_VENDORS`) or its traffic
   disappears from the dashboard and menubar.
@@ -245,6 +247,10 @@ and `scripts/llm-usage`. Read `docs/notes/hosted-only-go-proxy.md` and
   `{query}` function tool and serves it from Parallel, with per-(model, gateway)
   verdicts that fail closed to the strip. Off/unset ⇒ every `rits/` model gets the tool
   stripped plus the "no web search — route it through the Parallel MCP tools" note.
+  Both halves are gated on `SEARCH_NUDGE` (`rewrite.go`): with
+  `HOSTED_ONLY_SEARCH_NUDGE=0` and the shim off, a `rits/` model keeps the hosted tool
+  and gets no note — and with the shim on, a `native` verdict passes the tool through
+  instead of rewriting it.
 - The decision is per `rits/` id, never per slot: a new pair member, the retired alias
   and the `claude-*` aliases all get the same treatment, pinned by
   `scripts/hosted-only-go/searchparity_test.go`. Never ship a served model with neither
@@ -264,8 +270,13 @@ and `scripts/llm-usage`. Read `docs/notes/hosted-only-go-proxy.md` and
   model pair changes the fingerprint; under a busy proxy the launcher refuses to restart,
   names the ids the running proxy does not serve, and `<flavor>-hosted-only-restart`
   applies the change once it is idle.
-- Every knob the Go child reads must be forwarded by the launcher and hashed into the
-  fingerprint; `tests/go-proxy-knob-parity.zsh` enforces parity in both directions.
+- Every knob the Go child reads must be forwarded by the launcher — parity in both
+  directions is enforced by `tests/go-proxy-knob-parity.zsh` — **and** hashed into the
+  fingerprint (`_hosted_only_proxy_fp`'s knob list). That second half is not covered by
+  the parity test: a forwarded knob missing from the list leaves a running proxy
+  "fresh", so the old value keeps serving until a restart. Check the list when adding a
+  knob; `SEARCH_VERDICTS`, `PARALLEL_STATE`, `PARALLEL_MCP`, `PARALLEL_ACCOUNT` and
+  `QUOTA_MONTH_TZ` are currently forwarded without being hashed.
 
 ### Tests for any change in this area
 
