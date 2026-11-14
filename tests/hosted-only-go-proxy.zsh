@@ -193,6 +193,8 @@ JSON
 env ENMAAS_API_KEY=test-key HOSTED_ONLY_PROXY_TOKEN=test-token \
     HOSTED_ONLY_ENMAAS_BASE_URL="http://127.0.0.1:$stub_port" \
     HOSTED_ONLY_ALIAS_MODELS=claude-sonnet-5-5 \
+    HOSTED_ONLY_GLM_MODEL=rits/zai-org/glm-5-3 \
+    HOSTED_ONLY_DEEPSEEK_MODEL=rits/deepseek-ai/DeepSeek-V4.1-Flash-1017 \
     LLM_USAGE_DIR="$tmp/usage" \
     "$bin" --flavor claude --config "$hcfg" --port "$pport" --runtime-dir "$rtdir" >"$tmp/proxy.log" 2>&1 &
 proxy=$!

@@ -32,6 +32,7 @@ func TestLegacyModelAliasIsServedByThePrimarySlot(t *testing.T) {
 func TestUnregisteredModelStillHitsTheCostGuard(t *testing.T) {
 	h := newProxyHarness(t, 200, `{}`, func(c *config) {
 		c.GLM, c.DeepSeek = "rits/deepseek-ai/DeepSeek-V4.1-Flash-1017", "rits/meta-models/Muse-Spark-Open-816B-A42B-NVFP4"
+		c.Aliases = nil // the claude default carries the retired id; drop it here
 	})
 	rec := h.messages("rits/zai-org/glm-5-3")
 	if rec.Code != http.StatusBadRequest {

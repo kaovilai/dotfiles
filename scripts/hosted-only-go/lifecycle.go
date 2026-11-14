@@ -303,29 +303,26 @@ func readServedModels(runtimeDir string) map[string]bool {
 	return served
 }
 
-// desiredServedModels is the pair THIS launch would serve. The launcher passes
-// its generated config for the route-table flavors; the env-routed ones
-// (claude/codex, the hosted-only ports) have only the RUNNING proxy's
-// routes.json on disk, so the table is regenerated from this process's knobs —
-// the same ones writeRoutesFromEnv reads at spawn time.
+// desiredServedModels is the pair THIS launch would serve. The launcher hands
+// `ensure` the routes.json of the RUNNING proxy for every flavor (it is written
+// by startProxy), so for the env-routed flavors that file describes the pair
+// being replaced, never the one wanted — the table is regenerated from this
+// process's knobs instead, the same ones writeRoutesFromEnv reads at spawn.
 func desiredServedModels(flavor, port, runtimeDir, configPath string) []string {
-	if configPath != "" {
-		return servedModelNames(configPath, flavor)
+	if !routeTableFlavor(flavor) {
+		file, err := os.CreateTemp("", "hosted-only-desired-*.json")
+		if err != nil {
+			return nil
+		}
+		path := file.Name()
+		_ = file.Close()
+		defer os.Remove(path)
+		if err := writeRoutesFromEnv(loadConfig(flavor, port, runtimeDir), path); err != nil {
+			return nil
+		}
+		return servedModelNames(path, flavor)
 	}
-	if routeTableFlavor(flavor) {
-		return nil
-	}
-	file, err := os.CreateTemp("", "hosted-only-desired-*.json")
-	if err != nil {
-		return nil
-	}
-	path := file.Name()
-	_ = file.Close()
-	defer os.Remove(path)
-	if err := writeRoutesFromEnv(loadConfig(flavor, port, runtimeDir), path); err != nil {
-		return nil
-	}
-	return servedModelNames(path, flavor)
+	return servedModelNames(configPath, flavor)
 }
 
 // missingServedModels is the rollout gap the fingerprint cannot express: a
