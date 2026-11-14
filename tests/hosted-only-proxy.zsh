@@ -82,6 +82,11 @@ _hosted_only_proxy_vars claude
 [[ "$_hop_aliases" == "claude-sonnet-5-5,rits/zai-org/glm-5-3" ]] || fail "claude flavor alias default: $_hop_aliases"
 HOSTED_ONLY_ALIAS_MODELS=x,y _hosted_only_proxy_vars claude
 [[ "$_hop_aliases" == "x,y" ]] || fail "HOSTED_ONLY_ALIAS_MODELS not read: $_hop_aliases"
+# The Go side TrimSpace's entries, so a spaced list must match ids here too
+HOSTED_ONLY_ALIAS_MODELS="claude-sonnet-5-5, rits/zai-org/glm-5-3" _hosted_only_proxy_vars claude
+[[ "$_hop_aliases" == "claude-sonnet-5-5,rits/zai-org/glm-5-3" ]] || fail "spaced alias list not normalized: $_hop_aliases"
+[[ "$(_hop_slot_model rits/zai-org/glm-5-3)" == "$_hop_glm" ]] || fail "spaced alias list breaks the slot mapping"
+_hosted_only_proxy_vars claude   # restore the default alias list
 # A pre-swap alias pin (claude-* only) wins over today's default and would drop
 # the legacy GLM alias, so it warns instead of letting stored sessions 400
 alias_pin=$(HOSTED_ONLY_ALIAS_MODELS=claude-sonnet-5-5 _hosted_only_proxy_vars claude 2>&1 >/dev/null)

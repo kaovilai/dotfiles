@@ -169,6 +169,11 @@ _hosted_only_proxy_vars() {
     # "Invalid model name" on continue. The proxy serves it from the primary
     # slot (DeepSeek); the usage log keeps requested vs served visible.
     typeset -g _hop_aliases="$(_hosted_only_knob ALIAS_MODELS claude-sonnet-5-5,rits/zai-org/glm-5-3)"
+    # The Go side TrimSpace's every entry, so a spaced list ("a, b") serves both
+    # ids; normalize here too, or the alias rows and _hop_slot_model compare
+    # against a leading space and never match. This feeds the fingerprint, so the
+    # normalized form is what a restart compares.
+    _hop_aliases="${_hop_aliases// /}"
     # Dialect-suffix routing: this proxy turns it on for the #openai groups
     # (the EnMaaS flavor leaves it off and uses #responses siblings instead).
     typeset -g _hop_dialect="$(_hosted_only_knob DIALECT_SUFFIX "#openai")"
