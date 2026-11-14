@@ -249,8 +249,11 @@ and `scripts/llm-usage`. Read `docs/notes/hosted-only-go-proxy.md` and
 
 - `HOSTED_ONLY_SEARCH_SHIM=1` ⇒ the proxy rewrites the hosted `web_search` tool into a
   `{query}` function tool and serves it from Parallel, with per-(model, gateway)
-  verdicts that fail closed to the strip. Off/unset ⇒ every `rits/` model gets the tool
-  stripped plus the "no web search — route it through the Parallel MCP tools" note.
+  verdicts. An unknown/declined verdict falls back to the strip — which is the
+  `SEARCH_NUDGE`-gated strip below, so `SEARCH_SHIM=1` with `SEARCH_NUDGE=0` leaves an
+  unprobed `rits/` id holding the tool with neither behavior. Off/unset ⇒ every `rits/`
+  model gets the tool stripped plus the "no web search — route it through the Parallel
+  MCP tools" note.
   The strip and its note are gated on `SEARCH_NUDGE` (`rewrite.go`): with
   `HOSTED_ONLY_SEARCH_NUDGE=0` and the shim off, a `rits/` model keeps the hosted tool
   and gets no note. The shim half is gated separately — `SEARCH_SHIM` plus the
