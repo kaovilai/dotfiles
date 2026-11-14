@@ -5,8 +5,10 @@
 # a busy one waits for the watcher. Sourced functions are live in NEW shells
 # only.
 #
-# Hosted-only = EnMaaS-hosted free models only: GLM 5.3 (text) and DeepSeek
-# V4.1 Flash (1M context, vision). Codex's auto-review and Claude Code's
+# Hosted-only = EnMaaS-hosted free models only: DeepSeek V4.1 Flash (the
+# stronger coder, preferred first: DeepSWE 77 vs 60, Terminal-Bench 2.1 91 vs
+# 76) and Muse Spark Open (816B-A42B, multimodal, 1M context) as the fallback
+# and vision target. Codex's auto-review and Claude Code's
 # auto-mode classifier send their review request to the same endpoint as the
 # main model, so one local endpoint routes by model id and every tier, reviewer
 # and helper call stays on the two hosted models (no paid side-channel calls,
@@ -138,8 +140,12 @@ _hosted_only_proxy_vars() {
         print -ru2 -- 'hosted-only: impl validation failed; continuing in stop mode.'
         _hop_impl=go
     }
-    typeset -g _hop_glm="$(_hosted_only_knob GLM_MODEL "${GLM_HYBRID_MODEL:-rits/zai-org/glm-5-3}")"
-    typeset -g _hop_deepseek="$(_hosted_only_knob DEEPSEEK_MODEL rits/deepseek-ai/DeepSeek-V4.1-Flash-1017)"
+    # Slot names predate the 2026-11-14 pair swap (GLM 5.3 left for the enmaas
+    # flavor): the "GLM" slot is the PRIMARY (stronger coder, preferred first),
+    # the "DeepSeek" slot the FALLBACK + vision target. Slot-based, not
+    # name-based, so the proxy's pair picker and vision reroute keep working.
+    typeset -g _hop_glm="$(_hosted_only_knob GLM_MODEL "${GLM_HYBRID_MODEL:-rits/deepseek-ai/DeepSeek-V4.1-Flash-1017}")"
+    typeset -g _hop_deepseek="$(_hosted_only_knob DEEPSEEK_MODEL rits/meta-models/Muse-Spark-Open-816B-A42B-NVFP4)"
     typeset -g _hop_vision_fallback="$(_hosted_only_knob VISION_FALLBACK 1)"
     typeset -g _hop_limit_rewrite="$(_hosted_only_knob LIMIT_REWRITE 1)"
     typeset -g _hop_limit_retry="$(_hosted_only_knob RATE_LIMIT_DEFAULT_RETRY_SECONDS 60)"

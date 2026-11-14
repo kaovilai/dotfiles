@@ -54,18 +54,18 @@ _hosted_only_proxy_vars claude
 local cfg
 _hosted_only_proxy_vars claude
 cfg=$(_hosted_only_proxy_config)
-[[ "$cfg" == *'"anthropic/rits/zai-org/glm-5-3"'* && "$cfg" == *'DeepSeek-V4.1-Flash-1017'* ]] || fail "claude config lacks hosted models: $cfg"
+[[ "$cfg" == *'"anthropic/rits/deepseek-ai/DeepSeek-V4.1-Flash-1017"'* && "$cfg" == *'Muse-Spark-Open-816B-A42B-NVFP4'* ]] || fail "claude config lacks hosted models: $cfg"
 [[ "$cfg" == *'os.environ/HOSTED_ONLY_PROXY_TOKEN'* && "$cfg" == *'claude-sonnet-5-5'* ]] || fail "claude config shape"
 [[ "$cfg" != *luna* && "$cfg" != *api.openai.com* ]] || fail "OpenAI route leaked into config"
 [[ "$cfg" != *callbacks* && "$cfg" != *router_settings* && "$cfg" != *litellm_settings* ]] || fail "LiteLLM-only config blocks survived the retirement: $cfg"
 _hosted_only_proxy_vars codex
 cfg=$(_hosted_only_proxy_config)
-[[ "$cfg" == *'"openai/rits/zai-org/glm-5-3"'* && "$cfg" == *'/v1"'* ]] || fail "codex dialect missing from merged config: $cfg"
-[[ "$cfg" == *'glm-5-3#openai'* && "$cfg" == *'DeepSeek-V4.1-Flash-1017#openai'* ]] || fail "suffixed groups missing: $cfg"
+[[ "$cfg" == *'"openai/rits/deepseek-ai/DeepSeek-V4.1-Flash-1017"'* && "$cfg" == *'/v1"'* ]] || fail "codex dialect missing from merged config: $cfg"
+[[ "$cfg" == *'DeepSeek-V4.1-Flash-1017#openai'* && "$cfg" == *'Muse-Spark-Open-816B-A42B-NVFP4#openai'* ]] || fail "suffixed groups missing: $cfg"
 [[ "$cfg" == *'claude-sonnet-5-5'* ]] || fail "merged config must serve the claude alias for both flavors: $cfg"
-[[ "${cfg##*model_name: \"rits/zai-org/glm-5-3\"}" == *'#openai'* ]] || fail "bare glm group and suffixed group must be distinct entries: $cfg"
+[[ "${cfg##*model_name: \"rits/deepseek-ai/DeepSeek-V4.1-Flash-1017\"}" == *'#openai'* ]] || fail "bare primary group and suffixed group must be distinct entries: $cfg"
 # the anthropic and openai deployments of the same model must not share a group
-[[ "$(grep -c 'model_name:' <<< "$cfg")" == 5 ]] || fail "merged config must have 5 deployments (glm, glm#openai, ds, ds#openai, alias): $cfg"
+[[ "$(grep -c 'model_name:' <<< "$cfg")" == 5 ]] || fail "merged config must have 5 deployments (primary, primary#openai, fallback, fallback#openai, alias): $cfg"
 
 # knob defaults and overrides (fingerprint inputs)
 [[ "$_hop_fallback" == "1 1 60 600 1048576 512 3 16000" ]] || fail "fallback knob defaults: $_hop_fallback"

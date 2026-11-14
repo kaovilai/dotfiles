@@ -32,17 +32,18 @@
 # key. CODEX_ENMAAS_DIRECT=1 skips the proxy (old behavior: the caller's
 # launchArgs talk to the gateway directly). A running proxy whose routes, hooks
 # or key differ is never restarted under live sessions: stop it with
-# claude-enmaas-kill. CODEX_ENMAAS_REVIEW_MODEL (default the DeepSeek id) is the
+# claude-enmaas-kill. CODEX_ENMAAS_REVIEW_MODEL (default the Muse Spark id) is the
 # auto_review model of the GLM/DeepSeek catalog entries.
 #
 # hosted-only: EnMaaS-hosted free models for everything, auto-review included
 # (the retired "glm-hybrid" mode gave GLM an OpenAI reviewer; DeepSeek now does
-# that job). Models: GLM 5.3 (text-only) and DeepSeek V4.1 Flash
+# that job). Models: DeepSeek V4.1 Flash (primary, the stronger coder) and
+# Muse Spark Open (816B-A42B, multimodal, fallback + vision)
 # (1M context, vision), both served by the shared :4148 proxy (#599 merge: one
 # LiteLLM, openai-dialect groups suffixed #openai, chosen by the pre-call hook;
 # the catalog and wiring below keep the bare ids). Codex's guardian reuses the
 # main model's provider with only the model swapped, so the reviewer
-# (HOSTED_ONLY_REVIEW_MODEL, default DeepSeek) must be a model the proxy routes
+# (HOSTED_ONLY_REVIEW_MODEL, default the fallback slot, Muse Spark) must be a model the proxy routes
 # too. Main model: HOSTED_ONLY_MODEL (default GLM). Proxy
 # + upstream knobs: scripts/hosted-only-proxy.zsh (old GLM_HYBRID_* names still read).
 # Codex gets only the local proxy token as HOSTED_ONLY_PROXY_TOKEN, never the
@@ -133,9 +134,9 @@ if [[ "$backend" == enmaas ]]; then
             | def hosted: .auto_review_model_override = $review | .tool_mode = "direct"
                 | .supports_search_tool = ($shim == 1) | .upgrade = null;
             {models: ([.models[] | select(.slug != $glm and .slug != $ds)] + [
-                ($base | hosted | .slug = $glm | .display_name = "GLM 5.3" | .priority = 13
-                    | .input_modalities = ["text"] | .context_window = 1048576 | .max_context_window = 1048576),
-                ($base | hosted | .slug = $ds | .display_name = "DeepSeek V4.1 Flash" | .priority = 14
+                ($base | hosted | .slug = $glm | .display_name = "DeepSeek V4.1 Flash" | .priority = 13
+                    | .input_modalities = ["text", "image"] | .context_window = 1048576 | .max_context_window = 1048576),
+                ($base | hosted | .slug = $ds | .display_name = "Muse Spark Open" | .priority = 14
                     | .input_modalities = ["text", "image"] | .context_window = 1048576 | .max_context_window = 1048576)])}' \
             > "$catalog.tmp" && mv -f "$catalog.tmp" "$catalog" && print -r -- "$shape" >| "$catalog.version" || {
             rm -f "$catalog.tmp"
@@ -236,10 +237,10 @@ if [[ ! -s "$catalog" || "$(<"$catalog.version" 2>/dev/null)" != "$shape" ]]; th
         | def common: .auto_review_model_override = $review | .tool_mode = "direct"
             | .supports_search_tool = ($shim == 1) | .upgrade = null;
         {models: [
-            ($base | common | .slug = $glm | .display_name = "GLM 5.3" | .priority = 13
-                | .input_modalities = ["text"]
+            ($base | common | .slug = $glm | .display_name = "DeepSeek V4.1 Flash" | .priority = 13
+                | .input_modalities = ["text", "image"]
                 | .context_window = $gctx | .max_context_window = $gctx),
-            ($base | common | .slug = $ds | .display_name = "DeepSeek V4.1 Flash" | .priority = 14
+            ($base | common | .slug = $ds | .display_name = "Muse Spark Open" | .priority = 14
                 | .input_modalities = ["text", "image"]
                 | .context_window = $dctx | .max_context_window = $dctx)]}' \
         > "$catalog.tmp" && mv -f "$catalog.tmp" "$catalog" && print -r -- "$shape" >| "$catalog.version" || {

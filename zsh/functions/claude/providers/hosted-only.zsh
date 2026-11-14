@@ -2,11 +2,13 @@
 # (next T3 turn); the bridge exports the settings env into the client, so
 # startup-read knobs (CLAUDE_CODE_MAX_OUTPUT_TOKENS) win there too.
 # ---------------------------------------------------------------------------
-# claude-hosted-only: EnMaaS-hosted free models only (GLM 5.3 main; DeepSeek
-# V4.1 Flash selectable with --model rits/deepseek-ai/DeepSeek-V4.1-Flash-1017[1m]).
+# claude-hosted-only: EnMaaS-hosted free models only (DeepSeek V4.1 Flash
+# main -- the stronger coder; Muse Spark Open selectable with --model
+# rits/meta-models/Muse-Spark-Open-816B-A42B-NVFP4[1m], and the proxy's vision
+# reroute sends image-carrying requests there).
 # Retired names stay as aliases: claude-glm-hybrid, claude-glm-only (the old
 # "hybrid" mode put the auto-mode classifier on an OpenAI model; DeepSeek now
-# covers classifier, helpers and vision, so no OpenAI key or route is used).
+# covers classifier and helpers, so no OpenAI key or route is used).
 #
 # Claude Code picks the auto-mode classifier from ANTHROPIC_DEFAULT_SONNET_MODEL
 # (claude-sonnet-5-5 / claude-opus-5-5 ids are refused there) and sends it to
@@ -54,20 +56,18 @@ _claude_hosted_launch() (
     # be 200k" warning; Claude Code strips it before the request, so the proxy
     # still sees the bare id. modelSettings keys use the bare id.
     local glm1m="${glm}[1m]" ds1m="${ds}[1m]"
-    local -a picks=("fable=${glm1m}|GLM 5.3" "opus=${glm1m}|GLM 5.3" "haiku=${glm1m}|GLM 5.3" "=${ds1m}|DeepSeek V4.1 Flash")   # DeepSeek: picker entry only, no tier
+    local -a picks=("fable=${glm1m}|DeepSeek V4.1 Flash" "opus=${glm1m}|DeepSeek V4.1 Flash" "haiku=${glm1m}|DeepSeek V4.1 Flash" "=${ds1m}|Muse Spark Open")   # Muse Spark: picker entry only, no tier
     local classifier small subagent
-    # Auto-mode classification and the small/fast tier default to GLM, not
-    # DeepSeek (2026-11-06): the client-side auto-mode classifier (CLAUDE_CODE_
-    # AUTO_MODE_SERVER=0 above) runs on ANTHROPIC_SMALL_FAST_MODEL, sees text
-    # only (tool name + input, never images or output), and a DeepSeek outage
-    # froze every tool call that needed classification while GLM stayed up.
-    # Fallback: the proxy's router-level glm->deepseek fallback covers a GLM
-    # outage inside one request. Image-carrying small-model calls are still
-    # safe: the proxy's vision reroute sends GLM requests with images to
-    # DeepSeek. Knobs override both defaults.
+    # Auto-mode classification and the small/fast tier default to the PRIMARY
+    # (DeepSeek Flash, the fast model, 2026-11-14): the classifier sees text
+    # only, and Muse Spark always reasons before answering, which is the wrong
+    # latency profile for a per-tool-call classification. A primary outage is
+    # covered in-request by the proxy's pair fallback (classifier calls are
+    # image-free and fail over to Muse Spark). Knobs override.
     classifier="$(_claude_hosted_ref "${HOSTED_ONLY_CLASSIFIER_MODEL:-$glm}" "$glm" "$ds")"
     small="$(_claude_hosted_ref "${HOSTED_ONLY_SMALL_FAST_MODEL:-$glm}" "$glm" "$ds")"
-    subagent="$(_claude_hosted_ref "${HOSTED_ONLY_SUBAGENT_MODEL:-$ds}" "$glm" "$ds")"
+    # Subagents do the coding: the stronger coder, on the primary slot.
+    subagent="$(_claude_hosted_ref "${HOSTED_ONLY_SUBAGENT_MODEL:-$glm}" "$glm" "$ds")"
     local -a reply
     _claude_picker_args "${picks[@]}"
     local settings='{}'
