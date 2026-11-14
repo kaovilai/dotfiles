@@ -234,8 +234,10 @@ func loadConfig(flavor, port, runtimeDir string) *config {
 	// The hosted-only slots keep their old names: GLM_MODEL is the primary
 	// (DeepSeek V4.1 Flash, the stronger coder), DEEPSEEK_MODEL the fallback +
 	// vision target (Muse Spark Open) since the 2026-11-14 swap. The enmaas
-	// controller forwards no model knobs and runs on the enmaas pair, which is
-	// what its route table advertises.
+	// controller sets no model knobs of its own: the child receives exported
+	// HOSTED_ONLY_* values from the caller (CHILD_ENV_PREFIXES in
+	// zsh/functions/claude/providers/enmaas-proxy.zsh), while a non-exported
+	// pin moves only the routes that launcher advertises.
 	glmDefault, dsDefault, aliasDefault := "rits/zai-org/glm-5-3", "rits/deepseek-ai/DeepSeek-V4.1-Flash-1017", ""
 	if flavor == "claude" || flavor == "codex" {
 		glmDefault = "rits/deepseek-ai/DeepSeek-V4.1-Flash-1017"
