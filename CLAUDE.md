@@ -235,8 +235,8 @@ and `scripts/llm-usage`. Read `docs/notes/hosted-only-go-proxy.md` and
   DeepSeek V4.1 Flash, no aliases) because nothing sets those knobs for them — but
   **exported** `HOSTED_ONLY_*` knobs do reach the EnMaaS child (its controller forwards
   `CHILD_ENV_PREFIXES`), so exporting `HOSTED_ONLY_{GLM,DEEPSEEK}_MODEL` or
-  `ALIAS_MODELS` also changes that flavor's slots, aliases, vision reroute, fallback
-  pairing and output clamp; a non-exported shell assignment does not. Either way the
+  `HOSTED_ONLY_ALIAS_MODELS` also changes that flavor's slots, aliases, vision reroute,
+  fallback pairing and output clamp; a non-exported shell assignment does not. Either way the
   EnMaaS route labels (`ENMAAS_RESPONSES_ROUTES`) follow the same env.
 - A new model also needs its rollup entries in `scripts/llm-usage` (`strip_model`,
   `family`, `reroute_kind`'s slot set, `BRANDS`, `MODEL_VENDORS`). Traffic still shows
