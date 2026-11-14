@@ -36,8 +36,9 @@
 # auto_review model of the GLM/DeepSeek catalog entries.
 #
 # hosted-only: EnMaaS-hosted free models for everything, auto-review included
-# (the retired "glm-hybrid" mode gave GLM an OpenAI reviewer; DeepSeek now does
-# that job). Models: DeepSeek V4.1 Flash (primary, the stronger coder) and
+# (the retired "glm-hybrid" mode gave GLM an OpenAI reviewer; the fallback slot
+# now does that job — Muse Spark Open since the 2026-11-14 pair swap). Models:
+# DeepSeek V4.1 Flash (primary, the stronger coder) and
 # Muse Spark Open (816B-A42B, multimodal, fallback + vision target), both 1M
 # context, both served by the shared :4148 proxy (#599 merge: one
 # LiteLLM, openai-dialect groups suffixed #openai, chosen by the pre-call hook;

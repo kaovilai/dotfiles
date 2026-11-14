@@ -2653,10 +2653,17 @@ def reroute_kind(ev):
         return f"fallback:{reason}" if reason else "fallback"
     if not req or family(req) == family(srv):
         return None
-    if family(req) in HOSTED_SLOT_FAMILIES and family(srv) in HOSTED_SLOT_FAMILIES:
-        return "vision"
-    if family(req) in CLAUDE_FAMILIES and family(srv) in HOSTED_SLOT_FAMILIES:
+    req_f, srv_f = family(req), family(srv)
+    if req_f in CLAUDE_FAMILIES and srv_f in HOSTED_SLOT_FAMILIES:
         return "alias"
+    if req_f == "glm" and srv_f == "deepseek":
+        # since the 2026-11-14 pair swap glm-5-3 is an ALIAS of the primary
+        # slot, so serving it there is an alias resolution, not a reroute
+        return "alias"
+    if req_f in HOSTED_SLOT_FAMILIES and srv_f in HOSTED_SLOT_FAMILIES:
+        # image-input fallback between the pair's slots (deepseek -> muse, and
+        # the retired id -> muse once its alias resolution carries an image)
+        return "vision"
     return "other"
 
 
