@@ -68,14 +68,36 @@ echo "$CM_TEST_FAKE_BREW_PREFIX"
 STUB
 chmod +x "$HOME/bin/brew"
 export CM_TEST_FAKE_BREW_PREFIX="$tmp/no-brew"
-# stub launchctl: always loaded, bootstrap always ok; logs invocations (the
-# Darwin case asserts a current agent is NOT re-loaded)
+# stub launchctl: stateful — print succeeds only while a bootstrap-created
+# "loaded" marker exists and no bootout removed it; bootstrap can fail once on
+# demand (the Input/output-error race); a bootout-race flag makes bootout a
+# no-op. Logs invocations (the Darwin cases assert re-load/kickstart behavior)
 cat > "$HOME/bin/launchctl" <<'STUB'
 #!/bin/sh
 echo "launchctl $*" >> "$LAUNCHCTL_LOG"
+st="$CM_STUB_LAUNCHD_STATE"
+case "$1" in
+    print) [ -f "$st/loaded" ] && exit 0; exit 3 ;;
+    bootout) [ -f "$st/bootout-race" ] || rm -f "$st/loaded"; exit 0 ;;
+    bootstrap)
+        if [ -f "$st/bootstrap-fails" ]; then
+            rm -f "$st/bootstrap-fails"
+            echo "Bootstrap failed: 5: Input/output error" >&2
+            exit 5
+        fi
+        : >| "$st/loaded"; exit 0 ;;
+esac
 exit 0
 STUB
 chmod +x "$HOME/bin/launchctl"
+export CM_STUB_LAUNCHD_STATE="$tmp/launchd-state"
+mkdir -p "$CM_STUB_LAUNCHD_STATE"
+# stub sleep: the launchd wait/poll loops must not burn real seconds offline
+cat > "$HOME/bin/sleep" <<'STUB'
+#!/bin/sh
+exit 0
+STUB
+chmod +x "$HOME/bin/sleep"
 # -f on every invocation: a plain zsh sources ~/.zshenv, whose shell env can
 # rebuild PATH (vite-plus does, nondeterministically from this harness's view)
 # and drop the stub directory — one run then fetched the real nodejs.org
@@ -135,11 +157,13 @@ out="" url=""
 while [ $# -gt 0 ]; do
     case "$1" in
         -o) out="$2"; shift 2 ;;
-        -fsSL) shift ;;
+        --max-time) shift 2 ;;
+        -fsS*) shift ;;
         *) url="$1"; shift ;;
     esac
 done
 case "$url" in
+    */healthz) [ "${CM_STUB_HEALTHZ:-0}" = 1 ] && exit 0; exit 7 ;;
     *SHASUMS256.txt*) echo "$CM_TEST_SHA  node-v24.15.0-linux-x64.tar.xz" ;;
     *) cp "$CM_TEST_FIXTURE/node-v24.15.0-linux-x64.tar.xz" "$out" ;;
 esac
@@ -380,7 +404,7 @@ zsh -f "$repo/scripts/context-mode-daemon-sync.zsh" "${args[@]}" || fail "dead-u
 grep -q -- "--install" "$NODE_LOG" || fail "a unit whose ExecStart node is missing must be reinstalled"
 
 # --- 12. launchd: an escaped HOME must not re-load a current agent ----------------------
-export CM_TEST_UNAME=Darwin
+export CM_TEST_UNAME=Darwin CM_STUB_HEALTHZ=1
 export HOME="$tmp/ho&me"   # & forces the XML escaping the freshness check must undo
 # the node lives under a literal "&lt;": the plist stores "$tmp/n&amp;lt;ode/bin/node",
 # and the entity decoder must NOT turn that into ".../n<ode/..." (decoding &amp;
@@ -413,4 +437,25 @@ unset CM_TEST_UNAME
 export HOME="$tmp/home"
 export PATH="${PATH#*:}"   # drop the tricky node dir
 
-print -- "PASS: context-mode-daemon-sync (skip, node gate, autoinstall, marker retry, manual node, PATH-managed node, current, stale unit, add, foreign, numeric orderings, bad checksum, port move, rollback, unit-fail hold, scope+path guards, dead unit node, launchd escaping)"
+# --- 12b. launchd: a bootout that never lands kickstarts instead of failing -------------
+# the 2.2.5-2.2.7 outages: bootout raced, bootstrap never ran, nothing served
+export CM_TEST_UNAME=Darwin
+rm -f "$HOME/Library/LaunchAgents/com.kaovilai.context-mode-daemon.plist"
+: >| "$CM_STUB_LAUNCHD_STATE/loaded"
+: >| "$CM_STUB_LAUNCHD_STATE/bootout-race"
+: >| "$LAUNCHCTL_LOG"
+zsh -f "$repo/scripts/context-mode-daemon-sync.zsh" "${args[@]}" || fail "bootout-race run must exit 0"
+grep -q "kickstart -k" "$LAUNCHCTL_LOG" || fail "a wedged bootout must kickstart the loaded agent"
+grep -q " bootstrap " "$LAUNCHCTL_LOG" && fail "a wedged bootout must not bootstrap over the loaded label"
+rm -f "$CM_STUB_LAUNCHD_STATE/bootout-race"
+
+# --- 12c. launchd: a healthz that never answers is a failure, after one kickstart --------
+export CM_STUB_HEALTHZ=0
+: >| "$LAUNCHCTL_LOG"
+typeset -i rc=0
+zsh -f "$repo/scripts/context-mode-daemon-sync.zsh" "${args[@]}" || rc=$?
+(( rc == 1 )) || fail "a daemon that never answers healthz must fail the run (rc=$rc)"
+(( $(grep -c "kickstart -k" "$LAUNCHCTL_LOG") == 1 )) || fail "an unhealthy daemon must get exactly one kickstart retry"
+unset CM_TEST_UNAME CM_STUB_HEALTHZ
+
+print -- "PASS: context-mode-daemon-sync (skip, node gate, autoinstall, marker retry, manual node, PATH-managed node, current, stale unit, add, foreign, numeric orderings, bad checksum, port move, rollback, unit-fail hold, scope+path guards, dead unit node, launchd escaping, bootout race, healthz gate)"
