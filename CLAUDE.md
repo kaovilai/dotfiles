@@ -226,8 +226,9 @@ and `scripts/llm-usage`. Read `docs/notes/hosted-only-go-proxy.md` and
   which model a slot holds; it does not stop a request moving between slots (the vision
   reroute and the router fallback still do that).
 - A retired model must keep working for sessions that stored it: add its id to
-  `ALIAS_MODELS` (an alias is served by the primary slot) instead of letting the cost
-  guard answer 400 on continue.
+  `HOSTED_ONLY_ALIAS_MODELS` (legacy name `GLM_HYBRID_ALIAS_MODELS`; a bare
+  `ALIAS_MODELS` is never read — an alias is served by the primary slot) instead of
+  letting the cost guard answer 400 on continue.
 - `config.go`'s built-in defaults are per flavor: claude/codex default to the swapped
   pair plus the launcher's alias set, so a hand-run `ensure`/`watch` regenerates what
   those ports serve. The route-table flavors keep the **EnMaaS** pair (GLM 5.3 +
@@ -268,9 +269,10 @@ and `scripts/llm-usage`. Read `docs/notes/hosted-only-go-proxy.md` and
   survives the revert. Each flavor labels its own pair (the EnMaaS catalog is GLM 5.3
   text-only + DeepSeek V4.1 Flash).
 - Never restart a proxy a live session is routed through. A changed config, hook, key or
-  model pair changes the fingerprint; under a busy proxy the launcher refuses to restart,
-  names the ids the running proxy does not serve, and `<flavor>-hosted-only-restart`
-  applies the change once it is idle.
+  model pair changes the fingerprint; under a busy proxy the launcher refuses to restart
+  and names the ids the running proxy does not serve. `<flavor>-hosted-only-restart`
+  forces the restart immediately (`HOSTED_ONLY_FORCE_RESTART=1`, zero-refuse swap) — it
+  does not wait for idle, so run it only once the sessions have finished.
 - Every knob the Go child reads must be forwarded by the launcher — parity in both
   directions is enforced by `tests/go-proxy-knob-parity.zsh` — **and** hashed into the
   fingerprint (`_hosted_only_proxy_fp`'s knob list). That second half is not covered by
