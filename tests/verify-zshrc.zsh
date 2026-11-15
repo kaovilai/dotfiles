@@ -111,4 +111,23 @@ if grep -aEi 'command not found|parse error|bad pattern|no such file or director
   exit 1
 fi
 (( rc == 0 )) || exit $rc
+
+# --- 3. background startup notices stay out of captures ----------------------
+# A notice written by an `&!` job lands in any `$(... 2>&1)` that captures the
+# source, which once corrupted LANG. A git shim forces the dirty-repo notice so
+# this does not depend on the checkout's state.
+mkdir -p "$TESTHOME/bin"
+cat >"$TESTHOME/bin/git" <<'SHIM'
+#!/bin/sh
+if [ "$3" = status ]; then printf 'M .zshrc\n'; exit 0; fi
+exec /usr/bin/git "$@"
+SHIM
+chmod +x "$TESTHOME/bin/git"
+captured=$(HOME="$TESTHOME" PATH="$TESTHOME/bin:$PATH" zsh -c 'source ~/.zshrc' 2>&1)
+if print -r -- "$captured" | grep -aqE 'dotfiles repo has uncommitted|\[dotfiles\]|\[happy\]'; then
+  print -u2 '^ background startup notice leaked into captured output'
+  print -r -- "$captured"
+  exit 1
+fi
+print '    background notices stay out of captures'
 print '==> OK: .zshrc sources cleanly and all functions resolve'
