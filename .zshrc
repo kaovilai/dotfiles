@@ -141,6 +141,13 @@ for func in wifi-standard; do
 done
 unset func
 _safe_source ~/git/dotfiles/zsh/util.zsh
+# Background startup output goes to the terminal when there is one, and nowhere
+# otherwise: a notice that lands in a capture corrupts command substitutions such
+# as `LANG=$(zsh -c 'source ~/.zshrc 2>&1; ...')`. The prompt's zpty relay reopens
+# fd 1/2, so `-t 1`/`-t 2` are false in a real terminal; opening /dev/tty is the
+# test that still holds.
+_dotfiles_bg_out=/dev/null
+{ : >/dev/tty } 2>/dev/null && _dotfiles_bg_out=/dev/tty
 if [[ "$TERM_PROGRAM" != "vscode" ]]; then
   # Git status check (background to avoid blocking startup)
   {
@@ -160,33 +167,36 @@ if [[ "$TERM_PROGRAM" != "vscode" ]]; then
         print "dotfiles repo has uncommitted changes, run ${RED}edit-dotfiles${NC} to review" >&2
       fi
     fi
-  } &!
-  # Happy CLI update check (once per day, background)
-  {
-    local stamp="$HOME/.zsh-command-cache/happy-update-check"
-    [[ -d "${stamp:h}" ]] || mkdir -p "${stamp:h}"
-    local expired=0
-    if [[ -f "$stamp" ]]; then
-      () {
-        setopt local_options extended_glob
-        local -a expired_files
-        expired_files=("$stamp"(#qNms+86400))
-        if (( ${#expired_files} > 0 )); then
-          expired=1
-        fi
-      }
-    else
-      expired=1
-    fi
-    if (( expired == 1 )); then
-      local outdated
-      outdated=$(npm outdated -g happy 2>/dev/null)
-      touch "$stamp"
-      if [[ -n "$outdated" ]]; then
-        print -P "%F{yellow}[happy] New version available. Run: npm update -g happy%f" >&2
+  } >"$_dotfiles_bg_out" 2>&1 &!
+  # Happy CLI update check (once per day, background). Terminal-only: a capture
+  # must not consume the stamp, or that day's notice never reaches a terminal.
+  if [[ $_dotfiles_bg_out == /dev/tty ]]; then
+    {
+      local stamp="$HOME/.zsh-command-cache/happy-update-check"
+      [[ -d "${stamp:h}" ]] || mkdir -p "${stamp:h}"
+      local expired=0
+      if [[ -f "$stamp" ]]; then
+        () {
+          setopt local_options extended_glob
+          local -a expired_files
+          expired_files=("$stamp"(#qNms+86400))
+          if (( ${#expired_files} > 0 )); then
+            expired=1
+          fi
+        }
+      else
+        expired=1
       fi
-    fi
-  } &!
+      if (( expired == 1 )); then
+        local outdated
+        outdated=$(npm outdated -g happy 2>/dev/null)
+        touch "$stamp"
+        if [[ -n "$outdated" ]]; then
+          print -P "%F{yellow}[happy] New version available. Run: npm update -g happy%f" >&2
+        fi
+      fi
+    } >"$_dotfiles_bg_out" 2>&1 &!
+  fi
 fi
 # -- Non-essential initialization (happens in background) --
 {
@@ -195,7 +205,8 @@ fi
   if [[ "$TERM_PROGRAM" != "vscode" ]]; then
     source ~/git/dotfiles/zsh/completions.zsh
   fi
-} &!
+} >"$_dotfiles_bg_out" 2>&1 &!
+unset _dotfiles_bg_out
 
 # bun completions
 [ -s "$HOME/.bun/_bun" ] && source "$HOME/.bun/_bun"
