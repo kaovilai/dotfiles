@@ -231,18 +231,21 @@ func loadConfig(flavor, port, runtimeDir string) *config {
 
 	// Baked-in defaults are per flavor, so a hand-run `ensure`/`watch` without
 	// the launcher env regenerates the same pair that flavor actually serves.
-	// The hosted-only slots keep their old names: GLM_MODEL is the primary
-	// (DeepSeek V4.1 Flash, the stronger coder), DEEPSEEK_MODEL the fallback +
-	// vision target (Muse Spark Open) since the 2026-11-14 swap. The enmaas
-	// controller sets no model knobs of its own: the child receives exported
-	// HOSTED_ONLY_* values from the caller (CHILD_ENV_PREFIXES in
+	// The hosted-only slots keep their old names: GLM_MODEL is the primary,
+	// DEEPSEEK_MODEL the fallback + vision target. The 2026-11-14 swap put
+	// DeepSeek primary with Muse as fallback; the 2026-11-16 revert put GLM 5.3
+	// back on the primary (Artificial Analysis' Coding Agent Index has GLM
+	// ahead: 48.9 vs 46.3; its Terminal-Bench 4.0 gap is 41.9 vs 26.8) with
+	// DeepSeek as the fallback, which is also the vision target because GLM
+	// answers 400 to every image. Muse stays an alias so its two days of stored
+	// sessions keep working. The enmaas controller sets no model knobs of its
+	// own: the child receives exported HOSTED_ONLY_* values from the caller
+	// (CHILD_ENV_PREFIXES in
 	// zsh/functions/claude/providers/enmaas-proxy.zsh), while a non-exported
 	// pin moves only the routes that launcher advertises.
 	glmDefault, dsDefault, aliasDefault := "rits/zai-org/glm-5-3", "rits/deepseek-ai/DeepSeek-V4.1-Flash-1017", ""
 	if flavor == "claude" || flavor == "codex" {
-		glmDefault = "rits/deepseek-ai/DeepSeek-V4.1-Flash-1017"
-		dsDefault = "rits/meta-models/Muse-Spark-Open-816B-A42B-NVFP4"
-		aliasDefault = "claude-sonnet-5-5,rits/zai-org/glm-5-3"
+		aliasDefault = "claude-sonnet-5-5,rits/meta-models/Muse-Spark-Open-816B-A42B-NVFP4"
 	}
 	aliases := map[string]struct{}{}
 	for _, a := range strings.Split(knob("ALIAS_MODELS", aliasDefault), ",") {

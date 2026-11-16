@@ -37,16 +37,16 @@
 #
 # hosted-only: EnMaaS-hosted free models for everything, auto-review included
 # (the retired "glm-hybrid" mode gave GLM an OpenAI reviewer; the fallback slot
-# now does that job — Muse Spark Open since the 2026-11-14 pair swap). Models:
-# DeepSeek V4.1 Flash (primary, the stronger coder) and
-# Muse Spark Open (816B-A42B, multimodal, fallback + vision target), both 1M
+# now does that job). Models: GLM 5.3 (primary, text-only) and DeepSeek V4.1
+# Flash (multimodal, fallback + vision target; the 2026-11-14 swap and its
+# 11-16 revert moved only these ids), both 1M
 # context, both served by the shared :4148 proxy (#599 merge: one
 # LiteLLM, openai-dialect groups suffixed #openai, chosen by the pre-call hook;
 # the catalog and wiring below keep the bare ids). Codex's guardian reuses the
 # main model's provider with only the model swapped, so the reviewer
-# (HOSTED_ONLY_REVIEW_MODEL, default the fallback slot, Muse Spark) must be a model the proxy routes
-# too. Main model: HOSTED_ONLY_MODEL (default the primary slot, DeepSeek V4.1
-# Flash; the slots keep their old names, see zsh/functions/claude/providers/
+# (HOSTED_ONLY_REVIEW_MODEL, default the fallback slot, DeepSeek) must be a model the proxy routes
+# too. Main model: HOSTED_ONLY_MODEL (default the primary slot, GLM 5.3; the
+# slots keep their old names, see zsh/functions/claude/providers/
 # hosted-only.zsh). Proxy
 # + upstream knobs: scripts/hosted-only-proxy.zsh (old GLM_HYBRID_* names still read).
 # Codex gets only the local proxy token as HOSTED_ONLY_PROXY_TOKEN, never the
@@ -210,9 +210,9 @@ export HOSTED_ONLY_PROXY_TOKEN="$_hop_token"
 
 # hosted-only: catalog from the bundled one, keyed on Codex version + shape.
 # Fallback slot: the shared lib's _hop_deepseek, else its knob/default — the
-# last resort must match the lib's default (Muse Spark Open), not the pre-swap
-# one, or a taken chain would target an id the proxy no longer routes.
-typeset ds="${_hop_deepseek:-${HOSTED_ONLY_DEEPSEEK_MODEL:-${GLM_HYBRID_DEEPSEEK_MODEL:-rits/meta-models/Muse-Spark-Open-816B-A42B-NVFP4}}}"
+# last resort must match the lib's default (DeepSeek V4.1 Flash), not the
+# swapped-pair one, or a taken chain would target an id the proxy no longer routes.
+typeset ds="${_hop_deepseek:-${HOSTED_ONLY_DEEPSEEK_MODEL:-${GLM_HYBRID_DEEPSEEK_MODEL:-rits/deepseek-ai/DeepSeek-V4.1-Flash-1017}}}"
 # A pin made before the pair swap names a retired id (or a claude-* alias) that
 # the proxy still routes from the primary slot; the generated catalog below only
 # carries the two slots, so map such pins onto the primary instead of failing.
@@ -239,7 +239,7 @@ if [[ "$reviewer" != "$_hop_glm" && "$reviewer" != "$ds" ]]; then
 fi
 typeset catalog="$_hop_runtime/hosted-only-models.json" version shape
 version=$("$native" --version 2>/dev/null) || version=unknown
-shape="$version|shape2|$_hop_glm|$ds|$reviewer|$glm_ctx|$ds_ctx|$shim"
+shape="$version|shape3|$_hop_glm|$ds|$reviewer|$glm_ctx|$ds_ctx|$shim"
 if [[ ! -s "$catalog" || "$(<"$catalog.version" 2>/dev/null)" != "$shape" ]]; then
     "$native" debug models --bundled 2>/dev/null | jq --arg glm "$_hop_glm" --arg ds "$ds" \
         --arg review "$reviewer" --argjson gctx "$glm_ctx" --argjson dctx "$ds_ctx" --argjson shim "$shim" '
@@ -249,10 +249,10 @@ if [[ ! -s "$catalog" || "$(<"$catalog.version" 2>/dev/null)" != "$shape" ]]; th
         | def common: .auto_review_model_override = $review | .tool_mode = "direct"
             | .supports_search_tool = ($shim == 1) | .upgrade = null;
         {models: [
-            ($base | common | .slug = $glm | .display_name = "DeepSeek V4.1 Flash" | .priority = 13
-                | .input_modalities = ["text", "image"]
+            ($base | common | .slug = $glm | .display_name = "GLM 5.3" | .priority = 13
+                | .input_modalities = ["text"]
                 | .context_window = $gctx | .max_context_window = $gctx),
-            ($base | common | .slug = $ds | .display_name = "Muse Spark Open" | .priority = 14
+            ($base | common | .slug = $ds | .display_name = "DeepSeek V4.1 Flash" | .priority = 14
                 | .input_modalities = ["text", "image"]
                 | .context_window = $dctx | .max_context_window = $dctx)]}' \
         > "$catalog.tmp" && mv -f "$catalog.tmp" "$catalog" && print -r -- "$shape" >| "$catalog.version" || {

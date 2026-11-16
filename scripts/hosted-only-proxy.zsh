@@ -143,12 +143,14 @@ _hosted_only_proxy_vars() {
         print -ru2 -- 'hosted-only: impl validation failed; continuing in stop mode.'
         _hop_impl=go
     }
-    # Slot names predate the 2026-11-14 pair swap (GLM 5.3 left for the enmaas
-    # flavor): the "GLM" slot is the PRIMARY (stronger coder, preferred first),
-    # the "DeepSeek" slot the FALLBACK + vision target. Slot-based, not
-    # name-based, so the proxy's pair picker and vision reroute keep working.
-    typeset -g _hop_glm="$(_hosted_only_knob GLM_MODEL "${GLM_HYBRID_MODEL:-rits/deepseek-ai/DeepSeek-V4.1-Flash-1017}")"
-    typeset -g _hop_deepseek="$(_hosted_only_knob DEEPSEEK_MODEL rits/meta-models/Muse-Spark-Open-816B-A42B-NVFP4)"
+    # Slot names, not model names: the "GLM" slot is the PRIMARY, the
+    # "DeepSeek" slot the FALLBACK + vision target. GLM 5.3 holds the primary
+    # (Artificial Analysis' Coding Agent Index: 48.9 vs DeepSeek's 46.3) and
+    # DeepSeek V4.1 Flash the fallback, which must accept images because GLM
+    # answers 400 to them and the vision reroute sends those requests here.
+    # 2026-11-14 swap / 2026-11-16 revert both needed only these two ids.
+    typeset -g _hop_glm="$(_hosted_only_knob GLM_MODEL "${GLM_HYBRID_MODEL:-rits/zai-org/glm-5-3}")"
+    typeset -g _hop_deepseek="$(_hosted_only_knob DEEPSEEK_MODEL rits/deepseek-ai/DeepSeek-V4.1-Flash-1017)"
     typeset -g _hop_vision_fallback="$(_hosted_only_knob VISION_FALLBACK 1)"
     typeset -g _hop_limit_rewrite="$(_hosted_only_knob LIMIT_REWRITE 1)"
     typeset -g _hop_limit_retry="$(_hosted_only_knob RATE_LIMIT_DEFAULT_RETRY_SECONDS 60)"
@@ -163,12 +165,12 @@ _hosted_only_proxy_vars() {
     # The merged config always serves the claude-sonnet-5-5 alias from the GLM
     # (anthropic) deployment, so both flavors record the same value and the
     # shared fingerprint stays flavor-independent.
-    # rits/zai-org/glm-5-3 is a LEGACY alias since the 2026-11-14 pair swap
-    # (GLM left the hosted-only pair): T3 threads and Claude Code sessions that
-    # stored it as their model would otherwise get the cost guard's 400
-    # "Invalid model name" on continue. The proxy serves it from the primary
-    # slot (DeepSeek); the usage log keeps requested vs served visible.
-    typeset -g _hop_aliases="$(_hosted_only_knob ALIAS_MODELS claude-sonnet-5-5,rits/zai-org/glm-5-3)"
+    # Muse Spark Open is a LEGACY alias since the 2026-11-16 revert (it held the
+    # fallback for two days): sessions that stored it would otherwise get the
+    # cost guard's 400 "Invalid model name" on continue. The proxy serves it
+    # from the primary slot (GLM); the usage log keeps requested vs served
+    # visible.
+    typeset -g _hop_aliases="$(_hosted_only_knob ALIAS_MODELS claude-sonnet-5-5,rits/meta-models/Muse-Spark-Open-816B-A42B-NVFP4)"
     # The Go side TrimSpace's every entry, so a spaced list ("a, b") serves both
     # ids; normalize here too, or the alias rows and _hop_slot_model compare
     # against a leading space and never match. This feeds the fingerprint, so the
@@ -189,22 +191,23 @@ _hosted_only_proxy_vars() {
     # notes; days a pruned copy is kept.
     typeset -g _hop_image_budget="$(_hosted_only_knob IMAGE_BUDGET_BYTES 2500000)"
     typeset -g _hop_image_cache_days="$(_hosted_only_knob IMAGE_CACHE_DAYS 1)"
-    # A pin can make the pair degenerate: the retired fallback default (DeepSeek
-    # V4.1 Flash) is now the primary default, so carrying that pin over as
-    # HOSTED_ONLY_DEEPSEEK_MODEL leaves both slots holding one id. The proxy
-    # then skips the outage fallback and the vision reroute (rewrite.go checks
-    # cfg.GLM != cfg.DeepSeek) with no other signal, so say it here.
+    # A pin can make the pair degenerate: during the 2026-11-14..16 swap the
+    # primary default was DeepSeek V4.1 Flash, so a HOSTED_ONLY_GLM_MODEL pin
+    # from that window now collides with the fallback default and leaves both
+    # slots holding one id. The proxy then skips the outage fallback and the
+    # vision reroute (rewrite.go checks cfg.GLM != cfg.DeepSeek) with no other
+    # signal, so say it here.
     if [[ "$_hop_glm" == "$_hop_deepseek" ]]; then
-        print -ru2 -- "hosted-only: GLM and DEEPSEEK slots both resolve to $_hop_glm — pair fallback and vision reroute are off (likely a pre-swap DEEPSEEK_MODEL pin); set HOSTED_ONLY_DEEPSEEK_MODEL to the fallback model (the EnMaaS flavor reads the same knob: scope it per launch if that side keeps its own id)."
+        print -ru2 -- "hosted-only: GLM and DEEPSEEK slots both resolve to $_hop_glm — pair fallback and vision reroute are off (likely a GLM_MODEL pin carried over from the 2026-11-14..16 swap); set HOSTED_ONLY_GLM_MODEL to the primary model (the EnMaaS flavor reads the same knob: scope it per launch if that side keeps its own id)."
     fi
-    # A long-lived shell can still export the pre-swap alias list (claude-* only).
-    # The knob wins over today's default and silently drops the retired GLM id,
-    # whose alias row exists only so stored sessions keep working — they would
-    # get the cost guard's 400 on continue. Pinning that id as a SLOT serves it
-    # anyway, so the warning would be wrong there.
-    if [[ -n "${HOSTED_ONLY_ALIAS_MODELS-}${GLM_HYBRID_ALIAS_MODELS-}" && "$_hop_aliases" != *rits/zai-org/glm-5-3* \
-          && "$_hop_glm" != "rits/zai-org/glm-5-3" && "$_hop_deepseek" != "rits/zai-org/glm-5-3" ]]; then
-        print -ru2 -- "hosted-only: ALIAS_MODELS is set without rits/zai-org/glm-5-3 — sessions that stored the retired GLM id will get 400 on continue; add it to the list."
+    # A long-lived shell can still export the 2026-11-14 alias list (claude-*
+    # plus the retired GLM id). The knob wins over today's default and silently
+    # drops the retired Muse id, whose alias row exists only so stored sessions
+    # keep working — they would get the cost guard's 400 on continue. Pinning
+    # that id as a SLOT serves it anyway, so the warning would be wrong there.
+    if [[ -n "${HOSTED_ONLY_ALIAS_MODELS-}${GLM_HYBRID_ALIAS_MODELS-}" && "$_hop_aliases" != *Muse-Spark-Open* \
+          && "$_hop_glm" != *Muse-Spark-Open* && "$_hop_deepseek" != *Muse-Spark-Open* ]]; then
+        print -ru2 -- "hosted-only: ALIAS_MODELS is set without rits/meta-models/Muse-Spark-Open-816B-A42B-NVFP4 — sessions that stored the retired Muse id will get 400 on continue; add it to the list."
     fi
 }
 

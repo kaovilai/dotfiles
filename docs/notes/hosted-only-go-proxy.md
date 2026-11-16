@@ -99,7 +99,7 @@ Ports are load-bearing even with one binary:
 
 - **Policy boundary.** :4146 serves the whole discovered EnMaaS catalog; the
   hosted-only proxy serves only the merged groups in its own config (the two
-  slots plus the Claude and legacy-GLM aliases — no wildcard). That allowlist
+  slots plus the Claude and retired-Muse aliases — no wildcard). That allowlist
   is the hosted-only cost guard.
 - **Client configuration.** Each launcher points Claude Code at
   `ANTHROPIC_BASE_URL` and Codex at its provider `base_url`; the port *is* the
