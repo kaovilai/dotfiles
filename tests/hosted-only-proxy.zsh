@@ -89,6 +89,13 @@ HOSTED_ONLY_ALIAS_MODELS="claude-sonnet-5-5, rits/meta-models/Muse-Spark-Open-81
 # a slot id is never an alias (the primary is a slot): listing it changes nothing
 HOSTED_ONLY_ALIAS_MODELS="claude-sonnet-5-5, rits/zai-org/glm-5-3" _hosted_only_proxy_vars claude
 [[ "$_hop_aliases" == "claude-sonnet-5-5" ]] || fail "the primary slot id must be dropped from the aliases: $_hop_aliases"
+# A list filtered down to nothing is forwarded EMPTY, and the Go side reads set-but-
+# empty as "no aliases" (not the default), so config.yaml, fingerprint and child agree
+HOSTED_ONLY_ALIAS_MODELS="rits/zai-org/glm-5-3" _hosted_only_proxy_vars claude
+[[ -z "$_hop_aliases" ]] || fail "an alias list of only the primary slot id must filter to nothing: [$_hop_aliases]"
+_hosted_only_go_env
+(( ${_hop_go_env[(I)HOSTED_ONLY_ALIAS_MODELS=]} )) || fail "the empty alias list must be forwarded as HOSTED_ONLY_ALIAS_MODELS= (set-but-empty = no aliases): ${_hop_go_env[(r)HOSTED_ONLY_ALIAS_MODELS=*]}"
+_hosted_only_proxy_vars claude   # restore the default alias list
 _hosted_only_proxy_vars claude   # restore the default alias list
 # A pre-swap alias pin (claude-* only) wins over today's default and would drop
 # the legacy GLM alias, so it warns instead of letting stored sessions 400

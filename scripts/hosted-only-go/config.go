@@ -121,6 +121,22 @@ func knob(name, def string) string {
 	return def
 }
 
+// knobSet is knob() for a list the launcher always forwards: it reports whether
+// the knob is SET at all, so an explicitly empty value ("no entries") is not
+// mistaken for "unset, use the default". The launcher filters the alias list
+// (an active slot id is never an alias) and can legitimately forward an empty
+// result; treating that as unset made the child serve aliases the generated
+// config and fingerprint no longer listed.
+func knobSet(name string) (string, bool) {
+	if v, ok := os.LookupEnv("HOSTED_ONLY_" + name); ok {
+		return v, true
+	}
+	if v, ok := os.LookupEnv("GLM_HYBRID_" + name); ok {
+		return v, true
+	}
+	return "", false
+}
+
 // envInt reads a raw (unprefixed) env var: the mlx warm-gate knobs keep the
 // provider's own CLAUDE_MLX_* names, matching CLAUDE_MLX_PORT and friends.
 func envInt(name string, def, min int) int {
@@ -249,7 +265,11 @@ func loadConfig(flavor, port, runtimeDir string) *config {
 	}
 	glmModel, dsModel := knob("GLM_MODEL", glmDefault), knob("DEEPSEEK_MODEL", dsDefault)
 	aliases := map[string]struct{}{}
-	for _, a := range strings.Split(knob("ALIAS_MODELS", aliasDefault), ",") {
+	aliasList := aliasDefault
+	if v, ok := knobSet("ALIAS_MODELS"); ok {
+		aliasList = v // set-but-empty means NO aliases, not the default
+	}
+	for _, a := range strings.Split(aliasList, ",") {
 		// An id that IS a slot is served as itself: rewriteRequestMode expands
 		// aliases to the primary BEFORE it looks at the slots, so a slot pinned to
 		// an id that is also in the alias list (Muse as the fallback while it is

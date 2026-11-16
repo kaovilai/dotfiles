@@ -2,6 +2,7 @@ package main
 
 import (
 	"net/http"
+	"os"
 	"testing"
 )
 
@@ -73,5 +74,24 @@ func TestRetiredMuseStaysAnAliasWhenNoSlotUsesIt(t *testing.T) {
 	cfg := loadConfig("claude", "4148", t.TempDir())
 	if _, ok := cfg.Aliases[muse]; !ok {
 		t.Fatalf("the retired Muse id must stay an alias by default: %v", cfg.Aliases)
+	}
+}
+
+// An alias list the launcher filtered down to nothing is forwarded as an EMPTY
+// HOSTED_ONLY_ALIAS_MODELS. That means "no aliases", not "unset": otherwise the
+// child serves the defaults while the generated config and fingerprint list none
+// (2026-11-16 review).
+func TestEmptyAliasKnobMeansNoAliasesNotTheDefault(t *testing.T) {
+	t.Setenv("HOSTED_ONLY_ALIAS_MODELS", "")
+	if cfg := loadConfig("claude", "4148", t.TempDir()); len(cfg.Aliases) != 0 {
+		t.Fatalf("a set-but-empty alias knob must serve no aliases: %v", cfg.Aliases)
+	}
+	os.Unsetenv("HOSTED_ONLY_ALIAS_MODELS")
+	if cfg := loadConfig("claude", "4148", t.TempDir()); len(cfg.Aliases) == 0 {
+		t.Fatal("an unset alias knob keeps the per-flavor default")
+	}
+	t.Setenv("GLM_HYBRID_ALIAS_MODELS", "")
+	if cfg := loadConfig("claude", "4148", t.TempDir()); len(cfg.Aliases) != 0 {
+		t.Fatalf("the retired name behaves the same: %v", cfg.Aliases)
 	}
 }
