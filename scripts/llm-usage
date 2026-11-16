@@ -142,7 +142,7 @@ def family(model):
     if "deepseek" in m:
         return "deepseek"
     if "muse" in m:
-        # the hosted-only fallback slot since 2026-11-14 (Muse Spark Open)
+        # Muse Spark Open: the hosted-only fallback slot 2026-11-14..16, a retired alias since
         return "muse"
     if "luna" in m:
         return "luna"

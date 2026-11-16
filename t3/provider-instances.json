@@ -253,7 +253,7 @@
         },
         {
           "name": "ANTHROPIC_DEFAULT_OPUS_MODEL",
-          "value": "rits/deepseek-ai/DeepSeek-V4.1-Flash-1017[1m]",
+          "value": "rits/zai-org/glm-5-3[1m]",
           "sensitive": false
         },
         {
@@ -263,17 +263,17 @@
         },
         {
           "name": "ANTHROPIC_DEFAULT_HAIKU_MODEL",
-          "value": "rits/deepseek-ai/DeepSeek-V4.1-Flash-1017[1m]",
+          "value": "rits/zai-org/glm-5-3[1m]",
           "sensitive": false
         },
         {
           "name": "ANTHROPIC_DEFAULT_FABLE_MODEL",
-          "value": "rits/deepseek-ai/DeepSeek-V4.1-Flash-1017[1m]",
+          "value": "rits/zai-org/glm-5-3[1m]",
           "sensitive": false
         },
         {
           "name": "CLAUDE_CODE_SUBAGENT_MODEL",
-          "value": "rits/deepseek-ai/DeepSeek-V4.1-Flash-1017[1m]",
+          "value": "rits/zai-org/glm-5-3[1m]",
           "sensitive": false
         },
         {

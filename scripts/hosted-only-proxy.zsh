@@ -53,9 +53,9 @@
 # _hosted_only_go_env below.
 #
 # History: a "GLM hybrid" mode once added an OpenAI reviewer (gpt-6-luna) to
-# this proxy. DeepSeek V4.1 Flash (primary slot) covers reviewer and classifier
-# and Muse Spark Open (fallback slot) covers vision inside hosted-only, so that
-# mode is retired; its old names are aliases. The
+# this proxy. DeepSeek V4.1 Flash (fallback slot) covers reviewer, classifier and
+# vision inside hosted-only (GLM 5.3 holds the primary), so that mode is retired;
+# its old names are aliases. The
 # LiteLLM impl (HOSTED_ONLY_PROXY_IMPL=litellm / LLM_PROXY_IMPL=litellm) was
 # the escape hatch before the Go proxy reached parity; both knobs now error.
 #

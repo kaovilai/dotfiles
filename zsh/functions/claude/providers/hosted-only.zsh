@@ -34,12 +34,13 @@
 # It also sends primary-slot requests that contain an image to the fallback
 # slot (DeepSeek, multimodal). Main model and the subagent stay on the primary
 # slot.
-# Knobs: HOSTED_ONLY_CLASSIFIER_MODEL (sonnet tier = auto-mode classifier),
-# HOSTED_ONLY_SMALL_FAST_MODEL and HOSTED_ONLY_SUBAGENT_MODEL (subagents,
-# forced; workflow subagents too), all default the primary (DeepSeek V4.1
-# Flash): the fast model, while Muse Spark reasons before every answer — the
-# wrong latency profile for per-tool-call classification. Values: glm,
-# deepseek, or an id.
+# Knobs: HOSTED_ONLY_CLASSIFIER_MODEL (sonnet tier = auto-mode classifier) and
+# HOSTED_ONLY_SMALL_FAST_MODEL default the FALLBACK slot (DeepSeek V4.1 Flash,
+# the fast model: 1.8-2.3 s vs GLM's 4-6 s on a 40k classifier prompt, and it
+# honours thinking:disabled — the right latency profile for per-tool-call
+# classification). HOSTED_ONLY_SUBAGENT_MODEL (subagents, forced; workflow
+# subagents too) defaults the PRIMARY slot (GLM 5.3, the stronger agentic
+# coder). Values: glm, deepseek, or an id.
 # HOSTED_ONLY_CLIENT_MAX_RETRIES (default 3) sets CLAUDE_CODE_MAX_RETRIES (Claude
 # Code default 10) — bounds retries of real 5xx errors. Rate-limit and outage
 # answers arrive as 429 + retry-after: with CLAUDE_CODE_RETRY_WATCHDOG=1 (set
