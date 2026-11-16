@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -83,17 +84,14 @@ func TestCheckUpstreamKeyNeverBlocksOnAnUnreachableGatewayOrOtherFlavors(t *test
 	}
 }
 
-func TestProbeSendsBothAuthShapes(t *testing.T) {
+func TestProbeSendsOneCredentialShapePerRequest(t *testing.T) {
 	server, seen := gatewayAnswering(t, http.StatusOK)
 	if status := probeUpstreamKey(server.URL, "secret-value"); status != http.StatusOK {
 		t.Fatalf("status %d", status)
 	}
 	got := seen()
-	if got.Get("x-api-key") != "secret-value" || got.Get("Authorization") != "Bearer secret-value" {
-		t.Fatalf("probe must send the key as x-api-key and Bearer: %v", got)
-	}
-	if got.Get("anthropic-version") == "" {
-		t.Fatalf("the Messages shape carries anthropic-version: %v", got)
+	if got.Get("Authorization") != "Bearer secret-value" || got.Get("x-api-key") != "" {
+		t.Fatalf("the first probe is the Bearer shape alone: %v", got)
 	}
 }
 
@@ -259,5 +257,54 @@ func TestKeyProbeBudgetOutlastsTheResolver(t *testing.T) {
 	}
 	if got := keyProbeClient().Timeout; got != keyProbeTotalBudget {
 		t.Fatalf("client timeout %v, want %v", got, keyProbeTotalBudget)
+	}
+}
+
+// The probe never sends both credential shapes on one request, and refuses only
+// when EVERY shape is answered 401. A gateway that 401s conflicting credentials
+// must not block a valid key; a dead key is 401 on each shape.
+func TestProbeRefusesOnlyWhenEveryShapeIs401(t *testing.T) {
+	var mu sync.Mutex
+	var sawBoth bool
+	gateway := func(valid func(h http.Header) bool) *httptest.Server {
+		s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			mu.Lock()
+			if r.Header.Get("Authorization") != "" && r.Header.Get("x-api-key") != "" {
+				sawBoth = true
+			}
+			mu.Unlock()
+			if valid(r.Header) {
+				w.WriteHeader(http.StatusOK)
+				return
+			}
+			w.WriteHeader(http.StatusUnauthorized)
+		}))
+		t.Cleanup(s.Close)
+		return s
+	}
+
+	// valid key, but this gateway only accepts the Messages shape
+	xOnly := gateway(func(h http.Header) bool { return h.Get("x-api-key") == "good" && h.Get("Authorization") == "" })
+	if status := probeUpstreamKey(xOnly.URL, "good"); status != http.StatusOK {
+		t.Fatalf("a valid key accepted on the second shape must pass, got %d", status)
+	}
+	if err := checkUpstreamKey("claude", xOnly.URL, "good"); err != nil {
+		t.Fatalf("a valid key must not be refused: %v", err)
+	}
+	// valid key, Bearer only
+	bearerOnly := gateway(func(h http.Header) bool { return h.Get("Authorization") == "Bearer good" && h.Get("x-api-key") == "" })
+	if err := checkUpstreamKey("claude", bearerOnly.URL, "good"); err != nil {
+		t.Fatalf("a valid key accepted on the first shape must not be refused: %v", err)
+	}
+	// dead key: 401 on every shape
+	dead := gateway(func(http.Header) bool { return false })
+	var keyErr *upstreamKeyError
+	if err := checkUpstreamKey("claude", dead.URL, "bad"); !errors.As(err, &keyErr) {
+		t.Fatalf("a key rejected on every shape must be refused: %v", err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if sawBoth {
+		t.Fatal("no single request may carry both credential shapes")
 	}
 }

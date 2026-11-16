@@ -1008,9 +1008,11 @@ func runWatch(args []string) int {
 			status, err := ensureOnce(o)
 			switch {
 			case err != nil:
-				logf("restart did not bring it back; run: %s-hosted-only-restart", *flavor)
+				// Say WHY: a cold-start key rejection or the token-change compound
+				// error would otherwise read as a generic restart failure.
+				logf("restart did not bring it back: %v; run: %s-hosted-only-restart", err, *flavor)
 				notifyUser("Proxy restart FAILED",
-					fmt.Sprintf("%s (:%s) — run %s-hosted-only-restart", *name, *port, *flavor))
+					fmt.Sprintf("%s (:%s) — %v; run %s-hosted-only-restart", *name, *port, err, *flavor))
 				rc = 1
 			case status == "fresh":
 				logf("already restarted with the current code; nothing to do")

@@ -60,25 +60,46 @@ func keyProbeClient() *http.Client {
 	}
 }
 
-// probeUpstreamKey asks the gateway to list models with the key in both header
-// shapes the proxy uses (x-api-key + anthropic-version for Messages, Bearer for
-// Responses/chat). A read costs nothing and is allowed over the monthly cap.
+// probeUpstreamKey asks the gateway to list models, one credential shape per
+// request — the shapes the serving proxy itself sends (Bearer for Responses/chat,
+// x-api-key + anthropic-version for Messages) — never both on one request: a
+// gateway that 401s conflicting credentials would otherwise block a VALID key
+// from every swap and cold start, an outage that looks exactly like a bad key.
+// The key counts as rejected only when EVERY shape is answered 401; the first
+// answer that is not a 401 (200, 403, 404, 3xx, 5xx, unreachable) is returned.
+// A read costs nothing and is allowed over the monthly cap.
+//
+// Verified against the live gateway 2026-11-16: with a valid key /v1/models is 200 for
+// Bearer alone, for x-api-key + anthropic-version alone and for both together; with
+// no credential it is 401. Re-check that if the gateway's auth layer changes.
 func probeUpstreamKey(base, key string) int {
-	req, err := http.NewRequest(http.MethodGet, strings.TrimRight(base, "/")+"/v1/models", nil)
-	if err != nil {
-		return 0
+	endpoint := strings.TrimRight(base, "/") + "/v1/models"
+	shapes := []func(*http.Request){
+		func(r *http.Request) { r.Header.Set("Authorization", "Bearer "+key) },
+		func(r *http.Request) {
+			r.Header.Set("x-api-key", key)
+			r.Header.Set("anthropic-version", "2023-06-01")
+		},
 	}
-	req.Header.Set("x-api-key", key)
-	req.Header.Set("anthropic-version", "2023-06-01")
-	req.Header.Set("Authorization", "Bearer "+key)
-	client := keyProbeClient()
-	defer client.CloseIdleConnections()
-	resp, err := client.Do(req)
-	if err != nil {
-		return 0
+	status := 0
+	for _, shape := range shapes {
+		req, err := http.NewRequest(http.MethodGet, endpoint, nil)
+		if err != nil {
+			return 0
+		}
+		shape(req)
+		client := keyProbeClient()
+		resp, err := client.Do(req)
+		client.CloseIdleConnections()
+		if err != nil {
+			return 0
+		}
+		_ = resp.Body.Close()
+		if status = resp.StatusCode; status != http.StatusUnauthorized {
+			return status
+		}
 	}
-	_ = resp.Body.Close()
-	return resp.StatusCode
+	return status
 }
 
 // checkUpstreamKey fails only on a DEFINITE rejection (401). An outage, a slow
