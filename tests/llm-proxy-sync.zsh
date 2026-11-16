@@ -68,7 +68,14 @@ claude-openai-restart() { restarted+=(openai); return ${restart_rc[openai]-0}; }
 claude-enmaas-restart() { restarted+=(enmaas); return ${restart_rc[enmaas]-0}; }
 claude-hosted-only-restart() { restarted+=(glm-claude); return ${restart_rc[glm-claude]-0}; }
 codex-hosted-only-restart() { restarted+=(glm-codex); return ${restart_rc[glm-codex]-0}; }
-_llm_proxy_sync_confirm() { confirmed+=($1); [[ "${CONFIRM_RESULT-1}" == 1 ]]; }
+# The health probe answers, and (SLOW_BOOT_FRESH=1) a proxy that finished its slow boot
+# now reads fresh. Without it the answer comes from the OLD proxy, which stays stale.
+_llm_proxy_sync_confirm() {
+    confirmed+=($1)
+    [[ "${CONFIRM_RESULT-1}" == 1 ]] || return 1
+    (( ${SLOW_BOOT_FRESH-0} )) && stub_verdict=()
+    return 0
+}
 _llm_proxy_watch_alive() { (( WATCH_ALIVE )) || [[ -n "${watch_names[$1]-}" ]]; }
 _llm_proxy_watch_start() { watch_started+=($1); return $WATCH_START_RC; }
 _llm_proxy_watch_kill() { watch_killed+=($1); return 0; }
@@ -79,7 +86,7 @@ _llm_proxy_watch_pause() { (( FAKE_NOW++ )); }
 local out rc outfile="$tmp/out"
 reset() {
     listening=(); stub_verdict=(); serving=(); restart_rc=(); watch_names=(); restarted=(); confirmed=(); watch_started=(); watch_killed=()
-    unset CONFIRM_RESULT LLM_PROXY_WATCH_TIMEOUT
+    unset CONFIRM_RESULT LLM_PROXY_WATCH_TIMEOUT SLOW_BOOT_FRESH
     WATCH_ALIVE=0 WATCH_START_RC=0 FAKE_NOW=1000 BUSY_UNTIL=0
     rm -rf "$XDG_STATE_HOME"
 }
@@ -152,9 +159,15 @@ sync
 (( rc == 0 && ${#restarted} == 0 )) && [[ "$out" == *"could not be checked (unknown"* ]] || fail "unknown stub_verdict mishandled: rc=$rc out=$out"
 
 # 8. restart helper fails but the proxy comes up late (slow boot): success after confirm
-reset; listening=(59005 1); stub_verdict=(enmaas "stale: hooks"); restart_rc=(enmaas 1)
+reset; listening=(59005 1); stub_verdict=(enmaas "stale: hooks"); restart_rc=(enmaas 1); SLOW_BOOT_FRESH=1
 sync
 (( rc == 0 )) && [[ "${confirmed[*]}" == 59005 && "$out" == *"restarted with the current code"* ]] || fail "slow boot counted as failure: rc=$rc confirmed=$confirmed out=$out"
+
+# 8b. restart fails and the OLD proxy still answers /health (the replacement was refused:
+# the gateway rejected its key): it is still stale, so this is NOT a restart
+reset; listening=(59005 1); stub_verdict=(enmaas "stale: hooks"); restart_rc=(enmaas 1)
+sync
+(( rc == 1 )) && [[ "$out" == *"restart did not bring it back; run: claude-enmaas-restart"* && "$out" != *"restarted with the current code"* ]] || fail "a kept stale proxy was reported as restarted: rc=$rc out=$out"
 
 # 9. restart fails and the port stays dead: rc 1, the command to run by hand
 reset; listening=(59005 1); stub_verdict=(enmaas "stale: hooks"); restart_rc=(enmaas 1); CONFIRM_RESULT=0
@@ -329,9 +342,14 @@ watch enmaas
 (( rc == 1 )) && [[ "$out" == *"restart did not bring it back; run: claude-enmaas-restart"* ]] || fail "watcher hid a failed restart: rc=$rc out=$out"
 
 # W6. slow boot (restart helper gives up early, port answers later): success
-reset; listening=(59005 1); stub_verdict=(enmaas "stale: hooks"); restart_rc=(enmaas 1)
+reset; listening=(59005 1); stub_verdict=(enmaas "stale: hooks"); restart_rc=(enmaas 1); SLOW_BOOT_FRESH=1
 watch enmaas
 (( rc == 0 )) && [[ "${confirmed[*]}" == 59005 && "$out" == *"restarted with the current code"* ]] || fail "slow boot counted as failure by the watcher: rc=$rc out=$out"
+
+# W6b. the watcher's restart is refused (key rejected) and the old proxy keeps answering: FAILED, not updated
+reset; listening=(59005 1); stub_verdict=(enmaas "stale: hooks"); restart_rc=(enmaas 1)
+watch enmaas
+(( rc == 1 )) && [[ "$out" == *"restart did not bring it back; run: claude-enmaas-restart"* && "$out" != *"restarted with the current code"* ]] || fail "the watcher reported a kept stale proxy as updated: rc=$rc out=$out"
 
 # W7. launcher cannot compare: gives up, does not restart blindly
 reset; listening=(59005 1); stub_verdict=(enmaas unknown)
@@ -429,5 +447,23 @@ _claude_port_serving 59998 && fail "socket fallback saw busy with no listener an
 env -i HOME="$tmp/home" PATH="$PATH" XDG_STATE_HOME="$tmp/state2" zsh "$repo/scripts/llm-proxy-watch.zsh" bogus >"$outfile" 2>&1
 rc=$?; out=$(<"$outfile")
 (( rc == 2 )) && [[ "$out" == *"unknown proxy 'bogus'"* ]] || fail "scripts/llm-proxy-watch.zsh does not reach llm-proxy-watch: rc=$rc out=$out"
+
+# I. A stale idle proxy whose restart FAILED must not read as restarted just
+# because the OLD proxy still answers /health (the gateway rejected the new key
+# and the swap was refused: kept-key-rejected). Success = the restart worked, or
+# the staleness check reads fresh afterwards. (2026-11-16 review)
+(
+    local -A fn chk port
+    port[x]=59990
+    chk_stale() { print -r -- "stale: hooks" }
+    chk_fresh() { print -r -- fresh }
+    _llm_proxy_sync_confirm() { return 0 }      # the old proxy answers its health check
+    fn[x]=true;  chk[x]=chk_stale; _llm_proxy_sync_restart x || exit 1   # restart worked
+    fn[x]=false; chk[x]=chk_stale; _llm_proxy_sync_restart x && exit 2   # restart failed, old proxy kept
+    fn[x]=false; chk[x]=chk_fresh; _llm_proxy_sync_restart x || exit 3   # failed code but the proxy is current
+    _llm_proxy_sync_confirm() { return 1 }      # nothing answers at all
+    fn[x]=false; chk[x]=chk_fresh; _llm_proxy_sync_restart x && exit 4
+    exit 0
+) || fail "_llm_proxy_sync_restart accepts a kept stale proxy as restarted (exit $?)"
 
 print -r -- "ok llm-proxy-sync"

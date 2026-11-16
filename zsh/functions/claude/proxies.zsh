@@ -477,6 +477,23 @@ _llm_proxy_sync_confirm() {
     return 1
 }
 
+# _llm_proxy_sync_restart <name>: restart <name>, true only when it now runs the
+# CURRENT config. A restart can fail without the proxy going down: the
+# replacement was refused (the gateway rejected its key, kept-key-rejected) and
+# the old proxy keeps answering /health, so a health probe alone calls that a
+# success and fleet-sync reports a rollout that did not happen. When the restart
+# function reports failure, the proxy is accepted only if the staleness check
+# then reads fresh. Needs the caller's `fn`, `chk` and `port` tables
+# (_llm_proxy_sync_tables). Only for restarts of a proxy that was STALE and
+# serving: a listener that was gone has no old proxy to mistake for the new one.
+_llm_proxy_sync_restart() {
+    local t="$1" verdict
+    ${fn[$t]} && return 0
+    _llm_proxy_sync_confirm "${port[$t]}" || return 1
+    verdict=$(${chk[$t]})
+    [[ "$verdict" == fresh ]]
+}
+
 # _llm_proxy_sync_tables: fills the CALLER's `fn` (restart command), `chk`
 # (staleness check) and `port` associative arrays for the LiteLLM proxies that
 # llm-proxy-sync and llm-proxy-watch manage (declare them `local -A` first).
@@ -672,7 +689,7 @@ llm-proxy-sync() {
             continue
         fi
         print -ru2 -- "== $t (:${port[$t]}) $why; idle, restarting"
-        if ${fn[$t]} || _llm_proxy_sync_confirm "${port[$t]}"; then
+        if _llm_proxy_sync_restart "$t"; then
             print -ru2 -- "== $t (:${port[$t]}) restarted with the current code"
         else
             print -ru2 -- "== $t (:${port[$t]}) restart did not bring it back; run: ${fn[$t]}"
@@ -844,7 +861,7 @@ llm-proxy-watch() {
                     *) _llm_proxy_watch_log "$t" "could not be checked ($verdict); giving up"; rc=1; break ;;
                 esac
                 _llm_proxy_watch_log "$t" "idle; restarting ($verdict)"
-                if ${fn[$t]} || _llm_proxy_sync_confirm "${port[$t]}"; then
+                if _llm_proxy_sync_restart "$t"; then
                     _llm_proxy_watch_log "$t" "restarted with the current code"
                     _llm_proxy_notify "Proxy updated" "$t (:${port[$t]}) restarted at the first idle moment with the pulled code"
                 else

@@ -84,8 +84,14 @@ func probeUpstreamKey(base, key string) int {
 // checkUpstreamKey fails only on a DEFINITE rejection (401). An outage, a slow
 // gateway, DNS trouble, a 403 (entitlement/WAF), a redirect or a gateway without
 // a models route must never block a restart, so every other answer passes.
-// Route-table flavors carry their own upstream and key, which this EnMaaS probe
-// does not describe.
+//
+// Scope: the hosted-only flavors (claude, codex). The route-table flavors mlx,
+// openai and vertex carry their own upstream and key, which this EnMaaS probe
+// does not describe. The enmaas flavor DOES share the gateway and key, but its
+// swap lives in the Python controller (zsh/functions/claude/providers/
+// enmaas-proxy.zsh), which spawns `serve` itself and never reaches startProxy:
+// :4146 is NOT covered here, and a rejected key can still replace a working
+// enmaas proxy there (it only verifies binding and the serve loop).
 func checkUpstreamKey(flavor, base, key string) error {
 	if routeTableFlavor(flavor) || base == "" || key == "" {
 		return nil
