@@ -557,6 +557,13 @@ func ensureOnce(o ensureOpts) (string, error) {
 			}
 			return status, nil
 		}
+		if keepRunning(err, oldPids) {
+			// The old proxy stays: its fingerprint and served-models stamps were
+			// never touched, and the next launch retries once the key is fixed.
+			fmt.Fprintf(os.Stderr, "%v\nhosted-only: keeping the running %s proxy on :%s instead of replacing it with one that cannot authenticate; fix the key, then run %s-hosted-only-restart.\n",
+				err, o.flavor, o.port, o.flavor)
+			return "kept-key-rejected", nil
+		}
 		if len(oldPids) > 0 && anyPidAlive(oldPids) {
 			fmt.Fprintf(os.Stderr, "hosted-only: overlap start did not take (old listener cannot share the port); stopping it first.\n")
 			if code := stopOnce(o.flavor, o.port, o.runtimeDir, o.legacyDirs); code != 0 {
@@ -617,6 +624,11 @@ func startProxy(o ensureOpts, oldPids []int) (string, error) {
 	cfg := loadConfig(o.flavor, o.port, o.runtimeDir)
 	if cfg.APIKey == "" {
 		return "", errors.New("hosted-only-go: HOSTED_ONLY_UPSTREAM_KEY (enmaas: ENMAAS_API_KEY) is not set")
+	}
+	// Before ANY side effect (routes, stamps, spawn): a replacement the gateway
+	// would answer 401 must not take over from the proxy that is serving.
+	if err := checkUpstreamKey(o.flavor, cfg.BaseURL, cfg.APIKey); err != nil {
+		return "", err
 	}
 	if o.flavor == "vertex" && (os.Getenv("CLOUD_ML_REGION") == "" || os.Getenv("ANTHROPIC_VERTEX_PROJECT_ID") == "") {
 		return "", errors.New("hosted-only-go: CLOUD_ML_REGION and ANTHROPIC_VERTEX_PROJECT_ID are required for the vertex flavor")
