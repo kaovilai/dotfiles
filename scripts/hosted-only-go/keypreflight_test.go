@@ -31,8 +31,8 @@ func TestCheckUpstreamKeyRejectsOnlyDefiniteAuthFailures(t *testing.T) {
 		reject bool
 	}{
 		{http.StatusUnauthorized, true},
-		{http.StatusForbidden, false},        // valid key, route not entitled (over the cap) or an ingress/WAF
-		{http.StatusFound, false},            // a redirect is not a verdict
+		{http.StatusForbidden, false}, // valid key, route not entitled (over the cap) or an ingress/WAF
+		{http.StatusFound, false},     // a redirect is not a verdict
 		{http.StatusOK, false},
 		{http.StatusNotFound, false},            // a gateway without a models route
 		{http.StatusTooManyRequests, false},     // quota is not a bad key
