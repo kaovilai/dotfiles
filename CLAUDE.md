@@ -292,6 +292,28 @@ and `scripts/llm-usage`. Read `docs/notes/hosted-only-go-proxy.md` and
   and names the ids the running proxy does not serve. `<flavor>-hosted-only-restart`
   forces the restart immediately (`HOSTED_ONLY_FORCE_RESTART=1`, zero-refuse swap) — it
   does not wait for idle, so run it only once the sessions have finished.
+- A replacement proxy must be able to authenticate before it replaces a working one.
+  `startProxy` probes the gateway (`GET /v1/models`, both auth header shapes) **before any
+  side effect**; a definite 401 refuses the swap, leaves the serving proxy and its
+  stamps untouched (`kept-key-rejected`; the watcher reports it as a deferral, not a
+  rollout, and it is refused if the proxy token changed in the same launch), and on a cold
+  start fails with the key error instead of launching a client that can only say "Claude
+  could not authenticate". 403 is NOT a rejection (this gateway 403s a valid key over the
+  monthly cap), nor are redirects (never followed: the key must not travel), outages, 404s
+  or timeouts. The probe dials through the proxy's own DoH-capable dialer. Covered: the hosted-only
+  flavors on :4148. **Not covered:** the enmaas flavor (:4146) — its swap lives in the Python
+  controller (`enmaas-proxy.zsh`), which verifies binding and the serve loop but not
+  authentication, so a rejected key can still replace a working enmaas proxy there. 2026-11-16: an edit-triggered restart
+  picked up a key the gateway rejected and every hosted-only thread went down.
+- **Never edit or branch the live checkout.** `~/git/dotfiles` is what every
+  `~/.local/bin/{claude,codex}-t3-*` launcher symlinks into, so an edit, a branch switch
+  or a half-done rebase there changes what running sessions execute and can change the
+  fingerprint. Work in a worktree
+  (`git -C ~/git/dotfiles worktree add ~/git/dotfiles-wt-<name> -b <branch> origin/main`);
+  the live checkout only moves by `git pull --ff-only` after the PR merges. The
+  `block-live-dotfiles-edit.sh` PreToolUse hook enforces it (docs/, tests/, .github/ and
+  `*.md` stay editable; `touch ~/.local/state/dotfiles-live-edit-ok` is the 30-minute
+  deliberate override).
 - Every knob the Go child reads must be forwarded by the launcher — parity in both
   directions is enforced by `tests/go-proxy-knob-parity.zsh` — **and** hashed into the
   fingerprint. `_hosted_only_proxy_fp` derives its input from `_hosted_only_go_shared_env`

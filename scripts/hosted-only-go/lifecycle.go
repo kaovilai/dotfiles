@@ -483,8 +483,23 @@ type ensureOpts struct {
 }
 
 // ensureOnce is the locked heart of the launcher's start path for the Go impl.
-// Status is one of fresh, restarted, reused-busy; the error message is already
+// Status is one of fresh, restarted, reused-busy, kept-key-rejected; the error message is already
 // on stderr for the launch path.
+// reportPairGap says what a kept (busy, or key-rejected) proxy cannot serve. A
+// pair swap is the sharp edge of keeping an old proxy: it still refuses the new
+// ids, so name them instead of leaving the caller to decode a 400 from the cost
+// guard. A proxy started before the pair was recorded cannot be compared — say
+// so, since that IS the rollout case this exists for.
+func reportPairGap(o ensureOpts) {
+	if len(readServedModels(o.runtimeDir)) == 0 {
+		fmt.Fprintf(os.Stderr, "hosted-only: the running %s proxy predates the pair record, so the ids it serves cannot be checked; %s-hosted-only-restart applies the current pair once it is idle.\n",
+			o.flavor, o.flavor)
+	} else if missing := missingServedModels(o.runtimeDir, o.flavor, o.port, o.configPath); len(missing) > 0 {
+		fmt.Fprintf(os.Stderr, "hosted-only: the running proxy does not serve %s; a request naming one of those ids is refused (400) until the restart above runs.\n",
+			strings.Join(missing, ", "))
+	}
+}
+
 func ensureOnce(o ensureOpts) (string, error) {
 	unlock, err := lockRuntime(o.runtimeDir)
 	if err != nil {
@@ -506,18 +521,7 @@ func ensureOnce(o ensureOpts) (string, error) {
 			}
 			fmt.Fprintf(os.Stderr, "hosted-only: %s proxy config, hooks or key changed, but it is serving requests; reusing it (%s-hosted-only-restart applies the change now).\n",
 				o.flavor, o.flavor)
-			// A pair swap is the sharp edge of that reuse: the running proxy
-			// still refuses the new ids, so name them instead of leaving the
-			// caller to decode a 400 from the cost guard. A proxy started
-			// before the pair was recorded cannot be compared — say so, since
-			// that IS the rollout case this exists for.
-			if len(readServedModels(o.runtimeDir)) == 0 {
-				fmt.Fprintf(os.Stderr, "hosted-only: the running %s proxy predates the pair record, so the ids it serves cannot be checked; %s-hosted-only-restart applies the current pair once it is idle.\n",
-					o.flavor, o.flavor)
-			} else if missing := missingServedModels(o.runtimeDir, o.flavor, o.port, o.configPath); len(missing) > 0 {
-				fmt.Fprintf(os.Stderr, "hosted-only: the running proxy does not serve %s; a request naming one of those ids is refused (400) until the restart above runs.\n",
-					strings.Join(missing, ", "))
-			}
+			reportPairGap(o)
 			return "reused-busy", nil
 		}
 		// Zero-refuse restart (#612): start the new proxy ALONGSIDE the old
@@ -556,6 +560,22 @@ func ensureOnce(o ensureOpts) (string, error) {
 				retirePids(oldPids)
 			}
 			return status, nil
+		}
+		if keepRunning(err, oldPids) {
+			// The old proxy stays only if the client we are about to start can still
+			// talk to it: a proxy-token change in the same launch would hand the client
+			// a token the kept proxy rejects — the very symptom this guard removes.
+			if _, recToken := readFingerprint(o.runtimeDir); !tokenCompatible(recToken, o.tokenFP) {
+				return "", fmt.Errorf("%w; the running proxy also uses a different proxy token, so keeping it would launch the client with a token it rejects — fix the key, then run %s-hosted-only-restart", err, o.flavor)
+			}
+			// Its fingerprint and served-models stamps were never touched, and the
+			// next launch retries once the key is fixed.
+			fmt.Fprintf(os.Stderr, "%v\nhosted-only: keeping the running %s proxy on :%s instead of replacing it with one that cannot authenticate; fix the key, then run %s-hosted-only-restart.\n",
+				err, o.flavor, o.port, o.flavor)
+			// The kept proxy is the OLD code: if this launch also changed the pair, a
+			// request naming a new id gets the cost guard's 400, so say so up front.
+			reportPairGap(o)
+			return "kept-key-rejected", nil
 		}
 		if len(oldPids) > 0 && anyPidAlive(oldPids) {
 			fmt.Fprintf(os.Stderr, "hosted-only: overlap start did not take (old listener cannot share the port); stopping it first.\n")
@@ -617,6 +637,11 @@ func startProxy(o ensureOpts, oldPids []int) (string, error) {
 	cfg := loadConfig(o.flavor, o.port, o.runtimeDir)
 	if cfg.APIKey == "" {
 		return "", errors.New("hosted-only-go: HOSTED_ONLY_UPSTREAM_KEY (enmaas: ENMAAS_API_KEY) is not set")
+	}
+	// Before ANY side effect (routes, stamps, spawn): a replacement the gateway
+	// would answer 401 must not take over from the proxy that is serving.
+	if err := checkUpstreamKey(o.flavor, cfg.BaseURL, cfg.APIKey); err != nil {
+		return "", err
 	}
 	if o.flavor == "vertex" && (os.Getenv("CLOUD_ML_REGION") == "" || os.Getenv("ANTHROPIC_VERTEX_PROJECT_ID") == "") {
 		return "", errors.New("hosted-only-go: CLOUD_ML_REGION and ANTHROPIC_VERTEX_PROJECT_ID are required for the vertex flavor")
@@ -747,9 +772,39 @@ func runEnsure(args []string) int {
 	// pair — so a hand-run ensure without --flavor would restart that port
 	// serving the wrong pair. Default it like watch/status do.
 	o.flavor, o.port = ensureFlavorPort(o.flavor, o.port)
-	if _, err := ensureOnce(o); err != nil {
+	status, err := ensureOnce(o)
+	if err != nil {
 		fmt.Fprintf(os.Stderr, "hosted-only-go ensure: %v\n", err)
-		return 1
+		return ensureErrExitCode(err)
+	}
+	return ensureExitCode(status, os.Getenv("HOSTED_ONLY_FORCE_RESTART") != "")
+}
+
+// exitKeyRejected is the exit code for a PERMANENT refusal: the gateway rejected
+// the API key. Callers that retry failed restarts (the backoff loop in the
+// restart-all command) must not retry it - nothing but a new key changes the
+// outcome - so it is distinct from the generic failure code 1 that a transient
+// problem returns.
+const exitKeyRejected = 3
+
+// ensureErrExitCode maps an ensure error to its exit code.
+func ensureErrExitCode(err error) int {
+	var keyErr *upstreamKeyError
+	if errors.As(err, &keyErr) {
+		return exitKeyRejected
+	}
+	return 1
+}
+
+// ensureExitCode is what `ensure` returns for a successful status. A plain
+// launch that kept the old proxy (busy, or the gateway rejected the new key)
+// still exits 0 — the client must start against the proxy that is serving. A
+// FORCED restart exists only to apply the new code, so keeping the old proxy is
+// a failure of that request: nonzero, or *-hosted-only-restart and the
+// llm-proxy-sync idle path would report a rollout that did not happen.
+func ensureExitCode(status string, forced bool) int {
+	if forced && status == "kept-key-rejected" {
+		return exitKeyRejected
 	}
 	return 0
 }
@@ -969,9 +1024,11 @@ func runWatch(args []string) int {
 			status, err := ensureOnce(o)
 			switch {
 			case err != nil:
-				logf("restart did not bring it back; run: %s-hosted-only-restart", *flavor)
+				// Say WHY: a cold-start key rejection or the token-change compound
+				// error would otherwise read as a generic restart failure.
+				logf("restart did not bring it back: %v; run: %s-hosted-only-restart", err, *flavor)
 				notifyUser("Proxy restart FAILED",
-					fmt.Sprintf("%s (:%s) — run %s-hosted-only-restart", *name, *port, *flavor))
+					fmt.Sprintf("%s (:%s) — %v; run %s-hosted-only-restart", *name, *port, err, *flavor))
 				rc = 1
 			case status == "fresh":
 				logf("already restarted with the current code; nothing to do")
@@ -980,6 +1037,14 @@ func runWatch(args []string) int {
 				idle = 0
 				time.Sleep(watchPoll)
 				continue
+			case status == "kept-key-rejected":
+				// The gateway rejected the key the replacement would carry, so the old
+				// proxy is still serving the old code: NOT a rollout. Report it and leave
+				// the retry to the next fleet-sync, once the key is fixed.
+				logf("the gateway rejected the API key; kept the running proxy on the old code")
+				notifyUser("Proxy update deferred",
+					fmt.Sprintf("%s (:%s) kept its old code: the gateway rejected the API key; fix it, the next fleet-sync retries", *name, *port))
+				rc = 1
 			default:
 				logf("restarted with the current code")
 				notifyUser("Proxy updated",

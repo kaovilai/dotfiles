@@ -295,7 +295,9 @@ claude-hosted-only-restart() {
     # alongside the old one (SO_REUSEPORT) and the old retires once the new
     # listener answers, instead of stop-then-start refusing connections during
     # the boot window (2026-11-06, RH Career ECONNREFUSED).
-    ( HOSTED_ONLY_FORCE_RESTART=1 _hosted_only_proxy_ensure claude ) || return 1
+    ( HOSTED_ONLY_FORCE_RESTART=1 _hosted_only_proxy_ensure claude )
+    local ensure_rc=$?
+    (( ensure_rc == 0 )) || return $ensure_rc   # 3 = gateway rejected the key: permanent, the retry loop must not retry it
     _llm_proxy_wait_up "$(_hosted_only_knob CLAUDE_PROXY_PORT 4148)" 'hosted-only claude'
 }
 claude-glm-hybrid-restart() { claude-hosted-only-restart; }
@@ -307,7 +309,9 @@ codex-hosted-only-restart() {
     local port="$(_hosted_only_knob CODEX_PROXY_PORT "$(_hosted_only_knob CLAUDE_PROXY_PORT 4148)")"
     _llm_proxy_dns_probe "$(_llm_proxy_gateway_host "${HOSTED_ONLY_ENMAAS_BASE_URL:-}")" 'hosted-only codex' || return 1
     # zero-refuse restart, see claude-hosted-only-restart
-    ( HOSTED_ONLY_FORCE_RESTART=1 _hosted_only_proxy_ensure codex ) || return 1
+    ( HOSTED_ONLY_FORCE_RESTART=1 _hosted_only_proxy_ensure codex )
+    local ensure_rc=$?
+    (( ensure_rc == 0 )) || return $ensure_rc   # 3 = gateway rejected the key: permanent, the retry loop must not retry it
     _llm_proxy_wait_up "$port" 'hosted-only codex'
 }
 codex-glm-hybrid-restart() { codex-hosted-only-restart; }
@@ -378,7 +382,24 @@ llm-proxy-restart() {
         targets=("$@")
     fi
     local t rc=0 verdict why
-    local -a pending failed
+    local -a pending failed refused
+    # Exit code 3 from a restart = the gateway rejected the API key: a PERMANENT
+    # refusal (only a new key changes it), so it is reported and NOT queued for the
+    # backoff loop below, which exists for transient failures.
+    _llm_proxy_try_restart() {
+        local name="$1"
+        ${fn[$name]}
+        local try_rc=$?
+        (( try_rc == 0 )) && return 0
+        if (( try_rc == 3 )); then
+            print -ru2 -- "== $name refused: the gateway rejected the API key; not retrying - fix ENMAAS_API_KEY (or HOSTED_ONLY_UPSTREAM_KEY), then run it again"
+            refused+=($name)
+        else
+            print -ru2 -- "llm-proxy-restart: $name failed"
+            failed+=($name)
+        fi
+        return $try_rc
+    }
     for t in $targets; do
         [[ -n "${fn[$t]-}" ]] || { print -ru2 -- "llm-proxy-restart: unknown '$t' (choose: $order, all, required, required-on-idle, --list)"; rc=1; continue; }
         if (( required )); then
@@ -399,7 +420,7 @@ llm-proxy-restart() {
         else
             print -ru2 -- "== restarting $t (:${port[$t]})"
         fi
-        ${fn[$t]} || { print -ru2 -- "llm-proxy-restart: $t failed"; failed+=($t); }
+        _llm_proxy_try_restart "$t"
     done
     # required-on-idle: verdicts are in; now cut each pending proxy at the
     # first half-second poll that finds no request in flight on its port,
@@ -424,7 +445,7 @@ llm-proxy-restart() {
                     continue
                 fi
                 print -ru2 -- "== $t (:${port[$t]}) idle; restarting now"
-                ${fn[$t]} || { print -ru2 -- "llm-proxy-restart: $t failed"; failed+=($t); }
+                _llm_proxy_try_restart "$t"
             done
             pending=($still)
             if (( ${#pending} )); then
@@ -447,8 +468,15 @@ llm-proxy-restart() {
             for t in $failed; do
                 (( now >= due[$t] )) || continue
                 print -ru2 -- "== retry $t (:${port[$t]})"
-                if ${fn[$t]}; then
+                ${fn[$t]}
+                local retry_rc=$?
+                if (( retry_rc == 0 )); then
                     failed=(${failed:#$t})
+                elif (( retry_rc == 3 )); then
+                    # The gateway rejected the API key: a permanent refusal that no
+                    # amount of backoff changes. Stop retrying THIS proxy (others go on).
+                    print -ru2 -- "== $t refused: the gateway rejected the API key; not retrying - fix ENMAAS_API_KEY (or HOSTED_ONLY_UPSTREAM_KEY), then run it again"
+                    failed=(${failed:#$t}); refused+=($t)
                 else
                     delay[$t]=$(( delay[$t] * 2 > 60 ? 60 : delay[$t] * 2 ))
                     due[$t]=$(( EPOCHSECONDS + delay[$t] ))
@@ -458,7 +486,7 @@ llm-proxy-restart() {
             (( ${#failed} )) && sleep 1
         done
     fi
-    (( ${#failed} )) && rc=1
+    (( ${#failed} || ${#refused} )) && rc=1
     return $rc
 }
 
@@ -475,6 +503,23 @@ _llm_proxy_sync_confirm() {
         sleep 2
     done
     return 1
+}
+
+# _llm_proxy_sync_restart <name>: restart <name>, true only when it now runs the
+# CURRENT config. A restart can fail without the proxy going down: the
+# replacement was refused (the gateway rejected its key, kept-key-rejected) and
+# the old proxy keeps answering /health, so a health probe alone calls that a
+# success and fleet-sync reports a rollout that did not happen. When the restart
+# function reports failure, the proxy is accepted only if the staleness check
+# then reads fresh. Needs the caller's `fn`, `chk` and `port` tables
+# (_llm_proxy_sync_tables). Only for restarts of a proxy that was STALE and
+# serving: a listener that was gone has no old proxy to mistake for the new one.
+_llm_proxy_sync_restart() {
+    local t="$1" verdict
+    ${fn[$t]} && return 0
+    _llm_proxy_sync_confirm "${port[$t]}" || return 1
+    verdict=$(${chk[$t]})
+    [[ "$verdict" == fresh ]]
 }
 
 # _llm_proxy_sync_tables: fills the CALLER's `fn` (restart command), `chk`
@@ -672,7 +717,7 @@ llm-proxy-sync() {
             continue
         fi
         print -ru2 -- "== $t (:${port[$t]}) $why; idle, restarting"
-        if ${fn[$t]} || _llm_proxy_sync_confirm "${port[$t]}"; then
+        if _llm_proxy_sync_restart "$t"; then
             print -ru2 -- "== $t (:${port[$t]}) restarted with the current code"
         else
             print -ru2 -- "== $t (:${port[$t]}) restart did not bring it back; run: ${fn[$t]}"
@@ -844,7 +889,7 @@ llm-proxy-watch() {
                     *) _llm_proxy_watch_log "$t" "could not be checked ($verdict); giving up"; rc=1; break ;;
                 esac
                 _llm_proxy_watch_log "$t" "idle; restarting ($verdict)"
-                if ${fn[$t]} || _llm_proxy_sync_confirm "${port[$t]}"; then
+                if _llm_proxy_sync_restart "$t"; then
                     _llm_proxy_watch_log "$t" "restarted with the current code"
                     _llm_proxy_notify "Proxy updated" "$t (:${port[$t]}) restarted at the first idle moment with the pulled code"
                 else
