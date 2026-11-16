@@ -2,10 +2,13 @@
 # (next T3 turn); the bridge exports the settings env into the client, so
 # startup-read knobs (CLAUDE_CODE_MAX_OUTPUT_TOKENS) win there too.
 # ---------------------------------------------------------------------------
-# claude-hosted-only: EnMaaS-hosted free models only (DeepSeek V4.1 Flash
-# main -- the stronger coder; Muse Spark Open selectable with --model
-# rits/meta-models/Muse-Spark-Open-816B-A42B-NVFP4[1m], and the proxy's vision
-# reroute sends image-carrying requests there).
+# claude-hosted-only: EnMaaS-hosted free models only (GLM 5.3 main -- the
+# stronger agentic coder per Artificial Analysis' Coding Agent Index; DeepSeek
+# V4.1 Flash is the outage fallback, the auto-mode classifier / small-fast tier
+# and the vision target, selectable with --model
+# rits/deepseek-ai/DeepSeek-V4.1-Flash-1017[1m]: the proxy's vision reroute sends
+# image-carrying requests there because GLM answers 400 to images). Muse Spark
+# Open is only a retired alias now (served from the primary).
 # Retired names stay as aliases: claude-glm-hybrid, claude-glm-only (the old
 # "hybrid" mode put the auto-mode classifier on an OpenAI model; DeepSeek now
 # covers classifier and helpers, so no OpenAI key or route is used).

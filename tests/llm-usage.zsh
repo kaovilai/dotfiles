@@ -1349,6 +1349,12 @@ assert mod.reroute_kind(ev(mod.PAIR_SWAP_T - 60, **old_pair)) == "vision"   # be
 assert mod.reroute_kind(ev(mod.PAIR_SWAP_T + 60, **old_pair)) == "alias"    # swapped window
 assert mod.reroute_kind(ev(mod.PAIR_REVERT_T - 60, **old_pair)) == "alias"  # window end
 assert mod.reroute_kind(ev(mod.PAIR_REVERT_T + 60, **old_pair)) == "vision" # after the revert
+# the retired Muse id is an alias of the GLM primary on hosted-only ports after
+# the revert; before it Muse was a served slot, and EnMaaS never aliased it
+muse_alias = {"requested": "rits/meta-models/Muse-Spark-Open-816B-A42B-NVFP4", "served": "rits/zai-org/glm-5-3"}
+assert mod.reroute_kind(ev(mod.PAIR_REVERT_T + 60, **muse_alias)) == "alias"
+assert mod.reroute_kind(ev(mod.PAIR_REVERT_T - 60, **muse_alias)) == "vision"
+assert mod.reroute_kind(ev(mod.PAIR_REVERT_T + 60, port="4146", **muse_alias)) == "vision"
 
 # eid identity: `start` (ms precision, both writers emit it) separates same-second requests;
 # a transcript message `id` is the identity and must not depend on token counts (usage grows while streaming)

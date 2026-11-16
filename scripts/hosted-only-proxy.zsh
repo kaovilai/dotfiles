@@ -5,10 +5,12 @@
 # a busy one waits for the watcher. Sourced functions are live in NEW shells
 # only.
 #
-# Hosted-only = EnMaaS-hosted free models only: DeepSeek V4.1 Flash (the
-# stronger coder, preferred first: DeepSWE 77 vs 60, Terminal-Bench 2.1 91 vs
-# 76) and Muse Spark Open (816B-A42B, multimodal, 1M context) as the fallback
-# and vision target. Codex's auto-review and Claude Code's
+# Hosted-only = EnMaaS-hosted free models only: GLM 5.3 (the stronger agentic
+# coder, preferred first: Artificial Analysis Coding Agent Index 48.9 vs 46.3,
+# Terminal-Bench 4.0 41.9 vs 26.8; text-only) and DeepSeek V4.1 Flash (multimodal,
+# 1M context) as the fallback and vision target. The 2026-11-14 swap put
+# DeepSeek primary with Muse Spark Open as the fallback; the 2026-11-16 revert
+# restored this pair and kept Muse as a retired alias. Codex's auto-review and Claude Code's
 # auto-mode classifier send their review request to the same endpoint as the
 # main model, so one local endpoint routes by model id and every tier, reviewer
 # and helper call stays on the two hosted models (no paid side-channel calls,
