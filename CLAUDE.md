@@ -294,10 +294,13 @@ and `scripts/llm-usage`. Read `docs/notes/hosted-only-go-proxy.md` and
   does not wait for idle, so run it only once the sessions have finished.
 - A replacement proxy must be able to authenticate before it replaces a working one.
   `startProxy` probes the gateway (`GET /v1/models`, both auth header shapes) **before any
-  side effect**; a definite 401/403 refuses the swap, leaves the serving proxy and its
-  stamps untouched (`kept-key-rejected`), and on a cold start fails with the key error
-  instead of launching a client that can only say "Claude could not authenticate". An
-  outage, 404 or timeout never blocks a restart. 2026-11-16: an edit-triggered restart
+  side effect**; a definite 401 refuses the swap, leaves the serving proxy and its
+  stamps untouched (`kept-key-rejected`; the watcher reports it as a deferral, not a
+  rollout, and it is refused if the proxy token changed in the same launch), and on a cold
+  start fails with the key error instead of launching a client that can only say "Claude
+  could not authenticate". 403 is NOT a rejection (this gateway 403s a valid key over the
+  monthly cap), nor are redirects (never followed: the key must not travel), outages, 404s
+  or timeouts. The probe dials through the proxy's own DoH-capable dialer. 2026-11-16: an edit-triggered restart
   picked up a key the gateway rejected and every hosted-only thread went down.
 - **Never edit or branch the live checkout.** `~/git/dotfiles` is what every
   `~/.local/bin/{claude,codex}-t3-*` launcher symlinks into, so an edit, a branch switch

@@ -483,7 +483,7 @@ type ensureOpts struct {
 }
 
 // ensureOnce is the locked heart of the launcher's start path for the Go impl.
-// Status is one of fresh, restarted, reused-busy; the error message is already
+// Status is one of fresh, restarted, reused-busy, kept-key-rejected; the error message is already
 // on stderr for the launch path.
 func ensureOnce(o ensureOpts) (string, error) {
 	unlock, err := lockRuntime(o.runtimeDir)
@@ -558,8 +558,14 @@ func ensureOnce(o ensureOpts) (string, error) {
 			return status, nil
 		}
 		if keepRunning(err, oldPids) {
-			// The old proxy stays: its fingerprint and served-models stamps were
-			// never touched, and the next launch retries once the key is fixed.
+			// The old proxy stays only if the client we are about to start can still
+			// talk to it: a proxy-token change in the same launch would hand the client
+			// a token the kept proxy rejects — the very symptom this guard removes.
+			if _, recToken := readFingerprint(o.runtimeDir); !tokenCompatible(recToken, o.tokenFP) {
+				return "", fmt.Errorf("%v; the running proxy also uses a different proxy token, so keeping it would launch the client with a token it rejects — fix the key, then run %s-hosted-only-restart", err, o.flavor)
+			}
+			// Its fingerprint and served-models stamps were never touched, and the
+			// next launch retries once the key is fixed.
 			fmt.Fprintf(os.Stderr, "%v\nhosted-only: keeping the running %s proxy on :%s instead of replacing it with one that cannot authenticate; fix the key, then run %s-hosted-only-restart.\n",
 				err, o.flavor, o.port, o.flavor)
 			return "kept-key-rejected", nil
@@ -992,6 +998,14 @@ func runWatch(args []string) int {
 				idle = 0
 				time.Sleep(watchPoll)
 				continue
+			case status == "kept-key-rejected":
+				// The gateway rejected the key the replacement would carry, so the old
+				// proxy is still serving the old code: NOT a rollout. Report it and leave
+				// the retry to the next fleet-sync, once the key is fixed.
+				logf("the gateway rejected the API key; kept the running proxy on the old code")
+				notifyUser("Proxy update deferred",
+					fmt.Sprintf("%s (:%s) kept its old code: the gateway rejected the API key; fix it, the next fleet-sync retries", *name, *port))
+				rc = 1
 			default:
 				logf("restarted with the current code")
 				notifyUser("Proxy updated",

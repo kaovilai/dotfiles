@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -30,7 +31,8 @@ func TestCheckUpstreamKeyRejectsOnlyDefiniteAuthFailures(t *testing.T) {
 		reject bool
 	}{
 		{http.StatusUnauthorized, true},
-		{http.StatusForbidden, true},
+		{http.StatusForbidden, false},        // valid key, route not entitled (over the cap) or an ingress/WAF
+		{http.StatusFound, false},            // a redirect is not a verdict
 		{http.StatusOK, false},
 		{http.StatusNotFound, false},            // a gateway without a models route
 		{http.StatusTooManyRequests, false},     // quota is not a bad key
@@ -73,6 +75,57 @@ func TestProbeSendsBothAuthShapes(t *testing.T) {
 	}
 	if (*seen).Get("x-api-key") != "secret-value" || (*seen).Get("Authorization") != "Bearer secret-value" {
 		t.Fatalf("probe must send the key as x-api-key and Bearer: %v", *seen)
+	}
+	if (*seen).Get("anthropic-version") == "" {
+		t.Fatalf("the Messages shape carries anthropic-version: %v", *seen)
+	}
+}
+
+// The probe must never follow a redirect: x-api-key would be copied to whatever
+// host the 3xx names (the rule _claude_enmaas_discover already states).
+func TestProbeNeverFollowsARedirect(t *testing.T) {
+	var elsewhereHit bool
+	elsewhere := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		elsewhereHit = true
+		w.WriteHeader(http.StatusUnauthorized) // a "rejection" nobody asked for
+	}))
+	t.Cleanup(elsewhere.Close)
+	gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, elsewhere.URL+"/login", http.StatusFound)
+	}))
+	t.Cleanup(gateway.Close)
+
+	if status := probeUpstreamKey(gateway.URL, "secret-value"); status != http.StatusFound {
+		t.Fatalf("the redirect itself is the answer, got %d", status)
+	}
+	if elsewhereHit {
+		t.Fatal("the key must never be sent to a redirect target")
+	}
+	if err := checkUpstreamKey("claude", gateway.URL, "secret-value"); err != nil {
+		t.Fatalf("a redirect is not a rejection: %v", err)
+	}
+}
+
+func TestKeyErrorNamesBothKeySources(t *testing.T) {
+	msg := (&upstreamKeyError{Status: 401}).Error()
+	for _, want := range []string{"ENMAAS_API_KEY", "HOSTED_ONLY_UPSTREAM_KEY"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("the message must name %s as a place to fix the key: %q", want, msg)
+		}
+	}
+}
+
+// A kept proxy must still accept the client about to start: a proxy-token change
+// in the same launch would hand it a token the old proxy rejects.
+func TestTokenCompatible(t *testing.T) {
+	if !tokenCompatible("", "new") {
+		t.Error("an old record without a token is unknown and taken as unchanged")
+	}
+	if !tokenCompatible("same", "same") {
+		t.Error("matching tokens are compatible")
+	}
+	if tokenCompatible("old", "new") {
+		t.Error("a changed proxy token must not take the keep-running path")
 	}
 }
 
