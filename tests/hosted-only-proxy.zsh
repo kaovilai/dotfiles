@@ -63,7 +63,7 @@ cfg=$(_hosted_only_proxy_config)
 [[ "$cfg" == *'"openai/rits/deepseek-ai/DeepSeek-V4.1-Flash-1017"'* && "$cfg" == *'/v1"'* ]] || fail "codex dialect missing from merged config: $cfg"
 [[ "$cfg" == *'DeepSeek-V4.1-Flash-1017#openai'* && "$cfg" == *'Muse-Spark-Open-816B-A42B-NVFP4#openai'* ]] || fail "suffixed groups missing: $cfg"
 [[ "$cfg" == *'claude-sonnet-5-5'* ]] || fail "merged config must serve the claude alias for both flavors: $cfg"
-[[ "$cfg" == *'model_name: "rits/zai-org/glm-5-3"'* ]] || fail "merged config must carry the legacy GLM alias row the proxy serves: $cfg"
+[[ "$cfg" == *'model_name: "rits/meta-models/Muse-Spark-Open-816B-A42B-NVFP4"'* ]] || fail "merged config must carry the legacy Muse alias row the proxy serves: $cfg"
 [[ "${cfg##*model_name: \"rits/deepseek-ai/DeepSeek-V4.1-Flash-1017\"}" == *'#openai'* ]] || fail "bare primary group and suffixed group must be distinct entries: $cfg"
 # the anthropic and openai deployments of the same model must not share a group
 # (4 slot deployments + one anthropic/#openai pair per alias)
@@ -76,27 +76,42 @@ HOSTED_ONLY_FALLBACK=0 HOSTED_ONLY_MAX_MODEL_LEN=999999 _hosted_only_proxy_vars 
 _hosted_only_proxy_vars codex
 # The merged config serves the claude alias for both flavors, so the alias knob
 # (and the fingerprint it feeds) is flavor-independent
-[[ "$_hop_aliases" == "claude-sonnet-5-5,rits/zai-org/glm-5-3" ]] || fail "codex flavor alias default (merged): $_hop_aliases"
+[[ "$_hop_aliases" == "claude-sonnet-5-5,rits/meta-models/Muse-Spark-Open-816B-A42B-NVFP4" ]] || fail "codex flavor alias default (merged): $_hop_aliases"
 [[ "$_hop_request_timeout" == 180 ]] || fail "request timeout default: $_hop_request_timeout"
 _hosted_only_proxy_vars claude
-[[ "$_hop_aliases" == "claude-sonnet-5-5,rits/zai-org/glm-5-3" ]] || fail "claude flavor alias default: $_hop_aliases"
+[[ "$_hop_aliases" == "claude-sonnet-5-5,rits/meta-models/Muse-Spark-Open-816B-A42B-NVFP4" ]] || fail "claude flavor alias default: $_hop_aliases"
 HOSTED_ONLY_ALIAS_MODELS=x,y _hosted_only_proxy_vars claude
 [[ "$_hop_aliases" == "x,y" ]] || fail "HOSTED_ONLY_ALIAS_MODELS not read: $_hop_aliases"
 # The Go side TrimSpace's entries, so a spaced list must match ids here too
+HOSTED_ONLY_ALIAS_MODELS="claude-sonnet-5-5, rits/meta-models/Muse-Spark-Open-816B-A42B-NVFP4" _hosted_only_proxy_vars claude
+[[ "$_hop_aliases" == "claude-sonnet-5-5,rits/meta-models/Muse-Spark-Open-816B-A42B-NVFP4" ]] || fail "spaced alias list not normalized: $_hop_aliases"
+[[ "$(_hop_slot_model rits/meta-models/Muse-Spark-Open-816B-A42B-NVFP4)" == "$_hop_glm" ]] || fail "spaced alias list breaks the slot mapping"
+# a slot id is never an alias (the primary is a slot): listing it changes nothing
 HOSTED_ONLY_ALIAS_MODELS="claude-sonnet-5-5, rits/zai-org/glm-5-3" _hosted_only_proxy_vars claude
-[[ "$_hop_aliases" == "claude-sonnet-5-5,rits/zai-org/glm-5-3" ]] || fail "spaced alias list not normalized: $_hop_aliases"
-[[ "$(_hop_slot_model rits/zai-org/glm-5-3)" == "$_hop_glm" ]] || fail "spaced alias list breaks the slot mapping"
+[[ "$_hop_aliases" == "claude-sonnet-5-5" ]] || fail "the primary slot id must be dropped from the aliases: $_hop_aliases"
+# A list filtered down to nothing is forwarded EMPTY, and the Go side reads set-but-
+# empty as "no aliases" (not the default), so config.yaml, fingerprint and child agree
+HOSTED_ONLY_ALIAS_MODELS="rits/zai-org/glm-5-3" _hosted_only_proxy_vars claude
+[[ -z "$_hop_aliases" ]] || fail "an alias list of only the primary slot id must filter to nothing: [$_hop_aliases]"
+_hosted_only_go_env
+(( ${_hop_go_env[(I)HOSTED_ONLY_ALIAS_MODELS=]} )) || fail "the empty alias list must be forwarded as HOSTED_ONLY_ALIAS_MODELS= (set-but-empty = no aliases): ${_hop_go_env[(r)HOSTED_ONLY_ALIAS_MODELS=*]}"
+_hosted_only_proxy_vars claude   # restore the default alias list
 _hosted_only_proxy_vars claude   # restore the default alias list
 # A pre-swap alias pin (claude-* only) wins over today's default and would drop
 # the legacy GLM alias, so it warns instead of letting stored sessions 400
 alias_pin=$(HOSTED_ONLY_ALIAS_MODELS=claude-sonnet-5-5 _hosted_only_proxy_vars claude 2>&1 >/dev/null)
-[[ "$alias_pin" == *"without rits/zai-org/glm-5-3"* ]] || fail "alias pin warning missing: $alias_pin"
+[[ "$alias_pin" == *"without rits/meta-models/Muse-Spark-Open"* ]] || fail "alias pin warning missing: $alias_pin"
 default_alias=$(_hosted_only_proxy_vars claude 2>&1 >/dev/null)
-[[ "$default_alias" != *"without rits/zai-org/glm-5-3"* ]] || fail "the default alias list must not warn: $default_alias"
+[[ "$default_alias" != *"without rits/meta-models/Muse-Spark-Open"* ]] || fail "the default alias list must not warn: $default_alias"
 # a SLOT pinned to that id serves it without the alias row, so no warning there
-slot_pinned=$(HOSTED_ONLY_GLM_MODEL=rits/zai-org/glm-5-3 HOSTED_ONLY_ALIAS_MODELS=claude-sonnet-5-5 _hosted_only_proxy_vars codex 2>&1 >/dev/null)
-[[ "$slot_pinned" != *"without rits/zai-org/glm-5-3"* ]] || fail "a slot pin of the retired id must not warn: $slot_pinned"
+slot_pinned=$(HOSTED_ONLY_GLM_MODEL=rits/meta-models/Muse-Spark-Open-816B-A42B-NVFP4 HOSTED_ONLY_ALIAS_MODELS=claude-sonnet-5-5 _hosted_only_proxy_vars codex 2>&1 >/dev/null)
+[[ "$slot_pinned" != *"without rits/meta-models/Muse-Spark-Open"* ]] || fail "a slot pin of the retired id must not warn: $slot_pinned"
 _hosted_only_proxy_vars claude   # the probes ran in subshells: restore the globals
+# An id that IS a slot is served as itself, never as an alias of the primary: the
+# Go side drops it from the alias set, and so must the launcher (config.yaml,
+# fingerprint and the slot mapping all read this list)
+slot_alias=$(HOSTED_ONLY_DEEPSEEK_MODEL=rits/meta-models/Muse-Spark-Open-816B-A42B-NVFP4 zsh -c "source '$repo/scripts/hosted-only-proxy.zsh'; _hosted_only_proxy_vars claude 2>/dev/null; print -r -- \"\$_hop_aliases\"")
+[[ "$slot_alias" == "claude-sonnet-5-5" ]] || fail "a slot pinned to the retired Muse id must drop it from the aliases: $slot_alias"
 # A pre-swap DEEPSEEK_MODEL pin of the old fallback default now equals the
 # primary; a degenerate pair kills the outage fallback and vision reroute, so
 # the launcher says so instead of silently serving one model in both slots
@@ -107,7 +122,7 @@ normal=$(_hosted_only_proxy_vars codex 2>&1 >/dev/null)
 _hosted_only_proxy_vars codex   # the probe ran in subshells: restore the parent's globals
 # A pre-swap pin (retired GLM id / claude-* alias) is routed by the primary slot,
 # so launchers map it onto the primary id the catalogs actually list
-[[ "$(_hop_slot_model rits/zai-org/glm-5-3)" == "$_hop_glm" ]] || fail "legacy pin not mapped to the primary slot: $(_hop_slot_model rits/zai-org/glm-5-3)"
+[[ "$(_hop_slot_model rits/meta-models/Muse-Spark-Open-816B-A42B-NVFP4)" == "$_hop_glm" ]] || fail "legacy pin not mapped to the primary slot: $(_hop_slot_model rits/meta-models/Muse-Spark-Open-816B-A42B-NVFP4)"
 [[ "$(_hop_slot_model claude-sonnet-5-5)" == "$_hop_glm" ]] || fail "claude alias pin not mapped to the primary slot"
 [[ "$(_hop_slot_model "$_hop_deepseek")" == "$_hop_deepseek" ]] || fail "a slot id must pass through unchanged: $(_hop_slot_model "$_hop_deepseek")"
 HOSTED_ONLY_REQUEST_TIMEOUT=99 _hosted_only_proxy_vars claude

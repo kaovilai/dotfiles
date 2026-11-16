@@ -142,7 +142,7 @@ def family(model):
     if "deepseek" in m:
         return "deepseek"
     if "muse" in m:
-        # the hosted-only fallback slot since 2026-11-14 (Muse Spark Open)
+        # Muse Spark Open: the hosted-only fallback slot 2026-11-14..16, a retired alias since
         return "muse"
     if "luna" in m:
         return "luna"
@@ -2636,9 +2636,10 @@ CLAUDE_FAMILIES = ("opus", "sonnet", "haiku", "fable")
 # The hosted-only pair's slots: the routers move a request between these only to
 # serve one the requested slot cannot (images), never across vendors otherwise.
 HOSTED_SLOT_FAMILIES = ("glm", "deepseek", "muse")
-# Proxies whose pair was swapped on 2026-11-14: glm-5-3 rides the primary slot
-# there as an ALIAS id. EnMaaS still serves glm-5-3 first-class, so the same
-# requested/served families mean different things per route.
+# Proxies whose pair ran swapped (2026-11-14 -> 11-16): glm-5-3 was an ALIAS id
+# served from the primary slot there. The pair was reverted on 2026-11-16 (GLM
+# back on the primary), so only events logged inside that window are aliases;
+# EnMaaS never swapped and keeps glm-5-3 first-class.
 SWAPPED_PAIR_ROUTES = ("hosted-only", "codex-hosted-only")
 # When the swap landed: the pair-swap commit's own timestamp (2026-11-14
 # 12:13:40 +0700), not midnight — the swap code exists from that instant on, so
@@ -2650,21 +2651,37 @@ SWAPPED_PAIR_ROUTES = ("hosted-only", "codex-hosted-only")
 # proxy actually served is not in the event, and the window is bounded and
 # self-healing, so the cutoff errs toward the common case.
 PAIR_SWAP_T = datetime(2026, 11, 14, 5, 13, 40, tzinfo=timezone.utc).timestamp()
+# The revert (2026-11-16) puts GLM back on the primary, so the alias meaning ends
+# at the revert commit's own timestamp (23:48:59 +0700), same precision as
+# PAIR_SWAP_T — not midnight, which would call the day's last hours of swapped-pair
+# traffic vision reroutes. A proxy that restarts later still logs that gap as the
+# swapped pair (which pair it served is not in the event), so the cutoff errs
+# toward the common case, as the swap's did.
+PAIR_REVERT_T = datetime(2026, 11, 16, 16, 48, 59, tzinfo=timezone.utc).timestamp()
+def hosted_only_route(ev):
+    """True when the event's port is a hosted-only proxy (EnMaaS never swapped)."""
+    return PROXIES.get(str(ev.get("port")), (None, None))[0] in SWAPPED_PAIR_ROUTES
 def paired_route(ev):
-    """True when the event's port was running the swapped pair when it was logged."""
-    if PROXIES.get(str(ev.get("port")), (None, None))[0] not in SWAPPED_PAIR_ROUTES:
+    """True when the event's port ran the swapped pair at the time it was logged."""
+    if not hosted_only_route(ev):
         return False
-    return (ev.get("t") or 0) >= PAIR_SWAP_T
+    t = ev.get("t") or 0
+    return PAIR_SWAP_T <= t < PAIR_REVERT_T
+def revert_alias_route(ev):
+    """True when a retired-Muse request could only have been an alias resolution:
+    hosted-only ports after the revert serve that id from the GLM primary."""
+    return hosted_only_route(ev) and (ev.get("t") or 0) >= PAIR_REVERT_T
 def reroute_kind(ev):
     """None for a direct call, else why the served model differs from the requested one.
 
     alias     a Claude name (sonnet, T3's claude-sonnet-5-5, the classifier tier) served by a hosted slot,
-              or glm->deepseek logged on a swapped-pair proxy after the 2026-11-14 swap
-              (glm-5-3 is an alias id there from that instant on)
+              or glm->deepseek logged on a hosted-only port inside the 2026-11-14..16
+              swapped-pair window (glm-5-3 was an alias id there), or muse->glm on a
+              hosted-only port after the revert (Muse is the retired alias id now)
     vision    one hosted slot requested, the other served (image-input fallback;
               the pair is slot-based, so glm/deepseek/muse in either direction —
-              on EnMaaS glm is still first-class, and pre-swap events on the
-              hosted-only ports ran the old pair, so both stay vision reroutes)
+              EnMaaS never swapped, and hosted-only events outside the window
+              ran GLM primary, so both are vision reroutes)
     fallback  the router retried on another deployment after a failed first attempt;
               with a fallback_reason on the event (proxies that classify the primary
               failure), the reason rides along: fallback:outage-500, fallback:rate-limit
@@ -2679,11 +2696,15 @@ def reroute_kind(ev):
     req_f, srv_f = family(req), family(srv)
     if req_f in CLAUDE_FAMILIES and srv_f in HOSTED_SLOT_FAMILIES:
         return "alias"
+    if req_f == "muse" and srv_f == "glm" and revert_alias_route(ev):
+        # the retired Muse id is an ALIAS of the primary (GLM) since the revert:
+        # a stored session continuing on it resolves there, not a vision move
+        return "alias"
     if req_f == "glm" and srv_f == "deepseek" and paired_route(ev):
-        # after the swap glm-5-3 is an ALIAS of the primary slot on these ports,
-        # so serving it there is an alias resolution. Everything else stays a
-        # reroute: EnMaaS keeps glm first-class, and a pre-swap event on these
-        # ports ran the old pair (glm primary -> deepseek fallback = vision)
+        # inside the swap window glm-5-3 was an ALIAS of the primary slot on
+        # these ports, so serving it there was an alias resolution. Everything
+        # else stays a reroute: EnMaaS never swapped, and events outside the
+        # window ran GLM primary -> deepseek fallback = vision
         return "alias"
     if req_f in HOSTED_SLOT_FAMILIES and srv_f in HOSTED_SLOT_FAMILIES:
         # image-input fallback between the pair's slots (deepseek -> muse, and

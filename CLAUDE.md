@@ -216,11 +216,15 @@ and `scripts/llm-usage`. Read `docs/notes/hosted-only-go-proxy.md` and
 ### Model pair (slot-based)
 
 - `HOSTED_ONLY_GLM_MODEL` is the **primary** slot, `HOSTED_ONLY_DEEPSEEK_MODEL` the
-  **fallback + vision** slot. The names predate the 2026-11-14 pair swap; the pair
-  picker, the vision reroute and the `[1m]` picker refs all key off the slots, so a
-  swap changes the ids, not the machinery.
-- Primary = the stronger coder (benchmarks in the pair-swap PR); fallback = the model
-  that takes images and can reason longer. Both are `rits/` ids with the 1M window.
+  **fallback + vision** slot. The names predate the 2026-11-14 swap (and its 11-16
+  revert); the pair picker, the vision reroute and the `[1m]` picker refs all key off
+  the slots, so a swap changes the ids, not the machinery.
+- Primary = the stronger coder; fallback = the model that takes images. Current pair:
+  **GLM 5.3** primary (text-only; Artificial Analysis' Coding Agent Index 48.9 vs
+  DeepSeek's 46.3, Terminal-Bench 4.0 41.9 vs 26.8), **DeepSeek V4.1 Flash** fallback
+  and vision target (GLM answers 400 to every image). Both are `rits/` ids with the 1M
+  window. The 11-14 swap's "DeepSeek is the stronger coder" claim leaned on
+  vendor-reported DeepSWE/TB2.1 numbers; see `docs/notes/deepseek-v41-flash-vs-glm.md`.
 - Short-name knob values (`glm`, `deepseek`) follow the **slots**, not the model names —
   a pin made before a swap means a different model afterwards. Pin a full id to fix
   which model a slot holds; it does not stop a request moving between slots (the vision
@@ -229,9 +233,9 @@ and `scripts/llm-usage`. Read `docs/notes/hosted-only-go-proxy.md` and
   `HOSTED_ONLY_ALIAS_MODELS` (legacy name `GLM_HYBRID_ALIAS_MODELS`; a bare
   `ALIAS_MODELS` is never read — an alias is served by the primary slot) instead of
   letting the cost guard answer 400 on continue.
-- `config.go`'s built-in defaults are per flavor: claude/codex default to the swapped
-  pair plus the launcher's alias set, so a hand-run `ensure`/`watch` regenerates what
-  those ports serve. The route-table flavors keep the **EnMaaS** pair (GLM 5.3 +
+- `config.go`'s built-in defaults are per flavor: claude/codex default to the GLM +
+  DeepSeek pair plus `claude-sonnet-5-5` and the retired Muse id as aliases, so a
+  hand-run `ensure`/`watch` regenerates what those ports serve. The route-table flavors keep the **EnMaaS** pair (GLM 5.3 +
   DeepSeek V4.1 Flash, no aliases) because nothing sets those knobs for them — but
   **exported** `HOSTED_ONLY_*` knobs do reach the EnMaaS child (its controller forwards
   `CHILD_ENV_PREFIXES`), so exporting `HOSTED_ONLY_{GLM,DEEPSEEK}_MODEL` or

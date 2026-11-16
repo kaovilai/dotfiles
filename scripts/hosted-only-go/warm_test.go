@@ -152,6 +152,15 @@ func TestMlxWarmGateSpawnsServerWhenAbsent(t *testing.T) {
 	if rec.Code != http.StatusTooManyRequests {
 		t.Fatalf("absent server must be a retryable 429, got %d", rec.Code)
 	}
+	// The gate spawns on its own goroutine (go mlxSpawnServer), so the counter is
+	// only eventually 1: reading it the instant the response returns raced the
+	// goroutine and failed on CI. Wait for the spawn, then hold briefly to prove
+	// it happened exactly once.
+	deadline := time.Now().Add(3 * time.Second)
+	for atomic.LoadInt32(kicks) == 0 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	time.Sleep(50 * time.Millisecond)
 	if got := atomic.LoadInt32(kicks); got != 1 {
 		t.Fatalf("the gate must spawn the server once, got %d", got)
 	}

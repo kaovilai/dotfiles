@@ -2,10 +2,13 @@
 # (next T3 turn); the bridge exports the settings env into the client, so
 # startup-read knobs (CLAUDE_CODE_MAX_OUTPUT_TOKENS) win there too.
 # ---------------------------------------------------------------------------
-# claude-hosted-only: EnMaaS-hosted free models only (DeepSeek V4.1 Flash
-# main -- the stronger coder; Muse Spark Open selectable with --model
-# rits/meta-models/Muse-Spark-Open-816B-A42B-NVFP4[1m], and the proxy's vision
-# reroute sends image-carrying requests there).
+# claude-hosted-only: EnMaaS-hosted free models only (GLM 5.3 main -- the
+# stronger agentic coder per Artificial Analysis' Coding Agent Index; DeepSeek
+# V4.1 Flash is the outage fallback, the auto-mode classifier / small-fast tier
+# and the vision target, selectable with --model
+# rits/deepseek-ai/DeepSeek-V4.1-Flash-1017[1m]: the proxy's vision reroute sends
+# image-carrying requests there because GLM answers 400 to images). Muse Spark
+# Open is only a retired alias now (served from the primary).
 # Retired names stay as aliases: claude-glm-hybrid, claude-glm-only (the old
 # "hybrid" mode put the auto-mode classifier on an OpenAI model; DeepSeek now
 # covers classifier and helpers, so no OpenAI key or route is used).
@@ -17,27 +20,27 @@
 # models go through the local "claude" hosted-only Go proxy
 # (scripts/hosted-only-proxy.zsh, port 4148): both slots -> anthropic/
 # Messages on the EnMaaS root (same as claude-enmaas). The slots are named for
-# the models they used to hold (2026-11-14 pair swap): "glm" = PRIMARY
-# (DeepSeek V4.1 Flash), "deepseek" = FALLBACK + vision target (Muse Spark
-# Open). Short-name knob values follow the SLOTS, not the names: a
-# HOSTED_ONLY_*_MODEL=glm pin made before the swap now means DeepSeek Flash,
-# and =deepseek means Muse Spark — pin a full id when the model must not move,
-# but keep the two slots distinct: a pre-swap pin of the old fallback default
-# (DEEPSEEK_MODEL=DeepSeek V4.1 Flash) now equals the primary, and a pair with
-# one id in both slots has no outage fallback and no vision target (the
-# launcher warns).
-# The proxy's hook cuts reasoning on requests without a thinking field (the
-# primary slot; Muse Spark reasons before every answer); without it the
-# per-tool-call classifier calls get slow enough to stall a turn. It also sends
-# primary-slot requests that contain an image to the fallback slot (Muse Spark,
-# multimodal). Main model and the opus/haiku/fable tiers stay on the primary
+# the models they held before the 2026-11-14 swap and the 11-16 revert: "glm" =
+# PRIMARY (GLM 5.3), "deepseek" = FALLBACK + vision target (DeepSeek V4.1
+# Flash, multimodal — GLM answers 400 to images, so the reroute lands here).
+# Short-name knob values follow the SLOTS, not the names — pin a full id when
+# the model must not move, but keep the two slots distinct: a GLM_MODEL pin
+# carried over from the 11-14..16 window equals the fallback default, and a
+# pair with one id in both slots has no outage fallback and no vision target
+# (the launcher warns).
+# The proxy's hook cuts reasoning on requests without a thinking field (GLM
+# only reduces it, so the classifier/small-fast tiers are pinned to the fallback
+# slot, DeepSeek, whose 1.8-2.3 s beats GLM's 4-6 s on a 40k classifier prompt).
+# It also sends primary-slot requests that contain an image to the fallback
+# slot (DeepSeek, multimodal). Main model and the subagent stay on the primary
 # slot.
-# Knobs: HOSTED_ONLY_CLASSIFIER_MODEL (sonnet tier = auto-mode classifier),
-# HOSTED_ONLY_SMALL_FAST_MODEL and HOSTED_ONLY_SUBAGENT_MODEL (subagents,
-# forced; workflow subagents too), all default the primary (DeepSeek V4.1
-# Flash): the fast model, while Muse Spark reasons before every answer — the
-# wrong latency profile for per-tool-call classification. Values: glm,
-# deepseek, or an id.
+# Knobs: HOSTED_ONLY_CLASSIFIER_MODEL (sonnet tier = auto-mode classifier) and
+# HOSTED_ONLY_SMALL_FAST_MODEL default the FALLBACK slot (DeepSeek V4.1 Flash,
+# the fast model: 1.8-2.3 s vs GLM's 4-6 s on a 40k classifier prompt, and it
+# honours thinking:disabled — the right latency profile for per-tool-call
+# classification). HOSTED_ONLY_SUBAGENT_MODEL (subagents, forced; workflow
+# subagents too) defaults the PRIMARY slot (GLM 5.3, the stronger agentic
+# coder). Values: glm, deepseek, or an id.
 # HOSTED_ONLY_CLIENT_MAX_RETRIES (default 3) sets CLAUDE_CODE_MAX_RETRIES (Claude
 # Code default 10) — bounds retries of real 5xx errors. Rate-limit and outage
 # answers arrive as 429 + retry-after: with CLAUDE_CODE_RETRY_WATCHDOG=1 (set
@@ -66,17 +69,17 @@ _claude_hosted_launch() (
     # be 200k" warning; Claude Code strips it before the request, so the proxy
     # still sees the bare id. modelSettings keys use the bare id.
     local glm1m="${glm}[1m]" ds1m="${ds}[1m]"
-    local -a picks=("fable=${glm1m}|DeepSeek V4.1 Flash" "opus=${glm1m}|DeepSeek V4.1 Flash" "haiku=${glm1m}|DeepSeek V4.1 Flash" "=${ds1m}|Muse Spark Open")   # Muse Spark: picker entry only, no tier
+    local -a picks=("fable=${glm1m}|GLM 5.3 (1M)" "opus=${glm1m}|GLM 5.3 (1M)" "haiku=${glm1m}|GLM 5.3 (1M)" "=${ds1m}|DeepSeek V4.1 Flash (1M, vision)")
     local classifier small subagent
-    # Auto-mode classification and the small/fast tier default to the PRIMARY
-    # (DeepSeek Flash, the fast model, 2026-11-14): the classifier sees text
-    # only, and Muse Spark always reasons before answering, which is the wrong
-    # latency profile for a per-tool-call classification. A primary outage is
-    # covered in-request by the proxy's pair fallback (classifier calls are
-    # image-free and fail over to Muse Spark). Knobs override.
-    classifier="$(_claude_hosted_ref "${HOSTED_ONLY_CLASSIFIER_MODEL:-$glm}" "$glm" "$ds")"
-    small="$(_claude_hosted_ref "${HOSTED_ONLY_SMALL_FAST_MODEL:-$glm}" "$glm" "$ds")"
-    # Subagents do the coding: the stronger coder, on the primary slot.
+    # Auto-mode classification and the small/fast tier default to the FALLBACK
+    # slot (DeepSeek, 1.8-2.3 s on a 40k classifier prompt vs GLM's 4-6 s, and
+    # it honours thinking:disabled). A fallback outage is covered in-request by
+    # the proxy's pair picker (classifier calls are image-free and can run on
+    # either). Knobs override.
+    classifier="$(_claude_hosted_ref "${HOSTED_ONLY_CLASSIFIER_MODEL:-$ds}" "$glm" "$ds")"
+    small="$(_claude_hosted_ref "${HOSTED_ONLY_SMALL_FAST_MODEL:-$ds}" "$glm" "$ds")"
+    # Subagents do the coding: the primary slot (GLM 5.3 tops Artificial
+    # Analysis' Coding Agent Index, 48.9 vs DeepSeek's 46.3).
     subagent="$(_claude_hosted_ref "${HOSTED_ONLY_SUBAGENT_MODEL:-$glm}" "$glm" "$ds")"
     local -a reply
     _claude_picker_args "${picks[@]}"

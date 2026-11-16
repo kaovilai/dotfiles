@@ -63,5 +63,33 @@ Notes: DS is ~2.5-5× faster across every mode. GLM tool-call reliability roughl
 - **Claude `[1m]` suffix**: use `rits/deepseek-ai/DeepSeek-V4.1-Flash-1017[1m]` like GLM to silence the unrecognized-model 200k warning (CC strips it before the wire; proxy sees bare id).
 - **Subagent env** (`CLAUDE_CODE_SUBAGENT_MODEL` + `_FORCE=1`, `ANTHROPIC_SMALL_FAST_MODEL`, workflow subagent): point at a hosted id; DS recommended. Sonnet tier (classifier) = DS. Opus/Haiku/Fable tiers = main choice. Keep `CLAUDE_CODE_AUTO_MODE_SERVER=0`.
 - **Usage accounting gotcha**: DS reports `input_tokens` ≈ uncached tokens only; `cache_creation_input_tokens` / `prompt_tokens_details.created_cache_tokens` hold the rest. Context meters in Claude Code may read low; not a functional issue.
-- **Entitlement fragility**: DS passing the over-cap check is from the `allowed_over_limit_models` list; the list is server-side policy and can change. Keep GLM as the fallback id in hosted-only configs, probe both on proxy start (cheap 1-token ping) and surface which one is down.
+- **Entitlement fragility**: DS passing the over-cap check is from the `allowed_over_limit_models` list; the list is server-side policy and can change. Keep a second hosted id in the pair as the fallback (since the 2026-11-16 revert: DeepSeek, behind GLM primary — it is the multimodal one, so it also takes the vision reroute), probe both on proxy start (cheap 1-token ping) and surface which one is down.
 - **Not tested**: real Claude Code/Codex end-to-end sessions on DS, deny-path with a self-harming main model, long (>100k) context behavior, actual max output beyond a few thousand tokens, streaming behavior on DS, sampling-penalty drift on DS (GLM drift known only from earlier notes).
+
+## Addendum 2026-11-16: the pair reverted to GLM primary
+
+The 2026-11-14 swap made DeepSeek V4.1 Flash primary on the strength of
+vendor-reported DeepSWE 1.1 (77.0 vs 66.9) and Terminal-Bench 2.1 (90.6 vs
+88.2). Artificial Analysis' agentic-coding boards point the other way for the
+workload this proxy actually serves (Claude Code / Codex sessions):
+
+| Board (AA, Max) | DeepSeek V4.1 Flash | GLM-5.3 |
+|---|---|---|
+| Coding Agent Index v2.0 | 46.3 | **48.9** |
+| Terminal-Bench 4.0 | 26.8 | **41.9** |
+| AutomationBench-AA | **68.9** | 62.2 |
+| AA-Briefcase v1.1 | 1417 | **1503** |
+
+Sources: https://artificialanalysis.ai/models/comparisons/deepseek-v4-1-flash-vs-glm-5-3 ,
+https://www.datalearner.com/ai-models/pretrained-models/glm-5-3/analysis (v2.0 = 48.92),
+https://www.tbench.ai/ (TB 4.1 official: GLM 41.2% vs DeepSeek 38.5%). Where DeepSeek
+still leads: DeepSWE 1.1 (independent 73.8-74.2 vs 66.9-68.1), TB 2.1, FrontierCode 1.1
+on AA (44.0 vs 40.1), and the index's FrontierCode component (52.6 vs 48.25).
+
+All three hosted-only candidates are $0 on the EnMaaS free tier, so price never
+entered either decision. Reverted to **GLM 5.3 primary + DeepSeek V4.1 Flash
+fallback/vision** (DeepSeek is the multimodal one; GLM 400s on images). Muse Spark
+Open left the pair and stays an alias so its two days of stored sessions keep
+working. The classifier and small-fast tiers stay on DeepSeek: 1.8-2.3 s vs GLM's
+4-6 s on a 40k classifier prompt, and DeepSeek honours `thinking:disabled` (see the
+probe table above).

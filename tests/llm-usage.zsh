@@ -104,11 +104,11 @@ rows = [
 open(sys.argv[1], "w").write("\n".join(json.dumps(r) for r in rows) + "\n")
 PY
 out=$(LLM_USAGE_DIR=$kinddir $usage tail -n 3)
-[[ "$out" == *"alias"*"sess 049f12fa"* ]] || fail "tail must tag the alias reroute with its session: $out"
+[[ "$out" == *"vision"*"sess 049f12fa"* ]] || fail "tail must tag the vision reroute with its session: $out"
 [[ "$out" == *"fallback:outage-502"* ]] || fail "tail must name the fallback reason: $out"
 [[ "$(print -r -- "$out" | grep -c 'sess ')" == 2 ]] || fail "only rerouted lines carry the session tag: $out"
 out=$(LLM_USAGE_DIR=$kinddir $usage routes --since 1h)
-[[ "$out" == *"reroutes by kind: alias 1, fallback:outage-502 1"* ]] || fail "routes must summarize reroute kinds: $out"
+[[ "$out" == *"reroutes by kind: vision 1, fallback:outage-502 1"* ]] || fail "routes must summarize reroute kinds: $out"
 out=$(LLM_USAGE_DIR=$errdir $usage summary --since 2h --by route --json)
 print -r -- "$out" | python3 -c '
 import json, sys
@@ -471,17 +471,19 @@ kinds = {(r["from"], r["to"], r["kind"]): r["count"] for r in d["reroutes"]}
 assert kinds == {("sonnet", "glm-5.3", "alias"): 2, ("sonnet", "deepseek-v4.1-flash", "alias"): 1}, kinds
 assert d["reroutes_15m"] == 3 and next(m for m in d["by_model"] if m["model"] == "glm-5.3")["reroutes"] == 2, d["by_model"]
 assert d["reroutes_kinds_15m"] == {"alias": 3}, d["reroutes_kinds_15m"]
-# glm-5-3 is an alias id on the swapped pair: serving it on the primary slot is
-# an alias resolution; the vision reroute is the pair's own slot-to-slot move
-d = run("reroute-alias-glm", [ev(60, served=DS), ev(30)])
-assert [(r["from"], r["to"], r["kind"], r["count"]) for r in d["reroutes"]] == [("glm-5.3", "deepseek-v4.1-flash", "alias", 1)], d["reroutes"]
-assert d["reroutes_kinds_15m"] == {"alias": 1}, d["reroutes_kinds_15m"]
-# ...but EnMaaS still serves glm-5-3 first-class, so the same move there is that
-# router's own image reroute, not an alias; the split is per-route (port -> name)
+# After the 2026-11-16 revert GLM is the primary again, so a current
+# glm->deepseek move on any hosted-only port is the vision reroute (the swap
+# window itself is covered by the module-level asserts below, which can place
+# events inside it)
+d = run("reroute-glm-vision", [ev(60, served=DS), ev(30)])
+assert [(r["from"], r["to"], r["kind"], r["count"]) for r in d["reroutes"]] == [("glm-5.3", "deepseek-v4.1-flash", "vision", 1)], d["reroutes"]
+assert d["reroutes_kinds_15m"] == {"vision": 1}, d["reroutes_kinds_15m"]
+# EnMaaS never swapped, so the same move there is that router's own image
+# reroute too
 d = run("reroute-glm-enmaas", [ev(60, port="4146", served=DS), ev(30, port="4147", served=DS)])
-assert {(r["from"], r["to"], r["kind"], r["count"]) for r in d["reroutes"]} == {
-    ("glm-5.3", "deepseek-v4.1-flash", "vision", 1),
-    ("glm-5.3", "deepseek-v4.1-flash", "alias", 1)}, d["reroutes"]
+assert {(r["from"], r["to"], r["proxy"], r["kind"], r["count"]) for r in d["reroutes"]} == {
+    ("glm-5.3", "deepseek-v4.1-flash", "enmaas", "vision", 1),
+    ("glm-5.3", "deepseek-v4.1-flash", "codex-hosted-only", "vision", 1)}, d["reroutes"]
 # the pair is slot-based: after the 2026-11-14 swap the vision reroute is
 # primary->fallback (deepseek -> muse) and the retired GLM id rides the alias
 MUSE = "rits/meta-models/Muse-Spark-Open-816B-A42B-NVFP4"
@@ -963,7 +965,7 @@ fenv3 = {"LLM_USAGE_FLEET": f"peerC=local:{peer2}", "LLM_USAGE_CONFIG_DIR": temp
 subprocess.run([sys.executable, usage, "fleet", "refresh", "--force"], capture_output=True, text=True, timeout=60,
                env={**os.environ, "LLM_USAGE_DIR": agg3, **fenv3})
 d = run("fleet-reroutes", [ev(30)], state=agg3, extra_env=fenv3)
-assert d["reroutes_15m"] == 1 and d["reroutes_kinds_15m"].get("alias") == 1, d.get("reroutes_kinds_15m")
+assert d["reroutes_15m"] == 1 and d["reroutes_kinds_15m"].get("vision") == 1, d.get("reroutes_kinds_15m")
 assert d["totals"]["m15"]["errors"]["5xx"] == 1 and d["totals"]["m15"]["requests"] == 3, d["totals"]
 
 # fleet in-flight streaming: `watch-inflight` on the peer (hello, snapshot on change,
@@ -1343,8 +1345,16 @@ def host_lines(host):
 # reroute_kind: the pair swap is what turned glm->deepseek into an alias on the
 # hosted-only ports, so events logged before it stay the old pair's vision reroute
 old_pair = {"requested": "rits/zai-org/glm-5-3", "served": "rits/deepseek-ai/DeepSeek-V4.1-Flash-1017"}
-assert mod.reroute_kind(ev(mod.PAIR_SWAP_T + 60, **old_pair)) == "alias"
-assert mod.reroute_kind(ev(mod.PAIR_SWAP_T - 60, **old_pair)) == "vision"
+assert mod.reroute_kind(ev(mod.PAIR_SWAP_T - 60, **old_pair)) == "vision"   # before the swap: GLM primary
+assert mod.reroute_kind(ev(mod.PAIR_SWAP_T + 60, **old_pair)) == "alias"    # swapped window
+assert mod.reroute_kind(ev(mod.PAIR_REVERT_T - 60, **old_pair)) == "alias"  # window end
+assert mod.reroute_kind(ev(mod.PAIR_REVERT_T + 60, **old_pair)) == "vision" # after the revert
+# the retired Muse id is an alias of the GLM primary on hosted-only ports after
+# the revert; before it Muse was a served slot, and EnMaaS never aliased it
+muse_alias = {"requested": "rits/meta-models/Muse-Spark-Open-816B-A42B-NVFP4", "served": "rits/zai-org/glm-5-3"}
+assert mod.reroute_kind(ev(mod.PAIR_REVERT_T + 60, **muse_alias)) == "alias"
+assert mod.reroute_kind(ev(mod.PAIR_REVERT_T - 60, **muse_alias)) == "vision"
+assert mod.reroute_kind(ev(mod.PAIR_REVERT_T + 60, port="4146", **muse_alias)) == "vision"
 
 # eid identity: `start` (ms precision, both writers emit it) separates same-second requests;
 # a transcript message `id` is the identity and must not depend on token counts (usage grows while streaming)
