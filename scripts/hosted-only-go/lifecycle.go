@@ -485,6 +485,21 @@ type ensureOpts struct {
 // ensureOnce is the locked heart of the launcher's start path for the Go impl.
 // Status is one of fresh, restarted, reused-busy, kept-key-rejected; the error message is already
 // on stderr for the launch path.
+// reportPairGap says what a kept (busy, or key-rejected) proxy cannot serve. A
+// pair swap is the sharp edge of keeping an old proxy: it still refuses the new
+// ids, so name them instead of leaving the caller to decode a 400 from the cost
+// guard. A proxy started before the pair was recorded cannot be compared — say
+// so, since that IS the rollout case this exists for.
+func reportPairGap(o ensureOpts) {
+	if len(readServedModels(o.runtimeDir)) == 0 {
+		fmt.Fprintf(os.Stderr, "hosted-only: the running %s proxy predates the pair record, so the ids it serves cannot be checked; %s-hosted-only-restart applies the current pair once it is idle.\n",
+			o.flavor, o.flavor)
+	} else if missing := missingServedModels(o.runtimeDir, o.flavor, o.port, o.configPath); len(missing) > 0 {
+		fmt.Fprintf(os.Stderr, "hosted-only: the running proxy does not serve %s; a request naming one of those ids is refused (400) until the restart above runs.\n",
+			strings.Join(missing, ", "))
+	}
+}
+
 func ensureOnce(o ensureOpts) (string, error) {
 	unlock, err := lockRuntime(o.runtimeDir)
 	if err != nil {
@@ -506,18 +521,7 @@ func ensureOnce(o ensureOpts) (string, error) {
 			}
 			fmt.Fprintf(os.Stderr, "hosted-only: %s proxy config, hooks or key changed, but it is serving requests; reusing it (%s-hosted-only-restart applies the change now).\n",
 				o.flavor, o.flavor)
-			// A pair swap is the sharp edge of that reuse: the running proxy
-			// still refuses the new ids, so name them instead of leaving the
-			// caller to decode a 400 from the cost guard. A proxy started
-			// before the pair was recorded cannot be compared — say so, since
-			// that IS the rollout case this exists for.
-			if len(readServedModels(o.runtimeDir)) == 0 {
-				fmt.Fprintf(os.Stderr, "hosted-only: the running %s proxy predates the pair record, so the ids it serves cannot be checked; %s-hosted-only-restart applies the current pair once it is idle.\n",
-					o.flavor, o.flavor)
-			} else if missing := missingServedModels(o.runtimeDir, o.flavor, o.port, o.configPath); len(missing) > 0 {
-				fmt.Fprintf(os.Stderr, "hosted-only: the running proxy does not serve %s; a request naming one of those ids is refused (400) until the restart above runs.\n",
-					strings.Join(missing, ", "))
-			}
+			reportPairGap(o)
 			return "reused-busy", nil
 		}
 		// Zero-refuse restart (#612): start the new proxy ALONGSIDE the old
@@ -568,6 +572,9 @@ func ensureOnce(o ensureOpts) (string, error) {
 			// next launch retries once the key is fixed.
 			fmt.Fprintf(os.Stderr, "%v\nhosted-only: keeping the running %s proxy on :%s instead of replacing it with one that cannot authenticate; fix the key, then run %s-hosted-only-restart.\n",
 				err, o.flavor, o.port, o.flavor)
+			// The kept proxy is the OLD code: if this launch also changed the pair, a
+			// request naming a new id gets the cost guard's 400, so say so up front.
+			reportPairGap(o)
 			return "kept-key-rejected", nil
 		}
 		if len(oldPids) > 0 && anyPidAlive(oldPids) {

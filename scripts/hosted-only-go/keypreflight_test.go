@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -169,5 +170,47 @@ func TestKeepRunningOnlyForARejectedKeyWithALiveOldListener(t *testing.T) {
 	}
 	if keepRunning(nil, alive) {
 		t.Error("success is not a reason to keep anything")
+	}
+}
+
+// captureStderr runs fn and returns what it wrote to os.Stderr.
+func captureStderr(t *testing.T, fn func()) string {
+	t.Helper()
+	old := os.Stderr
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stderr = w
+	fn()
+	_ = w.Close()
+	os.Stderr = old
+	buf, _ := io.ReadAll(r)
+	return string(buf)
+}
+
+// A kept proxy (busy, or key-rejected) is the OLD code: when the same launch
+// also changed the pair, a request naming a new id gets the cost guard's 400, so
+// the launcher names the ids up front instead of leaving the caller to decode it.
+func TestReportPairGapNamesWhatAKeptProxyCannotServe(t *testing.T) {
+	t.Setenv("HOSTED_ONLY_GLM_MODEL", "rits/new-primary")
+	t.Setenv("HOSTED_ONLY_DEEPSEEK_MODEL", "rits/new-fallback")
+	t.Setenv("HOSTED_ONLY_ALIAS_MODELS", "claude-sonnet-5-5") // independent of the default alias list
+	dir := t.TempDir()
+	o := ensureOpts{flavor: "claude", port: "4148", runtimeDir: dir}
+
+	if out := captureStderr(t, func() { reportPairGap(o) }); !strings.Contains(out, "predates the pair record") {
+		t.Fatalf("a proxy with no pair record cannot be compared, and must say so: %q", out)
+	}
+
+	writeServedModels(dir, []string{"rits/old-primary", "rits/old-fallback"})
+	out := captureStderr(t, func() { reportPairGap(o) })
+	if !strings.Contains(out, "does not serve") || !strings.Contains(out, "rits/new-primary") || !strings.Contains(out, "rits/new-fallback") {
+		t.Fatalf("the kept proxy's missing ids must be named: %q", out)
+	}
+
+	writeServedModels(dir, []string{"rits/new-primary", "rits/new-fallback", "claude-sonnet-5-5"})
+	if out := captureStderr(t, func() { reportPairGap(o) }); out != "" {
+		t.Fatalf("a kept proxy serving the current pair reports nothing: %q", out)
 	}
 }
