@@ -8,20 +8,34 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 // gatewayAnswering is a fake EnMaaS gateway that answers every request with
-// status and records the auth headers the probe sent.
-func gatewayAnswering(t *testing.T, status int) (*httptest.Server, *http.Header) {
+// status and hands the test the auth headers the probe sent. The handler runs on
+// its own goroutine, so the snapshot travels over a channel (a socket round trip
+// is not a happens-before edge the race detector recognises).
+func gatewayAnswering(t *testing.T, status int) (*httptest.Server, func() http.Header) {
 	t.Helper()
-	var seen http.Header
+	seen := make(chan http.Header, 8)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		seen = r.Header.Clone()
+		select {
+		case seen <- r.Header.Clone():
+		default:
+		}
 		w.WriteHeader(status)
 	}))
 	t.Cleanup(server.Close)
-	return server, &seen
+	return server, func() http.Header {
+		select {
+		case h := <-seen:
+			return h
+		default:
+			return nil
+		}
+	}
 }
 
 // A replacement proxy the gateway would answer 401 must be refused before it
@@ -74,20 +88,21 @@ func TestProbeSendsBothAuthShapes(t *testing.T) {
 	if status := probeUpstreamKey(server.URL, "secret-value"); status != http.StatusOK {
 		t.Fatalf("status %d", status)
 	}
-	if (*seen).Get("x-api-key") != "secret-value" || (*seen).Get("Authorization") != "Bearer secret-value" {
-		t.Fatalf("probe must send the key as x-api-key and Bearer: %v", *seen)
+	got := seen()
+	if got.Get("x-api-key") != "secret-value" || got.Get("Authorization") != "Bearer secret-value" {
+		t.Fatalf("probe must send the key as x-api-key and Bearer: %v", got)
 	}
-	if (*seen).Get("anthropic-version") == "" {
-		t.Fatalf("the Messages shape carries anthropic-version: %v", *seen)
+	if got.Get("anthropic-version") == "" {
+		t.Fatalf("the Messages shape carries anthropic-version: %v", got)
 	}
 }
 
 // The probe must never follow a redirect: x-api-key would be copied to whatever
 // host the 3xx names (the rule _claude_enmaas_discover already states).
 func TestProbeNeverFollowsARedirect(t *testing.T) {
-	var elsewhereHit bool
+	var elsewhereHit atomic.Bool
 	elsewhere := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		elsewhereHit = true
+		elsewhereHit.Store(true)
 		w.WriteHeader(http.StatusUnauthorized) // a "rejection" nobody asked for
 	}))
 	t.Cleanup(elsewhere.Close)
@@ -99,7 +114,7 @@ func TestProbeNeverFollowsARedirect(t *testing.T) {
 	if status := probeUpstreamKey(gateway.URL, "secret-value"); status != http.StatusFound {
 		t.Fatalf("the redirect itself is the answer, got %d", status)
 	}
-	if elsewhereHit {
+	if elsewhereHit.Load() {
 		t.Fatal("the key must never be sent to a redirect target")
 	}
 	if err := checkUpstreamKey("claude", gateway.URL, "secret-value"); err != nil {
@@ -212,5 +227,37 @@ func TestReportPairGapNamesWhatAKeptProxyCannotServe(t *testing.T) {
 	writeServedModels(dir, []string{"rits/new-primary", "rits/new-fallback", "claude-sonnet-5-5"})
 	if out := captureStderr(t, func() { reportPairGap(o) }); out != "" {
 		t.Fatalf("a kept proxy serving the current pair reports nothing: %q", out)
+	}
+}
+
+// A forced restart exists to apply new code: keeping the old proxy is a failure
+// of THAT request, while a plain launch must still start against the proxy that
+// is serving.
+func TestEnsureExitCodeForcedRestartThatKeptTheOldProxyFails(t *testing.T) {
+	for _, tc := range []struct {
+		status string
+		forced bool
+		want   int
+	}{
+		{"kept-key-rejected", true, 1},
+		{"kept-key-rejected", false, 0},
+		{"restarted", true, 0},
+		{"fresh", true, 0},
+		{"reused-busy", false, 0},
+	} {
+		if got := ensureExitCode(tc.status, tc.forced); got != tc.want {
+			t.Errorf("status %q forced=%v: exit %d want %d", tc.status, tc.forced, got, tc.want)
+		}
+	}
+}
+
+// The probe budget has to outlast the system resolver's timeout, or the DoH
+// fallback the dialer exists for never gets to run.
+func TestKeyProbeBudgetOutlastsTheResolver(t *testing.T) {
+	if keyProbeDialBudget < 10*time.Second || keyProbeTotalBudget <= keyProbeDialBudget {
+		t.Fatalf("dial %v total %v: DoH needs time after a slow DNS failure", keyProbeDialBudget, keyProbeTotalBudget)
+	}
+	if got := keyProbeClient().Timeout; got != keyProbeTotalBudget {
+		t.Fatalf("client timeout %v, want %v", got, keyProbeTotalBudget)
 	}
 }

@@ -772,8 +772,22 @@ func runEnsure(args []string) int {
 	// pair — so a hand-run ensure without --flavor would restart that port
 	// serving the wrong pair. Default it like watch/status do.
 	o.flavor, o.port = ensureFlavorPort(o.flavor, o.port)
-	if _, err := ensureOnce(o); err != nil {
+	status, err := ensureOnce(o)
+	if err != nil {
 		fmt.Fprintf(os.Stderr, "hosted-only-go ensure: %v\n", err)
+		return 1
+	}
+	return ensureExitCode(status, os.Getenv("HOSTED_ONLY_FORCE_RESTART") != "")
+}
+
+// ensureExitCode is what `ensure` returns for a successful status. A plain
+// launch that kept the old proxy (busy, or the gateway rejected the new key)
+// still exits 0 — the client must start against the proxy that is serving. A
+// FORCED restart exists only to apply the new code, so keeping the old proxy is
+// a failure of that request: nonzero, or *-hosted-only-restart and the
+// llm-proxy-sync idle path would report a rollout that did not happen.
+func ensureExitCode(status string, forced bool) int {
+	if forced && status == "kept-key-rejected" {
 		return 1
 	}
 	return 0

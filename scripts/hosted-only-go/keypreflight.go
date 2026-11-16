@@ -26,6 +26,11 @@ func (e *upstreamKeyError) Error() string {
 	return fmt.Sprintf("hosted-only: the upstream gateway rejected the API key (HTTP %d); refresh ENMAAS_API_KEY (or HOSTED_ONLY_UPSTREAM_KEY, which overrides it when set) in the credentials file (default ~/secrets.zsh)", e.Status)
 }
 
+const (
+	keyProbeDialBudget  = 15 * time.Second
+	keyProbeTotalBudget = 20 * time.Second
+)
+
 // keyProbe is the seam tests replace; it returns the gateway's HTTP status for
 // a cheap authenticated read, or 0 when the gateway could not be reached.
 var keyProbe = probeUpstreamKey
@@ -36,11 +41,18 @@ var keyProbe = probeUpstreamKey
 // will, instead of a silent "unreachable" that lets the swap through. It never
 // follows a redirect: x-api-key would travel to whatever host a 3xx names (the
 // gateway-key rule in _claude_enmaas_discover), and a 3xx is not a verdict.
+//
+// The budget must outlast the system resolver: dohDialContext only falls back to
+// DoH after the base dial returns a DNS error, which on a stale or unresponsive
+// DNS server arrives at the resolver's own timeout. A shorter client deadline
+// would cancel the context before DoH ran and fail open on exactly the network
+// the dialer exists for. The dial gets 15s (the proxy allows 30s) and the whole
+// request 20s, still bounding a launch on a dead network.
 func keyProbeClient() *http.Client {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
-	transport.DialContext = dohDialContext(&net.Dialer{Timeout: 5 * time.Second}, newDoHResolver())
+	transport.DialContext = dohDialContext(&net.Dialer{Timeout: keyProbeDialBudget}, newDoHResolver())
 	return &http.Client{
-		Timeout:   5 * time.Second,
+		Timeout:   keyProbeTotalBudget,
 		Transport: transport,
 		CheckRedirect: func(*http.Request, []*http.Request) error {
 			return http.ErrUseLastResponse
