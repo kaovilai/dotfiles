@@ -566,7 +566,7 @@ func ensureOnce(o ensureOpts) (string, error) {
 			// talk to it: a proxy-token change in the same launch would hand the client
 			// a token the kept proxy rejects — the very symptom this guard removes.
 			if _, recToken := readFingerprint(o.runtimeDir); !tokenCompatible(recToken, o.tokenFP) {
-				return "", fmt.Errorf("%v; the running proxy also uses a different proxy token, so keeping it would launch the client with a token it rejects — fix the key, then run %s-hosted-only-restart", err, o.flavor)
+				return "", fmt.Errorf("%w; the running proxy also uses a different proxy token, so keeping it would launch the client with a token it rejects — fix the key, then run %s-hosted-only-restart", err, o.flavor)
 			}
 			// Its fingerprint and served-models stamps were never touched, and the
 			// next launch retries once the key is fixed.
@@ -775,9 +775,25 @@ func runEnsure(args []string) int {
 	status, err := ensureOnce(o)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "hosted-only-go ensure: %v\n", err)
-		return 1
+		return ensureErrExitCode(err)
 	}
 	return ensureExitCode(status, os.Getenv("HOSTED_ONLY_FORCE_RESTART") != "")
+}
+
+// exitKeyRejected is the exit code for a PERMANENT refusal: the gateway rejected
+// the API key. Callers that retry failed restarts (the backoff loop in the
+// restart-all command) must not retry it - nothing but a new key changes the
+// outcome - so it is distinct from the generic failure code 1 that a transient
+// problem returns.
+const exitKeyRejected = 3
+
+// ensureErrExitCode maps an ensure error to its exit code.
+func ensureErrExitCode(err error) int {
+	var keyErr *upstreamKeyError
+	if errors.As(err, &keyErr) {
+		return exitKeyRejected
+	}
+	return 1
 }
 
 // ensureExitCode is what `ensure` returns for a successful status. A plain
@@ -788,7 +804,7 @@ func runEnsure(args []string) int {
 // llm-proxy-sync idle path would report a rollout that did not happen.
 func ensureExitCode(status string, forced bool) int {
 	if forced && status == "kept-key-rejected" {
-		return 1
+		return exitKeyRejected
 	}
 	return 0
 }

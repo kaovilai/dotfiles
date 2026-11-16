@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -237,7 +238,7 @@ func TestEnsureExitCodeForcedRestartThatKeptTheOldProxyFails(t *testing.T) {
 		forced bool
 		want   int
 	}{
-		{"kept-key-rejected", true, 1},
+		{"kept-key-rejected", true, exitKeyRejected},
 		{"kept-key-rejected", false, 0},
 		{"restarted", true, 0},
 		{"fresh", true, 0},
@@ -306,5 +307,21 @@ func TestProbeRefusesOnlyWhenEveryShapeIs401(t *testing.T) {
 	defer mu.Unlock()
 	if sawBoth {
 		t.Fatal("no single request may carry both credential shapes")
+	}
+}
+
+// A key the gateway rejected is a PERMANENT refusal: its own exit code, so a caller
+// that retries failed restarts can stop instead of backing off forever, and the
+// compound token-change error keeps it (wrapped with %w).
+func TestEnsureErrExitCodeSeparatesPermanentKeyRefusals(t *testing.T) {
+	if got := ensureErrExitCode(&upstreamKeyError{Status: 401}); got != exitKeyRejected {
+		t.Errorf("a key refusal exits %d, want %d", got, exitKeyRejected)
+	}
+	wrapped := fmt.Errorf("%w; the running proxy also uses a different proxy token", &upstreamKeyError{Status: 401})
+	if got := ensureErrExitCode(wrapped); got != exitKeyRejected {
+		t.Errorf("the token-change compound error must stay a key refusal: %d", got)
+	}
+	if got := ensureErrExitCode(errors.New("port 4148 is held")); got != 1 {
+		t.Errorf("any other failure stays the generic code 1, got %d", got)
 	}
 }

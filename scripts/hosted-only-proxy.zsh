@@ -510,7 +510,7 @@ _hosted_only_proxy_ensure() {
     env "${_hop_go_env[@]}" "$gobin" ensure \
         --flavor "$_hop_flavor" --config "$_hop_runtime/routes.json" \
         --port "$_hop_port" --runtime-dir "$_hop_runtime" \
-        --fingerprint "$fp" --token-fp "$token_fp" "${legacy[@]}" || return 1
+        --fingerprint "$fp" --token-fp "$token_fp" "${legacy[@]}" || return $?   # 3 = key rejected (permanent), kept distinct for retry loops
     return 0
 }
 

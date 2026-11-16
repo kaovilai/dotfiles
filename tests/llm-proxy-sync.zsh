@@ -466,4 +466,13 @@ rc=$?; out=$(<"$outfile")
     exit 0
 ) || fail "_llm_proxy_sync_restart accepts a kept stale proxy as restarted (exit $?)"
 
+# J. A restart refused because the gateway rejected the API key (exit 3) is a PERMANENT
+# failure: reported once and never queued for the backoff loop, which exists for
+# transient ones and would otherwise spin until Ctrl-C. Other proxies still restart.
+reset; restart_rc=(enmaas 3 copilot 0)
+llm-proxy-restart enmaas copilot >"$outfile" 2>&1; rc=$?; out=$(<"$outfile")
+(( rc == 1 )) || fail "a refused restart must still fail the command: rc=$rc out=$out"
+[[ "${restarted[*]}" == "enmaas copilot" ]] || fail "each proxy is restarted exactly once, the refused one is not retried: ${restarted[*]}"
+[[ "$out" == *"enmaas refused: the gateway rejected the API key; not retrying"* && "$out" != *"retrying with backoff"* ]] || fail "the refusal must be reported and not retried: $out"
+
 print -r -- "ok llm-proxy-sync"
