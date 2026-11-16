@@ -178,6 +178,15 @@ _hosted_only_proxy_vars() {
     # against a leading space and never match. This feeds the fingerprint, so the
     # normalized form is what a restart compares.
     _hop_aliases="${_hop_aliases// /}"
+    # An id that is a SLOT is served as itself, never as an alias of the primary
+    # (the Go side drops it the same way): Muse pinned as the fallback while it is
+    # still in the default alias list must not collapse onto GLM.
+    local -a _hop_alias_keep=() _hop_alias_item
+    for _hop_alias_item in ${(s:,:)_hop_aliases}; do
+        [[ -n "$_hop_alias_item" && "$_hop_alias_item" != "$_hop_glm" && "$_hop_alias_item" != "$_hop_deepseek" ]] \
+            && _hop_alias_keep+=("$_hop_alias_item")
+    done
+    _hop_aliases="${(j:,:)_hop_alias_keep}"
     # Dialect-suffix routing: this proxy turns it on for the #openai groups
     # (the EnMaaS flavor leaves it off and uses #responses siblings instead).
     typeset -g _hop_dialect="$(_hosted_only_knob DIALECT_SUFFIX "#openai")"

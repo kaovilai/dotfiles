@@ -83,9 +83,12 @@ _hosted_only_proxy_vars claude
 HOSTED_ONLY_ALIAS_MODELS=x,y _hosted_only_proxy_vars claude
 [[ "$_hop_aliases" == "x,y" ]] || fail "HOSTED_ONLY_ALIAS_MODELS not read: $_hop_aliases"
 # The Go side TrimSpace's entries, so a spaced list must match ids here too
+HOSTED_ONLY_ALIAS_MODELS="claude-sonnet-5-5, rits/meta-models/Muse-Spark-Open-816B-A42B-NVFP4" _hosted_only_proxy_vars claude
+[[ "$_hop_aliases" == "claude-sonnet-5-5,rits/meta-models/Muse-Spark-Open-816B-A42B-NVFP4" ]] || fail "spaced alias list not normalized: $_hop_aliases"
+[[ "$(_hop_slot_model rits/meta-models/Muse-Spark-Open-816B-A42B-NVFP4)" == "$_hop_glm" ]] || fail "spaced alias list breaks the slot mapping"
+# a slot id is never an alias (the primary is a slot): listing it changes nothing
 HOSTED_ONLY_ALIAS_MODELS="claude-sonnet-5-5, rits/zai-org/glm-5-3" _hosted_only_proxy_vars claude
-[[ "$_hop_aliases" == "claude-sonnet-5-5,rits/zai-org/glm-5-3" ]] || fail "spaced alias list not normalized: $_hop_aliases"
-[[ "$(_hop_slot_model rits/zai-org/glm-5-3)" == "$_hop_glm" ]] || fail "spaced alias list breaks the slot mapping"
+[[ "$_hop_aliases" == "claude-sonnet-5-5" ]] || fail "the primary slot id must be dropped from the aliases: $_hop_aliases"
 _hosted_only_proxy_vars claude   # restore the default alias list
 # A pre-swap alias pin (claude-* only) wins over today's default and would drop
 # the legacy GLM alias, so it warns instead of letting stored sessions 400
@@ -97,6 +100,11 @@ default_alias=$(_hosted_only_proxy_vars claude 2>&1 >/dev/null)
 slot_pinned=$(HOSTED_ONLY_GLM_MODEL=rits/meta-models/Muse-Spark-Open-816B-A42B-NVFP4 HOSTED_ONLY_ALIAS_MODELS=claude-sonnet-5-5 _hosted_only_proxy_vars codex 2>&1 >/dev/null)
 [[ "$slot_pinned" != *"without rits/meta-models/Muse-Spark-Open"* ]] || fail "a slot pin of the retired id must not warn: $slot_pinned"
 _hosted_only_proxy_vars claude   # the probes ran in subshells: restore the globals
+# An id that IS a slot is served as itself, never as an alias of the primary: the
+# Go side drops it from the alias set, and so must the launcher (config.yaml,
+# fingerprint and the slot mapping all read this list)
+slot_alias=$(HOSTED_ONLY_DEEPSEEK_MODEL=rits/meta-models/Muse-Spark-Open-816B-A42B-NVFP4 zsh -c "source '$repo/scripts/hosted-only-proxy.zsh'; _hosted_only_proxy_vars claude 2>/dev/null; print -r -- \"\$_hop_aliases\"")
+[[ "$slot_alias" == "claude-sonnet-5-5" ]] || fail "a slot pinned to the retired Muse id must drop it from the aliases: $slot_alias"
 # A pre-swap DEEPSEEK_MODEL pin of the old fallback default now equals the
 # primary; a degenerate pair kills the outage fallback and vision reroute, so
 # the launcher says so instead of silently serving one model in both slots

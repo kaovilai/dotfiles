@@ -247,9 +247,14 @@ func loadConfig(flavor, port, runtimeDir string) *config {
 	if flavor == "claude" || flavor == "codex" {
 		aliasDefault = "claude-sonnet-5-5,rits/meta-models/Muse-Spark-Open-816B-A42B-NVFP4"
 	}
+	glmModel, dsModel := knob("GLM_MODEL", glmDefault), knob("DEEPSEEK_MODEL", dsDefault)
 	aliases := map[string]struct{}{}
 	for _, a := range strings.Split(knob("ALIAS_MODELS", aliasDefault), ",") {
-		if a = strings.TrimSpace(a); a != "" {
+		// An id that IS a slot is served as itself: rewriteRequestMode expands
+		// aliases to the primary BEFORE it looks at the slots, so a slot pinned to
+		// an id that is also in the alias list (Muse as the fallback while it is
+		// still a default alias) would silently answer from GLM instead.
+		if a = strings.TrimSpace(a); a != "" && a != glmModel && a != dsModel {
 			aliases[a] = struct{}{}
 		}
 	}
@@ -277,8 +282,8 @@ func loadConfig(flavor, port, runtimeDir string) *config {
 		Port:                 port,
 		RuntimeDir:           runtimeDir,
 		Token:                knob("PROXY_TOKEN", "hosted-only-local"),
-		GLM:                  knob("GLM_MODEL", glmDefault),
-		DeepSeek:             knob("DEEPSEEK_MODEL", dsDefault),
+		GLM:                  glmModel,
+		DeepSeek:             dsModel,
 		Aliases:              aliases,
 		BaseURL:              base,
 		APIKey:               apiKey,
