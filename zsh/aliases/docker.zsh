@@ -8,6 +8,7 @@ alias db_amd64t='docker build --platform linux/amd64 --tag'
 alias db_amd64r='docker build --platform linux/amd64 --tag "$(ghcr_tag)"'
 alias db_amd64rp='docker build --platform linux/amd64 --tag "$(ghcr_tag)" --push'
 alias multiarch='echo linux/amd64,linux/arm64'
+alias multiarchwibm='echo linux/amd64,linux/arm64,linux/s390x,linux/ppc64le'
 alias single_arch='echo linux/amd64'
 alias db_single='docker build --platform linux/amd64'
 alias db_multi='docker buildx build --platform linux/amd64,linux/arm64'
@@ -21,14 +22,11 @@ alias docker-crc='eval $(crc podman-env)'
 # alias podman='~/.crc/bin/podman/podman'
 alias docker-buildx-crc='docker buildx rm crc; crc start; oc --kubeconfig ~/.crc/machines/crc/kubeconfig create ns docker-driver > /dev/null 2>&1; oc --kubeconfig ~/.crc/machines/crc/kubeconfig create role docker-driver --verb use --resource scc --resource-name privileged -n docker-driver; oc --kubeconfig ~/.crc/machines/crc/kubeconfig create sa -n docker-driver docker-driver; oc --kubeconfig ~/.crc/machines/crc/kubeconfig create rolebinding docker-driver-rolebinding --role docker-driver --serviceaccount docker-driver:docker-driver -n docker-driver; KUBECONFIG=~/.crc/machines/crc/kubeconfig docker buildx create --name crc --driver kubernetes --driver-opt=namespace=docker-driver,qemu.install=true,annotations=openshift.io/required-scc=privileged,serviceaccount=docker-driver --use --bootstrap && docker-crc'
 alias docker-buildx-kube='docker buildx rm kube; oc create ns docker-driver > /dev/null 2>&1; oc create role docker-driver --verb use --resource scc --resource-name privileged -n docker-driver; oc create sa -n docker-driver docker-driver; oc create rolebinding docker-driver-rolebinding --role docker-driver --serviceaccount docker-driver:docker-driver -n docker-driver; docker buildx create --name kube --driver kubernetes --driver-opt=namespace=docker-driver,qemu.install=true,annotations=openshift.io/required-scc=privileged,serviceaccount=docker-driver --use --bootstrap'
-alias colima-restart='colima stop; colima start --arch aarch64 --vm-type=vz --vz-rosetta --cpu 8 --disk 30 --memory 3; colima-multiplat'
-alias colima-multiplat='docker buildx rm colima-multiplat; docker buildx create --name colima-multiplat --platform=linux/amd64,linux/arm64,linux/ppc64le,linux/s390x; docker buildx use colima-multiplat'
-alias dockerplatforms-amdarm='echo linux/amd64,linux/arm64'
-alias dockerplatforms-amdarmibm='echo linux/amd64,linux/arm64,linux/s390x,linux/ppc64le'
+alias colima-restart='colima stop; colima start --arch aarch64 --vm-type=vz --vz-rosetta --cpu 8 --disk 30 --memory 3; docker buildx rm colima-multiplat; docker buildx create --name colima-multiplat --platform=linux/amd64,linux/arm64,linux/ppc64le,linux/s390x; docker buildx use colima-multiplat'
 
 # Podman related aliases
 alias crl-inherit='container-registry-inherit'
-alias pbubi_manifest='podman build --platform "$(dockerplatforms-amdarm)" -f Dockerfile.ubi . --manifest "$(ghcr_tag)" && podman manifest push "$(ghcr_tag)" && ghcr_tag'
+alias pbubi_manifest='podman build --platform "$(multiarch)" -f Dockerfile.ubi . --manifest "$(ghcr_tag)" && podman manifest push "$(ghcr_tag)" && ghcr_tag'
 
 # Socktainer socket symlink functions
 # https://github.com/socktainer/socktainer#quick-start

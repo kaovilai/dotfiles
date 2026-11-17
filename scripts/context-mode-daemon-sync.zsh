@@ -211,7 +211,7 @@ elif [[ "$(uname -s)" == "Darwin" ]] && command -v launchctl >/dev/null; then
     typeset plist="$HOME/Library/LaunchAgents/com.kaovilai.context-mode-daemon.plist" label=com.kaovilai.context-mode-daemon
     # plist strings are XML: & < > in $HOME or the paths would break the document
     _cm_plist_escape() { print -r -- "${1//&/&amp;}" | sed -e 's/</\&lt;/g' -e 's/>/\&gt;/g'; }
-    typeset need=0 stored_node
+    typeset need=0 stored_node boot_err=""
     [[ -f "$plist" ]] || need=1
     # the plist stores XML-escaped paths: compare against the escaped spelling,
     # or a HOME containing & or < never matches and every pass re-loads a valid agent
@@ -263,15 +263,61 @@ EOF
             # || true: on a first install there is no loaded job to boot out, and a
             # failing bare command would end the script under err_exit
             launchctl bootout "gui/$(id -u)/$label" 2>/dev/null || true
-            if launchctl bootstrap "gui/$(id -u)" "$plist" 2>/dev/null; then
-                launchctl print "gui/$(id -u)/$label" >/dev/null 2>&1 && daemon_ready=1
+            # bootout returns before the teardown lands: a bootstrap racing it
+            # fails with "Bootstrap failed: 5: Input/output error" and used to
+            # end the pass with the agent loaded by nobody — the daemon-down
+            # outage on every 2.2.5/2.2.6/2.2.7 rollout. Wait the label out
+            # (bounded); the wait is what makes the sequence idempotent.
+            typeset _i
+            for _i in {1..20}; do
+                launchctl print "gui/$(id -u)/$label" >/dev/null 2>&1 || break
+                sleep 0.25
+            done
+            if launchctl print "gui/$(id -u)/$label" >/dev/null 2>&1; then
+                # the bootout never landed (job wedged in teardown): restarting
+                # the loaded definition keeps the daemon serving
+                boot_err="bootout did not unload the agent"
+                launchctl kickstart -k "gui/$(id -u)/$label" 2>/dev/null || true
+                daemon_ready=1
+            elif boot_err=$(launchctl bootstrap "gui/$(id -u)" "$plist" 2>&1); then
+                daemon_ready=1
+            elif launchctl print "gui/$(id -u)/$label" >/dev/null 2>&1; then
+                # bootstrap lost the same race but the label is loaded after
+                # all: kickstart beats failing with nothing running
+                boot_err="bootstrap: ${boot_err}"
+                launchctl kickstart -k "gui/$(id -u)/$label" 2>/dev/null || true
+                daemon_ready=1
             else
-                warning "context-mode daemon: launchctl failed"
+                warning "context-mode daemon: launchctl bootstrap failed: ${boot_err:-unknown error}"
                 problems+=('unit')
             fi
         }
     else
         daemon_ready=1   # plist current, node present, agent loaded — all verified above
+    fi
+    # loaded ≠ serving: RunAtLoad just forked node (healthz answers ~seconds
+    # later), and a wedged daemon serves nobody. The pass is only done when
+    # healthz answers on the port: one kickstart retry, then a real failure —
+    # never end with the daemon silently down. (daemon_ready also gates the
+    # registration move below.)
+    if (( daemon_ready )) && ! (( dry )) && command -v curl >/dev/null; then
+        typeset -i healthy=0
+        for _i in {1..20}; do
+            if curl -fsS -o /dev/null --max-time 2 "http://127.0.0.1:${daemon_port}/healthz" 2>/dev/null; then healthy=1; break; fi
+            sleep 0.5
+        done
+        if (( ! healthy )); then
+            launchctl kickstart -k "gui/$(id -u)/$label" 2>/dev/null || true
+            for _i in {1..20}; do
+                if curl -fsS -o /dev/null --max-time 2 "http://127.0.0.1:${daemon_port}/healthz" 2>/dev/null; then healthy=1; break; fi
+                sleep 0.5
+            done
+        fi
+        if (( ! healthy )); then
+            daemon_ready=0
+            warning "context-mode daemon: agent loaded but healthz never answered on port ${daemon_port}${boot_err:+ (${boot_err})}"
+            problems+=('unit')
+        fi
     fi
 else
     progress "context-mode daemon: no systemd user session or launchd; run '$node_bin $daemon' yourself"
