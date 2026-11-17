@@ -22,7 +22,7 @@ expected=(
   'znap name() {...}:1'
   "bare 'oc adm release extract':4"
   "runs through '\$OC_BIN':1"
-  "runs through '\"\$OC_BIN\"':1"
+  "runs through '\"\$OC_BIN':1"
   "runs through '\${OC_BIN}':1"
   "runs through '\$REASSIGN':1"
 )

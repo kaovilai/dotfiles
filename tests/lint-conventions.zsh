@@ -200,7 +200,7 @@ while IFS= read -r file; do
       local qout="" qrest="$cmd" qm=""
       while [[ "$qrest" =~ \'[^\']*\' ]]; do
         qm="$MATCH"
-        qout+="${qrest%%"$qm"}"
+        qout+="${qrest%%"$qm"*}"
         qrest="${qrest#*"$qm"}"
       done
       qout+="$qrest"
@@ -208,7 +208,7 @@ while IFS= read -r file; do
       qout=""
       while [[ "$qrest" =~ \"[^\"]*\" ]]; do
         qm="$MATCH"
-        qout+="${qrest%%"$qm"}"
+        qout+="${qrest%%"$qm"*}"
         # keep only a LEADING variable reference inside the quotes — the rest of
         # the span is still a quoted argument, not a command position
         # ('"$label (oc adm release extract ...)"' keeps '"$label"' only)
