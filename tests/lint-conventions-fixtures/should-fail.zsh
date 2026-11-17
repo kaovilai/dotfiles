@@ -8,6 +8,7 @@ if [[ $x =~ re ]]; then y=$BASH_REMATCH; fi
 znap baz() { echo hi; }
 oc adm release extract --command=oc img
 echo "extracting" && $OC_BIN adm release extract --command=oc img
+echo "braced" && ${OC_BIN} adm release extract --command=oc img
 function ok-name() { echo hi; }
 function ok-brace { echo hi; }
 ok-name() { echo hi; }
