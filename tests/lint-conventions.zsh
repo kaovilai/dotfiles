@@ -190,10 +190,12 @@ while IFS= read -r file; do
     # matched anywhere in the line (e.g. 'local oc_bin; oc_bin=$(...)'), and a
     # var derived via get-release-oc is approved only until reassigned.
     local arest="$line" am=""
-    while [[ "$arest" =~ '(^|[[:space:];&])(local[[:space:]]+)?([A-Za-z_][A-Za-z0-9_]*)=[^=[:space:]]' ]]; do
+    while [[ "$arest" =~ '(^|[[:space:];&])(local[[:space:]]+)?([A-Za-z_][A-Za-z0-9_]*)=[^=[:space:]]*' ]]; do
       am="$MATCH"
       local av="${match[3]}"
-      if [[ "$line" =~ "${av}=\\\$\(get-release-oc" ]]; then
+      # per-assignment: the derivation must start right after THIS 'var='
+      # (optional quote), not anywhere else on the line
+      if [[ "$am" =~ "^[[:space:]]*(local[[:space:]]+)?${av}=\"?\\\$\\(get-release-oc" ]]; then
         var_derived[$av]=1
       else
         var_derived[$av]=0
