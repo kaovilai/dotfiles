@@ -16,10 +16,15 @@ _gofmt_files() {
     fi
     go fmt "${(@f)files}"
 }
-gofmtgitdiff()       { _gofmt_files; }
-gofmtgitdiffmain()   { _gofmt_files upstream/main; }
-gofmtgitdiffmaster() { _gofmt_files upstream/master; }
-gofmtgitdiffoadp()   { _gofmt_files upstream/oadp-dev; }
+gofmt-git-diff()       { _gofmt_files; }
+gofmt-git-diff-main()   { _gofmt_files upstream/main; }
+gofmt-git-diff-master() { _gofmt_files upstream/master; }
+gofmt-git-diff-oadp()   { _gofmt_files upstream/oadp-dev; }
+# Backwards-compatible aliases for the pre-kebab-case names
+alias gofmtgitdiff='gofmt-git-diff'
+alias gofmtgitdiffmain='gofmt-git-diff-main'
+alias gofmtgitdiffmaster='gofmt-git-diff-master'
+alias gofmtgitdiffoadp='gofmt-git-diff-oadp'
 alias grf='golangci-lint run --fix'
 golangci-lint-with-retry() {
   if ! command -v golangci-lint &>/dev/null; then

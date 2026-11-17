@@ -13,6 +13,7 @@ This is a dotfiles repository containing ZSH shell configuration files and utili
 
 ### Naming
 - **All public functions and aliases must use `kebab-case`** (e.g., `create-ocp-aws`, `set-tf-proxy`)
+  - These conventions (ZSH-not-Bash, kebab-case, no `znap name()` defs, version-matched `oc` for `adm release extract`) are lint-enforced: `zsh tests/lint-conventions.zsh` (runs in Shell CI). Pre-existing underscore names are grandfathered in that script's `GRANDFATHERED` list — do not add new ones.
 - Private/internal helper functions may use `_underscore_prefix` (e.g., `_lazy_load_openshift`)
 - Single-word functions are exempt from this rule (e.g., `progress`, `error`)
 - When renaming a function, add a backwards-compatibility alias mapping the old name to the new name
