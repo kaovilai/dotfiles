@@ -120,10 +120,13 @@ while IFS= read -r file; do
       while [[ "$cmd" =~ '^(if|while|elif|then|!|command|sudo|env)[[:space:]]+' ]]; do
         cmd="${cmd#"$MATCH"}"
       done
-      # variable-mediated extract ("$oc_bin" adm release extract) is allowed only if
-      # the file derives it from get-release-oc somewhere — checked after the loop
-      if [[ "$cmd" =~ '^[[:space:]]*"[^"]+"[[:space:]]+adm[[:space:]]+release' ]]; then
-        var_extract_files[$file]=$lineno
+      # variable-mediated extract ($OC_BIN / "$oc_bin" adm release extract, at a command
+      # boundary incl. mid-line after &&): allowed only with a lint-allow marker, or when
+      # the file derives the variable from get-release-oc somewhere (checked after the loop)
+      if [[ "$cmd" =~ '(^|[;&|!()])[[:space:]]*"?\$[A-Za-z_][A-Za-z0-9_]*"?[[:space:]]+adm[[:space:]]+release' ]]; then
+        if [[ "$line" != *'lint-allow: release-extract-bootstrap'* && "$prev_line" != *'lint-allow: release-extract-bootstrap'* ]]; then
+          var_extract_files[$file]=$lineno
+        fi
       fi
       if [[ "$cmd" =~ '(^|[;&|!()])[[:space:]]*oc[[:space:]]+adm[[:space:]]+release' ]]; then
         # allowed: bootstrap extraction marked with lint-allow on this or the previous line
