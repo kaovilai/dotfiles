@@ -123,10 +123,55 @@ _zsh_files() {
 
 lint_files=$(_zsh_files "$@") || { print -u2 "❌ file enumeration failed — aborting"; exit 1 }
 typeset -A var_derived
+
+# strip single-quoted spans from $1; result in $REPLY
+_strip_sq() {
+  local rest="$1" out="" m
+  while [[ "$rest" =~ \'[^\']*\' ]]; do
+    m="$MATCH"
+    out+="${rest%%"$m"*}"
+    rest="${rest#*"$m"}"
+  done
+  REPLY="$out$rest"
+}
+
+# code portion of $1 (text before a comment '#' that sits OUTSIDE quotes and
+# at a word boundary); result in $REPLY. Double-quoted spans are kept intact
+# (zsh expands their contents); single-quoted spans are kept but the caller
+# strips them via _strip_sq when the rule must not see literals.
+_code_part() {
+  local s="$1" out="" i c pc in_s=0 in_d=0
+  for (( i=1; i<=${#s}; i++ )); do
+    c="${s[i]}"
+    if (( in_s )); then
+      [[ "$c" == "'" ]] && in_s=0
+      out+="$c"
+      continue
+    fi
+    if (( in_d )); then
+      [[ "$c" == '"' ]] && in_d=0
+      out+="$c"
+      continue
+    fi
+    if [[ "$c" == "'" ]]; then in_s=1; out+="$c"; continue; fi
+    if [[ "$c" == '"' ]]; then in_d=1; out+="$c"; continue; fi
+    if [[ "$c" == "#" ]]; then
+      pc="${s[i-1]}"
+      if [[ -z "$pc" || "$pc" == ' ' || "$pc" == $'\t' || "$pc" == ';' || "$pc" == '|' || "$pc" == '&' || "$pc" == '(' ]]; then
+        break
+      fi
+    fi
+    out+="$c"
+  done
+  REPLY="$out"
+}
+
 while IFS= read -r file; do
   [[ -f "$file" ]] || continue
   var_derived=()
   prev_line=""
+  # heredoc bodies are DATA, not shell code — rules don't apply inside them
+  local heredoc_tag=""
   # backslash continuations are JOINED before matching, so a wrap between
   # 'adm' and 'release'/'extract' cannot evade rule 4 (lineno = first line)
   local -a file_lines
@@ -140,28 +185,41 @@ while IFS= read -r file; do
       li=$(( li + 1 ))
       line="${line%\\}${file_lines[li]}"
     done
+    # heredoc body: skip until the terminator line
+    if [[ -n "$heredoc_tag" ]]; then
+      if [[ "${line//[[:space:]]/}" == "$heredoc_tag" ]]; then
+        heredoc_tag=""
+      fi
+      prev_line="$line"
+      continue
+    fi
     # skip full-line comments
     [[ "$line" =~ '^[[:space:]]*#' ]] && { prev_line="$line"; continue }
 
     # Single-quoted spans are literals: strip them once, up front, so rules
     # below see real code only (a quoted '#', a printed 'BIN=...' example, or
     # quoted command text is not a comment boundary / assignment / command).
-    local sq="" sqrest="$line" sqm=""
-    while [[ "$sqrest" =~ \'[^\']*\' ]]; do
-      sqm="$MATCH"
-      sq+="${sqrest%%"$sqm"*}"
-      sqrest="${sqrest#*"$sqm"}"
-    done
-    sq+="$sqrest"
-    local nolit="$sq"
+    _strip_sq "$line"
+    local nolit="$REPLY"
+
+    # detect a heredoc start on this line (unquoted/quoted/dashed form);
+    # body lines after this one are skipped. The start line itself is linted.
+    if [[ "$nolit" =~ '<<-?\??[A-Za-z_][A-Za-z0-9_-]*' && "$nolit" != *'<<<'* ]]; then
+      heredoc_tag="${MATCH#<<}"
+      heredoc_tag="${heredoc_tag#-}"
+      heredoc_tag="${heredoc_tag#\?}"
+    fi
 
     # 1. bash-isms — flag $BASH_REMATCH / ${BASH_REMATCH usage (the convention).
-    #    Checked on the code portion only (text before the first '#' outside
-    #    quotes), so a trailing comment mentioning the bash spelling is not a
-    #    violation; a bare mention (like this lint's own message text) is not
-    #    either. Double-quoted usage still counts: zsh expands it (to empty).
-    local code_part="${nolit%%'#'*}"
-    if [[ "$code_part" == *"\$BASH"_REMATCH* || "$code_part" == *'${BASH'"_REMATCH"* ]]; then
+    #    Checked on the code portion only: the cut happens at a comment '#'
+    #    outside quotes (so '#'-inside-double-quotes and ${var#pattern} do not
+    #    truncate), then single-quoted literals are stripped. A trailing
+    #    comment mentioning the bash spelling is not a violation; a bare
+    #    mention (like this lint's own message text) is not either.
+    #    Double-quoted usage still counts: zsh expands it (to empty).
+    _code_part "$line"
+    _strip_sq "$REPLY"
+    if [[ "$REPLY" == *"\$BASH"_REMATCH* || "$REPLY" == *'${BASH'"_REMATCH"* ]]; then
       fail "$file:$lineno: \$BASH"_REMATCH" is bash — use \$match (ZSH regex captures)"
     fi
 

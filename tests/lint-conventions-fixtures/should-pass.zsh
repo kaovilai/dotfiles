@@ -17,3 +17,11 @@ echo 'Example: (oc adm release extract --command=oc img)'
 print -r -- 'Example: (oc adm release extract --command=oc img)' && true
 # a quoted span starting with a variable is still just an argument
 echo "$label (oc adm release extract --command=oc img)"
+# '#' inside double quotes / ${var#pattern} is not a comment boundary
+echo "v1#v2" ok
+w=${p#prefix}
+# heredoc bodies are data, not shell code
+cat > /tmp/fixture-out <<HEREDOC_END
+oc adm release extract --command=oc img
+fake_bin=$(get-release-oc x)
+HEREDOC_END

@@ -23,3 +23,4 @@ function ok-brace { echo hi; }
 ok-name() { echo hi; }
 _private_helper() { echo hi; }
 alias fine-alias='echo hi'
+x=${p#prefix}; y=$BASH_REMATCH

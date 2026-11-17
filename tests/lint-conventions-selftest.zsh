@@ -18,7 +18,7 @@ expected=(
   "function 'bad_brace' uses underscore:1"
   "function 'bad_parens' uses underscore:1"
   "alias 'my_bad' uses underscore:1"
-  'is bash — use $match:1'
+  'is bash — use $match:2'
   'znap name() {...}:1'
   "bare 'oc adm release extract':5"
   "runs through '\$OC_BIN':1"
