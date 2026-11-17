@@ -126,10 +126,20 @@ typeset -A var_derived
 while IFS= read -r file; do
   [[ -f "$file" ]] || continue
   var_derived=()
-  lineno=0
   prev_line=""
-  while IFS= read -r line || [[ -n "$line" ]]; do
-    lineno=$(( lineno + 1 ))
+  # backslash continuations are JOINED before matching, so a wrap between
+  # 'adm' and 'release'/'extract' cannot evade rule 4 (lineno = first line)
+  local -a file_lines
+  file_lines=("${(f)$(<"$file")}")
+  local li=0
+  while (( li < ${#file_lines} )); do
+    li=$(( li + 1 ))
+    lineno=$li
+    local line="${file_lines[li]}"
+    while [[ "$line" =~ '\\$' ]] && (( li < ${#file_lines} )); do
+      li=$(( li + 1 ))
+      line="${line%\\}${file_lines[li]}"
+    done
     # skip full-line comments
     [[ "$line" =~ '^[[:space:]]*#' ]] && { prev_line="$line"; continue }
 
@@ -240,7 +250,7 @@ while IFS= read -r file; do
     fi
 
     prev_line="$line"
-  done < "$file"
+  done
 done < <(print -r -- "$lint_files")
 
 if (( failures > 0 )); then

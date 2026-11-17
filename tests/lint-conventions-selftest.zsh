@@ -20,7 +20,7 @@ expected=(
   "alias 'my_bad' uses underscore:1"
   'is bash — use $match:1'
   'znap name() {...}:1'
-  "bare 'oc adm release extract':4"
+  "bare 'oc adm release extract':5"
   "runs through '\$OC_BIN':1"
   "runs through '\"\$OC_BIN':1"
   "runs through '\${OC_BIN}':1"

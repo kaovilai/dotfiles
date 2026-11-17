@@ -10,6 +10,8 @@ oc adm release extract --command=oc img
 oc adm  release extract --command=oc img
 oc adm release  extract --command=oc img
 true && sudo oc adm release extract --command=oc img
+oc adm release \
+  extract --command=oc img
 echo "extracting" && $OC_BIN adm release extract --command=oc img
 echo "quoted var" && "$OC_BIN" adm release extract --command=oc img
 echo "braced" && ${OC_BIN} adm release extract --command=oc img
