@@ -53,7 +53,7 @@ fail() {
 # Enumeration failure must FAIL the lint, not silently scan nothing.
 _zsh_files() {
   local out
-  if ! out=$(git -C "$repo_root" ls-files '*.zsh' '.zshrc'); then
+  if ! out=$(git -C "$repo_root" ls-files '*.zsh' '*.zshrc'); then
     print -u2 "❌ git ls-files failed — cannot enumerate zsh files to lint"
     return 1
   fi
@@ -64,6 +64,8 @@ _zsh_files() {
 }
 
 lint_files=$(_zsh_files) || { print -u2 "❌ file enumeration failed — aborting"; exit 1 }
+typeset -A var_extract_files
+typeset -A has_get_release_oc
 while IFS= read -r file; do
   [[ -f "$file" ]] || continue
   lineno=0
@@ -115,9 +117,14 @@ while IFS= read -r file; do
     if [[ "$line" == *'adm release extract'* ]]; then
       local cmd="$line"
       cmd="${cmd#"${cmd%%[![:space:]]*}"}"
-      while [[ "$cmd" =~ '^(if|while|elif|then|!)[[:space:]]+' ]]; do
+      while [[ "$cmd" =~ '^(if|while|elif|then|!|command|sudo|env)[[:space:]]+' ]]; do
         cmd="${cmd#"$MATCH"}"
       done
+      # variable-mediated extract ("$oc_bin" adm release extract) is allowed only if
+      # the file derives it from get-release-oc somewhere — checked after the loop
+      if [[ "$cmd" =~ '^[[:space:]]*"[^"]+"[[:space:]]+adm[[:space:]]+release' ]]; then
+        var_extract_files[$file]=$lineno
+      fi
       if [[ "$cmd" =~ '(^|[;&|!()])[[:space:]]*oc[[:space:]]+adm[[:space:]]+release' ]]; then
         # allowed: bootstrap extraction marked with lint-allow on this or the previous line
         if [[ "$line" != *'lint-allow: release-extract-bootstrap'* && "$prev_line" != *'lint-allow: release-extract-bootstrap'* ]]; then
@@ -126,9 +133,20 @@ while IFS= read -r file; do
       fi
     fi
 
+    if [[ "$line" == *'get-release-oc'* ]]; then
+      has_get_release_oc[$file]=1
+    fi
+
     prev_line="$line"
   done < "$file"
 done < <(print -r -- "$lint_files")
+
+# variable-mediated extracts must be derived from get-release-oc somewhere in the file
+for f in "${(@k)var_extract_files}"; do
+  if [[ -z "${has_get_release_oc[$f]:-}" ]]; then
+    fail "$f:${var_extract_files[$f]}: 'adm release extract' runs through a variable that this file never derives from get-release-oc — a future edit swapping the variable to the system oc would stay green (OCPBUGS-77845). Derive it via get-release-oc (or add a '# lint-allow: release-extract-bootstrap' marker)"
+  fi
+done
 
 if (( failures > 0 )); then
   print -u2 -- "\n$failures convention violation(s). See CLAUDE.md/AGENTS.md 'Conventions'."
