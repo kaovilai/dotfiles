@@ -176,35 +176,57 @@ while IFS= read -r file; do
     #    derives it from get-release-oc — a later reassignment to the system
     #    oc invalidates the approval.
     #
-    # track variable assignments first: latest assignment wins
-    if [[ "$line" =~ '^[[:space:]]*(local[[:space:]]+)?([A-Za-z_][A-Za-z0-9_]*)=' ]]; then
-      local av="${match[2]}"
+    # track variable assignments first: latest assignment wins. Assignments are
+    # matched anywhere in the line (e.g. 'local oc_bin; oc_bin=$(...)'), and a
+    # var derived via get-release-oc is approved only until reassigned.
+    local arest="$line" am=""
+    while [[ "$arest" =~ '(^|[[:space:];&])(local[[:space:]]+)?([A-Za-z_][A-Za-z0-9_]*)=[^=[:space:]]' ]]; do
+      am="$MATCH"
+      local av="${match[3]}"
       if [[ "$line" =~ "${av}=\\\$\(get-release-oc" ]]; then
         var_derived[$av]=1
       else
         var_derived[$av]=0
       fi
-    fi
+      arest="${arest#*"$am"}"
+    done
 
-    if [[ "$line" == *'release extract'* ]]; then
+    if [[ "$line" == *'release'* ]]; then
       local cmd="$line"
       cmd="${cmd#"${cmd%%[![:space:]]*}"}"
-      # strip quoted spans — text inside quotes is not a command position
-      while [[ "$cmd" =~ \'[^\']*\' ]]; do cmd="${cmd//"$MATCH"/}"; done
-      while [[ "$cmd" =~ \"[^\"]*\" ]]; do cmd="${cmd//"$MATCH"/}"; done
+      # strip quoted spans — text inside quotes is not a command position —
+      # but KEEP quoted variable references ("$OC_BIN" / "${OC_BIN}"), which
+      # are real command positions
+      local qout="" qrest="$cmd" qm=""
+      while [[ "$qrest" =~ \'[^\']*\' ]]; do
+        qm="$MATCH"
+        qout+="${qrest%%"$qm"}"
+        qrest="${qrest#*"$qm"}"
+      done
+      qout+="$qrest"
+      qrest="$qout"
+      qout=""
+      while [[ "$qrest" =~ \"[^\"]*\" ]]; do
+        qm="$MATCH"
+        qout+="${qrest%%"$qm"}"
+        if [[ "$qm" == '"$'* ]]; then qout+="$qm"; fi
+        qrest="${qrest#*"$qm"}"
+      done
+      qout+="$qrest"
+      cmd="$qout"
       while [[ "$cmd" =~ '^(if|while|elif|then|!|command|sudo|env)[[:space:]]+' ]]; do
         cmd="${cmd#"$MATCH"}"
       done
       local marked=0
       [[ "$line" == *'lint-allow: release-extract-bootstrap'* || "$prev_line" == *'lint-allow: release-extract-bootstrap'* ]] && marked=1
       # bare system oc, at any command boundary, incl. after wrappers
-      if [[ "$cmd" =~ '(^|[;&|!()])[[:space:]]*((command|sudo|env|then|else|do)[[:space:]]+)*oc[[:space:]]+adm[[:space:]]+release' ]]; then
+      if [[ "$cmd" =~ '(^|[;&|!()])[[:space:]]*((command|sudo|env|then|else|do)[[:space:]]+)*oc[[:space:]]+adm[[:space:]]+release[[:space:]]+extract' ]]; then
         if (( ! marked )); then
           fail "$file:$lineno: bare 'oc adm release extract' — use a version-matched oc from get-release-oc (OCPBUGS-77845). Bootstrap-only use: add a '# lint-allow: release-extract-bootstrap' comment on the line above"
         fi
       fi
       # variable-mediated: group 5 is the variable name
-      if [[ "$cmd" =~ '(^|[;&|!()])[[:space:]]*((command|sudo|env|then|else|do)[[:space:]]+)*("?\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?"?)[[:space:]]+adm[[:space:]]+release' ]]; then
+      if [[ "$cmd" =~ '(^|[;&|!()])[[:space:]]*((command|sudo|env|then|else|do)[[:space:]]+)*("?\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?"?)[[:space:]]+adm[[:space:]]+release[[:space:]]+extract' ]]; then
         local vname="${match[5]}"
         if (( ! marked )) && [[ "${var_derived[$vname]:-0}" != 1 ]]; then
           fail "$file:$lineno: 'adm release extract' runs through '\$$vname', which is not currently derived from get-release-oc — a later reassignment to the system oc would stay green (OCPBUGS-77845). Derive it via get-release-oc (or add a '# lint-allow: release-extract-bootstrap' marker)"
