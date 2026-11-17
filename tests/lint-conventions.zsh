@@ -13,32 +13,82 @@ set -euo pipefail
 repo_root="${0:A:h:h}"
 failures=0
 
-# Names that predate the kebab-case rule (renaming them is separate,
-# backwards-compat-breaking work). DO NOT add new names here — new public
-# functions/aliases must be kebab-case; only _underscore_prefix stays private.
+# Underscore definitions that predate the kebab-case rule, keyed as
+# '<repo-relative-file>:<name>' so the exemption is tied to the file that
+# originally carried it. A NEW underscore definition fails even when it
+# reuses one of these names, and moving/renaming a file drops its exemption.
+# DO NOT add entries — new public functions/aliases must be kebab-case; only
+# _underscore_prefix stays private.
 GRANDFATHERED=(
-  # functions
-  run_suite stop_proxy head_of up_head ensure_go stop_go fp_with status_json
-  status_sync_agree chk_stale chk_fresh dump_of reset_bins gcu_nb cached_exec
-  command_cache_status command_cache_clear has_command cache_file_expired
-  command_cache_expired completion_cache_expired bump_completion_pins
-  zsh_completion_cache_status zsh_completion_cache_clear check_internet
-  reconnect_wifi go_impl command_exists install_packages_manually
-  get_latest_stable_multi_release_image get_latest_stable_version
-  get_latest_arm64_release_image get_latest_nightly_release_image
-  get_latest_ec_version get_latest_amd64_release_image
-  get_latest_multi_release_image get_latest_stable_amd64_release_image
-  get_latest_stable_arm64_release_image
-  # aliases
-  single_arch db_single db_multi db_multit db_multir db_multip ghcr_tag
-  ghcr_notag ghcr_tag-web dbubi_multi dbubi_multip pbubi_manifest db_amd64
-  db_amd64t db_amd64r db_amd64rp gcu_master gcu_master_nb gcu_main gcu_main_nb
-  gcu_oadp gcu_oadp_nb ocregistry_tag ocregistry_notag
+  tests/claude-enmaas-proxy.zsh:run_suite
+  tests/codex-enmaas.zsh:stop_proxy
+  tests/fleet-sync.zsh:head_of
+  tests/fleet-sync.zsh:up_head
+  tests/hosted-only-go-proxy.zsh:ensure_go
+  tests/hosted-only-go-proxy.zsh:fp_with
+  tests/hosted-only-go-proxy.zsh:stop_go
+  tests/llm-proxy-sync.zsh:chk_fresh
+  tests/llm-proxy-sync.zsh:chk_stale
+  tests/llm-proxy-sync.zsh:status_json
+  tests/llm-proxy-sync.zsh:status_sync_agree
+  tests/llm-usage.zsh:dump_of
+  tests/openshift-destroy-installer.zsh:reset_bins
+  zsh/aliases/docker.zsh:db_amd64
+  zsh/aliases/docker.zsh:db_amd64r
+  zsh/aliases/docker.zsh:db_amd64rp
+  zsh/aliases/docker.zsh:db_amd64t
+  zsh/aliases/docker.zsh:db_multi
+  zsh/aliases/docker.zsh:db_multip
+  zsh/aliases/docker.zsh:db_multir
+  zsh/aliases/docker.zsh:db_multit
+  zsh/aliases/docker.zsh:db_single
+  zsh/aliases/docker.zsh:dbubi_multi
+  zsh/aliases/docker.zsh:dbubi_multip
+  zsh/aliases/docker.zsh:ghcr_notag
+  zsh/aliases/docker.zsh:ghcr_tag
+  zsh/aliases/docker.zsh:ghcr_tag-web
+  zsh/aliases/docker.zsh:pbubi_manifest
+  zsh/aliases/docker.zsh:single_arch
+  zsh/aliases/git.zsh:gcu_main
+  zsh/aliases/git.zsh:gcu_main_nb
+  zsh/aliases/git.zsh:gcu_master
+  zsh/aliases/git.zsh:gcu_master_nb
+  zsh/aliases/git.zsh:gcu_nb
+  zsh/aliases/git.zsh:gcu_oadp
+  zsh/aliases/git.zsh:gcu_oadp_nb
+  zsh/aliases/velero.zsh:ocregistry_notag
+  zsh/aliases/velero.zsh:ocregistry_tag
+  zsh/command-cache.zsh:cached_exec
+  zsh/command-cache.zsh:cache_file_expired
+  zsh/command-cache.zsh:command_cache_clear
+  zsh/command-cache.zsh:command_cache_expired
+  zsh/command-cache.zsh:command_cache_status
+  zsh/command-cache.zsh:completion_cache_expired
+  zsh/command-cache.zsh:has_command
+  zsh/completion-pins.zsh:bump_completion_pins
+  zsh/completions.zsh:zsh_completion_cache_clear
+  zsh/completions.zsh:zsh_completion_cache_status
+  zsh/functions/aa-inflight-wifi.zsh:check_internet
+  zsh/functions/aa-inflight-wifi.zsh:reconnect_wifi
+  zsh/functions/claude/providers/enmaas-proxy.zsh:go_impl
+  zsh/functions/migrate-laptop.zsh:command_exists
+  zsh/functions/migrate-laptop.zsh:install_packages_manually
+  zsh/functions/openshift/variables.zsh:get_latest_amd64_release_image
+  zsh/functions/openshift/variables.zsh:get_latest_arm64_release_image
+  zsh/functions/openshift/variables.zsh:get_latest_ec_version
+  zsh/functions/openshift/variables.zsh:get_latest_multi_release_image
+  zsh/functions/openshift/variables.zsh:get_latest_nightly_release_image
+  zsh/functions/openshift/variables.zsh:get_latest_stable_amd64_release_image
+  zsh/functions/openshift/variables.zsh:get_latest_stable_arm64_release_image
+  zsh/functions/openshift/variables.zsh:get_latest_stable_multi_release_image
+  zsh/functions/openshift/variables.zsh:get_latest_stable_version
 )
 grandfathered() {
+  # $1 = repo-relative file path, $2 = name
+  local e="${1}:${2}"
   local n
   for n in $GRANDFATHERED; do
-    [[ "$n" == "$1" ]] && return 0
+    [[ "$n" == "$e" ]] && return 0
   done
   return 1
 }
@@ -93,20 +143,20 @@ while IFS= read -r file; do
     #    name() { ... } and function name { ... } — underscore in a non-_prefixed name is private-by-mistake
     if [[ "$line" =~ '^[[:space:]]*(function[[:space:]]+)?([A-Za-z][A-Za-z0-9_-]*)[[:space:]]*\(\)' ]]; then
       local name="${match[2]}"
-      if [[ "$name" == *_* && "$name" != _* ]] && ! grandfathered "$name"; then
+      if [[ "$name" == *_* && "$name" != _* ]] && ! grandfathered "${file#$repo_root/}" "$name"; then
         fail "$file:$lineno: function '$name' uses underscore in a public name — use kebab-case (rename to '${name//_/-}', keep a back-compat alias; _prefix only for private helpers)"
       fi
     fi
     if [[ "$line" =~ '^[[:space:]]*function[[:space:]]+([A-Za-z][A-Za-z0-9_-]*)[[:space:]]*\{' ]]; then
       local fname="${match[1]}"
-      if [[ "$fname" == *_* && "$fname" != _* ]] && ! grandfathered "$fname"; then
+      if [[ "$fname" == *_* && "$fname" != _* ]] && ! grandfathered "${file#$repo_root/}" "$fname"; then
         fail "$file:$lineno: function '$fname' uses underscore in a public name — use kebab-case (rename to '${fname//_/-}', keep a back-compat alias; _prefix only for private helpers)"
       fi
     fi
     # alias name=...
     if [[ "$line" =~ '^[[:space:]]*alias[[:space:]]+([A-Za-z0-9_-]+)=' ]]; then
       local aname="${match[1]}"
-      if [[ "$aname" == *_* ]] && ! grandfathered "$aname"; then
+      if [[ "$aname" == *_* ]] && ! grandfathered "${file#$repo_root/}" "$aname"; then
         fail "$file:$lineno: alias '$aname' uses underscore — use kebab-case (rename to '${aname//_/-}', keep a back-compat alias)"
       fi
     fi
@@ -148,13 +198,13 @@ while IFS= read -r file; do
       local marked=0
       [[ "$line" == *'lint-allow: release-extract-bootstrap'* || "$prev_line" == *'lint-allow: release-extract-bootstrap'* ]] && marked=1
       # bare system oc, at any command boundary, incl. after wrappers
-      if [[ "$cmd" =~ '(^|[;&|!()])[[:space:]]*((command|sudo|env)[[:space:]]+)*oc[[:space:]]+adm[[:space:]]+release' ]]; then
+      if [[ "$cmd" =~ '(^|[;&|!()])[[:space:]]*((command|sudo|env|then|else|do)[[:space:]]+)*oc[[:space:]]+adm[[:space:]]+release' ]]; then
         if (( ! marked )); then
           fail "$file:$lineno: bare 'oc adm release extract' — use a version-matched oc from get-release-oc (OCPBUGS-77845). Bootstrap-only use: add a '# lint-allow: release-extract-bootstrap' comment on the line above"
         fi
       fi
       # variable-mediated: group 5 is the variable name
-      if [[ "$cmd" =~ '(^|[;&|!()])[[:space:]]*((command|sudo|env)[[:space:]]+)*("?\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?"?)[[:space:]]+adm[[:space:]]+release' ]]; then
+      if [[ "$cmd" =~ '(^|[;&|!()])[[:space:]]*((command|sudo|env|then|else|do)[[:space:]]+)*("?\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?"?)[[:space:]]+adm[[:space:]]+release' ]]; then
         local vname="${match[5]}"
         if (( ! marked )) && [[ "${var_derived[$vname]:-0}" != 1 ]]; then
           fail "$file:$lineno: 'adm release extract' runs through '\$$vname', which is not currently derived from get-release-oc — a later reassignment to the system oc would stay green (OCPBUGS-77845). Derive it via get-release-oc (or add a '# lint-allow: release-extract-bootstrap' marker)"
