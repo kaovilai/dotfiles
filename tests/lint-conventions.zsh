@@ -209,7 +209,12 @@ while IFS= read -r file; do
       while [[ "$qrest" =~ \"[^\"]*\" ]]; do
         qm="$MATCH"
         qout+="${qrest%%"$qm"}"
-        if [[ "$qm" == '"$'* ]]; then qout+="$qm"; fi
+        # keep only a LEADING variable reference inside the quotes — the rest of
+        # the span is still a quoted argument, not a command position
+        # ('"$label (oc adm release extract ...)"' keeps '"$label"' only)
+        if [[ "$qm" =~ '^"(\$[A-Za-z_][A-Za-z0-9_]*|\$\{[A-Za-z_][A-Za-z0-9_]*\})' ]]; then
+          qout+="$MATCH"
+        fi
         qrest="${qrest#*"$qm"}"
       done
       qout+="$qrest"
@@ -227,9 +232,9 @@ while IFS= read -r file; do
       fi
       # variable-mediated: group 5 is the variable name
       if [[ "$cmd" =~ '(^|[;&|!()])[[:space:]]*((command|sudo|env|then|else|do)[[:space:]]+)*("?\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?"?)[[:space:]]+adm[[:space:]]+release[[:space:]]+extract' ]]; then
-        local vname="${match[5]}"
+        local vname="${match[5]}" vspell="${match[4]}"
         if (( ! marked )) && [[ "${var_derived[$vname]:-0}" != 1 ]]; then
-          fail "$file:$lineno: 'adm release extract' runs through '\$$vname', which is not currently derived from get-release-oc — a later reassignment to the system oc would stay green (OCPBUGS-77845). Derive it via get-release-oc (or add a '# lint-allow: release-extract-bootstrap' marker)"
+          fail "$file:$lineno: 'adm release extract' runs through '$vspell', which is not currently derived from get-release-oc — a later reassignment to the system oc would stay green (OCPBUGS-77845). Derive it via get-release-oc (or add a '# lint-allow: release-extract-bootstrap' marker)"
         fi
       fi
     fi

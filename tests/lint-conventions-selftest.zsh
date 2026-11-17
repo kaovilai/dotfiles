@@ -1,28 +1,33 @@
 #!/usr/bin/env zsh
 # lint-conventions-selftest.zsh — prove every rule in lint-conventions.zsh
-# actually fires, using the committed fixture. The fixture lives under
+# actually fires, using the committed fixtures. They live under
 # tests/lint-conventions-fixtures/ which the main lint run excludes, so this
-# selftest is the only place it is scanned.
-# Exits nonzero if the lint does not flag every expected violation.
+# selftest is the only place they are scanned.
+# Exits nonzero if the lint does not flag every expected violation the exact
+# expected number of times, or flags the clean fixture.
 
 set -uo pipefail
 
 here="${0:A:h}"
-fixture="$here/lint-conventions-fixtures/should-fail.zsh"
+bad_fixture="$here/lint-conventions-fixtures/should-fail.zsh"
+good_fixture="$here/lint-conventions-fixtures/should-pass.zsh"
 
+# message-substring : expected occurrence count
 expected=(
-  'function '\''foo_bar'\'' uses underscore'
-  'function '\''bad_brace'\'' uses underscore'
-  'function '\''bad_parens'\'' uses underscore'
-  'alias '\''my_bad'\'' uses underscore'
-  'is bash — use $match'
-  'znap name() {...}'
-  'bare '\''oc adm release extract'\'''
-  "runs through '\$OC_BIN'"
-  "runs through '\$REASSIGN'"
+  "function 'foo_bar' uses underscore:1"
+  "function 'bad_brace' uses underscore:1"
+  "function 'bad_parens' uses underscore:1"
+  "alias 'my_bad' uses underscore:1"
+  'is bash — use $match:1'
+  'znap name() {...}:1'
+  "bare 'oc adm release extract':4"
+  "runs through '\$OC_BIN':1"
+  "runs through '\"\$OC_BIN\"':1"
+  "runs through '\${OC_BIN}':1"
+  "runs through '\$REASSIGN':1"
 )
 
-output=$(zsh "$here/lint-conventions.zsh" "$fixture" 2>&1)
+output=$(zsh "$here/lint-conventions.zsh" "$bad_fixture" 2>&1)
 rc=$?
 
 if [[ $rc -eq 0 ]]; then
@@ -32,14 +37,17 @@ fi
 
 failed=0
 for e in $expected; do
-  if ! print -r -- "$output" | grep -qF "$e"; then
-    print -u2 "❌ selftest: expected a violation matching '$e' — not reported"
+  msg="${e%:*}"
+  want="${e##*:}"
+  got=$(print -r -- "$output" | grep -cF "$msg")
+  if [[ "$got" != "$want" ]]; then
+    print -u2 "❌ selftest: expected $want occurrence(s) of '$msg', got $got"
     (( failed++ )) || true
   fi
 done
 
-# and a clean file must pass
-if ! zsh "$here/lint-conventions.zsh" "$here/lint-conventions-fixtures/should-pass.zsh" &>/dev/null; then
+# and the clean fixture must pass
+if ! zsh "$here/lint-conventions.zsh" "$good_fixture" &>/dev/null; then
   print -u2 "❌ selftest: lint flagged the clean fixture — false positive"
   exit 1
 fi

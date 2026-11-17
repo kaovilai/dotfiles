@@ -13,3 +13,5 @@ local oc_bin; oc_bin=$(get-release-oc "$release_image")
 echo "braced" && "${oc_bin}" adm release extract --command=openshift-install img
 # quoted text mentioning the command is not a command position
 echo 'Example: (oc adm release extract --command=oc img)'
+# a quoted span starting with a variable is still just an argument
+echo "$label (oc adm release extract --command=oc img)"
