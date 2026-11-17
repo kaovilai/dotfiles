@@ -50,13 +50,20 @@ fail() {
 
 # Repo zsh sources. Excluded: vendored completions (zsh/completions/, *.txt),
 # docs/.claude (prose), .git, this test's own fixtures.
+# Enumeration failure must FAIL the lint, not silently scan nothing.
 _zsh_files() {
-  git -C "$repo_root" ls-files '*.zsh' '.zshrc' 2>/dev/null \
-    | grep -v '^zsh/completions/' \
-    | grep -v '^tests/lint-conventions-fixtures/' \
+  local out
+  if ! out=$(git -C "$repo_root" ls-files '*.zsh' '.zshrc'); then
+    print -u2 "❌ git ls-files failed — cannot enumerate zsh files to lint"
+    return 1
+  fi
+  print -r -- "$out" \
+    | { grep -v '^zsh/completions/' || true; } \
+    | { grep -v '^tests/lint-conventions-fixtures/' || true; } \
     | while IFS= read -r f; do print -r -- "$repo_root/$f"; done
 }
 
+lint_files=$(_zsh_files) || { print -u2 "❌ file enumeration failed — aborting"; exit 1 }
 while IFS= read -r file; do
   [[ -f "$file" ]] || continue
   lineno=0
@@ -102,9 +109,16 @@ while IFS= read -r file; do
     # 4. system-oc release extraction. Match `oc adm release` only at a command
     #    boundary (line start, after ; & | ! ( ) — so chained `... && oc adm ...`
     #    is caught), not mid-string text like `extract: oc adm release extract`
-    #    inside an echo message.
+    #    inside an echo message. Leading condition keywords (if/while/elif/then)
+    #    and negations are stripped before the boundary match so `if oc adm ...`
+    #    is caught too.
     if [[ "$line" == *'adm release extract'* ]]; then
-      if [[ "$line" =~ '(^|[;&|!()])[[:space:]]*oc[[:space:]]+adm[[:space:]]+release' ]]; then
+      local cmd="$line"
+      cmd="${cmd#"${cmd%%[![:space:]]*}"}"
+      while [[ "$cmd" =~ '^(if|while|elif|then|!)[[:space:]]+' ]]; do
+        cmd="${cmd#"$MATCH"}"
+      done
+      if [[ "$cmd" =~ '(^|[;&|!()])[[:space:]]*oc[[:space:]]+adm[[:space:]]+release' ]]; then
         # allowed: bootstrap extraction marked with lint-allow on this or the previous line
         if [[ "$line" != *'lint-allow: release-extract-bootstrap'* && "$prev_line" != *'lint-allow: release-extract-bootstrap'* ]]; then
           fail "$file:$lineno: bare 'oc adm release extract' — use a version-matched oc from get-release-oc (OCPBUGS-77845). Bootstrap-only use: add a '# lint-allow: release-extract-bootstrap' comment on the line above"
@@ -114,7 +128,7 @@ while IFS= read -r file; do
 
     prev_line="$line"
   done < "$file"
-done < <(_zsh_files)
+done < <(print -r -- "$lint_files")
 
 if (( failures > 0 )); then
   print -u2 -- "\n$failures convention violation(s). See CLAUDE.md/AGENTS.md 'Conventions'."
