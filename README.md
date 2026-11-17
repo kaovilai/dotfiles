@@ -205,7 +205,6 @@ sudo dnf install -y golang nodejs pipx pkgconf
 # Prefer podman over docker on this repo (see CLAUDE.md) -- native on Fedora, no VM needed.
 sudo dnf install -y podman kubernetes-client skopeo
 # minikube: download binary -- https://minikube.sigs.k8s.io/docs/start/
-# lima (Linux VMs on macOS): not needed on Linux, podman is already native
 ```
 
 ### Cloud CLI tools

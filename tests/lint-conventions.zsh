@@ -143,9 +143,12 @@ while IFS= read -r file; do
     # skip full-line comments
     [[ "$line" =~ '^[[:space:]]*#' ]] && { prev_line="$line"; continue }
 
-    # 1. bash-isms — flag $BASH_REMATCH / ${BASH_REMATCH usage (the convention);
-    #    a bare mention (like this lint's own message text) is not a violation
-    if [[ "$line" == *"\$BASH"_REMATCH* || "$line" == *'${BASH'"_REMATCH"* ]]; then
+    # 1. bash-isms — flag $BASH_REMATCH / ${BASH_REMATCH usage (the convention).
+    #    Checked on the code portion only (text before the first '#'), so a
+    #    trailing comment mentioning the bash spelling is not a violation;
+    #    a bare mention (like this lint's own message text) is not either.
+    local code_part="${line%%'#'*}"
+    if [[ "$code_part" == *"\$BASH"_REMATCH* || "$code_part" == *'${BASH'"_REMATCH"* ]]; then
       fail "$file:$lineno: \$BASH"_REMATCH" is bash — use \$match (ZSH regex captures)"
     fi
 
