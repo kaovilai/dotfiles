@@ -81,8 +81,8 @@ while IFS= read -r file; do
 
     # 2. kebab-case for public definitions and aliases.
     #    name() { ... } and function name { ... } — underscore in a non-_prefixed name is private-by-mistake
-    if [[ "$line" =~ '^[[:space:]]*([A-Za-z][A-Za-z0-9_-]*)[[:space:]]*\(\)' ]]; then
-      local name="${match[1]}"
+    if [[ "$line" =~ '^[[:space:]]*(function[[:space:]]+)?([A-Za-z][A-Za-z0-9_-]*)[[:space:]]*\(\)' ]]; then
+      local name="${match[2]}"
       if [[ "$name" == *_* && "$name" != _* ]] && ! grandfathered "$name"; then
         fail "$file:$lineno: function '$name' uses underscore in a public name — use kebab-case (rename to '${name//_/-}', keep a back-compat alias; _prefix only for private helpers)"
       fi
