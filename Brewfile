@@ -49,7 +49,6 @@ brew "docker"
 brew "kubernetes-cli"        # kubectl
 brew "minikube"
 brew "skopeo"                # Container image utility
-brew "lima"                  # Linux VMs on macOS
 
 # Cloud CLI tools
 brew "azure-cli"

@@ -293,7 +293,8 @@ get-openshift-install-for-release-image() {
     echo "INFO: Extracting openshift-install binary for $version from $release_image (this may take a minute)..." >&2
     local tmp_extract_dir
     tmp_extract_dir=$(mktemp -d)
-    if ! oc adm release extract --command=openshift-install --to="$tmp_extract_dir" --registry-config ~/pull-secret.txt "$release_image" &>/dev/null; then
+    local oc_bin; oc_bin=$(get-release-oc "$release_image")
+    if ! "$oc_bin" adm release extract --command=openshift-install --to="$tmp_extract_dir" --registry-config ~/pull-secret.txt "$release_image" &>/dev/null; then
         echo "ERROR: Failed to extract openshift-install from $release_image" >&2
         rm -rf "$tmp_extract_dir"
         return 1
@@ -1024,6 +1025,7 @@ get-release-oc() {
 
     echo "INFO: Extracting oc matching release image $release_image..." >&2
     mkdir -p "$oc_dir"
+    # lint-allow: release-extract-bootstrap -- system oc extracts the version-matched oc itself
     oc adm release extract --command=oc --to "$oc_dir" \
         --registry-config ~/pull-secret.txt "$release_image" 2>/dev/null
     if [[ -x "$oc_dir/oc" ]]; then
