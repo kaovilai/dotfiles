@@ -44,7 +44,9 @@ jobs:
           done
 
       - name: Lint repo conventions (CLAUDE.md/AGENTS.md rules as checks)
-        run: zsh tests/lint-conventions.zsh
+        run: |
+          zsh tests/lint-conventions.zsh
+          zsh tests/lint-conventions-selftest.zsh
 
       - name: ShellCheck shell scripts
         id: shellcheck

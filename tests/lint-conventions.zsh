@@ -49,9 +49,17 @@ fail() {
 }
 
 # Repo zsh sources. Excluded: vendored completions (zsh/completions/, *.txt),
-# docs/.claude (prose), .git, this test's own fixtures.
+# docs/.claude (prose), .git, this test's own fixtures (exercised by
+# tests/lint-conventions-selftest.zsh instead).
 # Enumeration failure must FAIL the lint, not silently scan nothing.
+# Optional args: explicit file list to scan (used by the selftest) instead of
+# enumerating the repo.
 _zsh_files() {
+  if (( $# > 0 )); then
+    local f
+    for f in "$@"; do print -r -- "$f"; done
+    return 0
+  fi
   local out
   if ! out=$(git -C "$repo_root" ls-files '*.zsh' '*.zshrc'); then
     print -u2 "❌ git ls-files failed — cannot enumerate zsh files to lint"
@@ -63,7 +71,7 @@ _zsh_files() {
     | while IFS= read -r f; do print -r -- "$repo_root/$f"; done
 }
 
-lint_files=$(_zsh_files) || { print -u2 "❌ file enumeration failed — aborting"; exit 1 }
+lint_files=$(_zsh_files "$@") || { print -u2 "❌ file enumeration failed — aborting"; exit 1 }
 typeset -A var_extract_files
 typeset -A has_get_release_oc
 while IFS= read -r file; do
@@ -136,7 +144,9 @@ while IFS= read -r file; do
       fi
     fi
 
-    if [[ "$line" == *'get-release-oc'* ]]; then
+    # only a real derivation counts — '$(get-release-oc ...)' command substitution,
+    # not the helper's name appearing in echo/message text
+    if [[ "$line" == *'$(get-release-oc '* || "$line" == *'$(get-release-oc)'* ]]; then
       has_get_release_oc[$file]=1
     fi
 
