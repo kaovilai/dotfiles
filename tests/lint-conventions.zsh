@@ -73,11 +73,17 @@ while IFS= read -r file; do
     fi
 
     # 2. kebab-case for public definitions and aliases.
-    #    name() { ... } / function name { — underscore in a non-_prefixed name is private-by-mistake
-    if [[ "$line" =~ '^[[:space:]]*(function[[:space:]]+)?([A-Za-z][A-Za-z0-9_-]*)[[:space:]]*\(\)' ]]; then
-      local name="${match[2]}"
+    #    name() { ... } and function name { ... } — underscore in a non-_prefixed name is private-by-mistake
+    if [[ "$line" =~ '^[[:space:]]*([A-Za-z][A-Za-z0-9_-]*)[[:space:]]*\(\)' ]]; then
+      local name="${match[1]}"
       if [[ "$name" == *_* && "$name" != _* ]] && ! grandfathered "$name"; then
         fail "$file:$lineno: function '$name' uses underscore in a public name — use kebab-case (rename to '${name//_/-}', keep a back-compat alias; _prefix only for private helpers)"
+      fi
+    fi
+    if [[ "$line" =~ '^[[:space:]]*function[[:space:]]+([A-Za-z][A-Za-z0-9_-]*)[[:space:]]*\{' ]]; then
+      local fname="${match[1]}"
+      if [[ "$fname" == *_* && "$fname" != _* ]] && ! grandfathered "$fname"; then
+        fail "$file:$lineno: function '$fname' uses underscore in a public name — use kebab-case (rename to '${fname//_/-}', keep a back-compat alias; _prefix only for private helpers)"
       fi
     fi
     # alias name=...
@@ -93,9 +99,12 @@ while IFS= read -r file; do
       fail "$file:$lineno: 'znap name() {...}' redefines znap itself — define functions plainly: name() { ... }"
     fi
 
-    # 4. system-oc release extraction (skip echo/print text — only real command lines)
-    if [[ "$line" == *'adm release extract'* && "$line" != *echo* && "$line" != *print* ]]; then
-      if [[ "$line" =~ '(^|[;&|!(])[[:space:]]*oc[[:space:]]+adm[[:space:]]+release' ]]; then
+    # 4. system-oc release extraction. Match `oc adm release` only at a command
+    #    boundary (line start, after ; & | ! ( ) — so chained `... && oc adm ...`
+    #    is caught), not mid-string text like `extract: oc adm release extract`
+    #    inside an echo message.
+    if [[ "$line" == *'adm release extract'* ]]; then
+      if [[ "$line" =~ '(^|[;&|!()])[[:space:]]*oc[[:space:]]+adm[[:space:]]+release' ]]; then
         # allowed: bootstrap extraction marked with lint-allow on this or the previous line
         if [[ "$line" != *'lint-allow: release-extract-bootstrap'* && "$prev_line" != *'lint-allow: release-extract-bootstrap'* ]]; then
           fail "$file:$lineno: bare 'oc adm release extract' — use a version-matched oc from get-release-oc (OCPBUGS-77845). Bootstrap-only use: add a '# lint-allow: release-extract-bootstrap' comment on the line above"
