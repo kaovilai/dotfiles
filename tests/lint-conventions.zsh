@@ -72,10 +72,10 @@ _zsh_files() {
 }
 
 lint_files=$(_zsh_files "$@") || { print -u2 "❌ file enumeration failed — aborting"; exit 1 }
-typeset -A var_extract_files
-typeset -A has_get_release_oc
+typeset -A var_derived
 while IFS= read -r file; do
   [[ -f "$file" ]] || continue
+  var_derived=()
   lineno=0
   prev_line=""
   while IFS= read -r line || [[ -n "$line" ]]; do
@@ -116,50 +116,55 @@ while IFS= read -r file; do
       fail "$file:$lineno: 'znap name() {...}' redefines znap itself — define functions plainly: name() { ... }"
     fi
 
-    # 4. system-oc release extraction. Match `oc adm release` only at a command
-    #    boundary (line start, after ; & | ! ( ) — so chained `... && oc adm ...`
-    #    is caught), not mid-string text like `extract: oc adm release extract`
-    #    inside an echo message. Leading condition keywords (if/while/elif/then)
-    #    and negations are stripped before the boundary match so `if oc adm ...`
-    #    is caught too.
-    if [[ "$line" == *'adm release extract'* ]]; then
-      local cmd="$line"
-      cmd="${cmd#"${cmd%%[![:space:]]*}"}"
-      while [[ "$cmd" =~ '^(if|while|elif|then|!|command|sudo|env)[[:space:]]+' ]]; do
-        cmd="${cmd#"$MATCH"}"
-      done
-      # variable-mediated extract ($OC_BIN / "$oc_bin" adm release extract, at a command
-      # boundary incl. mid-line after &&): allowed only with a lint-allow marker, or when
-      # the file derives the variable from get-release-oc somewhere (checked after the loop)
-      if [[ "$cmd" =~ '(^|[;&|!()])[[:space:]]*"?\$\{?[A-Za-z_][A-Za-z0-9_]*\}?"?[[:space:]]+adm[[:space:]]+release' ]]; then
-        if [[ "$line" != *'lint-allow: release-extract-bootstrap'* && "$prev_line" != *'lint-allow: release-extract-bootstrap'* ]]; then
-          var_extract_files[$file]=$lineno
-        fi
-      fi
-      if [[ "$cmd" =~ '(^|[;&|!()])[[:space:]]*oc[[:space:]]+adm[[:space:]]+release' ]]; then
-        # allowed: bootstrap extraction marked with lint-allow on this or the previous line
-        if [[ "$line" != *'lint-allow: release-extract-bootstrap'* && "$prev_line" != *'lint-allow: release-extract-bootstrap'* ]]; then
-          fail "$file:$lineno: bare 'oc adm release extract' — use a version-matched oc from get-release-oc (OCPBUGS-77845). Bootstrap-only use: add a '# lint-allow: release-extract-bootstrap' comment on the line above"
-        fi
+    # 4. system-oc release extraction. `oc adm release` is matched only at a
+    #    command boundary (line start, after ; & | ! ( ), incl. after
+    #    command/sudo/env wrappers and leading if/while/elif/then/! keywords),
+    #    so chained `... && sudo oc adm ...` is caught while quoted text like
+    #    'Example: (oc adm release extract ...)' inside an echo message is not
+    #    (quoted spans are stripped before matching). Variable-mediated
+    #    extracts are approved only while THAT variable's latest assignment
+    #    derives it from get-release-oc — a later reassignment to the system
+    #    oc invalidates the approval.
+    #
+    # track variable assignments first: latest assignment wins
+    if [[ "$line" =~ '^[[:space:]]*(local[[:space:]]+)?([A-Za-z_][A-Za-z0-9_]*)=' ]]; then
+      local av="${match[2]}"
+      if [[ "$line" =~ "${av}=\\\$\(get-release-oc" ]]; then
+        var_derived[$av]=1
+      else
+        var_derived[$av]=0
       fi
     fi
 
-    # only a real derivation counts — '$(get-release-oc ...)' command substitution,
-    # not the helper's name appearing in echo/message text
-    if [[ "$line" == *'$(get-release-oc '* || "$line" == *'$(get-release-oc)'* ]]; then
-      has_get_release_oc[$file]=1
+    if [[ "$line" == *'release extract'* ]]; then
+      local cmd="$line"
+      cmd="${cmd#"${cmd%%[![:space:]]*}"}"
+      # strip quoted spans — text inside quotes is not a command position
+      while [[ "$cmd" =~ \'[^\']*\' ]]; do cmd="${cmd//"$MATCH"/}"; done
+      while [[ "$cmd" =~ \"[^\"]*\" ]]; do cmd="${cmd//"$MATCH"/}"; done
+      while [[ "$cmd" =~ '^(if|while|elif|then|!|command|sudo|env)[[:space:]]+' ]]; do
+        cmd="${cmd#"$MATCH"}"
+      done
+      local marked=0
+      [[ "$line" == *'lint-allow: release-extract-bootstrap'* || "$prev_line" == *'lint-allow: release-extract-bootstrap'* ]] && marked=1
+      # bare system oc, at any command boundary, incl. after wrappers
+      if [[ "$cmd" =~ '(^|[;&|!()])[[:space:]]*((command|sudo|env)[[:space:]]+)*oc[[:space:]]+adm[[:space:]]+release' ]]; then
+        if (( ! marked )); then
+          fail "$file:$lineno: bare 'oc adm release extract' — use a version-matched oc from get-release-oc (OCPBUGS-77845). Bootstrap-only use: add a '# lint-allow: release-extract-bootstrap' comment on the line above"
+        fi
+      fi
+      # variable-mediated: group 5 is the variable name
+      if [[ "$cmd" =~ '(^|[;&|!()])[[:space:]]*((command|sudo|env)[[:space:]]+)*("?\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?"?)[[:space:]]+adm[[:space:]]+release' ]]; then
+        local vname="${match[5]}"
+        if (( ! marked )) && [[ "${var_derived[$vname]:-0}" != 1 ]]; then
+          fail "$file:$lineno: 'adm release extract' runs through '\$$vname', which is not currently derived from get-release-oc — a later reassignment to the system oc would stay green (OCPBUGS-77845). Derive it via get-release-oc (or add a '# lint-allow: release-extract-bootstrap' marker)"
+        fi
+      fi
     fi
 
     prev_line="$line"
   done < "$file"
 done < <(print -r -- "$lint_files")
-
-# variable-mediated extracts must be derived from get-release-oc somewhere in the file
-for f in "${(@k)var_extract_files}"; do
-  if [[ -z "${has_get_release_oc[$f]:-}" ]]; then
-    fail "$f:${var_extract_files[$f]}: 'adm release extract' runs through a variable that this file never derives from get-release-oc — a future edit swapping the variable to the system oc would stay green (OCPBUGS-77845). Derive it via get-release-oc (or add a '# lint-allow: release-extract-bootstrap' marker)"
-  fi
-done
 
 if (( failures > 0 )); then
   print -u2 -- "\n$failures convention violation(s). See CLAUDE.md/AGENTS.md 'Conventions'."

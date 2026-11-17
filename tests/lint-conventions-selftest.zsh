@@ -11,14 +11,15 @@ here="${0:A:h}"
 fixture="$here/lint-conventions-fixtures/should-fail.zsh"
 
 expected=(
-  'function .foo_bar. uses underscore'
-  'function .bad_brace. uses underscore'
-  'function .bad_parens. uses underscore'
-  'alias .my_bad. uses underscore'
-  'BASH.*REMATCH is bash'
-  'znap name\(\)'
-  "bare 'oc adm release extract'"
-  'runs through a variable that this file never derives'
+  'function '\''foo_bar'\'' uses underscore'
+  'function '\''bad_brace'\'' uses underscore'
+  'function '\''bad_parens'\'' uses underscore'
+  'alias '\''my_bad'\'' uses underscore'
+  'is bash — use $match'
+  'znap name() {...}'
+  'bare '\''oc adm release extract'\'''
+  "runs through '\$OC_BIN'"
+  "runs through '\$REASSIGN'"
 )
 
 output=$(zsh "$here/lint-conventions.zsh" "$fixture" 2>&1)
@@ -31,7 +32,7 @@ fi
 
 failed=0
 for e in $expected; do
-  if ! print -r -- "$output" | grep -q "$e"; then
+  if ! print -r -- "$output" | grep -qF "$e"; then
     print -u2 "❌ selftest: expected a violation matching '$e' — not reported"
     (( failed++ )) || true
   fi

@@ -11,3 +11,5 @@ oc adm release extract --command=oc img
 local oc_bin; oc_bin=$(get-release-oc "$release_image")
 "$oc_bin" adm release extract --command=openshift-install img
 echo "braced" && "${oc_bin}" adm release extract --command=openshift-install img
+# quoted text mentioning the command is not a command position
+echo 'Example: (oc adm release extract --command=oc img)'
