@@ -50,7 +50,7 @@ fail() {
 
 # Repo zsh sources. Excluded: vendored completions (zsh/completions/, *.txt),
 # docs/.claude (prose), .git, this test's own fixtures.
-zsh_files() {
+_zsh_files() {
   git -C "$repo_root" ls-files '*.zsh' '.zshrc' 2>/dev/null \
     | grep -v '^zsh/completions/' \
     | grep -v '^tests/lint-conventions-fixtures/' \
@@ -66,9 +66,10 @@ while IFS= read -r file; do
     # skip full-line comments
     [[ "$line" =~ '^[[:space:]]*#' ]] && { prev_line="$line"; continue }
 
-    # 1. bash-isms
-    if [[ "$line" == *BASH_REMATCH* && "$line" != *'#'*BASH_REMATCH* ]]; then
-      fail "$file:$lineno: BASH_REMATCH is bash — use \$match (ZSH regex captures)"
+    # 1. bash-isms — flag $BASH_REMATCH / ${BASH_REMATCH usage (the convention);
+    #    a bare mention (like this lint's own message text) is not a violation
+    if [[ "$line" == *"\$BASH"_REMATCH* || "$line" == *'${BASH'"_REMATCH"* ]]; then
+      fail "$file:$lineno: \$BASH"_REMATCH" is bash — use \$match (ZSH regex captures)"
     fi
 
     # 2. kebab-case for public definitions and aliases.
@@ -104,7 +105,7 @@ while IFS= read -r file; do
 
     prev_line="$line"
   done < "$file"
-done < <(zsh_files)
+done < <(_zsh_files)
 
 if (( failures > 0 )); then
   print -u2 -- "\n$failures convention violation(s). See CLAUDE.md/AGENTS.md 'Conventions'."
