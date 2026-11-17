@@ -143,11 +143,24 @@ while IFS= read -r file; do
     # skip full-line comments
     [[ "$line" =~ '^[[:space:]]*#' ]] && { prev_line="$line"; continue }
 
+    # Single-quoted spans are literals: strip them once, up front, so rules
+    # below see real code only (a quoted '#', a printed 'BIN=...' example, or
+    # quoted command text is not a comment boundary / assignment / command).
+    local sq="" sqrest="$line" sqm=""
+    while [[ "$sqrest" =~ \'[^\']*\' ]]; do
+      sqm="$MATCH"
+      sq+="${sqrest%%"$sqm"*}"
+      sqrest="${sqrest#*"$sqm"}"
+    done
+    sq+="$sqrest"
+    local nolit="$sq"
+
     # 1. bash-isms — flag $BASH_REMATCH / ${BASH_REMATCH usage (the convention).
-    #    Checked on the code portion only (text before the first '#'), so a
-    #    trailing comment mentioning the bash spelling is not a violation;
-    #    a bare mention (like this lint's own message text) is not either.
-    local code_part="${line%%'#'*}"
+    #    Checked on the code portion only (text before the first '#' outside
+    #    quotes), so a trailing comment mentioning the bash spelling is not a
+    #    violation; a bare mention (like this lint's own message text) is not
+    #    either. Double-quoted usage still counts: zsh expands it (to empty).
+    local code_part="${nolit%%'#'*}"
     if [[ "$code_part" == *"\$BASH"_REMATCH* || "$code_part" == *'${BASH'"_REMATCH"* ]]; then
       fail "$file:$lineno: \$BASH"_REMATCH" is bash — use \$match (ZSH regex captures)"
     fi
@@ -192,7 +205,7 @@ while IFS= read -r file; do
     # track variable assignments first: latest assignment wins. Assignments are
     # matched anywhere in the line (e.g. 'local oc_bin; oc_bin=$(...)'), and a
     # var derived via get-release-oc is approved only until reassigned.
-    local arest="$line" am=""
+    local arest="$nolit" am=""
     while [[ "$arest" =~ '(^|[[:space:];&])(local[[:space:]]+)?([A-Za-z_][A-Za-z0-9_]*)=[^=[:space:]]*' ]]; do
       am="$MATCH"
       local av="${match[3]}"
@@ -245,13 +258,17 @@ while IFS= read -r file; do
           fail "$file:$lineno: bare 'oc adm release extract' — use a version-matched oc from get-release-oc (OCPBUGS-77845). Bootstrap-only use: add a '# lint-allow: release-extract-bootstrap' comment on the line above"
         fi
       fi
-      # variable-mediated: group 5 is the variable name
-      if [[ "$cmd" =~ '(^|[;&|!()])[[:space:]]*((command|sudo|env|then|else|do)[[:space:]]+)*("?\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?"?)[[:space:]]+adm[[:space:]]+release[[:space:]]+extract' ]]; then
-        local vname="${match[5]}" vspell="${match[4]}"
+      # variable-mediated: group 4 is the spelling, group 5 the name.
+      # EVERY match on the line is checked — an approved variable must not
+      # suppress the diagnostic for a different variable in the same line.
+      local vrest="$cmd"
+      while [[ "$vrest" =~ '(^|[;&|!()])[[:space:]]*((command|sudo|env|then|else|do)[[:space:]]+)*("?\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?"?)[[:space:]]+adm[[:space:]]+release[[:space:]]+extract' ]]; do
+        local vwhole="$MATCH" vname="${match[5]}" vspell="${match[4]}"
         if (( ! marked )) && [[ "${var_derived[$vname]:-0}" != 1 ]]; then
           fail "$file:$lineno: 'adm release extract' runs through '$vspell', which is not currently derived from get-release-oc — a later reassignment to the system oc would stay green (OCPBUGS-77845). Derive it via get-release-oc (or add a '# lint-allow: release-extract-bootstrap' marker)"
         fi
-      fi
+        vrest="${vrest#*"$vwhole"}"
+      done
     fi
 
     prev_line="$line"
