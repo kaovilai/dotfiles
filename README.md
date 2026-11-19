@@ -9,7 +9,7 @@ One repo covers four things that usually live in five places:
 - **An LLM telemetry stack** — `llm-usage` reads every local proxy's request log (plus Claude/Codex transcripts) and answers "which model actually served my traffic, at what cost, and what is throttled right now" — in the terminal, a browser dashboard, and a native macOS menubar monitor, across your whole fleet of machines.
 - **OpenShift / OADP / Velero cluster automation** — repeatable create/connect/destroy flows for AWS, GCP (WIF), Azure (STS), and ROSA clusters with Velero backup setup, version-matched `oc` binaries, and offline-testable installer logic.
 
-Everything here is ZSH (not Bash), kebab-case for public commands, and covered by [27 offline test suites](tests/) that run without a cluster, a proxy, or a GUI.
+Everything here is ZSH (not Bash), kebab-case for public commands, and covered by [26 offline test suites](tests/) that run without a cluster, a proxy, or a GUI.
 
 ## Highlights
 
@@ -81,9 +81,8 @@ Debug without a GUI: `llm-usage-menubar --dump-menu`, `--status-png out.png`, `-
 
 ### 4. `fleet-sync` — edit on one machine, the others follow
 
-`scripts/fleet-sync.zsh` fast-forwards this machine's dotfiles, Claude config (`~/.config/claude`), and copilot-api checkouts, then applies what changed: newly enabled plugins, the shared context-mode daemon unit, T3 provider imports, `bun install` when a lockfile moved, and a rebuild+restart of the menubar helper when its Swift source moved. It never commits, merges, or discards — a repo with uncommitted or diverged work is skipped with a warning. Install an hourly systemd user timer with `--install-timer` (Linux).
+`scripts/fleet-sync.zsh` fast-forwards this machine's dotfiles, Claude config (`~/.config/claude`), and copilot-api checkouts, then applies what changed: newly enabled plugins, T3 provider imports, `bun install` when a lockfile moved, and a rebuild+restart of the menubar helper when its Swift source moved. It never commits, merges, or discards — a repo with uncommitted or diverged work is skipped with a warning. Install an hourly systemd user timer with `--install-timer` (Linux).
 
-The **context-mode daemon** (synced the same way) runs one shared MCP server per machine on loopback instead of one ~87 MB process per session — a `87 MB × sessions → 87 MB × machine` saving.
 
 ### 5. OpenShift / OADP / Velero automation
 
@@ -101,7 +100,7 @@ Details that matter: every `oc adm release extract` goes through a **version-mat
 
 ### 6. A dotfiles repo that tests itself
 
-27 offline test suites (`tests/`) stub out `node`, `claude`, `systemctl`, `curl` and more to verify real behavior: provider lifecycle and proxy routing, mode completion, model pickers, fleet-sync decisions, the context-mode daemon sync, T3 launchers, and `zsh -n` over the whole `.zshrc`. The shell itself is performance-tuned: lazy-loaded function groups, backgrounded non-essential init, and completion caching.
+26 offline test suites (`tests/`) stub out `node`, `claude`, `systemctl`, `curl` and more to verify real behavior: provider lifecycle and proxy routing, mode completion, model pickers, fleet-sync decisions, T3 launchers, and `zsh -n` over the whole `.zshrc`. The shell itself is performance-tuned: lazy-loaded function groups, backgrounded non-essential init, and completion caching.
 
 ## Function catalog
 
@@ -139,7 +138,6 @@ cluster lifecycle (above), `get-release-oc`, `get-openshift-install-for-release-
 | `llm-usage-dashboard.html` | Browser dashboard |
 | `mlx-idle-watch.zsh` | Unloads MLX server when idle |
 | `fleet-sync.zsh` | Multi-machine dotfiles/config sync (+ systemd timer) |
-| `context-mode-daemon-sync.zsh` | Shared context-mode MCP daemon unit/registration |
 | `setup-t3-headless.zsh` | Headless T3 Code laptop setup |
 | `spectre-x360/`, `wsl-keepalive.ps1` | Hardware/WSL specific helpers |
 
@@ -304,7 +302,7 @@ zsh/
   completions/          # custom completions (llm-usage, tailscale)
 scripts/                # llm-usage, proxies, fleet-sync, menubar monitor, ...
 docs/                   # setup guides + docs/notes/ design notes
-tests/                  # 27 offline test suites
+tests/                  # 26 offline test suites
 ```
 
 See `zsh/aliases/README.md` for adding aliases; conventions (ZSH not Bash, kebab-case public names, `znap` never prefixed on function definitions) are in `CLAUDE.md`.
