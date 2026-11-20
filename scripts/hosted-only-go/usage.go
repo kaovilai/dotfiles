@@ -123,6 +123,15 @@ func pidAlive(pid int) bool {
 	return err == syscall.EPERM
 }
 
+// fileUnlinked reports whether the FileInfo describes an open-but-deleted
+// file (Nlink 0 on Linux and macOS; unknown elsewhere — no detection).
+func fileUnlinked(fi os.FileInfo) bool {
+	if st, ok := fi.Sys().(*syscall.Stat_t); ok {
+		return st.Nlink == 0
+	}
+	return false
+}
+
 // flush must be called with u.mu held. It never prunes: an entry leaves the
 // table only when its request ends (idle detection keys on non-emptiness, so
 // dropping a still-streaming request would mark a busy proxy idle and make
@@ -274,6 +283,14 @@ func (u *usageLog) write(event map[string]any) {
 	reopen := u.eventsFile == nil || u.eventsPath != path
 	if !reopen {
 		if st, err := os.Stat(path); err != nil || u.eventsStat == nil || !os.SameFile(st, u.eventsStat) {
+			reopen = true
+		} else if st, err := u.eventsFile.Stat(); err == nil && fileUnlinked(st) {
+			// deleted and recreated with a REUSED inode (realistic: every
+			// local proxy appends to the same events-YYYY-MM.jsonl, so a
+			// sibling's write recreates the file between ours): the path
+			// resolves to a different file that SameFile cannot tell apart
+			// from the one this handle owns. Nlink == 0 on the open handle
+			// says this one is the unlinked one.
 			reopen = true
 		}
 	}

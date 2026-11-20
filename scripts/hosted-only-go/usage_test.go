@@ -112,6 +112,19 @@ func TestUsageLogReopensWhenEventsFileIsReplaced(t *testing.T) {
 	if err != nil || !strings.Contains(string(body), `"e3"`) {
 		t.Fatalf("the write after the file was replaced must land in the new file: %v %q", err, body)
 	}
+	// delete + recreate between writes (a sibling proxy's append recreated
+	// it): the write must land in the file that is at the path NOW
+	if err := os.Remove(filepath.Join(dir, "events-2026-11.jsonl")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "events-2026-11.jsonl"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	u.write(event("e4", "2026-11-20T13:00:00.000Z"))
+	body, err = os.ReadFile(filepath.Join(dir, "events-2026-11.jsonl"))
+	if err != nil || !strings.Contains(string(body), `"e4"`) {
+		t.Fatalf("the write after delete+recreate must land in the current file: %v %q", err, body)
+	}
 }
 
 // A suppressed update still owes the file one write: without the trailing
