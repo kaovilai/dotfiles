@@ -533,6 +533,22 @@ with patch.dict(os.environ, env), patch.dict(ns, dict(patched, **{
     assert reused['pid']==424242, 'a busy proxy must be reused, not stopped or probed'
 print('ok - busy rechecked after the key probe (all mocked)')
 
+# ensure(): an exported HOSTED_ONLY_UPSTREAM_KEY overrides ENMAAS_API_KEY in
+# the Go child's loadConfig — the probe must check THAT credential.
+seen={}
+def capture_key(base, keyd):
+    seen['key']=keyd
+    return True
+with patch.dict(os.environ, dict(env, HOSTED_ONLY_UPSTREAM_KEY='override-secret')), patch.dict(ns, dict(patched, **{
+        'busy':lambda port:False, 'gateway_rejects_key':capture_key, 'stop': no_stop})):
+    try:
+        g['ensure'](froot, 4166, fresh(), 3, [])
+        raise AssertionError('must refuse on the rejected override')
+    except RuntimeError as error:
+        assert 'rejected the API key' in str(error), error
+assert seen.get('key')=='override-secret', seen
+print('ok - the probe checks HOSTED_ONLY_UPSTREAM_KEY when it overrides')
+
 # ensure(): code changed and idle -> zero-gap swap: new child spawned, old
 # group retired only after the new one accepts, token kept.
 killed=set()

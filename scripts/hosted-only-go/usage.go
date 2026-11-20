@@ -128,27 +128,33 @@ func (u *usageLog) flush() {
 	}
 	body, err := json.Marshal(payload)
 	if err != nil {
-		u.flushDirty = true
-		u.scheduleTrailingFlush()
+		u.flushFailed()
 		return
 	}
 	if err := os.MkdirAll(u.dir, 0o700); err != nil {
-		u.flushDirty = true
-		u.scheduleTrailingFlush()
+		u.flushFailed()
 		return
 	}
 	tmp := u.inflightPath() + ".tmp"
 	if err := os.WriteFile(tmp, body, 0o600); err != nil {
-		u.flushDirty = true
-		u.scheduleTrailingFlush()
+		u.flushFailed()
 		return
 	}
 	if err := os.Rename(tmp, u.inflightPath()); err != nil {
-		u.flushDirty = true
-		u.scheduleTrailingFlush()
+		u.flushFailed()
 		return
 	}
 	u.flushDirty = false
+}
+
+// flushFailed must be called with u.mu held: the previously published table
+// no longer describes this map, so drop it — readers then fall back to
+// socket counting instead of trusting a stale table — and retry through the
+// trailing timer for as long as the failure lasts.
+func (u *usageLog) flushFailed() {
+	u.flushDirty = true
+	_ = os.Remove(u.inflightPath())
+	u.scheduleTrailingFlush()
 }
 
 // inflightFlushAfter is the steady-state debounce: transitions flush at once,

@@ -136,12 +136,19 @@ func (a *app) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+
+	started := time.Now()
+	// Register the handler BEFORE reading the body: idle detection keys on
+	// the usage table, and a slow or large upload must count as in flight
+	// or an automatic swap could retire this process mid-read. The model
+	// names are refined once the body is decoded (same id, updated entry).
+	requestID := fmt.Sprintf("%d-%d", started.UnixNano(), a.seq.Add(1))
+	a.usage.start(requestID, "", "")
+	defer a.usage.end(requestID)
 	if strings.HasSuffix(r.URL.Path, "/count_tokens") {
 		a.handleCountTokens(w, r)
 		return
 	}
-
-	started := time.Now()
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 256<<20))
 	if err != nil {
 		http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
@@ -156,10 +163,8 @@ func (a *app) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	requested := asString(data["model"])
-	requestID := fmt.Sprintf("%d-%d", started.UnixNano(), a.seq.Add(1))
 	served := requested
-	a.usage.start(requestID, served, requested)
-	defer a.usage.end(requestID)
+	a.usage.start(requestID, served, requested) // refine the registered entry
 
 	// Web-search shim: decide before the rewrites (the strip would remove the
 	// hosted tool the shim needs). The canary piggybacks here — the first real

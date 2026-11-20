@@ -455,6 +455,15 @@ def knob_digest():
     return hashlib.sha256(repr(items).encode()).hexdigest()
 
 
+def upstream_key():
+    """The credential the Go child will send: ENMAAS_API_KEY, unless an
+    exported HOSTED_ONLY_UPSTREAM_KEY overrides it in loadConfig. Check and
+    ensure must agree on it (the recorded key signature tracks this value)."""
+    key = os.environ['ENMAAS_API_KEY']
+    override = os.environ.get('HOSTED_ONLY_UPSTREAM_KEY', '').strip()
+    return override if override else key
+
+
 def check(root, port, config, required):
     """Dry run for the restart-required check: {'state': down|fresh|stale,
     'changed': [...], 'busy': bool}; nothing is started, stopped or written."""
@@ -468,7 +477,7 @@ def check(root, port, config, required):
         return {'state': 'down', 'changed': [], 'busy': False}
     if not ready(info, info_root):
         return {'state': 'stale', 'changed': ['recorded proxy is not ready'], 'busy': busy(port)}
-    changed, _, _, _ = changes(info_root, info, root, config, versions, os.environ['ENMAAS_API_KEY'],
+    changed, _, _, _ = changes(info_root, info, root, config, versions, upstream_key(),
                                gohash, required)
     return {'state': 'stale' if changed else 'fresh', 'changed': changed, 'busy': busy(port)}
 
@@ -478,7 +487,9 @@ def ensure(root, port, config, timeout, required):
     gobin, gohash = go_binary()
     versions = [gohash, knob_digest(), 'go']   # last element stays 'go': the zero-gap swap branch keys on it   # a list: the recorded identity holds one (argv slices were lists)
     info_root, info = locate(root, port)
-    key = os.environ['ENMAAS_API_KEY']
+    # The recorded key signature and the probe use the credential the child
+    # will actually send (see upstream_key).
+    key = upstream_key()
     hooks = gohash
     swap = None
     # Memoized key probe: a replacement the gateway would answer 401 must be

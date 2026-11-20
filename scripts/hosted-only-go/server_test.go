@@ -1,6 +1,9 @@
 package main
 
 import (
+	"bytes"
+	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -9,7 +12,39 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
+
+// A request whose body has not even arrived yet must already count as in
+// flight: idle detection keys on the usage table, and the registration must
+// precede the (possibly slow, possibly large) body read or an automatic swap
+// could retire this process mid-read.
+func TestUsageRegistersBeforeBodyReadCompletes(t *testing.T) {
+	h := newProxyHarness(t, http.StatusOK, `{}`, nil)
+	pr, pw := io.Pipe()
+	req, err := http.NewRequest(http.MethodPost, "/v1/messages", pr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("x-api-key", "hosted-only-local")
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		h.app.ServeHTTP(httptest.NewRecorder(), req)
+	}()
+	path := filepath.Join(os.Getenv("LLM_USAGE_DIR"), fmt.Sprintf("inflight-0-%d.json", os.Getpid()))
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if body, err := os.ReadFile(path); err == nil &&
+			bytes.Contains(body, []byte(`"requests":{`)) && !bytes.Contains(body, []byte(`"requests":{}`)) {
+			_ = pw.CloseWithError(errors.New("aborted by test"))
+			<-done
+			return // registered while the body was still unread
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("a request whose body has not arrived must already count as in flight")
+}
 
 // proxyHarness runs the real handler against a stub gateway that answers every
 // upstream call with the given status and body, counting calls per model.
