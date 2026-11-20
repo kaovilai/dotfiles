@@ -549,6 +549,18 @@ with patch.dict(os.environ, dict(env, HOSTED_ONLY_UPSTREAM_KEY='override-secret'
 assert seen.get('key')=='override-secret', seen
 print('ok - the probe checks HOSTED_ONLY_UPSTREAM_KEY when it overrides')
 
+# gateway_rejects_key() never dials a base the key may not travel to: plain
+# http to a non-loopback host, or a URL carrying credentials, is not a
+# verdict (False) and never opens a connection.
+with patch.object(ns['urllib'].request, 'build_opener', side_effect=AssertionError('must not dial')):
+    assert g['gateway_rejects_key']('http://nonloopback.example/v1', 'k') is False
+    assert g['gateway_rejects_key']('https://user:pass@gateway.example/v1', 'k') is False
+    assert g['gateway_rejects_key']('ftp://gateway.example', 'k') is False
+# loopback and https pass validation (loopback here is unreachable: still
+# not a rejection, but validation did not veto it).
+assert g['gateway_rejects_key']('http://127.0.0.1:1/v1', 'k') is False
+print('ok - probe base validation')
+
 # ensure(): code changed and idle -> zero-gap swap: new child spawned, old
 # group retired only after the new one accepts, token kept.
 killed=set()

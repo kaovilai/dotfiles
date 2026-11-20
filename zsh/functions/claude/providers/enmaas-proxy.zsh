@@ -20,6 +20,7 @@ import sys
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 
 
@@ -270,6 +271,25 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
         return None  # never follow: the key must not travel to another host
 
 
+def _safe_probe_base(base):
+    """Whether the probe may send the key to this base: https, or a loopback
+    host (local test stubs); never a URL that carries its own credentials.
+    The serving proxy sends the key to the same base for every request, so
+    this is defense in depth for the controller's own dial, not the only
+    gate — a base that fails it is treated like an unreachable gateway (not
+    a verdict, the launch proceeds on the proxy's own contract)."""
+    try:
+        parsed = urllib.parse.urlparse(base)
+    except ValueError:
+        return False
+    if parsed.username or parsed.password:
+        return False
+    host = (parsed.hostname or '').lower()
+    if host in ('localhost', '127.0.0.1', '::1'):
+        return True
+    return parsed.scheme == 'https'
+
+
 def _probe_status(opener, request, deadline):
     """Response status for one credential shape, cut off at the wall-clock
     deadline (a socket timeout bounds single operations, not a gateway that
@@ -308,6 +328,8 @@ def gateway_rejects_key(base, key):
     base = base.rstrip('/')
     if base.endswith('/v1'):
         base = base[:-len('/v1')]
+    if not _safe_probe_base(base):
+        return False  # not a base the key may be sent to: not a verdict
     endpoint = base + '/v1/models'
     opener = urllib.request.build_opener(_NoRedirect)
     shapes = ({'Authorization': 'Bearer ' + key},
