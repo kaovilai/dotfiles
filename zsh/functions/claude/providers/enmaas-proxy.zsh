@@ -488,7 +488,7 @@ def ensure(root, port, config, timeout, required):
                 config['model_list'][0]['litellm_params']['api_base'], key)
         return _key_probe['rejected']
 
-    def refuse_rejected_key():
+    def _refuse_rejected_key():
         if key_rejected():
             raise RuntimeError('the upstream gateway rejected the API key (HTTP 401); '
                                'refresh ENMAAS_API_KEY in the credentials file (default ~/secrets.zsh)')
@@ -509,7 +509,7 @@ def ensure(root, port, config, timeout, required):
             by design)."""
             if not (changed and (not busy(port) or forced)):
                 return False
-            refuse_rejected_key()
+            _refuse_rejected_key()
             return forced or not busy(port)
 
         if restart_now():
@@ -544,7 +544,7 @@ def ensure(root, port, config, timeout, required):
             if busy(port):
                 raise RuntimeError('an earlier EnMaaS proxy without its state files is serving requests; '
                                    'run claude-enmaas-restart once they finish')
-            refuse_rejected_key()
+            _refuse_rejected_key()
             if busy(port):
                 # a request started while the probe ran: same refusal as above
                 raise RuntimeError('an earlier EnMaaS proxy without its state files is serving requests; '
@@ -567,7 +567,7 @@ def ensure(root, port, config, timeout, required):
     # fails a cold start with the key error instead of launching one that can
     # only answer 401. (Memoized: the changed- and stray-branch checks above
     # may already have probed.)
-    refuse_rejected_key()
+    _refuse_rejected_key()
     token = swap[1]['token'] if swap else 'sk-enmaas-' + secrets.token_hex(32)
     config['general_settings']['master_key'] = token
     write_private(root / 'config.json', config)
