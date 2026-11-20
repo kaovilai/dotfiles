@@ -121,8 +121,8 @@ func inflightTable(path string) (requests, trustworthy bool) {
 	}
 	var doc struct {
 		Requests map[string]json.RawMessage `json:"requests"`
-		Updated  float64                     `json:"updated"`
-		Beat     bool                        `json:"beat"`
+		Updated  float64                    `json:"updated"`
+		Beat     bool                       `json:"beat"`
 	}
 	if json.Unmarshal(data, &doc) != nil {
 		return false, true
