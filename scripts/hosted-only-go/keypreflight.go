@@ -3,6 +3,7 @@ package main
 import (
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"strings"
@@ -97,6 +98,10 @@ func probeUpstreamKey(base, key string) int {
 		if err != nil {
 			return 0
 		}
+		// Drain (bounded) before Close so the pooled connection is reused by
+		// the second credential shape instead of being discarded.
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 64<<10))
+		_ = resp.Body.Close()
 		_ = resp.Body.Close()
 		if status = resp.StatusCode; status != http.StatusUnauthorized {
 			return status

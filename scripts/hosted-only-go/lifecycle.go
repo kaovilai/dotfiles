@@ -117,7 +117,10 @@ func usageInflightDir() string {
 func inflightTable(path string) (requests, trustworthy bool) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return false, true // unreadable: the old behavior (a live reporter)
+		// Unreadable (a permission or cleanup race): the table is not
+		// evidence of idle — socket inspection decides, like the EnMaaS
+		// controller's inflight_busy does for an unreadable table.
+		return false, false
 	}
 	var doc struct {
 		Requests map[string]json.RawMessage `json:"requests"`
@@ -125,7 +128,7 @@ func inflightTable(path string) (requests, trustworthy bool) {
 		Beat     bool                       `json:"beat"`
 	}
 	if json.Unmarshal(data, &doc) != nil {
-		return false, true
+		return false, false
 	}
 	if len(doc.Requests) > 0 {
 		return true, true

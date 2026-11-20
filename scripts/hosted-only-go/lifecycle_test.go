@@ -101,6 +101,11 @@ func TestInflightTableTrust(t *testing.T) {
 	if requests, trustworthy := inflightTable(path); !requests || !trustworthy {
 		t.Fatalf("a request must read busy: %v %v", requests, trustworthy)
 	}
+	// unreadable (a directory stands in for a permission/cleanup race): not
+	// evidence of idle — socket inspection decides
+	if requests, trustworthy := inflightTable(dir); requests || trustworthy {
+		t.Fatalf("an unreadable table must not be trusted idle: %v %v", requests, trustworthy)
+	}
 }
 
 func TestPortServingInflight(t *testing.T) {

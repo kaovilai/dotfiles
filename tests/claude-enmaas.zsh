@@ -474,6 +474,9 @@ with patch.dict(os.environ, env):
     # a heartbeating proxy whose beat went stale cannot publish: unknown, not idle
     table.write_text(json.dumps({'pid':me,'beat':True,'updated':time.time()-600,'requests':{}}))
     assert g['inflight_busy'](4166) is None
+    # an unparseable stamp cannot prove fresh either
+    table.write_text(json.dumps({'pid':me,'beat':True,'updated':{'x':1},'requests':{}}))
+    assert g['inflight_busy'](4166) is None
     table.write_text(json.dumps({'pid':me,'beat':True,'updated':time.time(),'requests':{}}))
     assert g['inflight_busy'](4166) is False
     # an old-style table (no beat) is trusted however old its stamp is

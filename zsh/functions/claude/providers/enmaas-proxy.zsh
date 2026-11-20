@@ -154,14 +154,19 @@ def inflight_busy(port):
             continue
         if requests:
             return True
-        if doc.get('beat') and time.time() - float(doc.get('updated') or 0) > 120:
-            # A heartbeating proxy (the Go usage log republishes its table
-            # every 30 s even when idle) whose beat went stale can no longer
-            # publish — a read-only usage dir leaves this empty table in
-            # place, and it must not read as idle during an active request.
-            # Unknown, like an unreadable table.
-            unreadable = True
-            continue
+        if doc.get('beat'):
+            try:
+                stale = time.time() - float(doc.get('updated') or 0) > 120
+            except (TypeError, ValueError):
+                stale = True  # an unparseable stamp cannot prove fresh
+            if stale:
+                # A heartbeating proxy (the Go usage log republishes its table
+                # every 30 s even when idle) whose beat went stale can no longer
+                # publish — a read-only usage dir leaves this empty table in
+                # place, and it must not read as idle during an active request.
+                # Unknown, like an unreadable table.
+                unreadable = True
+                continue
     if reporter and not unreadable:
         return False
     return None
@@ -543,7 +548,9 @@ def ensure(root, port, config, timeout, required):
     def _refuse_rejected_key():
         if key_rejected():
             raise RuntimeError('the upstream gateway rejected the API key (HTTP 401); '
-                               'refresh ENMAAS_API_KEY in the credentials file (default ~/secrets.zsh)')
+                               'refresh ENMAAS_API_KEY (or the exported '
+                               'HOSTED_ONLY_UPSTREAM_KEY, which overrides it) in the '
+                               'credentials file (default ~/secrets.zsh)')
 
     if owned(info):
         if not ready(info, info_root):
