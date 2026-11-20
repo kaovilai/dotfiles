@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 )
 
@@ -81,6 +82,34 @@ func TestUsageLogKeepsEventsFileOpenAcrossMonths(t *testing.T) {
 		if got := len(splitLines(body)); got != want {
 			t.Fatalf("%s: %d events, want %d", name, got, want)
 		}
+	}
+}
+
+// A deleted/recreated usage dir must not keep feeding the unlinked inode: the
+// open handle is re-stat'ed per write and reopened when the path no longer
+// resolves to it, so events keep landing in the live file.
+func TestUsageLogReopensWhenEventsFileIsReplaced(t *testing.T) {
+	dir := t.TempDir()
+	u := newUsageLog(dir, "45995")
+	event := func(id, ts string) map[string]any {
+		return map[string]any{"ts": ts, "ok": true, "id": id}
+	}
+	u.write(event("e1", "2026-11-20T10:00:00.000Z"))
+	if err := os.RemoveAll(dir); err != nil {
+		t.Fatal(err)
+	}
+	u.write(event("e2", "2026-11-20T11:00:00.000Z"))
+	body, err := os.ReadFile(filepath.Join(dir, "events-2026-11.jsonl"))
+	if err != nil || !strings.Contains(string(body), `"e2"`) {
+		t.Fatalf("the write after the dir was wiped must land in the new file: %v %q", err, body)
+	}
+	if err := os.Remove(filepath.Join(dir, "events-2026-11.jsonl")); err != nil {
+		t.Fatal(err)
+	}
+	u.write(event("e3", "2026-11-20T12:00:00.000Z"))
+	body, err = os.ReadFile(filepath.Join(dir, "events-2026-11.jsonl"))
+	if err != nil || !strings.Contains(string(body), `"e3"`) {
+		t.Fatalf("the write after the file was replaced must land in the new file: %v %q", err, body)
 	}
 }
 

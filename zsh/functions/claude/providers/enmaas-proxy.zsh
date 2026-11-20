@@ -137,7 +137,7 @@ def inflight_busy(port):
             with open(directory / name) as stream:
                 doc = json.load(stream)
         except (OSError, ValueError):
-            return True  # a live reporter that cannot be read: stay safe
+            continue  # unreadable table: skip it like the Go portServing does
         if doc.get('requests'):
             return True
     return False if reporter else None
@@ -264,14 +264,25 @@ def gateway_rejects_key(base, key):
     covers the hosted-only flavors; this gives the :4146 swap the guard the
     2026-11-16 incident showed it was missing (a rejected key replaced a
     working proxy there)."""
-    endpoint = base.rstrip('/') + '/v1/models'
+    # The chat rows of the generated config carry "<root>/v1" as api_base
+    # (model_list[0] is the "*" chat entry) while anthropic rows carry the
+    # bare root: strip a trailing /v1 like the Go loadConfig does, so the
+    # probe always lands on <root>/v1/models and not <root>/v1/v1/models.
+    base = base.rstrip('/')
+    if base.endswith('/v1'):
+        base = base[:-len('/v1')]
+    endpoint = base + '/v1/models'
     opener = urllib.request.build_opener(_NoRedirect)
     shapes = ({'Authorization': 'Bearer ' + key},
               {'x-api-key': key, 'anthropic-version': '2023-06-01'})
+    # One budget across both shapes (Go: keyProbeTotalBudget): a blackholed
+    # gateway must not hold a swap for one timeout per shape.
+    deadline = time.monotonic() + 20
     for headers in shapes:
         request = urllib.request.Request(endpoint, headers=headers)
+        timeout = max(1.0, deadline - time.monotonic())
         try:
-            with opener.open(request, timeout=20) as response:
+            with opener.open(request, timeout=timeout) as response:
                 status = response.status
         except urllib.error.HTTPError as error:
             status = error.code

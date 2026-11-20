@@ -159,6 +159,14 @@ with tempfile.TemporaryDirectory(prefix='enmaas-go-swap-', dir=os.environ.get('T
                 pass
 
             def do_GET(self):
+                # 401 only on the real probe path, 404 elsewhere: a probe that
+                # lands on a wrong URL (e.g. <root>/v1/v1/models) must NOT be
+                # able to read as a key rejection.
+                if self.path != '/v1/models':
+                    self.send_response(404)
+                    self.send_header('Content-Length', '0')
+                    self.end_headers()
+                    return
                 self.send_response(401)
                 self.send_header('Content-Length', '0')
                 self.end_headers()
@@ -167,7 +175,9 @@ with tempfile.TemporaryDirectory(prefix='enmaas-go-swap-', dir=os.environ.get('T
         threading.Thread(target=rejector.serve_forever, daemon=True).start()
         rejected_config = json.loads(json.dumps(config))
         for row in rejected_config['model_list']:
-            row['litellm_params']['api_base'] = 'http://127.0.0.1:%d' % rejector.server_address[1]
+            # Production chat rows carry "<root>/v1" as api_base; the probe must
+            # strip that suffix to hit <root>/v1/models.
+            row['litellm_params']['api_base'] = 'http://127.0.0.1:%d/v1' % rejector.server_address[1]
 
         def controller_config(op, at_port, cfg):
             args = [str(at_port), '90', 'offline-model'] if op == 'ensure' else [str(at_port)]

@@ -193,8 +193,10 @@ gateway name over DoH itself.
   OpenAI cached tokens normalized (`in` excludes `cache_read`). The empty
   in-flight table is written at startup (a live proxy is always a live
   reporter for idle detection), steady-state rewrites happen only on
-  empty<->non-empty transitions (plus a 1 min debounce), and the month's
-  events file stays open across writes.
+  empty<->non-empty transitions (plus a 5 s debounce), and the month's
+  events file stays open across writes (re-stat'ed per write, so a
+  deleted/recreated usage dir reopens instead of appending into a lost
+  inode).
 - **Performance:** one keep-alive/HTTP/2 transport per process (idle pool
   widened to 64 conns/host: the Go default of 2 made parallel sessions
   re-dial the gateway per request); a request whose

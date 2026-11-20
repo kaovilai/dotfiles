@@ -32,9 +32,13 @@ type usageLog struct {
 	lastFlush time.Time
 
 	// The events file stays open across writes: one open+append+close per
-	// request was three syscalls and a path lookup on the hot path.
+	// request was three syscalls and a path lookup on the hot path. eventsStat
+	// is the FileInfo it was opened with: a deleted/recreated usage dir would
+	// otherwise keep feeding an unlinked inode (events silently lost), so each
+	// write re-stats the path and reopens when the file is gone or replaced.
 	eventsPath string
 	eventsFile *os.File
+	eventsStat os.FileInfo
 }
 
 type inflightEntry struct {
@@ -123,9 +127,11 @@ func (u *usageLog) flush() {
 }
 
 // inflightFlushAfter is the steady-state debounce: transitions flush at once,
-// anything else at most this often (keeps the stale-entry pruning and the
-// `updated` stamp roughly current without a rewrite per request).
-const inflightFlushAfter = time.Minute
+// anything else at most this often. 5s keeps the table current enough for the
+// llm-usage in-flight views while capping the whole-map rewrite under
+// sustained concurrency (the old cost was a rewrite per request start AND
+// end).
+const inflightFlushAfter = 5 * time.Second
 
 func (u *usageLog) start(id, model, requested string) {
 	if id == "" {
@@ -190,18 +196,29 @@ func (u *usageLog) write(event map[string]any) {
 	path := filepath.Join(u.dir, fmt.Sprintf("events-%04d-%02d.jsonl", year, month))
 	// The month file stays open across writes (one open per process per
 	// month, not one per request); a failed open is retried on the next
-	// event by remembering only the path that is actually open.
-	if u.eventsFile == nil || u.eventsPath != path {
-		_ = os.MkdirAll(u.dir, 0o700)
+	// event by remembering only the path that is actually open, and a path
+	// that no longer resolves to the opened inode (deleted/recreated usage
+	// dir) reopens instead of appending into a lost file.
+	reopen := u.eventsFile == nil || u.eventsPath != path
+	if !reopen {
+		if st, err := os.Stat(path); err != nil || u.eventsStat == nil || !os.SameFile(st, u.eventsStat) {
+			reopen = true
+		}
+	}
+	if reopen {
 		if u.eventsFile != nil {
 			_ = u.eventsFile.Close()
-			u.eventsFile = nil
+			u.eventsFile, u.eventsStat = nil, nil
 		}
+		_ = os.MkdirAll(u.dir, 0o700)
 		file, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0o600)
 		if err != nil {
 			return
 		}
 		u.eventsFile, u.eventsPath = file, path
+		if st, err := file.Stat(); err == nil {
+			u.eventsStat = st
+		}
 	}
 	_, _ = u.eventsFile.Write(append(body, '\n'))
 }
