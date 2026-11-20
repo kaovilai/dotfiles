@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"net"
 	"net/http"
 	"strings"
@@ -94,7 +93,7 @@ func probeUpstreamKey(base, key string) int {
 	defer client.CloseIdleConnections()
 	ctx, cancel := context.WithTimeout(context.Background(), keyProbeTotalBudget)
 	defer cancel()
-	for i, shape := range shapes {
+	for _, shape := range shapes {
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 		if err != nil {
 			return 0
@@ -104,20 +103,14 @@ func probeUpstreamKey(base, key string) int {
 		if err != nil {
 			return 0
 		}
+		// Close without draining: a stalled 401 body could otherwise consume
+		// the shared deadline and fail the second shape's request open (the
+		// guard would pass a genuinely rejected key). The discarded
+		// connection costs the second shape one handshake — nothing more.
+		_ = resp.Body.Close()
 		if status = resp.StatusCode; status != http.StatusUnauthorized {
-			// Terminal: no later probe request can reuse the connection, so
-			// skip the drain and let Close drop it.
-			_ = resp.Body.Close()
 			return status
 		}
-		if i < len(shapes)-1 {
-			// 401 and another shape follows: drain (bounded) before Close so
-			// the pooled connection is reused instead of being discarded. The
-			// FINAL 401 needs no drain either — the rejection is already
-			// known, and a stalled body would only delay reporting it.
-			_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 64<<10))
-		}
-		_ = resp.Body.Close()
 	}
 	return status
 }
