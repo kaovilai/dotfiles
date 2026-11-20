@@ -1,6 +1,9 @@
 package main
 
 import (
+	"bytes"
+	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -9,7 +12,39 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
+
+// A request whose body has not even arrived yet must already count as in
+// flight: idle detection keys on the usage table, and the registration must
+// precede the (possibly slow, possibly large) body read or an automatic swap
+// could retire this process mid-read.
+func TestUsageRegistersBeforeBodyReadCompletes(t *testing.T) {
+	h := newProxyHarness(t, http.StatusOK, `{}`, nil)
+	pr, pw := io.Pipe()
+	req, err := http.NewRequest(http.MethodPost, "/v1/messages", pr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("x-api-key", "hosted-only-local")
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		h.app.ServeHTTP(httptest.NewRecorder(), req)
+	}()
+	path := filepath.Join(os.Getenv("LLM_USAGE_DIR"), fmt.Sprintf("inflight-0-%d.json", os.Getpid()))
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if body, err := os.ReadFile(path); err == nil &&
+			bytes.Contains(body, []byte(`"requests":{`)) && !bytes.Contains(body, []byte(`"requests":{}`)) {
+			_ = pw.CloseWithError(errors.New("aborted by test"))
+			<-done
+			return // registered while the body was still unread
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("a request whose body has not arrived must already count as in flight")
+}
 
 // proxyHarness runs the real handler against a stub gateway that answers every
 // upstream call with the given status and body, counting calls per model.
@@ -70,6 +105,25 @@ func (h *proxyHarness) count(model string) int {
 // LIMIT_REWRITE=0 used to silence the outage rewrite too, leaving 502/504/529
 // answers unwritten for T3 (it only resumes a thread from a reset-bearing
 // answer). Either knob must be enough on its own.
+// The serving transport must widen the idle pool: the Go default of 2 idle
+// connections per host re-dials the gateway (full TCP+TLS handshake) for every
+// request past the second under parallel sessions — latency on the hot path
+// and a connection storm at the gateway's front door.
+func TestServingTransportPoolsIdleConnections(t *testing.T) {
+	t.Setenv("ENMAAS_API_KEY", "k")
+	t.Setenv("LLM_USAGE_DIR", t.TempDir())
+	transport, ok := newApp(loadConfig("claude", "4148", "")).client.Transport.(*http.Transport)
+	if !ok {
+		t.Fatal("the client must use the tuned http.Transport")
+	}
+	if transport.MaxIdleConnsPerHost < 32 || transport.MaxIdleConns < 2*transport.MaxIdleConnsPerHost {
+		t.Fatalf("idle pool too small: per-host %d total %d", transport.MaxIdleConnsPerHost, transport.MaxIdleConns)
+	}
+	if !transport.ForceAttemptHTTP2 {
+		t.Fatal("HTTP/2 must stay enabled")
+	}
+}
+
 func TestOutageRewriteSurvivesLimitRewriteOff(t *testing.T) {
 	h := newProxyHarness(t, 529, `{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}`, func(c *config) {
 		c.LimitRewrite = false

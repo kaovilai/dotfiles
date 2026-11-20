@@ -44,6 +44,12 @@ def wait_for(check, description, timeout=15):
 with tempfile.TemporaryDirectory(prefix='enmaas-lifecycle-') as tmp:
     env['CLAUDE_ENMAAS_RUNTIME_DIR'] = str(Path(tmp) / 'state')
     os.environ['CLAUDE_ENMAAS_RUNTIME_DIR'] = env['CLAUDE_ENMAAS_RUNTIME_DIR']
+    # Keep the child's usage tables (and the busy() reads below) inside the
+    # fixture: LLM_USAGE_DIR is honored by both the Go child and the
+    # controller's in-flight check. It must reach the test process's own
+    # environment too — helper['busy'] resolves it from os.environ.
+    env['LLM_USAGE_DIR'] = str(Path(tmp) / 'usage')
+    os.environ['LLM_USAGE_DIR'] = env['LLM_USAGE_DIR']
     program = Path(tmp) / 'proxy.py'
     emitted = subprocess.run(['zsh', '-f', '-c',
         'source "$ENMAAS_TEST_REPO/zsh/functions/claude/providers/enmaas-proxy.zsh"; _claude_enmaas_proxy_program'],
@@ -101,17 +107,34 @@ with tempfile.TemporaryDirectory(prefix='enmaas-lifecycle-') as tmp:
         assert json.loads((root / 'proxy.json').read_text())['pid'] == original_pid
         assert (root / 'config.json').read_bytes() == original_config
         changed['model_list'][-1]['litellm_params']['model'] = 'openai/responses/new-chat'
-        # While a client connection is open the proxy counts as serving: a key
-        # change reuses it with a notice, a route it cannot serve is refused.
+        # Serving = a request actually in flight, reported by the Go child's
+        # usage table — not an open client socket: idle keep-alive connections
+        # must not hold restarts back (the Go lifecycle reads the same tables).
+        usage_dir = Path(env['LLM_USAGE_DIR'])
+        child_inflight = usage_dir / ('inflight-%s-%s.json' % (port, info['pid']))
+        wait_for(child_inflight.exists, 'the Go child did not write its (empty) in-flight table at startup')
+        assert not helper['busy'](port), 'a live reporter with an empty table must read idle'
         with socket.create_connection(('127.0.0.1', port), timeout=2):
-            wait_for(lambda: helper['busy'](port), 'open client connection not seen as busy')
-            rejected = controller('ensure', port, changed, ('new-chat',))
-            assert rejected.returncode != 0 and 'routing changed' in rejected.stderr, rejected.stderr
-            reused = controller('ensure', port, key='different-key')
-            assert reused.returncode == 0 and 'serving requests' in reused.stderr, reused.stderr
-            assert json.loads((root / 'proxy.json').read_text())['pid'] == original_pid
+            assert not helper['busy'](port), 'an idle client connection is not a request in flight'
+        # Fake the busy state as a SECOND live reporter owned by this test
+        # process's pid instead of overwriting the child's table: the child's
+        # 30 s idle heartbeat republishes its own file, which would race the
+        # restore below. busy() merges live reporters — any non-empty table
+        # reads busy — and the heartbeat never touches this file.
+        fake_reporter = usage_dir / ('inflight-%s-%d.json' % (port, os.getpid()))
+        helper['write_private'](fake_reporter, {'pid': os.getpid(), 'port': port,
+            'updated': time.time(), 'requests': {'r1': {'t': time.time(),
+            'model': 'offline-model', 'requested': 'offline-model'}}})
+        wait_for(lambda: helper['busy'](port), 'a live reporter with a request must read busy')
+        rejected = controller('ensure', port, changed, ('new-chat',))
+        assert rejected.returncode != 0 and 'routing changed' in rejected.stderr, rejected.stderr
+        reused = controller('ensure', port, key='different-key')
+        assert reused.returncode == 0 and 'serving requests' in reused.stderr, reused.stderr
+        assert json.loads((root / 'proxy.json').read_text())['pid'] == original_pid
+        fake_reporter.unlink(missing_ok=True)
+        wait_for(lambda: not helper['busy'](port), 'removing the fake reporter still read busy')
         assert helper['ready'](info, root), 'config mismatch stopped a busy service'
-        print('PASS: busy proxy is reused on key change; incompatible routing requires explicit restart')
+        print('PASS: busy (in-flight) proxy is reused on key change; incompatible routing requires explicit restart')
 
         # Idle: the same key change swaps the proxy (zero-gap; the Go swap
         # keeps the token so a client holding it stays valid on either listener).

@@ -1,9 +1,12 @@
 package main
 
 import (
+	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -67,6 +70,94 @@ func fakeInflight(t *testing.T, dir, port string, pid int, requests string) {
 	path := filepath.Join(dir, "inflight-"+port+"-"+strconv.Itoa(pid)+".json")
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestInflightTableTrust(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "inflight-45998-1.json")
+	write := func(body string) {
+		t.Helper()
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// old-style table (no beat), ancient stamp: trusted empty
+	write(`{"pid":1,"port":"45998","updated":1,"requests":{}}`)
+	if requests, trustworthy := inflightTable(path); requests || !trustworthy {
+		t.Fatalf("old-style empty table must be trusted idle: %v %v", requests, trustworthy)
+	}
+	// heartbeating proxy, fresh stamp: trusted empty
+	fresh := float64(time.Now().UnixNano()) / 1e9
+	write(fmt.Sprintf(`{"pid":1,"port":"45998","updated":%f,"beat":true,"requests":{}}`, fresh))
+	if requests, trustworthy := inflightTable(path); requests || !trustworthy {
+		t.Fatalf("a fresh beat must be trusted idle: %v %v", requests, trustworthy)
+	}
+	// heartbeating proxy, stale stamp: the empty table says nothing
+	write(`{"pid":1,"port":"45998","updated":1,"beat":true,"requests":{}}`)
+	if requests, trustworthy := inflightTable(path); requests || trustworthy {
+		t.Fatalf("a stale beat must not be evidence of idle: %v %v", requests, trustworthy)
+	}
+	// requests in flight beat everything
+	write(`{"pid":1,"port":"45998","updated":1,"beat":true,"requests":{"r1":{}}}`)
+	if requests, trustworthy := inflightTable(path); !requests || !trustworthy {
+		t.Fatalf("a request must read busy: %v %v", requests, trustworthy)
+	}
+	// unreadable (a directory stands in for a permission/cleanup race): not
+	// evidence of idle — socket inspection decides
+	if requests, trustworthy := inflightTable(dir); requests || trustworthy {
+		t.Fatalf("an unreadable table must not be trusted idle: %v %v", requests, trustworthy)
+	}
+	// a missing or null table (a foreign writer): unknown, not idle
+	for _, body := range []string{`{"pid":1,"updated":1}`, `{"pid":1,"updated":1,"requests":null}`} {
+		write(body)
+		if requests, trustworthy := inflightTable(path); requests || trustworthy {
+			t.Fatalf("a missing/null table must not be trusted idle: %v %v", requests, trustworthy)
+		}
+	}
+}
+
+// One untrustworthy live reporter makes the whole verdict unknown — another
+// reporter's empty table must not outrank it (parity with the Python
+// inflight_busy): the socket fallback decides, and an ESTABLISHED connection
+// is exactly what it must then see.
+func TestPortServingUnknownReporterFallsBackToSockets(t *testing.T) {
+	if _, err := exec.LookPath("lsof"); err != nil {
+		if _, err := exec.LookPath("ss"); err != nil {
+			t.Skip("neither lsof nor ss: the socket fallback is not observable")
+		}
+	}
+	dir := t.TempDir()
+	t.Setenv("LLM_USAGE_DIR", dir)
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	port := strconv.Itoa(listener.Addr().(*net.TCPAddr).Port)
+	client, err := net.Dial("tcp", listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	server, err := listener.Accept()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer server.Close()
+
+	fakeInflight(t, dir, port, os.Getpid(), `{}`)
+	if portServing(port) {
+		t.Fatal("a trustworthy empty table must read idle even with a client connected")
+	}
+	// a second live reporter whose table cannot be read (a directory with the
+	// reporter's name): the verdict becomes unknown, so the ESTABLISHED
+	// connection decides
+	if err := os.Mkdir(filepath.Join(dir, fmt.Sprintf("inflight-%s-%d.json", port, os.Getppid())), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if !portServing(port) {
+		t.Fatal("an untrustworthy live reporter must fall back to socket counting")
 	}
 }
 

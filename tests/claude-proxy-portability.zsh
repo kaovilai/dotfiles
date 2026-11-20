@@ -72,4 +72,38 @@ d=$(bindir none)
 if out=$(path=("$d"); _claude_listen_pids 4141 2>&1); then fail "no port tool returned success"; fi
 [[ "$out" == *"neither lsof nor ss"* ]] || fail "missing-tool message absent: '$out'"
 
+# _claude_port_serving's table trust matches the Go inflightTable and the
+# EnMaaS controller's inflight_busy: busy / trusted-idle / unknown (socket
+# fallback). The reporter is this test's own live pid; SS_ESTAB gives the
+# socket fallback something to see.
+if (( $+commands[jq] )); then
+    d=$(bindir ss-jq ss jq)
+    ln -sf "$tmp/stubs/ss" "$d/ss"
+    u="$tmp/usage"; mkdir -p "$u"; me=$$
+    cps() { (path=("$d") LLM_USAGE_DIR="$u" SS_ESTAB="$1" _claude_port_serving 4141); }
+    w() { print -r -- "$2" > "$u/inflight-4141-$me.json"; }
+    w 1 '{"requests":{"r":{"t":1}}}'
+    cps 1 || fail "a request in flight must read busy"
+    cps 0 || fail "a request in flight must read busy (no socket)"
+    w 1 '{"requests":{}}'
+    cps 1 && fail "a trusted (no-beat) empty table must read idle despite a socket"
+    w 1 "{\"beat\":true,\"updated\":$(date +%s),\"requests\":{}}"
+    cps 1 && fail "a fresh beat's empty table must read idle despite a socket"
+    w 1 '{"beat":true,"updated":1,"requests":{}}'
+    cps 1 || fail "a stale beat must fall back to the socket test (busy)"
+    w 1 '{"pid":1}'
+    cps 1 || fail "a missing requests map must fall back to the socket test (busy)"
+    w 1 '{"requests":null}'
+    cps 1 || fail "a null requests map must fall back to the socket test (busy)"
+    w 1 '{"requests":[]}'
+    cps 1 || fail "a non-map requests value must fall back to the socket test (busy)"
+    w 1 '{"requests":false}'
+    cps 1 || fail "a false requests value must fall back to the socket test (busy)"
+    w 1 '{not json'
+    cps 1 || fail "an unreadable table must fall back to the socket test (busy)"
+    rm -f "$u"/inflight-4141-*.json
+else
+    print -ru2 -- "skip: jq not installed"
+fi
+
 print -r -- "ok claude-proxy-portability"

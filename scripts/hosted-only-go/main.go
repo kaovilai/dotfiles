@@ -93,8 +93,20 @@ func runServe() {
 
 	startCacheSweeper(cfg)
 	server := &http.Server{
-		Handler:           newApp(cfg),
+		Handler: newApp(cfg),
+		// ReadHeaderTimeout bounds the headers; ReadTimeout bounds the body
+		// read (a client that sends headers and stalls its upload would
+		// otherwise hold the handler — and its in-flight table entry, which
+		// idle detection keys on — busy for as long as the stall lasts).
+		// Generous: the cap is 256 MiB over loopback. Streaming RESPONSES are
+		// writes and unaffected.
 		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       10 * time.Minute,
+		// Idle client keep-alives are closed after this instead of being held
+		// forever: socket-counting idle checks (the EnMaaS controller's busy)
+		// then see the truth, and file descriptors do not accumulate across
+		// long-lived client pools. Active requests and streams are unaffected.
+		IdleTimeout: 75 * time.Second,
 	}
 	listener, err := reusePortListener("127.0.0.1:" + cfg.Port)
 	if err != nil {

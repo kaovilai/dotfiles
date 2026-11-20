@@ -13,9 +13,14 @@ import (
 )
 
 const (
-	inflightStaleSeconds = 900
-	classifierMarker     = "security monitor for autonomous AI coding agents"
+	classifierMarker = "security monitor for autonomous AI coding agents"
 )
+
+// inflightHeartbeatEvery is the idle heartbeat interval (see newUsageLog).
+// Readers treat a `beat` table whose `updated` stamp is older than a few
+// intervals as unknown — the proxy cannot publish, so its empty table is
+// not evidence of idle.
+const inflightHeartbeatEvery = 30 * time.Second
 
 // usageLog writes the same events-YYYY-MM.jsonl lines litellm_usage_log.py
 // writes, so `llm-usage` and the menubar keep working on the Go path.
@@ -24,6 +29,28 @@ type usageLog struct {
 	port     string
 	mu       sync.Mutex
 	inflight map[string]inflightEntry
+
+	// lastFlush bounds how often the (whole-map) inflight rewrite runs: only
+	// empty<->non-empty transitions must be timely — portServing and the
+	// EnMaaS controller's busy() key on non-emptiness — while steady
+	// concurrency would otherwise rewrite the file twice per request.
+	// flushTimer is the trailing flush: a suppressed update (still busy, no
+	// transition) schedules one write after the debounce so the table does
+	// not hold a stale entry set for the rest of a long request — and a
+	// FAILED write (flushDirty) is retried through it, so a stale table
+	// never outlives the request state it describes.
+	lastFlush  time.Time
+	flushTimer *time.Timer
+	flushDirty bool
+
+	// The events file stays open across writes: one open+append+close per
+	// request was three syscalls and a path lookup on the hot path. eventsStat
+	// is the FileInfo it was opened with: a deleted/recreated usage dir would
+	// otherwise keep feeding an unlinked inode (events silently lost), so each
+	// write re-stats the path and reopens when the file is gone or replaced.
+	eventsPath string
+	eventsFile *os.File
+	eventsStat os.FileInfo
 }
 
 type inflightEntry struct {
@@ -35,6 +62,27 @@ type inflightEntry struct {
 func newUsageLog(dir, port string) *usageLog {
 	u := &usageLog{dir: dir, port: port, inflight: map[string]inflightEntry{}}
 	u.cleanupInflight()
+	// Write the (empty) inflight table immediately: a live proxy is then
+	// always a live reporter, so idle detection (portServing, the EnMaaS
+	// controller's busy) reads the table instead of falling back to socket
+	// counting — where a client's pooled keep-alive connections would read
+	// busy forever and defer every restart. An empty dir means usage logging
+	// is not configured (handmade test configs): write nothing.
+	if dir != "" {
+		u.flush()
+		// Idle heartbeat: a quiet proxy still refreshes its table's
+		// `updated` stamp (with the `beat` marker), so a reader can tell a
+		// healthy empty table from one the proxy can no longer publish —
+		// a read-only usage dir leaves the last table in place, and an
+		// empty one would read idle during an active request.
+		go func() {
+			for range time.Tick(inflightHeartbeatEvery) {
+				u.mu.Lock()
+				u.flush()
+				u.mu.Unlock()
+			}
+		}()
+	}
 	return u
 }
 
@@ -75,30 +123,91 @@ func pidAlive(pid int) bool {
 	return err == syscall.EPERM
 }
 
-// flush must be called with u.mu held.
-func (u *usageLog) flush() {
-	now := float64(time.Now().UnixNano()) / 1e9
-	for id, entry := range u.inflight {
-		if now-entry.T > inflightStaleSeconds {
-			delete(u.inflight, id)
-		}
+// fileUnlinked reports whether the FileInfo describes an open-but-deleted
+// file (Nlink 0 on Linux and macOS; unknown elsewhere — no detection).
+func fileUnlinked(fi os.FileInfo) bool {
+	if st, ok := fi.Sys().(*syscall.Stat_t); ok {
+		return st.Nlink == 0
 	}
+	return false
+}
+
+// flush must be called with u.mu held. It never prunes: an entry leaves the
+// table only when its request ends (idle detection keys on non-emptiness, so
+// dropping a still-streaming request would mark a busy proxy idle and make
+// it restart-eligible mid-request). A crashed proxy's leftovers are handled
+// by pid liveness at the readers and cleanupInflight at the next start —
+// not by age. A failed write keeps the previous table published, so it
+// stays dirty and the trailing timer retries: a stale table must not
+// outlive the request state it describes.
+func (u *usageLog) flush() {
+	u.lastFlush = time.Now()
+	if u.flushTimer != nil {
+		u.flushTimer.Stop()
+		u.flushTimer = nil
+	}
+	now := float64(u.lastFlush.UnixNano()) / 1e9
 	payload := map[string]any{
 		"pid":      os.Getpid(),
 		"port":     u.port,
 		"updated":  now,
+		"beat":     true,
 		"requests": u.inflight,
 	}
 	body, err := json.Marshal(payload)
 	if err != nil {
+		u.flushFailed()
 		return
 	}
-	_ = os.MkdirAll(u.dir, 0o700)
+	if err := os.MkdirAll(u.dir, 0o700); err != nil {
+		u.flushFailed()
+		return
+	}
 	tmp := u.inflightPath() + ".tmp"
 	if err := os.WriteFile(tmp, body, 0o600); err != nil {
+		u.flushFailed()
 		return
 	}
-	_ = os.Rename(tmp, u.inflightPath())
+	if err := os.Rename(tmp, u.inflightPath()); err != nil {
+		u.flushFailed()
+		return
+	}
+	u.flushDirty = false
+}
+
+// flushFailed must be called with u.mu held: the previously published table
+// no longer describes this map, so drop it — readers then fall back to
+// socket counting instead of trusting a stale table — and retry through the
+// trailing timer for as long as the failure lasts.
+func (u *usageLog) flushFailed() {
+	u.flushDirty = true
+	_ = os.Remove(u.inflightPath())
+	u.scheduleTrailingFlush()
+}
+
+// inflightFlushAfter is the steady-state debounce: transitions flush at once,
+// anything else at most this often. 5s keeps the table current enough for the
+// llm-usage in-flight views while capping the whole-map rewrite under
+// sustained concurrency (the old cost was a rewrite per request start AND
+// end).
+const inflightFlushAfter = 5 * time.Second
+
+// scheduleTrailingFlush must be called with u.mu held: a suppressed update
+// still owes the file one write after the debounce window, or a long request
+// keeps a stale entry set (an ended request listed, a running one missing)
+// until its own end flushes. It also carries the retry of a failed write.
+func (u *usageLog) scheduleTrailingFlush() {
+	if u.flushTimer != nil {
+		return
+	}
+	u.flushTimer = time.AfterFunc(inflightFlushAfter, func() {
+		u.mu.Lock()
+		defer u.mu.Unlock()
+		u.flushTimer = nil
+		if len(u.inflight) > 0 || u.flushDirty {
+			u.flush()
+		}
+	})
 }
 
 func (u *usageLog) start(id, model, requested string) {
@@ -107,12 +216,17 @@ func (u *usageLog) start(id, model, requested string) {
 	}
 	u.mu.Lock()
 	defer u.mu.Unlock()
+	empty := len(u.inflight) == 0
 	u.inflight[id] = inflightEntry{
 		T:         float64(time.Now().UnixNano()) / 1e9,
 		Model:     model,
 		Requested: requested,
 	}
-	u.flush()
+	if empty || time.Since(u.lastFlush) > inflightFlushAfter {
+		u.flush()
+	} else {
+		u.scheduleTrailingFlush()
+	}
 }
 
 func (u *usageLog) end(id string) {
@@ -123,7 +237,11 @@ func (u *usageLog) end(id string) {
 	defer u.mu.Unlock()
 	if _, ok := u.inflight[id]; ok {
 		delete(u.inflight, id)
-		u.flush()
+		if len(u.inflight) == 0 || time.Since(u.lastFlush) > inflightFlushAfter {
+			u.flush()
+		} else {
+			u.scheduleTrailingFlush()
+		}
 	}
 }
 
@@ -150,7 +268,6 @@ func (u *usageLog) write(event map[string]any) {
 	}
 	u.mu.Lock()
 	defer u.mu.Unlock()
-	_ = os.MkdirAll(u.dir, 0o700)
 	// Rebuild the month from the parsed numbers after the shape check: the
 	// filename never carries a string taken from the event map, so the
 	// analyzer sees ints, not tainted text (the map holds request-derived
@@ -158,12 +275,46 @@ func (u *usageLog) write(event map[string]any) {
 	year, _ := strconv.Atoi(ts[:4])
 	month, _ := strconv.Atoi(ts[5:7])
 	path := filepath.Join(u.dir, fmt.Sprintf("events-%04d-%02d.jsonl", year, month))
-	file, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0o600)
-	if err != nil {
-		return
+	// The month file stays open across writes (one open per process per
+	// month, not one per request); a failed open is retried on the next
+	// event by remembering only the path that is actually open, and a path
+	// that no longer resolves to the opened inode (deleted/recreated usage
+	// dir) reopens instead of appending into a lost file.
+	reopen := u.eventsFile == nil || u.eventsPath != path
+	if !reopen {
+		if st, err := os.Stat(path); err != nil || u.eventsStat == nil || !os.SameFile(st, u.eventsStat) {
+			reopen = true
+		} else if st, err := u.eventsFile.Stat(); err == nil && fileUnlinked(st) {
+			// deleted and recreated with a REUSED inode (realistic: every
+			// local proxy appends to the same events-YYYY-MM.jsonl, so a
+			// sibling's write recreates the file between ours): the path
+			// resolves to a different file that SameFile cannot tell apart
+			// from the one this handle owns. Nlink == 0 on the open handle
+			// says this one is the unlinked one.
+			reopen = true
+		}
 	}
-	defer file.Close()
-	_, _ = file.Write(append(body, '\n'))
+	if reopen {
+		if u.eventsFile != nil {
+			_ = u.eventsFile.Close()
+			u.eventsFile, u.eventsStat = nil, nil
+		}
+		_ = os.MkdirAll(u.dir, 0o700)
+		file, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0o600)
+		if err != nil {
+			return
+		}
+		u.eventsFile, u.eventsPath = file, path
+		if st, err := file.Stat(); err == nil {
+			u.eventsStat = st
+		}
+	}
+	if _, err := u.eventsFile.Write(append(body, '\n')); err != nil {
+		// A failed write (ENOSPC/EIO) leaves the handle suspect: drop it so
+		// the next event re-opens instead of appending into a dead fd.
+		_ = u.eventsFile.Close()
+		u.eventsFile, u.eventsStat = nil, nil
+	}
 }
 
 // isoMonthPrefix reports whether s starts with YYYY-MM (digits and the one

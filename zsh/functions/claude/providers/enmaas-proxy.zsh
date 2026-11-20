@@ -17,8 +17,10 @@ import socket
 import stat
 import subprocess
 import sys
+import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 
 
@@ -92,12 +94,102 @@ def notice(message):
     print('claude-enmaas: ' + message, file=sys.stderr)
 
 
-def busy(port):
-    # Client connections the proxy is serving right now (ESTABLISHED sockets
-    # whose local end is the port). Restarting then would cut off a request.
+def _usage_dir():
+    return (os.environ.get('LLM_USAGE_DIR')
+            or Path(os.environ.get('XDG_STATE_HOME') or Path.home() / '.local' / 'state') / 'llm-usage')
+
+
+def pid_alive(pid):
+    try:
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        return False
+
+
+def inflight_busy(port):
+    """None when no live in-flight reporter owns the port (caller falls back
+    to socket counting) or when a live reporter's table cannot be read (the
+    truth is unknown, so the socket fallback decides); otherwise True/False
+    from the reporters' tables. The Go child writes
+    inflight-<port>-<pid>.json per request (and an empty table at startup),
+    so a live, readable reporter is the truth — client keep-alive pools hold
+    ESTABLISHED sockets between requests, and socket counting alone would
+    read busy forever, deferring every restart to a forced one."""
+    directory = Path(_usage_dir())
+    reporter = False
+    unreadable = False
+    try:
+        names = os.listdir(directory)
+    except OSError:
+        return None
+    for name in names:
+        if not name.endswith('.json') or not name.startswith('inflight-%s-' % port):
+            continue
+        try:
+            pid = int(name[:-len('.json')].rsplit('-', 1)[1])
+        except (IndexError, ValueError):
+            continue
+        if not pid_alive(pid):
+            continue
+        reporter = True
+        try:
+            with open(directory / name) as stream:
+                doc = json.load(stream)
+            requests = doc.get('requests') if isinstance(doc, dict) else None
+        except (OSError, ValueError):
+            # A live reporter whose table vanished or cannot be parsed (a
+            # cleanup race, a truncated write) is unknown, not idle: letting
+            # the socket fallback decide is safer than declaring the port
+            # free while a request may be running.
+            unreadable = True
+            continue
+        if not isinstance(requests, dict):
+            # valid JSON but not a table shape (null, a list, ...): unknown
+            unreadable = True
+            continue
+        if requests:
+            return True
+        if doc.get('beat'):
+            try:
+                stale = time.time() - float(doc.get('updated') or 0) > 120
+            except (TypeError, ValueError):
+                stale = True  # an unparseable stamp cannot prove fresh
+            if stale:
+                # A heartbeating proxy (the Go usage log republishes its table
+                # every 30 s even when idle) whose beat went stale can no longer
+                # publish — a read-only usage dir leaves this empty table in
+                # place, and it must not read as idle during an active request.
+                # Unknown, like an unreadable table.
+                unreadable = True
+                continue
+    if reporter and not unreadable:
+        return False
+    return None
+
+
+def _sockets_serving(port):
+    # ESTABLISHED client sockets on the port: the fallback verdict when the
+    # in-flight tables say nothing (and an extra confirmation for the legacy
+    # stop-then-start path, which retires the only listener).
     result = subprocess.run(['lsof', '-nP', '-iTCP:%s' % port, '-sTCP:ESTABLISHED', '-Fn'],
                             text=True, capture_output=True)
     return any(line.startswith('n') and (':%s->' % port) in line for line in result.stdout.splitlines())
+
+
+def busy(port):
+    # Whether the proxy is serving requests right now; restarting then would
+    # cut one off. Preferred source: the Go child's in-flight tables (see
+    # inflight_busy); only when no live reporter exists do ESTABLISHED client
+    # sockets decide (the fallback the Go lifecycle also keeps).
+    inflight = inflight_busy(port)
+    if inflight is not None:
+        return inflight
+    return _sockets_serving(port)
 
 
 def stray(port, root):
@@ -192,6 +284,86 @@ def ready(info, root):
 
 def signature(key, token):
     return hmac.new(token.encode(), key.encode(), hashlib.sha256).hexdigest()
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None  # never follow: the key must not travel to another host
+
+
+def _safe_probe_base(base):
+    """Whether the probe may send the key to this base: https, or a loopback
+    host (local test stubs); never a URL that carries its own credentials.
+    The serving proxy sends the key to the same base for every request, so
+    this is defense in depth for the controller's own dial, not the only
+    gate — a base that fails it is treated like an unreachable gateway (not
+    a verdict, the launch proceeds on the proxy's own contract)."""
+    try:
+        parsed = urllib.parse.urlparse(base)
+    except ValueError:
+        return False
+    if parsed.username or parsed.password:
+        return False
+    host = (parsed.hostname or '').lower()
+    if host in ('localhost', '127.0.0.1', '::1'):
+        return True
+    return parsed.scheme == 'https'
+
+
+def _probe_status(opener, request, deadline):
+    """Response status for one credential shape, cut off at the wall-clock
+    deadline (a socket timeout bounds single operations, not a gateway that
+    trickles response headers — and the caller holds the startup lock).
+    None = not answered inside the budget (not a verdict)."""
+    result = {}
+
+    def run():
+        try:
+            with opener.open(request, timeout=60) as response:
+                result['status'] = response.status
+        except urllib.error.HTTPError as error:
+            result['status'] = error.code
+        except Exception:
+            result['status'] = None
+
+    worker = threading.Thread(target=run, daemon=True)
+    worker.start()
+    worker.join(max(0.1, deadline - time.monotonic()))
+    return result.get('status')
+
+
+def gateway_rejects_key(base, key):
+    """True only on a DEFINITE rejection: every credential shape the serving
+    proxy itself sends got 401 from the gateway. A 403 (entitlement, monthly
+    cap), a redirect, an outage or an unreachable gateway all pass — none is
+    a verdict a restart could act on, and waiting on one would block healthy
+    swaps. Same contract as the Go keypreflight (checkUpstreamKey), which
+    covers the hosted-only flavors; this gives the :4146 swap the guard the
+    2026-11-16 incident showed it was missing (a rejected key replaced a
+    working proxy there)."""
+    # The chat rows of the generated config carry "<root>/v1" as api_base
+    # (model_list[0] is the "*" chat entry) while anthropic rows carry the
+    # bare root: strip a trailing /v1 like the Go loadConfig does, so the
+    # probe always lands on <root>/v1/models and not <root>/v1/v1/models.
+    base = base.rstrip('/')
+    if base.endswith('/v1'):
+        base = base[:-len('/v1')]
+    if not _safe_probe_base(base):
+        return False  # not a base the key may be sent to: not a verdict
+    endpoint = base + '/v1/models'
+    opener = urllib.request.build_opener(_NoRedirect)
+    shapes = ({'Authorization': 'Bearer ' + key},
+              {'x-api-key': key, 'anthropic-version': '2023-06-01'})
+    # One wall-clock budget across both shapes (Go: keyProbeTotalBudget): a
+    # blackholed or trickling gateway must not hold the startup lock for one
+    # timeout per shape.
+    deadline = time.monotonic() + 20
+    for headers in shapes:
+        request = urllib.request.Request(endpoint, headers=headers)
+        status = _probe_status(opener, request, deadline)
+        if status is None or status != 401:
+            return False
+    return True
 
 
 # The child is the Go proxy; these env prefixes reach it (knobs, usage log
@@ -325,6 +497,21 @@ def knob_digest():
     return hashlib.sha256(repr(items).encode()).hexdigest()
 
 
+def upstream_key():
+    """The credential the Go child will send: an exported
+    HOSTED_ONLY_UPSTREAM_KEY overrides ENMAAS_API_KEY in loadConfig, and may
+    be the ONLY one set (the child accepts that). Check and ensure must agree
+    on it (the recorded key signature tracks this value)."""
+    override = os.environ.get('HOSTED_ONLY_UPSTREAM_KEY', '').strip()
+    if override:
+        return override
+    key = os.environ.get('ENMAAS_API_KEY', '').strip()
+    if not key:
+        raise RuntimeError('neither ENMAAS_API_KEY nor an exported '
+                           'HOSTED_ONLY_UPSTREAM_KEY is set')
+    return key
+
+
 def check(root, port, config, required):
     """Dry run for the restart-required check: {'state': down|fresh|stale,
     'changed': [...], 'busy': bool}; nothing is started, stopped or written."""
@@ -338,7 +525,7 @@ def check(root, port, config, required):
         return {'state': 'down', 'changed': [], 'busy': False}
     if not ready(info, info_root):
         return {'state': 'stale', 'changed': ['recorded proxy is not ready'], 'busy': busy(port)}
-    changed, _, _, _ = changes(info_root, info, root, config, versions, os.environ['ENMAAS_API_KEY'],
+    changed, _, _, _ = changes(info_root, info, root, config, versions, upstream_key(),
                                gohash, required)
     return {'state': 'stale' if changed else 'fresh', 'changed': changed, 'busy': busy(port)}
 
@@ -348,9 +535,30 @@ def ensure(root, port, config, timeout, required):
     gobin, gohash = go_binary()
     versions = [gohash, knob_digest(), 'go']   # last element stays 'go': the zero-gap swap branch keys on it   # a list: the recorded identity holds one (argv slices were lists)
     info_root, info = locate(root, port)
-    key = os.environ['ENMAAS_API_KEY']
+    # The recorded key signature and the probe use the credential the child
+    # will actually send (see upstream_key).
+    key = upstream_key()
     hooks = gohash
     swap = None
+    # Memoized key probe: a replacement the gateway would answer 401 must be
+    # refused BEFORE any stop or spawn retires the serving proxy — including
+    # the legacy stop-then-start branch and stray cleanup below, not only the
+    # zero-gap swap. Probed at most once per launch.
+    _key_probe = {}
+
+    def key_rejected():
+        if 'rejected' not in _key_probe:
+            _key_probe['rejected'] = gateway_rejects_key(
+                config['model_list'][0]['litellm_params']['api_base'], key)
+        return _key_probe['rejected']
+
+    def _refuse_rejected_key():
+        if key_rejected():
+            raise RuntimeError('the upstream gateway rejected the API key (HTTP 401); '
+                               'refresh ENMAAS_API_KEY (or the exported '
+                               'HOSTED_ONLY_UPSTREAM_KEY, which overrides it) in the '
+                               'credentials file (default ~/secrets.zsh)')
+
     if owned(info):
         if not ready(info, info_root):
             raise RuntimeError('recorded proxy is not ready; run claude-enmaas-kill before relaunching')
@@ -358,9 +566,19 @@ def ensure(root, port, config, timeout, required):
         forced = bool(os.environ.get('CLAUDE_ENMAAS_FORCE_RESTART'))
         if forced and not changed:
             changed = ['restart requested']
-        if changed and (not busy(port) or forced):
-            # Nobody is mid-request (or a swap is forced, which loses nothing):
-            # apply the change now instead of refusing.
+        def restart_now():
+            """Idle (or forced) AND the replacement can authenticate AND
+            still idle after the probe's round trip. The probe runs INSIDE
+            the decision: a busy->idle flip between the checks cannot reach
+            a stop without it, and a request starting while the probe runs
+            flips the answer back to reuse (a forced restart stays forced
+            by design)."""
+            if not (changed and (not busy(port) or forced)):
+                return False
+            _refuse_rejected_key()
+            return forced or not busy(port)
+
+        if restart_now():
             if (info.get('versions') or ['', ''])[-1] == 'go':
                 # Zero-refuse restart: the replacement starts ALONGSIDE the old
                 # Go listener (both bind SO_REUSEPORT) and the old group is
@@ -370,6 +588,17 @@ def ensure(root, port, config, timeout, required):
                 notice('%s changed; restarting the proxy (zero-gap swap)' % ', '.join(changed))
                 swap = (info_root, info)
             else:
+                # The legacy (litellm-generation) child's tables come from
+                # litellm_usage_log, which prunes >15-min entries and writes
+                # no beat: its empty table is not proof of idle. This is also
+                # the only path that retires the listener without a
+                # replacement already listening alongside, so require the
+                # socket check to agree on idle before stopping (the pre-Go
+                # controller's own verdict). A FORCED restart stays forced
+                # by design — it does not wait for idle.
+                if not forced and _sockets_serving(port):
+                    raise RuntimeError('the legacy proxy still holds client connections; '
+                                       'run claude-enmaas-restart once they finish')
                 notice('%s changed; restarting the idle proxy' % ', '.join(changed))
                 stop(info_root, info, port)
                 wait_port_free(port)
@@ -392,6 +621,11 @@ def ensure(root, port, config, timeout, required):
             if busy(port):
                 raise RuntimeError('an earlier EnMaaS proxy without its state files is serving requests; '
                                    'run claude-enmaas-restart once they finish')
+            _refuse_rejected_key()
+            if busy(port):
+                # a request started while the probe ran: same refusal as above
+                raise RuntimeError('an earlier EnMaaS proxy without its state files is serving requests; '
+                                   'run claude-enmaas-restart once they finish')
             notice('replacing an earlier EnMaaS proxy whose state files are gone')
             stop_stray(groups, port, root)
             wait_port_free(port)
@@ -403,6 +637,14 @@ def ensure(root, port, config, timeout, required):
                 probe.bind(('127.0.0.1', port))
             except OSError:
                 raise RuntimeError('proxy port is occupied; refusing to adopt or stop its listener')
+    # Before ANY side effect (config write, spawn, old-group retire): a
+    # replacement the gateway would answer 401 must not take over from the
+    # proxy that is serving. Raising here leaves the old proxy untouched (the
+    # zero-gap swap retires it only after the replacement is verified) and
+    # fails a cold start with the key error instead of launching one that can
+    # only answer 401. (Memoized: the changed- and stray-branch checks above
+    # may already have probed.)
+    _refuse_rejected_key()
     token = swap[1]['token'] if swap else 'sk-enmaas-' + secrets.token_hex(32)
     config['general_settings']['master_key'] = token
     write_private(root / 'config.json', config)

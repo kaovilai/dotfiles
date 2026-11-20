@@ -85,7 +85,14 @@ func newApp(cfg *config) *app {
 	// (doh.go), mirroring dns_fallback.py on the LiteLLM path.
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.ForceAttemptHTTP2 = true
-	transport.DialContext = dohDialContext(&net.Dialer{Timeout: 30 * time.Second}, newDoHResolver())
+	// The default pool keeps only 2 idle connections per host: with parallel
+	// sessions (agent fanouts) every request past the second redials the
+	// gateway — a full TCP+TLS handshake onto every request's first-byte
+	// latency, and a connection storm the gateway's front door rates. Widen
+	// the pool so bursts reuse warm connections.
+	transport.MaxIdleConns = 256
+	transport.MaxIdleConnsPerHost = 64
+	transport.DialContext = dohDialContext(&net.Dialer{Timeout: 30 * time.Second}, sharedDoHResolver())
 	// First-byte budget: request write to response headers.
 	if cfg.RequestTimeout > 0 {
 		transport.ResponseHeaderTimeout = cfg.RequestTimeout
@@ -129,17 +136,26 @@ func (a *app) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+
+	// Register the handler BEFORE reading the body: idle detection keys on
+	// the usage table, and a slow or large upload must count as in flight
+	// or an automatic swap could retire this process mid-read. The model
+	// names are refined once the body is decoded (same id, updated entry).
+	// `started` (the metrics clock: ms, ttft) stays AFTER the body read, so
+	// it keeps measuring processing time, not upload time.
+	requestID := fmt.Sprintf("%d-%d", time.Now().UnixNano(), a.seq.Add(1))
+	a.usage.start(requestID, "", "")
+	defer a.usage.end(requestID)
 	if strings.HasSuffix(r.URL.Path, "/count_tokens") {
 		a.handleCountTokens(w, r)
 		return
 	}
-
-	started := time.Now()
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 256<<20))
 	if err != nil {
 		http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
 		return
 	}
+	started := time.Now()
 	data, err := decodeObject(body)
 	if err != nil {
 		a.writeJSON(w, http.StatusBadRequest, map[string]any{
@@ -149,10 +165,8 @@ func (a *app) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	requested := asString(data["model"])
-	requestID := fmt.Sprintf("%d-%d", started.UnixNano(), a.seq.Add(1))
 	served := requested
-	a.usage.start(requestID, served, requested)
-	defer a.usage.end(requestID)
+	a.usage.start(requestID, served, requested) // refine the registered entry
 
 	// Web-search shim: decide before the rewrites (the strip would remove the
 	// hosted tool the shim needs). The canary piggybacks here — the first real

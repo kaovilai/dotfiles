@@ -380,7 +380,7 @@ _claude_enmaas_assert 'explicit vision fallback model is routed' test "$(jq -r '
 # Exercise the actual emitted controller functions with patched sockets,
 # processes and go_binary. Never touches a real runtime, listener or toolchain.
 python3 - "$tmp/actual-daemon.py" "$tmp" <<'PY'
-import json, os, runpy, sys
+import json, os, runpy, sys, time
 from pathlib import Path
 from unittest.mock import patch
 p=Path(sys.argv[2]); g=runpy.run_path(sys.argv[1]); ns=g['ensure'].__globals__
@@ -407,7 +407,8 @@ gobin=('fake-go-bin', 'hash-1')
 
 # ensure(): not owned -> spawn the Go binary with the generated config, a
 # proxy log and a filtered env; identity records the source hash.
-with patch.dict(os.environ, env), patch.object(ns['subprocess'],'Popen',spawn), patch.object(ns['socket'],'socket',OpenSocket),      patch.dict(ns, {'listeners':lambda port:set(),'birth':lambda pid:'t0','ready':lambda info,root:True,'go_binary':lambda: gobin}):
+with patch.dict(os.environ, env), patch.object(ns['subprocess'],'Popen',spawn), patch.object(ns['socket'],'socket',OpenSocket),      patch.dict(ns, {'listeners':lambda port:set(),'birth':lambda pid:'t0','ready':lambda info,root:True,'go_binary':lambda: gobin,
+        'gateway_rejects_key':lambda base,key: False}):
     g['ensure'](froot, 4166, fresh(), 3, [])
 argv,options=spawned[0]
 assert argv==['fake-go-bin','--flavor','enmaas','--config',str(froot/'config.json'),'--port','4166'], argv
@@ -452,6 +453,165 @@ with patch.dict(os.environ, env), patch.object(ns['subprocess'],'Popen',side_eff
         assert verdict=={'state':'stale','changed':['gateway/key or dependency settings','hook code or knobs'],'busy':True}, verdict
     assert json.loads((froot/'proxy.json').read_text())==info, 'check must not rewrite state'
 
+# inflight_busy(): a live reporter's readable empty table is idle, a request
+# is busy, and an UNREADABLE table is unknown (None -> socket fallback), not
+# idle. (Needs the env patch: _usage_dir reads LLM_USAGE_DIR from os.environ.)
+with patch.dict(os.environ, env):
+    ud=p/'usage'; ud.mkdir(exist_ok=True)
+    me=os.getpid()
+    table=ud/('inflight-4166-%d.json'%me)
+    table.write_text('{not json')
+    assert g['inflight_busy'](4166) is None, 'an unreadable live reporter is unknown, not idle'
+    table.write_text(json.dumps({'pid':me,'requests':{}}))
+    assert g['inflight_busy'](4166) is False
+    table.write_text(json.dumps({'pid':me,'requests':{'r':{'t':1,'model':'m'}}}))
+    assert g['inflight_busy'](4166) is True
+    # valid JSON but not a table shape (null, a list): unknown, never a crash
+    table.write_text('null')
+    assert g['inflight_busy'](4166) is None
+    table.write_text('[]')
+    assert g['inflight_busy'](4166) is None
+    # a heartbeating proxy whose beat went stale cannot publish: unknown, not idle
+    table.write_text(json.dumps({'pid':me,'beat':True,'updated':time.time()-600,'requests':{}}))
+    assert g['inflight_busy'](4166) is None
+    # an unparseable stamp cannot prove fresh either
+    table.write_text(json.dumps({'pid':me,'beat':True,'updated':{'x':1},'requests':{}}))
+    assert g['inflight_busy'](4166) is None
+    table.write_text(json.dumps({'pid':me,'beat':True,'updated':time.time(),'requests':{}}))
+    assert g['inflight_busy'](4166) is False
+    # an old-style table (no beat) is trusted however old its stamp is
+    table.write_text(json.dumps({'pid':me,'updated':1,'requests':{}}))
+    assert g['inflight_busy'](4166) is False
+
+# ensure(): a definitely-rejected key must refuse BEFORE the legacy stop or
+# the stray cleanup retires anything — a stop followed by a refused spawn
+# would leave nothing serving.
+def no_stop(*a):
+    raise AssertionError('a rejected key must not stop the serving proxy')
+
+def no_stop_stray(*a):
+    raise AssertionError('a rejected key must not stop strays')
+
+legacy_root=p/'runtime-legacy'; legacy_root.mkdir(mode=0o700)
+legacy_info={'pid':424242,'birth':'t0','port':4166,'token':'tok','versions':['h1','litellm'],
+             'key_signature':'x','hooks':'h1'}
+g['write_private'](legacy_root/'proxy.json', legacy_info)
+g['write_private'](legacy_root/'config.json', {'model_list': config['model_list']})
+with patch.dict(os.environ, env), patch.dict(ns, dict(patched, **{
+        'busy':lambda port: False, 'gateway_rejects_key':lambda base,key: True, 'stop': no_stop})):
+    try:
+        g['ensure'](legacy_root, 4166, fresh(), 3, [])
+        raise AssertionError('a rejected key must refuse the restart')
+    except RuntimeError as error:
+        assert 'rejected the API key' in str(error), error
+with patch.dict(os.environ, env), patch.dict(ns, {'owned':lambda i:False,'listeners':lambda port:set(),
+        'stray':lambda port,root:{99},'busy':lambda port:False,'go_binary':lambda: gobin,
+        'gateway_rejects_key':lambda base,key: True, 'stop_stray': no_stop_stray}):
+    try:
+        g['ensure'](legacy_root, 4166, fresh(), 3, [])
+        raise AssertionError('a rejected key must refuse the stray replacement')
+    except RuntimeError as error:
+        assert 'rejected the API key' in str(error), error
+print('ok - inflight busy semantics and key-refusal ordering (all mocked)')
+
+# ensure(): a request starting while the key probe runs must flip the
+# restart into a reuse (or, on the stray path, the serving refusal), never a
+# stop — the probe is a network round trip between the busy checks.
+flips=iter([False, True])
+with patch.dict(os.environ, env), patch.dict(ns, dict(patched, **{
+        'busy':lambda port: next(flips), 'gateway_rejects_key':lambda base,key: False, 'stop': no_stop})):
+    reused=g['ensure'](legacy_root, 4166, fresh(), 3, [])
+    assert reused['pid']==424242, 'a proxy that became busy during the probe must be reused, not stopped'
+flips=iter([False, True])
+with patch.dict(os.environ, env), patch.dict(ns, {'owned':lambda i:False,'listeners':lambda port:set(),
+        'stray':lambda port,root:{99},'busy':lambda port: next(flips),'go_binary':lambda: gobin,
+        'gateway_rejects_key':lambda base,key: False, 'stop_stray': no_stop_stray}):
+    try:
+        g['ensure'](legacy_root, 4166, fresh(), 3, [])
+        raise AssertionError('a stray that became busy during the probe must not be replaced')
+    except RuntimeError as error:
+        assert 'serving requests' in str(error), error
+# ensure(): busy at the decision, idle an instant later (the request ended
+# between the checks) — the single guarded decision must reuse, never reach
+# a stop, and never even probe (the probe lives inside the decision).
+def no_probe(base, key):
+    raise AssertionError('the probe must not run when the proxy is serving')
+
+flips=iter([True, False])
+with patch.dict(os.environ, env), patch.dict(ns, dict(patched, **{
+        'busy':lambda port: next(flips), 'gateway_rejects_key': no_probe, 'stop': no_stop})):
+    reused=g['ensure'](legacy_root, 4166, fresh(), 3, [])
+    assert reused['pid']==424242, 'a busy proxy must be reused, not stopped or probed'
+print('ok - busy rechecked after the key probe (all mocked)')
+
+# ensure(): an exported HOSTED_ONLY_UPSTREAM_KEY overrides ENMAAS_API_KEY in
+# the Go child's loadConfig — the probe must check THAT credential.
+seen={}
+def capture_key(base, keyd):
+    seen['key']=keyd
+    return True
+with patch.dict(os.environ, dict(env, HOSTED_ONLY_UPSTREAM_KEY='override-secret')), patch.dict(ns, dict(patched, **{
+        'busy':lambda port:False, 'gateway_rejects_key':capture_key, 'stop': no_stop})):
+    try:
+        g['ensure'](froot, 4166, fresh(), 3, [])
+        raise AssertionError('must refuse on the rejected override')
+    except RuntimeError as error:
+        assert 'rejected the API key' in str(error), error
+assert seen.get('key')=='override-secret', seen
+print('ok - the probe checks HOSTED_ONLY_UPSTREAM_KEY when it overrides')
+
+# gateway_rejects_key() never dials a base the key may not travel to: plain
+# http to a non-loopback host, or a URL carrying credentials, is not a
+# verdict (False) and never opens a connection.
+with patch.object(ns['urllib'].request, 'build_opener', side_effect=AssertionError('must not dial')):
+    assert g['gateway_rejects_key']('http://nonloopback.example/v1', 'k') is False
+    assert g['gateway_rejects_key']('https://user:pass@gateway.example/v1', 'k') is False
+    assert g['gateway_rejects_key']('ftp://gateway.example', 'k') is False
+# loopback and https pass validation (loopback here is unreachable: still
+# not a rejection, but validation did not veto it).
+assert g['gateway_rejects_key']('http://127.0.0.1:1/v1', 'k') is False
+print('ok - probe base validation')
+
+# upstream_key(): an override-only setup (HOSTED_ONLY_UPSTREAM_KEY set,
+# ENMAAS_API_KEY absent — loadConfig accepts it) must not KeyError; the child
+# env carries the override as its key.
+spawned.clear()
+oroot=p/'runtime-override-only'; oroot.mkdir(mode=0o700)
+with patch.dict(os.environ, dict(env, PATH=os.environ.get('PATH', '')), clear=True):
+    del os.environ['ENMAAS_API_KEY']
+    os.environ['HOSTED_ONLY_UPSTREAM_KEY']='override-only-secret'
+    with patch.dict(ns, {'owned':lambda i:False,'listeners':lambda port:set(),'stray':lambda port,root:set(),
+            'go_binary':lambda: gobin,'ready':lambda i,r:True,'birth':lambda pid:'t0','gateway_rejects_key':lambda base,key: False}),          patch.object(ns['subprocess'],'Popen',spawn), patch.object(ns['socket'],'socket',OpenSocket):
+        g['ensure'](oroot, 4166, fresh(), 3, [])
+argv,options=spawned[0]
+assert options['env']['ENMAAS_API_KEY']=='override-only-secret', options['env']
+assert options['env']['HOSTED_ONLY_UPSTREAM_KEY']=='override-only-secret', options['env']
+print('ok - override-only credentials work')
+
+# ensure(): the legacy stop-then-start path (the only one that retires the
+# listener without a replacement alongside) additionally requires the socket
+# check to agree on idle — a legacy child's pruned, beat-less table is not
+# proof of idle.
+stopped=[]
+def record_stop(*a):
+    stopped.append(a)
+with patch.dict(os.environ, env), patch.dict(ns, dict(patched, **{
+        'busy':lambda port: False, '_sockets_serving':lambda port: True,
+        'go_binary':lambda: gobin, 'stop': record_stop})):
+    try:
+        g['ensure'](legacy_root, 4166, fresh(), 3, [])
+        raise AssertionError('a legacy proxy holding sockets must not be stopped')
+    except RuntimeError as error:
+        assert 'still holds client connections' in str(error), error
+assert not stopped, 'the socket-refused legacy proxy must not be stopped'
+with patch.dict(os.environ, env), patch.dict(ns, dict(patched, **{
+        'busy':lambda port: False, '_sockets_serving':lambda port: False,
+        'go_binary':lambda: gobin, 'stop': record_stop, 'listeners':lambda port:set(),
+        'gateway_rejects_key':lambda base,key: False, 'birth':lambda pid:'t0'})),      patch.object(ns['subprocess'],'Popen',spawn), patch.object(ns['socket'],'socket',OpenSocket):
+    g['ensure'](legacy_root, 4166, fresh(), 3, [])
+assert stopped, 'the legacy stop must run once the sockets agree on idle'
+print('ok - legacy stop gated on the socket verdict')
+
 # ensure(): code changed and idle -> zero-gap swap: new child spawned, old
 # group retired only after the new one accepts, token kept.
 killed=set()
@@ -459,7 +619,8 @@ def fake_killpg(pid, sig=None):
     killed.add(pid)
 spawned.clear()
 swap=dict(patched, **{'busy':lambda port:False, 'go_binary':lambda: ('fake-go-bin','hash-2'), 'birth':lambda pid:'t0',
-          'child_serving':lambda log: True, '_port_conflict':lambda log: False},
+          'child_serving':lambda log: True, '_port_conflict':lambda log: False,
+          'gateway_rejects_key':lambda base,key: False},
           listeners=lambda port:{999999}, owned=lambda i: i['pid'] not in killed)
 with patch.dict(os.environ, env), patch.dict(ns, swap), patch.object(ns['subprocess'],'Popen',spawn),      patch.object(ns['socket'],'socket',OpenSocket), patch.object(ns['os'],'killpg',fake_killpg),      patch.object(ns['os'],'getpgid',lambda pid: 999999):
     result=g['ensure'](froot, 4166, fresh(), 3, [])

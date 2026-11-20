@@ -58,6 +58,21 @@ func normalizeDoHHost(host string) string {
 	return strings.ToLower(host)
 }
 
+// sharedDoHResolver is the one resolver for the process: the serving transport
+// and the key preflight (keypreflight.go) otherwise each build their own, with
+// separate caches — on a network where the system resolver fails for the
+// gateway, both pay the full DoH ladder instead of the second hitting cache.
+// The env knobs are read once, at first use (process start on every path).
+var (
+	dohSharedOnce sync.Once
+	dohShared     *dohResolver
+)
+
+func sharedDoHResolver() *dohResolver {
+	dohSharedOnce.Do(func() { dohShared = newDoHResolver() })
+	return dohShared
+}
+
 func newDoHResolver() *dohResolver {
 	hosts := map[string]struct{}{}
 	for _, host := range strings.Split(os.Getenv("ENMAAS_DNS_FALLBACK_HOSTS"), ",") {
