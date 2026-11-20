@@ -13,8 +13,7 @@ import (
 )
 
 const (
-	inflightStaleSeconds = 900
-	classifierMarker     = "security monitor for autonomous AI coding agents"
+	classifierMarker = "security monitor for autonomous AI coding agents"
 )
 
 // usageLog writes the same events-YYYY-MM.jsonl lines litellm_usage_log.py
@@ -103,29 +102,19 @@ func pidAlive(pid int) bool {
 	return err == syscall.EPERM
 }
 
-// flush must be called with u.mu held. It prunes entries older than the
-// stale window (a gone-quiet table, not a live one — see flushTable).
+// flush must be called with u.mu held. It never prunes: an entry leaves the
+// table only when its request ends (idle detection keys on non-emptiness, so
+// dropping a still-streaming request would mark a busy proxy idle and make
+// it restart-eligible mid-request). A crashed proxy's leftovers are handled
+// by pid liveness at the readers and cleanupInflight at the next start —
+// not by age.
 func (u *usageLog) flush() {
-	u.flushTable(true)
-}
-
-// flushTable must be called with u.mu held; prune=false is the maintenance
-// variant used by the trailing flush, which must never drop a request that
-// is merely older than the stale window but still streaming.
-func (u *usageLog) flushTable(prune bool) {
 	u.lastFlush = time.Now()
 	if u.flushTimer != nil {
 		u.flushTimer.Stop()
 		u.flushTimer = nil
 	}
 	now := float64(u.lastFlush.UnixNano()) / 1e9
-	if prune {
-		for id, entry := range u.inflight {
-			if now-entry.T > inflightStaleSeconds {
-				delete(u.inflight, id)
-			}
-		}
-	}
 	payload := map[string]any{
 		"pid":      os.Getpid(),
 		"port":     u.port,
@@ -164,10 +153,7 @@ func (u *usageLog) scheduleTrailingFlush() {
 		defer u.mu.Unlock()
 		u.flushTimer = nil
 		if len(u.inflight) > 0 {
-			// Maintenance write, never a pruning one: a request streaming
-			// past inflightStaleSeconds is still live, and dropping it here
-			// would mark a busy proxy idle (restart eligibility).
-			u.flushTable(false)
+			u.flush()
 		}
 	})
 }

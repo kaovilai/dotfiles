@@ -133,26 +133,26 @@ func TestUsageLogTrailingFlush(t *testing.T) {
 	t.Fatal("the trailing flush must eventually write the suppressed update")
 }
 
-// The trailing flush is a maintenance write, never a pruning one: a request
-// streaming past the stale window stays in the table, or a busy proxy would
-// read idle and become restart-eligible mid-request.
-func TestUsageLogTrailingFlushDoesNotPruneLiveRequests(t *testing.T) {
+// No flush ever prunes: a request streaming for a very long time stays in
+// the table (idle detection keys on non-emptiness — dropping it would make
+// a busy proxy restart-eligible mid-request). Entries leave via end() only.
+func TestUsageLogFlushNeverPrunesLongRequests(t *testing.T) {
 	dir := t.TempDir()
 	u := newUsageLog(dir, "45993")
 	path := filepath.Join(dir, "inflight-45993-"+strconv.Itoa(os.Getpid())+".json")
 	u.start("a", "m", "m")
 	u.mu.Lock()
 	entry := u.inflight["a"]
-	entry.T -= inflightStaleSeconds + 60
+	entry.T -= 9000 // far past any stale window; the request is still live
 	u.inflight["a"] = entry
 	u.mu.Unlock()
-	u.start("b", "m", "m") // suppressed: schedules the trailing (non-pruning) flush
+	u.start("b", "m", "m") // suppressed: schedules the trailing flush
 	deadline := time.Now().Add(inflightFlushAfter + 3*time.Second)
 	for time.Now().Before(deadline) {
 		requests := readInflight(t, path)["requests"].(map[string]any)
 		if _, ok := requests["b"]; ok {
 			if _, ok := requests["a"]; !ok {
-				t.Fatal("the trailing flush pruned a still-live (long-streaming) request")
+				t.Fatal("a flush pruned a still-live (long-streaming) request")
 			}
 			return
 		}

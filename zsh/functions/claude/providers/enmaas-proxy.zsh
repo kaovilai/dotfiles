@@ -500,16 +500,19 @@ def ensure(root, port, config, timeout, required):
         forced = bool(os.environ.get('CLAUDE_ENMAAS_FORCE_RESTART'))
         if forced and not changed:
             changed = ['restart requested']
-        if changed and (not busy(port) or forced):
-            # Nobody is mid-request (or a swap is forced, which loses nothing):
-            # apply the change now instead of refusing.
+        def restart_now():
+            """Idle (or forced) AND the replacement can authenticate AND
+            still idle after the probe's round trip. The probe runs INSIDE
+            the decision: a busy->idle flip between the checks cannot reach
+            a stop without it, and a request starting while the probe runs
+            flips the answer back to reuse (a forced restart stays forced
+            by design)."""
+            if not (changed and (not busy(port) or forced)):
+                return False
             refuse_rejected_key()
-            # The probe is a network round trip: a request may have started
-            # while it ran, and stopping then would cut it. Re-read the
-            # busy state (a forced restart stays forced by design).
-            if not forced and busy(port):
-                changed = None  # fall through to the reuse paths below
-        if changed and (not busy(port) or forced):
+            return forced or not busy(port)
+
+        if restart_now():
             if (info.get('versions') or ['', ''])[-1] == 'go':
                 # Zero-refuse restart: the replacement starts ALONGSIDE the old
                 # Go listener (both bind SO_REUSEPORT) and the old group is

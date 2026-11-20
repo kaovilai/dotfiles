@@ -515,6 +515,17 @@ with patch.dict(os.environ, env), patch.dict(ns, {'owned':lambda i:False,'listen
         raise AssertionError('a stray that became busy during the probe must not be replaced')
     except RuntimeError as error:
         assert 'serving requests' in str(error), error
+# ensure(): busy at the decision, idle an instant later (the request ended
+# between the checks) — the single guarded decision must reuse, never reach
+# a stop, and never even probe (the probe lives inside the decision).
+def no_probe(base, key):
+    raise AssertionError('the probe must not run when the proxy is serving')
+
+flips=iter([True, False])
+with patch.dict(os.environ, env), patch.dict(ns, dict(patched, **{
+        'busy':lambda port: next(flips), 'gateway_rejects_key': no_probe, 'stop': no_stop})):
+    reused=g['ensure'](legacy_root, 4166, fresh(), 3, [])
+    assert reused['pid']==424242, 'a busy proxy must be reused, not stopped or probed'
 print('ok - busy rechecked after the key probe (all mocked)')
 
 # ensure(): code changed and idle -> zero-gap swap: new child spawned, old
