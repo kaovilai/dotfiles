@@ -197,6 +197,19 @@ gateway name over DoH itself.
   events file stays open across writes (re-stat'ed per write, so a
   deleted/recreated usage dir reopens instead of appending into a lost
   inode).
+- **Rollout transition (heartbeat):** readers trust a live reporter's
+  no-`beat` empty table as idle so a pre-heartbeat child can still be
+  restarted at all (treating it as unknown would fall back to socket
+  counting, where the old binary's pooled keep-alives defer the upgrade
+  restart indefinitely). The one-time trade-off: a PRE-upgrade child's old
+  `flush()` prunes entries older than 15 min, so during the first
+  post-upgrade launch a single >15-min stream with concurrent traffic can
+  publish an empty no-`beat` table that reads idle — the swap may then cut
+  that stream (the pre-PR socket-counting `busy()` would have protected it).
+  The window closes once the fleet runs the heartbeat binary. If it ever
+  matters in practice, the designed follow-up is gating the no-`beat` trust
+  on the reporter being the binary this launcher would run (the controller
+  knows the recorded source hash; the Go side, the recorded fingerprint).
 - **Performance:** one keep-alive/HTTP/2 transport per process (idle pool
   widened to 64 conns/host: the Go default of 2 made parallel sessions
   re-dial the gateway per request); a request whose
