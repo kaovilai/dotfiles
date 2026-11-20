@@ -30,9 +30,12 @@ type usageLog struct {
 	// concurrency would otherwise rewrite the file twice per request.
 	// flushTimer is the trailing flush: a suppressed update (still busy, no
 	// transition) schedules one write after the debounce so the table does
-	// not hold a stale entry set for the rest of a long request.
+	// not hold a stale entry set for the rest of a long request — and a
+	// FAILED write (flushDirty) is retried through it, so a stale table
+	// never outlives the request state it describes.
 	lastFlush  time.Time
 	flushTimer *time.Timer
+	flushDirty bool
 
 	// The events file stays open across writes: one open+append+close per
 	// request was three syscalls and a path lookup on the hot path. eventsStat
@@ -107,7 +110,9 @@ func pidAlive(pid int) bool {
 // dropping a still-streaming request would mark a busy proxy idle and make
 // it restart-eligible mid-request). A crashed proxy's leftovers are handled
 // by pid liveness at the readers and cleanupInflight at the next start —
-// not by age.
+// not by age. A failed write keeps the previous table published, so it
+// stays dirty and the trailing timer retries: a stale table must not
+// outlive the request state it describes.
 func (u *usageLog) flush() {
 	u.lastFlush = time.Now()
 	if u.flushTimer != nil {
@@ -123,14 +128,27 @@ func (u *usageLog) flush() {
 	}
 	body, err := json.Marshal(payload)
 	if err != nil {
+		u.flushDirty = true
+		u.scheduleTrailingFlush()
 		return
 	}
-	_ = os.MkdirAll(u.dir, 0o700)
+	if err := os.MkdirAll(u.dir, 0o700); err != nil {
+		u.flushDirty = true
+		u.scheduleTrailingFlush()
+		return
+	}
 	tmp := u.inflightPath() + ".tmp"
 	if err := os.WriteFile(tmp, body, 0o600); err != nil {
+		u.flushDirty = true
+		u.scheduleTrailingFlush()
 		return
 	}
-	_ = os.Rename(tmp, u.inflightPath())
+	if err := os.Rename(tmp, u.inflightPath()); err != nil {
+		u.flushDirty = true
+		u.scheduleTrailingFlush()
+		return
+	}
+	u.flushDirty = false
 }
 
 // inflightFlushAfter is the steady-state debounce: transitions flush at once,
@@ -143,7 +161,7 @@ const inflightFlushAfter = 5 * time.Second
 // scheduleTrailingFlush must be called with u.mu held: a suppressed update
 // still owes the file one write after the debounce window, or a long request
 // keeps a stale entry set (an ended request listed, a running one missing)
-// until its own end flushes.
+// until its own end flushes. It also carries the retry of a failed write.
 func (u *usageLog) scheduleTrailingFlush() {
 	if u.flushTimer != nil {
 		return
@@ -152,7 +170,7 @@ func (u *usageLog) scheduleTrailingFlush() {
 		u.mu.Lock()
 		defer u.mu.Unlock()
 		u.flushTimer = nil
-		if len(u.inflight) > 0 {
+		if len(u.inflight) > 0 || u.flushDirty {
 			u.flush()
 		}
 	})

@@ -139,6 +139,7 @@ def inflight_busy(port):
         try:
             with open(directory / name) as stream:
                 doc = json.load(stream)
+            requests = doc.get('requests') if isinstance(doc, dict) else None
         except (OSError, ValueError):
             # A live reporter whose table vanished or cannot be parsed (a
             # cleanup race, a truncated write) is unknown, not idle: letting
@@ -146,7 +147,11 @@ def inflight_busy(port):
             # free while a request may be running.
             unreadable = True
             continue
-        if doc.get('requests'):
+        if not isinstance(requests, dict):
+            # valid JSON but not a table shape (null, a list, ...): unknown
+            unreadable = True
+            continue
+        if requests:
             return True
     if reporter and not unreadable:
         return False

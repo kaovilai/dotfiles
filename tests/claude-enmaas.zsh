@@ -466,6 +466,11 @@ with patch.dict(os.environ, env):
     assert g['inflight_busy'](4166) is False
     table.write_text(json.dumps({'pid':me,'requests':{'r':{'t':1,'model':'m'}}}))
     assert g['inflight_busy'](4166) is True
+# valid JSON but not a table shape (null, a list): unknown, never a crash
+table.write_text('null')
+assert g['inflight_busy'](4166) is None
+table.write_text('[]')
+assert g['inflight_busy'](4166) is None
 
 # ensure(): a definitely-rejected key must refuse BEFORE the legacy stop or
 # the stray cleanup retires anything — a stop followed by a refused spawn

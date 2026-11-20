@@ -161,6 +161,40 @@ func TestUsageLogFlushNeverPrunesLongRequests(t *testing.T) {
 	t.Fatal("the trailing flush must eventually write the suppressed update")
 }
 
+// A failed flush (unwritable usage dir) leaves the previous table published:
+// the write stays dirty and the trailing timer retries it, so the startup
+// empty table can never masquerade as the state of a request that started.
+func TestUsageLogRetriesAFailedFlush(t *testing.T) {
+	base := t.TempDir()
+	blocked := filepath.Join(base, "usage")
+	if err := os.WriteFile(blocked, []byte("not a dir"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	u := newUsageLog(blocked, "45992") // dir is a file: the startup flush fails
+	path := filepath.Join(blocked, "inflight-45992-"+strconv.Itoa(os.Getpid())+".json")
+	u.start("a", "m", "m") // 0->1 transition: fails again, stays dirty
+	if err := os.Remove(blocked); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(blocked, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(inflightFlushAfter + 3*time.Second)
+	for time.Now().Before(deadline) {
+		// tolerant poll: the file does not exist until the retry lands
+		if body, err := os.ReadFile(path); err == nil {
+			var doc map[string]any
+			if json.Unmarshal(body, &doc) == nil {
+				if requests, ok := doc["requests"].(map[string]any); ok && len(requests) == 1 {
+					return // the retry landed the suppressed transition
+				}
+			}
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	t.Fatal("the trailing retry must land the failed transition flush")
+}
+
 func splitLines(body []byte) []string {
 	var lines []string
 	start := 0
