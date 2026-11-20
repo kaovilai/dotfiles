@@ -220,7 +220,12 @@ func (u *usageLog) write(event map[string]any) {
 			u.eventsStat = st
 		}
 	}
-	_, _ = u.eventsFile.Write(append(body, '\n'))
+	if _, err := u.eventsFile.Write(append(body, '\n')); err != nil {
+		// A failed write (ENOSPC/EIO) leaves the handle suspect: drop it so
+		// the next event re-opens instead of appending into a dead fd.
+		_ = u.eventsFile.Close()
+		u.eventsFile, u.eventsStat = nil, nil
+	}
 }
 
 // isoMonthPrefix reports whether s starts with YYYY-MM (digits and the one
