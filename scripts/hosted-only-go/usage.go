@@ -103,17 +103,27 @@ func pidAlive(pid int) bool {
 	return err == syscall.EPERM
 }
 
-// flush must be called with u.mu held.
+// flush must be called with u.mu held. It prunes entries older than the
+// stale window (a gone-quiet table, not a live one — see flushTable).
 func (u *usageLog) flush() {
+	u.flushTable(true)
+}
+
+// flushTable must be called with u.mu held; prune=false is the maintenance
+// variant used by the trailing flush, which must never drop a request that
+// is merely older than the stale window but still streaming.
+func (u *usageLog) flushTable(prune bool) {
 	u.lastFlush = time.Now()
 	if u.flushTimer != nil {
 		u.flushTimer.Stop()
 		u.flushTimer = nil
 	}
 	now := float64(u.lastFlush.UnixNano()) / 1e9
-	for id, entry := range u.inflight {
-		if now-entry.T > inflightStaleSeconds {
-			delete(u.inflight, id)
+	if prune {
+		for id, entry := range u.inflight {
+			if now-entry.T > inflightStaleSeconds {
+				delete(u.inflight, id)
+			}
 		}
 	}
 	payload := map[string]any{
@@ -154,7 +164,10 @@ func (u *usageLog) scheduleTrailingFlush() {
 		defer u.mu.Unlock()
 		u.flushTimer = nil
 		if len(u.inflight) > 0 {
-			u.flush()
+			// Maintenance write, never a pruning one: a request streaming
+			// past inflightStaleSeconds is still live, and dropping it here
+			// would mark a busy proxy idle (restart eligibility).
+			u.flushTable(false)
 		}
 	})
 }

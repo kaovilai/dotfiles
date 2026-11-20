@@ -498,6 +498,25 @@ with patch.dict(os.environ, env), patch.dict(ns, {'owned':lambda i:False,'listen
         assert 'rejected the API key' in str(error), error
 print('ok - inflight busy semantics and key-refusal ordering (all mocked)')
 
+# ensure(): a request starting while the key probe runs must flip the
+# restart into a reuse (or, on the stray path, the serving refusal), never a
+# stop — the probe is a network round trip between the busy checks.
+flips=iter([False, True])
+with patch.dict(os.environ, env), patch.dict(ns, dict(patched, **{
+        'busy':lambda port: next(flips), 'gateway_rejects_key':lambda base,key: False, 'stop': no_stop})):
+    reused=g['ensure'](legacy_root, 4166, fresh(), 3, [])
+    assert reused['pid']==424242, 'a proxy that became busy during the probe must be reused, not stopped'
+flips=iter([False, True])
+with patch.dict(os.environ, env), patch.dict(ns, {'owned':lambda i:False,'listeners':lambda port:set(),
+        'stray':lambda port,root:{99},'busy':lambda port: next(flips),'go_binary':lambda: gobin,
+        'gateway_rejects_key':lambda base,key: False, 'stop_stray': no_stop_stray}):
+    try:
+        g['ensure'](legacy_root, 4166, fresh(), 3, [])
+        raise AssertionError('a stray that became busy during the probe must not be replaced')
+    except RuntimeError as error:
+        assert 'serving requests' in str(error), error
+print('ok - busy rechecked after the key probe (all mocked)')
+
 # ensure(): code changed and idle -> zero-gap swap: new child spawned, old
 # group retired only after the new one accepts, token kept.
 killed=set()

@@ -17,6 +17,7 @@ import socket
 import stat
 import subprocess
 import sys
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -264,6 +265,28 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
         return None  # never follow: the key must not travel to another host
 
 
+def _probe_status(opener, request, deadline):
+    """Response status for one credential shape, cut off at the wall-clock
+    deadline (a socket timeout bounds single operations, not a gateway that
+    trickles response headers — and the caller holds the startup lock).
+    None = not answered inside the budget (not a verdict)."""
+    result = {}
+
+    def run():
+        try:
+            with opener.open(request, timeout=60) as response:
+                result['status'] = response.status
+        except urllib.error.HTTPError as error:
+            result['status'] = error.code
+        except Exception:
+            result['status'] = None
+
+    worker = threading.Thread(target=run, daemon=True)
+    worker.start()
+    worker.join(max(0.1, deadline - time.monotonic()))
+    return result.get('status')
+
+
 def gateway_rejects_key(base, key):
     """True only on a DEFINITE rejection: every credential shape the serving
     proxy itself sends got 401 from the gateway. A 403 (entitlement, monthly
@@ -284,20 +307,14 @@ def gateway_rejects_key(base, key):
     opener = urllib.request.build_opener(_NoRedirect)
     shapes = ({'Authorization': 'Bearer ' + key},
               {'x-api-key': key, 'anthropic-version': '2023-06-01'})
-    # One budget across both shapes (Go: keyProbeTotalBudget): a blackholed
-    # gateway must not hold a swap for one timeout per shape.
+    # One wall-clock budget across both shapes (Go: keyProbeTotalBudget): a
+    # blackholed or trickling gateway must not hold the startup lock for one
+    # timeout per shape.
     deadline = time.monotonic() + 20
     for headers in shapes:
         request = urllib.request.Request(endpoint, headers=headers)
-        timeout = max(1.0, deadline - time.monotonic())
-        try:
-            with opener.open(request, timeout=timeout) as response:
-                status = response.status
-        except urllib.error.HTTPError as error:
-            status = error.code
-        except (OSError, ValueError):
-            return False
-        if status != 401:
+        status = _probe_status(opener, request, deadline)
+        if status is None or status != 401:
             return False
     return True
 
@@ -487,6 +504,12 @@ def ensure(root, port, config, timeout, required):
             # Nobody is mid-request (or a swap is forced, which loses nothing):
             # apply the change now instead of refusing.
             refuse_rejected_key()
+            # The probe is a network round trip: a request may have started
+            # while it ran, and stopping then would cut it. Re-read the
+            # busy state (a forced restart stays forced by design).
+            if not forced and busy(port):
+                changed = None  # fall through to the reuse paths below
+        if changed and (not busy(port) or forced):
             if (info.get('versions') or ['', ''])[-1] == 'go':
                 # Zero-refuse restart: the replacement starts ALONGSIDE the old
                 # Go listener (both bind SO_REUSEPORT) and the old group is
@@ -519,6 +542,10 @@ def ensure(root, port, config, timeout, required):
                 raise RuntimeError('an earlier EnMaaS proxy without its state files is serving requests; '
                                    'run claude-enmaas-restart once they finish')
             refuse_rejected_key()
+            if busy(port):
+                # a request started while the probe ran: same refusal as above
+                raise RuntimeError('an earlier EnMaaS proxy without its state files is serving requests; '
+                                   'run claude-enmaas-restart once they finish')
             notice('replacing an earlier EnMaaS proxy whose state files are gone')
             stop_stray(groups, port, root)
             wait_port_free(port)
