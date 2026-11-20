@@ -24,6 +24,17 @@ type usageLog struct {
 	port     string
 	mu       sync.Mutex
 	inflight map[string]inflightEntry
+
+	// lastFlush bounds how often the (whole-map) inflight rewrite runs: only
+	// empty<->non-empty transitions must be timely — portServing and the
+	// EnMaaS controller's busy() key on non-emptiness — while steady
+	// concurrency would otherwise rewrite the file twice per request.
+	lastFlush time.Time
+
+	// The events file stays open across writes: one open+append+close per
+	// request was three syscalls and a path lookup on the hot path.
+	eventsPath string
+	eventsFile *os.File
 }
 
 type inflightEntry struct {
@@ -35,6 +46,15 @@ type inflightEntry struct {
 func newUsageLog(dir, port string) *usageLog {
 	u := &usageLog{dir: dir, port: port, inflight: map[string]inflightEntry{}}
 	u.cleanupInflight()
+	// Write the (empty) inflight table immediately: a live proxy is then
+	// always a live reporter, so idle detection (portServing, the EnMaaS
+	// controller's busy) reads the table instead of falling back to socket
+	// counting — where a client's pooled keep-alive connections would read
+	// busy forever and defer every restart. An empty dir means usage logging
+	// is not configured (handmade test configs): write nothing.
+	if dir != "" {
+		u.flush()
+	}
 	return u
 }
 
@@ -77,7 +97,8 @@ func pidAlive(pid int) bool {
 
 // flush must be called with u.mu held.
 func (u *usageLog) flush() {
-	now := float64(time.Now().UnixNano()) / 1e9
+	u.lastFlush = time.Now()
+	now := float64(u.lastFlush.UnixNano()) / 1e9
 	for id, entry := range u.inflight {
 		if now-entry.T > inflightStaleSeconds {
 			delete(u.inflight, id)
@@ -101,18 +122,26 @@ func (u *usageLog) flush() {
 	_ = os.Rename(tmp, u.inflightPath())
 }
 
+// inflightFlushAfter is the steady-state debounce: transitions flush at once,
+// anything else at most this often (keeps the stale-entry pruning and the
+// `updated` stamp roughly current without a rewrite per request).
+const inflightFlushAfter = time.Minute
+
 func (u *usageLog) start(id, model, requested string) {
 	if id == "" {
 		return
 	}
 	u.mu.Lock()
 	defer u.mu.Unlock()
+	empty := len(u.inflight) == 0
 	u.inflight[id] = inflightEntry{
 		T:         float64(time.Now().UnixNano()) / 1e9,
 		Model:     model,
 		Requested: requested,
 	}
-	u.flush()
+	if empty || time.Since(u.lastFlush) > inflightFlushAfter {
+		u.flush()
+	}
 }
 
 func (u *usageLog) end(id string) {
@@ -123,7 +152,9 @@ func (u *usageLog) end(id string) {
 	defer u.mu.Unlock()
 	if _, ok := u.inflight[id]; ok {
 		delete(u.inflight, id)
-		u.flush()
+		if len(u.inflight) == 0 || time.Since(u.lastFlush) > inflightFlushAfter {
+			u.flush()
+		}
 	}
 }
 
@@ -150,7 +181,6 @@ func (u *usageLog) write(event map[string]any) {
 	}
 	u.mu.Lock()
 	defer u.mu.Unlock()
-	_ = os.MkdirAll(u.dir, 0o700)
 	// Rebuild the month from the parsed numbers after the shape check: the
 	// filename never carries a string taken from the event map, so the
 	// analyzer sees ints, not tainted text (the map holds request-derived
@@ -158,12 +188,22 @@ func (u *usageLog) write(event map[string]any) {
 	year, _ := strconv.Atoi(ts[:4])
 	month, _ := strconv.Atoi(ts[5:7])
 	path := filepath.Join(u.dir, fmt.Sprintf("events-%04d-%02d.jsonl", year, month))
-	file, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0o600)
-	if err != nil {
-		return
+	// The month file stays open across writes (one open per process per
+	// month, not one per request); a failed open is retried on the next
+	// event by remembering only the path that is actually open.
+	if u.eventsFile == nil || u.eventsPath != path {
+		_ = os.MkdirAll(u.dir, 0o700)
+		if u.eventsFile != nil {
+			_ = u.eventsFile.Close()
+			u.eventsFile = nil
+		}
+		file, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0o600)
+		if err != nil {
+			return
+		}
+		u.eventsFile, u.eventsPath = file, path
 	}
-	defer file.Close()
-	_, _ = file.Write(append(body, '\n'))
+	_, _ = u.eventsFile.Write(append(body, '\n'))
 }
 
 // isoMonthPrefix reports whether s starts with YYYY-MM (digits and the one

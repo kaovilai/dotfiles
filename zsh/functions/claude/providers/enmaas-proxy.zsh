@@ -92,9 +92,65 @@ def notice(message):
     print('claude-enmaas: ' + message, file=sys.stderr)
 
 
+def _usage_dir():
+    return (os.environ.get('LLM_USAGE_DIR')
+            or Path(os.environ.get('XDG_STATE_HOME') or Path.home() / '.local' / 'state') / 'llm-usage')
+
+
+def pid_alive(pid):
+    try:
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        return False
+
+
+def inflight_busy(port):
+    """None when no live in-flight reporter owns the port (caller falls back
+    to socket counting); otherwise True/False from the reporters' tables.
+    Mirrors the Go lifecycle's portServing: the Go child writes
+    inflight-<port>-<pid>.json per request (and an empty table at startup),
+    so a live reporter is the truth — client keep-alive pools hold ESTABLISHED
+    sockets between requests, and socket counting alone would read busy
+    forever, deferring every restart to a forced one."""
+    directory = Path(_usage_dir())
+    reporter = False
+    try:
+        names = os.listdir(directory)
+    except OSError:
+        return None
+    for name in names:
+        if not name.endswith('.json') or not name.startswith('inflight-%s-' % port):
+            continue
+        try:
+            pid = int(name[:-len('.json')].rsplit('-', 1)[1])
+        except (IndexError, ValueError):
+            continue
+        if not pid_alive(pid):
+            continue
+        reporter = True
+        try:
+            with open(directory / name) as stream:
+                doc = json.load(stream)
+        except (OSError, ValueError):
+            return True  # a live reporter that cannot be read: stay safe
+        if doc.get('requests'):
+            return True
+    return False if reporter else None
+
+
 def busy(port):
-    # Client connections the proxy is serving right now (ESTABLISHED sockets
-    # whose local end is the port). Restarting then would cut off a request.
+    # Whether the proxy is serving requests right now; restarting then would
+    # cut one off. Preferred source: the Go child's in-flight tables (see
+    # inflight_busy); only when no live reporter exists do ESTABLISHED client
+    # sockets decide (the fallback the Go lifecycle also keeps).
+    inflight = inflight_busy(port)
+    if inflight is not None:
+        return inflight
     result = subprocess.run(['lsof', '-nP', '-iTCP:%s' % port, '-sTCP:ESTABLISHED', '-Fn'],
                             text=True, capture_output=True)
     return any(line.startswith('n') and (':%s->' % port) in line for line in result.stdout.splitlines())
@@ -192,6 +248,38 @@ def ready(info, root):
 
 def signature(key, token):
     return hmac.new(token.encode(), key.encode(), hashlib.sha256).hexdigest()
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None  # never follow: the key must not travel to another host
+
+
+def gateway_rejects_key(base, key):
+    """True only on a DEFINITE rejection: every credential shape the serving
+    proxy itself sends got 401 from the gateway. A 403 (entitlement, monthly
+    cap), a redirect, an outage or an unreachable gateway all pass — none is
+    a verdict a restart could act on, and waiting on one would block healthy
+    swaps. Same contract as the Go keypreflight (checkUpstreamKey), which
+    covers the hosted-only flavors; this gives the :4146 swap the guard the
+    2026-11-16 incident showed it was missing (a rejected key replaced a
+    working proxy there)."""
+    endpoint = base.rstrip('/') + '/v1/models'
+    opener = urllib.request.build_opener(_NoRedirect)
+    shapes = ({'Authorization': 'Bearer ' + key},
+              {'x-api-key': key, 'anthropic-version': '2023-06-01'})
+    for headers in shapes:
+        request = urllib.request.Request(endpoint, headers=headers)
+        try:
+            with opener.open(request, timeout=20) as response:
+                status = response.status
+        except urllib.error.HTTPError as error:
+            status = error.code
+        except (OSError, ValueError):
+            return False
+        if status != 401:
+            return False
+    return True
 
 
 # The child is the Go proxy; these env prefixes reach it (knobs, usage log
@@ -403,6 +491,15 @@ def ensure(root, port, config, timeout, required):
                 probe.bind(('127.0.0.1', port))
             except OSError:
                 raise RuntimeError('proxy port is occupied; refusing to adopt or stop its listener')
+    # Before ANY side effect (config write, spawn, old-group retire): a
+    # replacement the gateway would answer 401 must not take over from the
+    # proxy that is serving. Raising here leaves the old proxy untouched (the
+    # zero-gap swap retires it only after the replacement is verified) and
+    # fails a cold start with the key error instead of launching one that can
+    # only answer 401.
+    if gateway_rejects_key(config['model_list'][0]['litellm_params']['api_base'], key):
+        raise RuntimeError('the upstream gateway rejected the API key (HTTP 401); '
+                           'refresh ENMAAS_API_KEY in the credentials file (default ~/secrets.zsh)')
     token = swap[1]['token'] if swap else 'sk-enmaas-' + secrets.token_hex(32)
     config['general_settings']['master_key'] = token
     write_private(root / 'config.json', config)

@@ -70,6 +70,25 @@ func (h *proxyHarness) count(model string) int {
 // LIMIT_REWRITE=0 used to silence the outage rewrite too, leaving 502/504/529
 // answers unwritten for T3 (it only resumes a thread from a reset-bearing
 // answer). Either knob must be enough on its own.
+// The serving transport must widen the idle pool: the Go default of 2 idle
+// connections per host re-dials the gateway (full TCP+TLS handshake) for every
+// request past the second under parallel sessions — latency on the hot path
+// and a connection storm at the gateway's front door.
+func TestServingTransportPoolsIdleConnections(t *testing.T) {
+	t.Setenv("ENMAAS_API_KEY", "k")
+	t.Setenv("LLM_USAGE_DIR", t.TempDir())
+	transport, ok := newApp(loadConfig("claude", "4148", "")).client.Transport.(*http.Transport)
+	if !ok {
+		t.Fatal("the client must use the tuned http.Transport")
+	}
+	if transport.MaxIdleConnsPerHost < 32 || transport.MaxIdleConns < 2*transport.MaxIdleConnsPerHost {
+		t.Fatalf("idle pool too small: per-host %d total %d", transport.MaxIdleConnsPerHost, transport.MaxIdleConns)
+	}
+	if !transport.ForceAttemptHTTP2 {
+		t.Fatal("HTTP/2 must stay enabled")
+	}
+}
+
 func TestOutageRewriteSurvivesLimitRewriteOff(t *testing.T) {
 	h := newProxyHarness(t, 529, `{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}`, func(c *config) {
 		c.LimitRewrite = false

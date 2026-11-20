@@ -407,7 +407,8 @@ gobin=('fake-go-bin', 'hash-1')
 
 # ensure(): not owned -> spawn the Go binary with the generated config, a
 # proxy log and a filtered env; identity records the source hash.
-with patch.dict(os.environ, env), patch.object(ns['subprocess'],'Popen',spawn), patch.object(ns['socket'],'socket',OpenSocket),      patch.dict(ns, {'listeners':lambda port:set(),'birth':lambda pid:'t0','ready':lambda info,root:True,'go_binary':lambda: gobin}):
+with patch.dict(os.environ, env), patch.object(ns['subprocess'],'Popen',spawn), patch.object(ns['socket'],'socket',OpenSocket),      patch.dict(ns, {'listeners':lambda port:set(),'birth':lambda pid:'t0','ready':lambda info,root:True,'go_binary':lambda: gobin,
+        'gateway_rejects_key':lambda base,key: False}):
     g['ensure'](froot, 4166, fresh(), 3, [])
 argv,options=spawned[0]
 assert argv==['fake-go-bin','--flavor','enmaas','--config',str(froot/'config.json'),'--port','4166'], argv
@@ -459,7 +460,8 @@ def fake_killpg(pid, sig=None):
     killed.add(pid)
 spawned.clear()
 swap=dict(patched, **{'busy':lambda port:False, 'go_binary':lambda: ('fake-go-bin','hash-2'), 'birth':lambda pid:'t0',
-          'child_serving':lambda log: True, '_port_conflict':lambda log: False},
+          'child_serving':lambda log: True, '_port_conflict':lambda log: False,
+          'gateway_rejects_key':lambda base,key: False},
           listeners=lambda port:{999999}, owned=lambda i: i['pid'] not in killed)
 with patch.dict(os.environ, env), patch.dict(ns, swap), patch.object(ns['subprocess'],'Popen',spawn),      patch.object(ns['socket'],'socket',OpenSocket), patch.object(ns['os'],'killpg',fake_killpg),      patch.object(ns['os'],'getpgid',lambda pid: 999999):
     result=g['ensure'](froot, 4166, fresh(), 3, [])

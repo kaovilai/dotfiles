@@ -85,7 +85,14 @@ func newApp(cfg *config) *app {
 	// (doh.go), mirroring dns_fallback.py on the LiteLLM path.
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.ForceAttemptHTTP2 = true
-	transport.DialContext = dohDialContext(&net.Dialer{Timeout: 30 * time.Second}, newDoHResolver())
+	// The default pool keeps only 2 idle connections per host: with parallel
+	// sessions (agent fanouts) every request past the second redials the
+	// gateway — a full TCP+TLS handshake onto every request's first-byte
+	// latency, and a connection storm the gateway's front door rates. Widen
+	// the pool so bursts reuse warm connections.
+	transport.MaxIdleConns = 256
+	transport.MaxIdleConnsPerHost = 64
+	transport.DialContext = dohDialContext(&net.Dialer{Timeout: 30 * time.Second}, sharedDoHResolver())
 	// First-byte budget: request write to response headers.
 	if cfg.RequestTimeout > 0 {
 		transport.ResponseHeaderTimeout = cfg.RequestTimeout

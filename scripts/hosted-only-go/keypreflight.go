@@ -50,7 +50,7 @@ var keyProbe = probeUpstreamKey
 // request 20s, still bounding a launch on a dead network.
 func keyProbeClient() *http.Client {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
-	transport.DialContext = dohDialContext(&net.Dialer{Timeout: keyProbeDialBudget}, newDoHResolver())
+	transport.DialContext = dohDialContext(&net.Dialer{Timeout: keyProbeDialBudget}, sharedDoHResolver())
 	return &http.Client{
 		Timeout:   keyProbeTotalBudget,
 		Transport: transport,
@@ -82,15 +82,18 @@ func probeUpstreamKey(base, key string) int {
 		},
 	}
 	status := 0
+	// One client for both shapes: they hit the same endpoint, so the second
+	// rides the first's connection instead of paying its own TCP+TLS
+	// handshake — the probe runs on every launch and every watcher restart.
+	client := keyProbeClient()
+	defer client.CloseIdleConnections()
 	for _, shape := range shapes {
 		req, err := http.NewRequest(http.MethodGet, endpoint, nil)
 		if err != nil {
 			return 0
 		}
 		shape(req)
-		client := keyProbeClient()
 		resp, err := client.Do(req)
-		client.CloseIdleConnections()
 		if err != nil {
 			return 0
 		}
@@ -108,11 +111,11 @@ func probeUpstreamKey(base, key string) int {
 //
 // Scope: the hosted-only flavors (claude, codex). The route-table flavors mlx,
 // openai and vertex carry their own upstream and key, which this EnMaaS probe
-// does not describe. The enmaas flavor DOES share the gateway and key, but its
+// does not describe. The enmaas flavor shares the gateway and key too, but its
 // swap lives in the Python controller (zsh/functions/claude/providers/
 // enmaas-proxy.zsh), which spawns `serve` itself and never reaches startProxy:
-// :4146 is NOT covered here, and a rejected key can still replace a working
-// enmaas proxy there (it only verifies binding and the serve loop).
+// :4146 is guarded there instead, by the controller's gateway_rejects_key
+// (same both-shapes, 401-only contract) running before any side effect.
 func checkUpstreamKey(flavor, base, key string) error {
 	if routeTableFlavor(flavor) || base == "" || key == "" {
 		return nil

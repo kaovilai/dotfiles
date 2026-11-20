@@ -93,8 +93,13 @@ func runServe() {
 
 	startCacheSweeper(cfg)
 	server := &http.Server{
-		Handler:           newApp(cfg),
+		Handler: newApp(cfg),
+		// Idle client keep-alives are closed after this instead of being held
+		// forever: socket-counting idle checks (the EnMaaS controller's busy)
+		// then see the truth, and file descriptors do not accumulate across
+		// long-lived client pools. Active requests and streams are unaffected.
 		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       75 * time.Second,
 	}
 	listener, err := reusePortListener("127.0.0.1:" + cfg.Port)
 	if err != nil {

@@ -149,6 +149,41 @@ with tempfile.TemporaryDirectory(prefix='enmaas-go-swap-', dir=os.environ.get('T
         wait_for(lambda: not helper['owned'](info2), 'the forced swap did not retire the old group')
         print('PASS: a forced restart swaps')
 
+        # A gateway that DEFINITELY rejects the key (401 to every credential
+        # shape) must not feed a swap: the healthy proxy keeps serving, and a
+        # cold start fails with the key error instead of a proxy that can only
+        # answer 401 (the 2026-11-16 incident class, now guarded for :4146
+        # like the hosted-only flavors already were).
+        class RejectingGateway(BaseHTTPRequestHandler):
+            def log_message(self, *args):
+                pass
+
+            def do_GET(self):
+                self.send_response(401)
+                self.send_header('Content-Length', '0')
+                self.end_headers()
+
+        rejector = ThreadingHTTPServer(('127.0.0.1', 0), RejectingGateway)
+        threading.Thread(target=rejector.serve_forever, daemon=True).start()
+        rejected_config = json.loads(json.dumps(config))
+        for row in rejected_config['model_list']:
+            row['litellm_params']['api_base'] = 'http://127.0.0.1:%d' % rejector.server_address[1]
+
+        def controller_config(op, at_port, cfg):
+            args = [str(at_port), '90', 'offline-model'] if op == 'ensure' else [str(at_port)]
+            return subprocess.run(['python3', str(program), op, *args], env=env, input=json.dumps(cfg),
+                                  text=True, capture_output=True, timeout=120)
+
+        cold_port = free_port()
+        cold = controller_config('ensure', cold_port, rejected_config)
+        assert cold.returncode != 0 and 'rejected the API key' in cold.stderr, cold.stderr
+        refused = controller_config('ensure', port, rejected_config)
+        assert refused.returncode != 0 and 'rejected the API key' in refused.stderr, refused.stderr
+        assert json.loads((root / 'proxy.json').read_text()) == info3, 'a rejected key must not replace the serving proxy'
+        assert helper['ready'](info3, root), 'the old proxy must still serve after the refused swap'
+        rejector.shutdown()
+        print('PASS: a definitely-rejected key refuses the swap and the cold start')
+
         # A forced swap while a request is in flight: the old group is SIGTERMed and
         # must be given its graceful-drain budget (10 s) before any SIGKILL — the
         # request below takes 9.5 s, longer than the 8 s escalation this used to
