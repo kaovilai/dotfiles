@@ -293,24 +293,34 @@ _claude_listen_pids() {
 # the socket test alone read "busy" forever and deferred restarts stalled
 # (2026-11-06 audit); sockets remain the fallback for a port that reports
 # nothing. Same live-pid rule as llm-usage's read_inflight.
+#
+# Table trust matches the Go inflightTable and the EnMaaS controller's
+# inflight_busy: a request reads busy; an empty table is idle only when it
+# proves it — a heartbeating proxy (the Go usage log's `beat`) whose stamp
+# went stale, a missing/null requests map, or an unreadable file is UNKNOWN
+# and falls back to the socket test, so a proxy that cannot publish its
+# state never reads idle while a request may be running.
 _claude_port_serving() {
-    local _cps_dir="${LLM_USAGE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/llm-usage}" _cps_f _cps_pid
+    local _cps_dir="${LLM_USAGE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/llm-usage}" _cps_f _cps_pid _cps_v
     local -a _cps_files
+    local -i _cps_reporter=0 _cps_unknown=0
     _cps_files=("$_cps_dir"/inflight-"$1"-*.json(N))
-    if (( ${#_cps_files} )); then
-        local -i _cps_reporter=0
-        for _cps_f in $_cps_files; do
-            _cps_pid="${${_cps_f:t}:r}"; _cps_pid="${_cps_pid##*-}"
-            [[ "$_cps_pid" == <-> ]] && kill -0 "$_cps_pid" 2>/dev/null || continue
-            _cps_reporter=1
-            if jq -e '(.requests // {}) | length > 0' "$_cps_f" >/dev/null 2>&1; then
-                return 0
-            fi
-        done
-        # a live reporter with an empty table says idle; only dead-pid or
-        # unreadable leftovers do not say anything — use the socket test
-        (( _cps_reporter )) && return 1
-    fi
+    for _cps_f in $_cps_files; do
+        _cps_pid="${${_cps_f:t}:r}"; _cps_pid="${_cps_pid##*-}"
+        [[ "$_cps_pid" == <-> ]] && kill -0 "$_cps_pid" 2>/dev/null || continue
+        _cps_v="$(jq -r 'if ((.requests // {}) | length) > 0 then "busy"
+            elif .requests == null then "unknown"
+            elif (.beat // false) and ((now - (.updated // 0)) > 120) then "unknown"
+            else "idle" end' "$_cps_f" 2>/dev/null)"
+        case "$_cps_v" in
+            busy) return 0 ;;
+            idle) _cps_reporter=1 ;;
+            *) _cps_unknown=1 ;;
+        esac
+    done
+    # a live reporter with a trusted empty table says idle; anything unknown
+    # (or no reporter at all) falls through to the socket test
+    (( _cps_reporter && ! _cps_unknown )) && return 1
     if (( $+commands[lsof] )); then
         lsof -nP -iTCP:"$1" -sTCP:ESTABLISHED -Fn 2>/dev/null | grep -q -- "^n.*:$1->"
     elif (( $+commands[ss] )); then
