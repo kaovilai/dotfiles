@@ -594,8 +594,9 @@ def ensure(root, port, config, timeout, required):
                 # the only path that retires the listener without a
                 # replacement already listening alongside, so require the
                 # socket check to agree on idle before stopping (the pre-Go
-                # controller's own verdict).
-                if _sockets_serving(port):
+                # controller's own verdict). A FORCED restart stays forced
+                # by design — it does not wait for idle.
+                if not forced and _sockets_serving(port):
                     raise RuntimeError('the legacy proxy still holds client connections; '
                                        'run claude-enmaas-restart once they finish')
                 notice('%s changed; restarting the idle proxy' % ', '.join(changed))
