@@ -16,6 +16,12 @@ const (
 	classifierMarker = "security monitor for autonomous AI coding agents"
 )
 
+// inflightHeartbeatEvery is the idle heartbeat interval (see newUsageLog).
+// Readers treat a `beat` table whose `updated` stamp is older than a few
+// intervals as unknown — the proxy cannot publish, so its empty table is
+// not evidence of idle.
+const inflightHeartbeatEvery = 30 * time.Second
+
 // usageLog writes the same events-YYYY-MM.jsonl lines litellm_usage_log.py
 // writes, so `llm-usage` and the menubar keep working on the Go path.
 type usageLog struct {
@@ -64,6 +70,18 @@ func newUsageLog(dir, port string) *usageLog {
 	// is not configured (handmade test configs): write nothing.
 	if dir != "" {
 		u.flush()
+		// Idle heartbeat: a quiet proxy still refreshes its table's
+		// `updated` stamp (with the `beat` marker), so a reader can tell a
+		// healthy empty table from one the proxy can no longer publish —
+		// a read-only usage dir leaves the last table in place, and an
+		// empty one would read idle during an active request.
+		go func() {
+			for range time.Tick(inflightHeartbeatEvery) {
+				u.mu.Lock()
+				u.flush()
+				u.mu.Unlock()
+			}
+		}()
 	}
 	return u
 }
@@ -124,6 +142,7 @@ func (u *usageLog) flush() {
 		"pid":      os.Getpid(),
 		"port":     u.port,
 		"updated":  now,
+		"beat":     true,
 		"requests": u.inflight,
 	}
 	body, err := json.Marshal(payload)

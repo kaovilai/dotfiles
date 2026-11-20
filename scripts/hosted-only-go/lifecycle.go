@@ -97,22 +97,6 @@ func dedupeInts(values []int) []int {
 	return out
 }
 
-// inflightHasRequests reports whether an inflight-<port>-<pid>.json has at
-// least one request in flight.
-func inflightHasRequests(path string) bool {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return false
-	}
-	var doc struct {
-		Requests map[string]json.RawMessage `json:"requests"`
-	}
-	if json.Unmarshal(data, &doc) != nil {
-		return false
-	}
-	return len(doc.Requests) > 0
-}
-
 // usageInflightDir mirrors the zsh LLM_USAGE_DIR resolution.
 func usageInflightDir() string {
 	if dir := os.Getenv("LLM_USAGE_DIR"); dir != "" {
@@ -125,11 +109,38 @@ func usageInflightDir() string {
 	return state + "/llm-usage"
 }
 
+// inflightTable reads one reporter's table: whether it lists requests, and
+// whether an empty table can be trusted as idle. A heartbeating proxy
+// (`beat`, written by the Go usage log's idle heartbeat) refreshes
+// `updated` even when idle; a beat whose stamp has gone// stale means the proxy can no longer publish (read-only usage dir), so its
+// empty table is not evidence of idle.
+func inflightTable(path string) (requests, trustworthy bool) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return false, true // unreadable: the old behavior (a live reporter)
+	}
+	var doc struct {
+		Requests map[string]json.RawMessage `json:"requests"`
+		Updated  float64                     `json:"updated"`
+		Beat     bool                        `json:"beat"`
+	}
+	if json.Unmarshal(data, &doc) != nil {
+		return false, true
+	}
+	if len(doc.Requests) > 0 {
+		return true, true
+	}
+	if doc.Beat && time.Since(time.Unix(0, int64(doc.Updated*1e9))) > 4*inflightHeartbeatEvery {
+		return false, false // cannot publish: the empty table says nothing
+	}
+	return false, true
+}
+
 // portServing mirrors _claude_port_serving: the port's inflight files are the
 // preferred source (a keep-alive pool holds ESTABLISHED sockets between
 // requests, so sockets alone would read busy forever); a live reporter with an
 // empty table says idle, and only dead-pid leftovers fall back to the socket
-// test.
+// test. A reporter whose beat went stale is not a reporter (see inflightTable).
 func portServing(port string) bool {
 	matches, _ := filepath.Glob(filepath.Join(usageInflightDir(), "inflight-"+port+"-*.json"))
 	reporter := false
@@ -139,9 +150,12 @@ func portServing(port string) bool {
 		if err != nil || !pidAlive(pid) {
 			continue
 		}
-		reporter = true
-		if inflightHasRequests(path) {
+		requests, trustworthy := inflightTable(path)
+		if requests {
 			return true
+		}
+		if trustworthy {
+			reporter = true
 		}
 	}
 	if reporter {

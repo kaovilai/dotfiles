@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -67,6 +68,38 @@ func fakeInflight(t *testing.T, dir, port string, pid int, requests string) {
 	path := filepath.Join(dir, "inflight-"+port+"-"+strconv.Itoa(pid)+".json")
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestInflightTableTrust(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "inflight-45998-1.json")
+	write := func(body string) {
+		t.Helper()
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// old-style table (no beat), ancient stamp: trusted empty
+	write(`{"pid":1,"port":"45998","updated":1,"requests":{}}`)
+	if requests, trustworthy := inflightTable(path); requests || !trustworthy {
+		t.Fatalf("old-style empty table must be trusted idle: %v %v", requests, trustworthy)
+	}
+	// heartbeating proxy, fresh stamp: trusted empty
+	fresh := float64(time.Now().UnixNano()) / 1e9
+	write(fmt.Sprintf(`{"pid":1,"port":"45998","updated":%f,"beat":true,"requests":{}}`, fresh))
+	if requests, trustworthy := inflightTable(path); requests || !trustworthy {
+		t.Fatalf("a fresh beat must be trusted idle: %v %v", requests, trustworthy)
+	}
+	// heartbeating proxy, stale stamp: the empty table says nothing
+	write(`{"pid":1,"port":"45998","updated":1,"beat":true,"requests":{}}`)
+	if requests, trustworthy := inflightTable(path); requests || trustworthy {
+		t.Fatalf("a stale beat must not be evidence of idle: %v %v", requests, trustworthy)
+	}
+	// requests in flight beat everything
+	write(`{"pid":1,"port":"45998","updated":1,"beat":true,"requests":{"r1":{}}}`)
+	if requests, trustworthy := inflightTable(path); !requests || !trustworthy {
+		t.Fatalf("a request must read busy: %v %v", requests, trustworthy)
 	}
 }
 

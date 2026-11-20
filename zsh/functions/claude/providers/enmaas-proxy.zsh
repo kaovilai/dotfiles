@@ -154,6 +154,14 @@ def inflight_busy(port):
             continue
         if requests:
             return True
+        if doc.get('beat') and time.time() - float(doc.get('updated') or 0) > 120:
+            # A heartbeating proxy (the Go usage log republishes its table
+            # every 30 s even when idle) whose beat went stale can no longer
+            # publish — a read-only usage dir leaves this empty table in
+            # place, and it must not read as idle during an active request.
+            # Unknown, like an unreadable table.
+            unreadable = True
+            continue
     if reporter and not unreadable:
         return False
     return None

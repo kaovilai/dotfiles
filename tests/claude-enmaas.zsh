@@ -380,7 +380,7 @@ _claude_enmaas_assert 'explicit vision fallback model is routed' test "$(jq -r '
 # Exercise the actual emitted controller functions with patched sockets,
 # processes and go_binary. Never touches a real runtime, listener or toolchain.
 python3 - "$tmp/actual-daemon.py" "$tmp" <<'PY'
-import json, os, runpy, sys
+import json, os, runpy, sys, time
 from pathlib import Path
 from unittest.mock import patch
 p=Path(sys.argv[2]); g=runpy.run_path(sys.argv[1]); ns=g['ensure'].__globals__
@@ -466,11 +466,19 @@ with patch.dict(os.environ, env):
     assert g['inflight_busy'](4166) is False
     table.write_text(json.dumps({'pid':me,'requests':{'r':{'t':1,'model':'m'}}}))
     assert g['inflight_busy'](4166) is True
-# valid JSON but not a table shape (null, a list): unknown, never a crash
-table.write_text('null')
-assert g['inflight_busy'](4166) is None
-table.write_text('[]')
-assert g['inflight_busy'](4166) is None
+    # valid JSON but not a table shape (null, a list): unknown, never a crash
+    table.write_text('null')
+    assert g['inflight_busy'](4166) is None
+    table.write_text('[]')
+    assert g['inflight_busy'](4166) is None
+    # a heartbeating proxy whose beat went stale cannot publish: unknown, not idle
+    table.write_text(json.dumps({'pid':me,'beat':True,'updated':time.time()-600,'requests':{}}))
+    assert g['inflight_busy'](4166) is None
+    table.write_text(json.dumps({'pid':me,'beat':True,'updated':time.time(),'requests':{}}))
+    assert g['inflight_busy'](4166) is False
+    # an old-style table (no beat) is trusted however old its stamp is
+    table.write_text(json.dumps({'pid':me,'updated':1,'requests':{}}))
+    assert g['inflight_busy'](4166) is False
 
 # ensure(): a definitely-rejected key must refuse BEFORE the legacy stop or
 # the stray cleanup retires anything — a stop followed by a refused spawn
