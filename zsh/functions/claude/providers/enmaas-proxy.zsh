@@ -172,6 +172,15 @@ def inflight_busy(port):
     return None
 
 
+def _sockets_serving(port):
+    # ESTABLISHED client sockets on the port: the fallback verdict when the
+    # in-flight tables say nothing (and an extra confirmation for the legacy
+    # stop-then-start path, which retires the only listener).
+    result = subprocess.run(['lsof', '-nP', '-iTCP:%s' % port, '-sTCP:ESTABLISHED', '-Fn'],
+                            text=True, capture_output=True)
+    return any(line.startswith('n') and (':%s->' % port) in line for line in result.stdout.splitlines())
+
+
 def busy(port):
     # Whether the proxy is serving requests right now; restarting then would
     # cut one off. Preferred source: the Go child's in-flight tables (see
@@ -180,9 +189,7 @@ def busy(port):
     inflight = inflight_busy(port)
     if inflight is not None:
         return inflight
-    result = subprocess.run(['lsof', '-nP', '-iTCP:%s' % port, '-sTCP:ESTABLISHED', '-Fn'],
-                            text=True, capture_output=True)
-    return any(line.startswith('n') and (':%s->' % port) in line for line in result.stdout.splitlines())
+    return _sockets_serving(port)
 
 
 def stray(port, root):
@@ -581,6 +588,16 @@ def ensure(root, port, config, timeout, required):
                 notice('%s changed; restarting the proxy (zero-gap swap)' % ', '.join(changed))
                 swap = (info_root, info)
             else:
+                # The legacy (litellm-generation) child's tables come from
+                # litellm_usage_log, which prunes >15-min entries and writes
+                # no beat: its empty table is not proof of idle. This is also
+                # the only path that retires the listener without a
+                # replacement already listening alongside, so require the
+                # socket check to agree on idle before stopping (the pre-Go
+                # controller's own verdict).
+                if _sockets_serving(port):
+                    raise RuntimeError('the legacy proxy still holds client connections; '
+                                       'run claude-enmaas-restart once they finish')
                 notice('%s changed; restarting the idle proxy' % ', '.join(changed))
                 stop(info_root, info, port)
                 wait_port_free(port)

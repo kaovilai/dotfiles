@@ -588,6 +588,30 @@ assert options['env']['ENMAAS_API_KEY']=='override-only-secret', options['env']
 assert options['env']['HOSTED_ONLY_UPSTREAM_KEY']=='override-only-secret', options['env']
 print('ok - override-only credentials work')
 
+# ensure(): the legacy stop-then-start path (the only one that retires the
+# listener without a replacement alongside) additionally requires the socket
+# check to agree on idle — a legacy child's pruned, beat-less table is not
+# proof of idle.
+stopped=[]
+def record_stop(*a):
+    stopped.append(a)
+with patch.dict(os.environ, env), patch.dict(ns, dict(patched, **{
+        'busy':lambda port: False, '_sockets_serving':lambda port: True,
+        'go_binary':lambda: gobin, 'stop': record_stop})):
+    try:
+        g['ensure'](legacy_root, 4166, fresh(), 3, [])
+        raise AssertionError('a legacy proxy holding sockets must not be stopped')
+    except RuntimeError as error:
+        assert 'still holds client connections' in str(error), error
+assert not stopped, 'the socket-refused legacy proxy must not be stopped'
+with patch.dict(os.environ, env), patch.dict(ns, dict(patched, **{
+        'busy':lambda port: False, '_sockets_serving':lambda port: False,
+        'go_binary':lambda: gobin, 'stop': record_stop, 'listeners':lambda port:set(),
+        'gateway_rejects_key':lambda base,key: False, 'birth':lambda pid:'t0'})),      patch.object(ns['subprocess'],'Popen',spawn), patch.object(ns['socket'],'socket',OpenSocket):
+    g['ensure'](legacy_root, 4166, fresh(), 3, [])
+assert stopped, 'the legacy stop must run once the sockets agree on idle'
+print('ok - legacy stop gated on the socket verdict')
+
 # ensure(): code changed and idle -> zero-gap swap: new child spawned, old
 # group retired only after the new one accepts, token kept.
 killed=set()
