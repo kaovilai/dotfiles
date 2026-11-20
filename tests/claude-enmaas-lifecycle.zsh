@@ -116,17 +116,23 @@ with tempfile.TemporaryDirectory(prefix='enmaas-lifecycle-') as tmp:
         assert not helper['busy'](port), 'a live reporter with an empty table must read idle'
         with socket.create_connection(('127.0.0.1', port), timeout=2):
             assert not helper['busy'](port), 'an idle client connection is not a request in flight'
-        original_inflight = json.loads(child_inflight.read_text())
-        helper['write_private'](child_inflight, dict(original_inflight,
-            requests={'r1': {'t': 1, 'model': 'offline-model', 'requested': 'offline-model'}}))
+        # Fake the busy state as a SECOND live reporter owned by this test
+        # process's pid instead of overwriting the child's table: the child's
+        # 30 s idle heartbeat republishes its own file, which would race the
+        # restore below. busy() merges live reporters — any non-empty table
+        # reads busy — and the heartbeat never touches this file.
+        fake_reporter = usage_dir / ('inflight-%s-%d.json' % (port, os.getpid()))
+        helper['write_private'](fake_reporter, {'pid': os.getpid(), 'port': port,
+            'updated': time.time(), 'requests': {'r1': {'t': time.time(),
+            'model': 'offline-model', 'requested': 'offline-model'}}})
         wait_for(lambda: helper['busy'](port), 'a live reporter with a request must read busy')
         rejected = controller('ensure', port, changed, ('new-chat',))
         assert rejected.returncode != 0 and 'routing changed' in rejected.stderr, rejected.stderr
         reused = controller('ensure', port, key='different-key')
         assert reused.returncode == 0 and 'serving requests' in reused.stderr, reused.stderr
         assert json.loads((root / 'proxy.json').read_text())['pid'] == original_pid
-        helper['write_private'](child_inflight, original_inflight)
-        wait_for(lambda: not helper['busy'](port), 'restoring the empty table still read busy')
+        fake_reporter.unlink(missing_ok=True)
+        wait_for(lambda: not helper['busy'](port), 'removing the fake reporter still read busy')
         assert helper['ready'](info, root), 'config mismatch stopped a busy service'
         print('PASS: busy (in-flight) proxy is reused on key change; incompatible routing requires explicit restart')
 
