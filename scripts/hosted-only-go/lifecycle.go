@@ -147,6 +147,7 @@ func inflightTable(path string) (requests, trustworthy bool) {
 func portServing(port string) bool {
 	matches, _ := filepath.Glob(filepath.Join(usageInflightDir(), "inflight-"+port+"-*.json"))
 	reporter := false
+	unknown := false
 	for _, path := range matches {
 		base := strings.TrimSuffix(filepath.Base(path), ".json")
 		pid, err := strconv.Atoi(base[strings.LastIndexByte(base, '-')+1:])
@@ -159,9 +160,14 @@ func portServing(port string) bool {
 		}
 		if trustworthy {
 			reporter = true
+		} else {
+			// one live reporter whose table is not evidence of idle makes
+			// the whole verdict unknown, matching the Python inflight_busy:
+			// another reporter's empty table must not outrank it
+			unknown = true
 		}
 	}
-	if reporter {
+	if reporter && !unknown {
 		return false
 	}
 	if path, err := exec.LookPath("lsof"); err == nil {
