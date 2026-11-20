@@ -486,12 +486,18 @@ def knob_digest():
 
 
 def upstream_key():
-    """The credential the Go child will send: ENMAAS_API_KEY, unless an
-    exported HOSTED_ONLY_UPSTREAM_KEY overrides it in loadConfig. Check and
-    ensure must agree on it (the recorded key signature tracks this value)."""
-    key = os.environ['ENMAAS_API_KEY']
+    """The credential the Go child will send: an exported
+    HOSTED_ONLY_UPSTREAM_KEY overrides ENMAAS_API_KEY in loadConfig, and may
+    be the ONLY one set (the child accepts that). Check and ensure must agree
+    on it (the recorded key signature tracks this value)."""
     override = os.environ.get('HOSTED_ONLY_UPSTREAM_KEY', '').strip()
-    return override if override else key
+    if override:
+        return override
+    key = os.environ.get('ENMAAS_API_KEY', '').strip()
+    if not key:
+        raise RuntimeError('neither ENMAAS_API_KEY nor an exported '
+                           'HOSTED_ONLY_UPSTREAM_KEY is set')
+    return key
 
 
 def check(root, port, config, required):

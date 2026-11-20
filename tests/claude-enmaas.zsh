@@ -569,6 +569,22 @@ with patch.object(ns['urllib'].request, 'build_opener', side_effect=AssertionErr
 assert g['gateway_rejects_key']('http://127.0.0.1:1/v1', 'k') is False
 print('ok - probe base validation')
 
+# upstream_key(): an override-only setup (HOSTED_ONLY_UPSTREAM_KEY set,
+# ENMAAS_API_KEY absent — loadConfig accepts it) must not KeyError; the child
+# env carries the override as its key.
+spawned.clear()
+oroot=p/'runtime-override-only'; oroot.mkdir(mode=0o700)
+with patch.dict(os.environ, env, clear=True):
+    del os.environ['ENMAAS_API_KEY']
+    os.environ['HOSTED_ONLY_UPSTREAM_KEY']='override-only-secret'
+    with patch.dict(ns, {'owned':lambda i:False,'listeners':lambda port:set(),'stray':lambda port,root:set(),
+            'go_binary':lambda: gobin,'ready':lambda i,r:True,'birth':lambda pid:'t0','gateway_rejects_key':lambda base,key: False}),          patch.object(ns['subprocess'],'Popen',spawn), patch.object(ns['socket'],'socket',OpenSocket):
+        g['ensure'](oroot, 4166, fresh(), 3, [])
+argv,options=spawned[0]
+assert options['env']['ENMAAS_API_KEY']=='override-only-secret', options['env']
+assert options['env']['HOSTED_ONLY_UPSTREAM_KEY']=='override-only-secret', options['env']
+print('ok - override-only credentials work')
+
 # ensure(): code changed and idle -> zero-gap swap: new child spawned, old
 # group retired only after the new one accepts, token kept.
 killed=set()
