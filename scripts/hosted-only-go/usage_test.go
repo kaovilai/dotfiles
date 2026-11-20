@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 func readInflight(t *testing.T, path string) map[string]any {
@@ -111,6 +112,25 @@ func TestUsageLogReopensWhenEventsFileIsReplaced(t *testing.T) {
 	if err != nil || !strings.Contains(string(body), `"e3"`) {
 		t.Fatalf("the write after the file was replaced must land in the new file: %v %q", err, body)
 	}
+}
+
+// A suppressed update still owes the file one write: without the trailing
+// flush, a long request keeps a stale entry set (an ended request listed, a
+// running one missing) until its own end flushes.
+func TestUsageLogTrailingFlush(t *testing.T) {
+	dir := t.TempDir()
+	u := newUsageLog(dir, "45994")
+	path := filepath.Join(dir, "inflight-45994-"+strconv.Itoa(os.Getpid())+".json")
+	u.start("a", "m", "m") // 0->1 transition: immediate flush
+	u.start("b", "m", "m") // suppressed: schedules the trailing flush
+	deadline := time.Now().Add(inflightFlushAfter + 3*time.Second)
+	for time.Now().Before(deadline) {
+		if doc := readInflight(t, path); len(doc["requests"].(map[string]any)) == 2 {
+			return
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	t.Fatal("the trailing flush must eventually write the suppressed update")
 }
 
 func splitLines(body []byte) []string {

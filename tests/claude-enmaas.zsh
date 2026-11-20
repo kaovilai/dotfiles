@@ -453,6 +453,51 @@ with patch.dict(os.environ, env), patch.object(ns['subprocess'],'Popen',side_eff
         assert verdict=={'state':'stale','changed':['gateway/key or dependency settings','hook code or knobs'],'busy':True}, verdict
     assert json.loads((froot/'proxy.json').read_text())==info, 'check must not rewrite state'
 
+# inflight_busy(): a live reporter's readable empty table is idle, a request
+# is busy, and an UNREADABLE table is unknown (None -> socket fallback), not
+# idle. (Needs the env patch: _usage_dir reads LLM_USAGE_DIR from os.environ.)
+with patch.dict(os.environ, env):
+    ud=p/'usage'; ud.mkdir(exist_ok=True)
+    me=os.getpid()
+    table=ud/('inflight-4166-%d.json'%me)
+    table.write_text('{not json')
+    assert g['inflight_busy'](4166) is None, 'an unreadable live reporter is unknown, not idle'
+    table.write_text(json.dumps({'pid':me,'requests':{}}))
+    assert g['inflight_busy'](4166) is False
+    table.write_text(json.dumps({'pid':me,'requests':{'r':{'t':1,'model':'m'}}}))
+    assert g['inflight_busy'](4166) is True
+
+# ensure(): a definitely-rejected key must refuse BEFORE the legacy stop or
+# the stray cleanup retires anything — a stop followed by a refused spawn
+# would leave nothing serving.
+def no_stop(*a):
+    raise AssertionError('a rejected key must not stop the serving proxy')
+
+def no_stop_stray(*a):
+    raise AssertionError('a rejected key must not stop strays')
+
+legacy_root=p/'runtime-legacy'; legacy_root.mkdir(mode=0o700)
+legacy_info={'pid':424242,'birth':'t0','port':4166,'token':'tok','versions':['h1','litellm'],
+             'key_signature':'x','hooks':'h1'}
+g['write_private'](legacy_root/'proxy.json', legacy_info)
+g['write_private'](legacy_root/'config.json', {'model_list': config['model_list']})
+with patch.dict(os.environ, env), patch.dict(ns, dict(patched, **{
+        'busy':lambda port: False, 'gateway_rejects_key':lambda base,key: True, 'stop': no_stop})):
+    try:
+        g['ensure'](legacy_root, 4166, fresh(), 3, [])
+        raise AssertionError('a rejected key must refuse the restart')
+    except RuntimeError as error:
+        assert 'rejected the API key' in str(error), error
+with patch.dict(os.environ, env), patch.dict(ns, {'owned':lambda i:False,'listeners':lambda port:set(),
+        'stray':lambda port,root:{99},'busy':lambda port:False,'go_binary':lambda: gobin,
+        'gateway_rejects_key':lambda base,key: True, 'stop_stray': no_stop_stray}):
+    try:
+        g['ensure'](legacy_root, 4166, fresh(), 3, [])
+        raise AssertionError('a rejected key must refuse the stray replacement')
+    except RuntimeError as error:
+        assert 'rejected the API key' in str(error), error
+print('ok - inflight busy semantics and key-refusal ordering (all mocked)')
+
 # ensure(): code changed and idle -> zero-gap swap: new child spawned, old
 # group retired only after the new one accepts, token kept.
 killed=set()

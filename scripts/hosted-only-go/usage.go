@@ -29,7 +29,11 @@ type usageLog struct {
 	// empty<->non-empty transitions must be timely — portServing and the
 	// EnMaaS controller's busy() key on non-emptiness — while steady
 	// concurrency would otherwise rewrite the file twice per request.
-	lastFlush time.Time
+	// flushTimer is the trailing flush: a suppressed update (still busy, no
+	// transition) schedules one write after the debounce so the table does
+	// not hold a stale entry set for the rest of a long request.
+	lastFlush  time.Time
+	flushTimer *time.Timer
 
 	// The events file stays open across writes: one open+append+close per
 	// request was three syscalls and a path lookup on the hot path. eventsStat
@@ -102,6 +106,10 @@ func pidAlive(pid int) bool {
 // flush must be called with u.mu held.
 func (u *usageLog) flush() {
 	u.lastFlush = time.Now()
+	if u.flushTimer != nil {
+		u.flushTimer.Stop()
+		u.flushTimer = nil
+	}
 	now := float64(u.lastFlush.UnixNano()) / 1e9
 	for id, entry := range u.inflight {
 		if now-entry.T > inflightStaleSeconds {
@@ -133,6 +141,24 @@ func (u *usageLog) flush() {
 // end).
 const inflightFlushAfter = 5 * time.Second
 
+// scheduleTrailingFlush must be called with u.mu held: a suppressed update
+// still owes the file one write after the debounce window, or a long request
+// keeps a stale entry set (an ended request listed, a running one missing)
+// until its own end flushes.
+func (u *usageLog) scheduleTrailingFlush() {
+	if u.flushTimer != nil {
+		return
+	}
+	u.flushTimer = time.AfterFunc(inflightFlushAfter, func() {
+		u.mu.Lock()
+		defer u.mu.Unlock()
+		u.flushTimer = nil
+		if len(u.inflight) > 0 {
+			u.flush()
+		}
+	})
+}
+
 func (u *usageLog) start(id, model, requested string) {
 	if id == "" {
 		return
@@ -147,6 +173,8 @@ func (u *usageLog) start(id, model, requested string) {
 	}
 	if empty || time.Since(u.lastFlush) > inflightFlushAfter {
 		u.flush()
+	} else {
+		u.scheduleTrailingFlush()
 	}
 }
 
@@ -160,6 +188,8 @@ func (u *usageLog) end(id string) {
 		delete(u.inflight, id)
 		if len(u.inflight) == 0 || time.Since(u.lastFlush) > inflightFlushAfter {
 			u.flush()
+		} else {
+			u.scheduleTrailingFlush()
 		}
 	}
 }

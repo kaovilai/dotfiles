@@ -111,14 +111,16 @@ def pid_alive(pid):
 
 def inflight_busy(port):
     """None when no live in-flight reporter owns the port (caller falls back
-    to socket counting); otherwise True/False from the reporters' tables.
-    Mirrors the Go lifecycle's portServing: the Go child writes
+    to socket counting) or when a live reporter's table cannot be read (the
+    truth is unknown, so the socket fallback decides); otherwise True/False
+    from the reporters' tables. The Go child writes
     inflight-<port>-<pid>.json per request (and an empty table at startup),
-    so a live reporter is the truth — client keep-alive pools hold ESTABLISHED
-    sockets between requests, and socket counting alone would read busy
-    forever, deferring every restart to a forced one."""
+    so a live, readable reporter is the truth — client keep-alive pools hold
+    ESTABLISHED sockets between requests, and socket counting alone would
+    read busy forever, deferring every restart to a forced one."""
     directory = Path(_usage_dir())
     reporter = False
+    unreadable = False
     try:
         names = os.listdir(directory)
     except OSError:
@@ -137,10 +139,17 @@ def inflight_busy(port):
             with open(directory / name) as stream:
                 doc = json.load(stream)
         except (OSError, ValueError):
-            continue  # unreadable table: skip it like the Go portServing does
+            # A live reporter whose table vanished or cannot be parsed (a
+            # cleanup race, a truncated write) is unknown, not idle: letting
+            # the socket fallback decide is safer than declaring the port
+            # free while a request may be running.
+            unreadable = True
+            continue
         if doc.get('requests'):
             return True
-    return False if reporter else None
+    if reporter and not unreadable:
+        return False
+    return None
 
 
 def busy(port):
@@ -450,6 +459,23 @@ def ensure(root, port, config, timeout, required):
     key = os.environ['ENMAAS_API_KEY']
     hooks = gohash
     swap = None
+    # Memoized key probe: a replacement the gateway would answer 401 must be
+    # refused BEFORE any stop or spawn retires the serving proxy — including
+    # the legacy stop-then-start branch and stray cleanup below, not only the
+    # zero-gap swap. Probed at most once per launch.
+    _key_probe = {}
+
+    def key_rejected():
+        if 'rejected' not in _key_probe:
+            _key_probe['rejected'] = gateway_rejects_key(
+                config['model_list'][0]['litellm_params']['api_base'], key)
+        return _key_probe['rejected']
+
+    def refuse_rejected_key():
+        if key_rejected():
+            raise RuntimeError('the upstream gateway rejected the API key (HTTP 401); '
+                               'refresh ENMAAS_API_KEY in the credentials file (default ~/secrets.zsh)')
+
     if owned(info):
         if not ready(info, info_root):
             raise RuntimeError('recorded proxy is not ready; run claude-enmaas-kill before relaunching')
@@ -460,6 +486,7 @@ def ensure(root, port, config, timeout, required):
         if changed and (not busy(port) or forced):
             # Nobody is mid-request (or a swap is forced, which loses nothing):
             # apply the change now instead of refusing.
+            refuse_rejected_key()
             if (info.get('versions') or ['', ''])[-1] == 'go':
                 # Zero-refuse restart: the replacement starts ALONGSIDE the old
                 # Go listener (both bind SO_REUSEPORT) and the old group is
@@ -491,6 +518,7 @@ def ensure(root, port, config, timeout, required):
             if busy(port):
                 raise RuntimeError('an earlier EnMaaS proxy without its state files is serving requests; '
                                    'run claude-enmaas-restart once they finish')
+            refuse_rejected_key()
             notice('replacing an earlier EnMaaS proxy whose state files are gone')
             stop_stray(groups, port, root)
             wait_port_free(port)
@@ -507,10 +535,9 @@ def ensure(root, port, config, timeout, required):
     # proxy that is serving. Raising here leaves the old proxy untouched (the
     # zero-gap swap retires it only after the replacement is verified) and
     # fails a cold start with the key error instead of launching one that can
-    # only answer 401.
-    if gateway_rejects_key(config['model_list'][0]['litellm_params']['api_base'], key):
-        raise RuntimeError('the upstream gateway rejected the API key (HTTP 401); '
-                           'refresh ENMAAS_API_KEY in the credentials file (default ~/secrets.zsh)')
+    # only answer 401. (Memoized: the changed- and stray-branch checks above
+    # may already have probed.)
+    refuse_rejected_key()
     token = swap[1]['token'] if swap else 'sk-enmaas-' + secrets.token_hex(32)
     config['general_settings']['master_key'] = token
     write_private(root / 'config.json', config)
