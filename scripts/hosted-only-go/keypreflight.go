@@ -94,7 +94,7 @@ func probeUpstreamKey(base, key string) int {
 	defer client.CloseIdleConnections()
 	ctx, cancel := context.WithTimeout(context.Background(), keyProbeTotalBudget)
 	defer cancel()
-	for _, shape := range shapes {
+	for i, shape := range shapes {
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 		if err != nil {
 			return 0
@@ -110,9 +110,13 @@ func probeUpstreamKey(base, key string) int {
 			_ = resp.Body.Close()
 			return status
 		}
-		// 401 -> the next shape follows: drain (bounded) before Close so the
-		// pooled connection is reused instead of being discarded.
-		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 64<<10))
+		if i < len(shapes)-1 {
+			// 401 and another shape follows: drain (bounded) before Close so
+			// the pooled connection is reused instead of being discarded. The
+			// FINAL 401 needs no drain either — the rejection is already
+			// known, and a stalled body would only delay reporting it.
+			_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 64<<10))
+		}
 		_ = resp.Body.Close()
 	}
 	return status
