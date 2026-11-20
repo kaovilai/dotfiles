@@ -108,6 +108,13 @@ func TestInflightTableTrust(t *testing.T) {
 	if requests, trustworthy := inflightTable(dir); requests || trustworthy {
 		t.Fatalf("an unreadable table must not be trusted idle: %v %v", requests, trustworthy)
 	}
+	// a missing or null table (a foreign writer): unknown, not idle
+	for _, body := range []string{`{"pid":1,"updated":1}`, `{"pid":1,"updated":1,"requests":null}`} {
+		write(body)
+		if requests, trustworthy := inflightTable(path); requests || trustworthy {
+			t.Fatalf("a missing/null table must not be trusted idle: %v %v", requests, trustworthy)
+		}
+	}
 }
 
 // One untrustworthy live reporter makes the whole verdict unknown — another

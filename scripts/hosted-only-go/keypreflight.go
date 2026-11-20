@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -86,10 +87,15 @@ func probeUpstreamKey(base, key string) int {
 	// One client for both shapes: they hit the same endpoint, so the second
 	// rides the first's connection instead of paying its own TCP+TLS
 	// handshake — the probe runs on every launch and every watcher restart.
+	// One shared deadline spans both requests AND their body drains (the
+	// per-Do Client.Timeout restarts per call, so a stalled 401 body could
+	// otherwise add a second full timeout before the rejection is reported).
 	client := keyProbeClient()
 	defer client.CloseIdleConnections()
+	ctx, cancel := context.WithTimeout(context.Background(), keyProbeTotalBudget)
+	defer cancel()
 	for _, shape := range shapes {
-		req, err := http.NewRequest(http.MethodGet, endpoint, nil)
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 		if err != nil {
 			return 0
 		}
@@ -98,14 +104,16 @@ func probeUpstreamKey(base, key string) int {
 		if err != nil {
 			return 0
 		}
-		// Drain (bounded) before Close so the pooled connection is reused by
-		// the second credential shape instead of being discarded.
-		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 64<<10))
-		_ = resp.Body.Close()
-		_ = resp.Body.Close()
 		if status = resp.StatusCode; status != http.StatusUnauthorized {
+			// Terminal: no later probe request can reuse the connection, so
+			// skip the drain and let Close drop it.
+			_ = resp.Body.Close()
 			return status
 		}
+		// 401 -> the next shape follows: drain (bounded) before Close so the
+		// pooled connection is reused instead of being discarded.
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 64<<10))
+		_ = resp.Body.Close()
 	}
 	return status
 }

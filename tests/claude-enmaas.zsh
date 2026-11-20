@@ -577,7 +577,7 @@ print('ok - probe base validation')
 # env carries the override as its key.
 spawned.clear()
 oroot=p/'runtime-override-only'; oroot.mkdir(mode=0o700)
-with patch.dict(os.environ, env, clear=True):
+with patch.dict(os.environ, dict(env, PATH=os.environ.get('PATH', '')), clear=True):
     del os.environ['ENMAAS_API_KEY']
     os.environ['HOSTED_ONLY_UPSTREAM_KEY']='override-only-secret'
     with patch.dict(ns, {'owned':lambda i:False,'listeners':lambda port:set(),'stray':lambda port,root:set(),

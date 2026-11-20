@@ -127,7 +127,9 @@ func inflightTable(path string) (requests, trustworthy bool) {
 		Updated  float64                    `json:"updated"`
 		Beat     bool                       `json:"beat"`
 	}
-	if json.Unmarshal(data, &doc) != nil {
+	if json.Unmarshal(data, &doc) != nil || doc.Requests == nil {
+		// a missing or null table (only a foreign writer produces one — the
+		// Go usage log always writes the map) is unknown, not idle
 		return false, false
 	}
 	if len(doc.Requests) > 0 {
