@@ -137,12 +137,13 @@ func (a *app) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	started := time.Now()
 	// Register the handler BEFORE reading the body: idle detection keys on
 	// the usage table, and a slow or large upload must count as in flight
 	// or an automatic swap could retire this process mid-read. The model
 	// names are refined once the body is decoded (same id, updated entry).
-	requestID := fmt.Sprintf("%d-%d", started.UnixNano(), a.seq.Add(1))
+	// `started` (the metrics clock: ms, ttft) stays AFTER the body read, so
+	// it keeps measuring processing time, not upload time.
+	requestID := fmt.Sprintf("%d-%d", time.Now().UnixNano(), a.seq.Add(1))
 	a.usage.start(requestID, "", "")
 	defer a.usage.end(requestID)
 	if strings.HasSuffix(r.URL.Path, "/count_tokens") {
@@ -154,6 +155,7 @@ func (a *app) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
 		return
 	}
+	started := time.Now()
 	data, err := decodeObject(body)
 	if err != nil {
 		a.writeJSON(w, http.StatusBadRequest, map[string]any{
