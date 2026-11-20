@@ -308,8 +308,8 @@ _claude_port_serving() {
     for _cps_f in $_cps_files; do
         _cps_pid="${${_cps_f:t}:r}"; _cps_pid="${_cps_pid##*-}"
         [[ "$_cps_pid" == <-> ]] && kill -0 "$_cps_pid" 2>/dev/null || continue
-        _cps_v="$(jq -r 'if ((.requests // {}) | length) > 0 then "busy"
-            elif .requests == null then "unknown"
+        _cps_v="$(jq -r 'if (.requests | type) != "object" then "unknown"
+            elif (.requests | length) > 0 then "busy"
             elif (.beat // false) and ((now - (.updated // 0)) > 120) then "unknown"
             else "idle" end' "$_cps_f" 2>/dev/null)"
         case "$_cps_v" in

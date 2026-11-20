@@ -95,6 +95,10 @@ if (( $+commands[jq] )); then
     cps 1 || fail "a missing requests map must fall back to the socket test (busy)"
     w 1 '{"requests":null}'
     cps 1 || fail "a null requests map must fall back to the socket test (busy)"
+    w 1 '{"requests":[]}'
+    cps 1 || fail "a non-map requests value must fall back to the socket test (busy)"
+    w 1 '{"requests":false}'
+    cps 1 || fail "a false requests value must fall back to the socket test (busy)"
     w 1 '{not json'
     cps 1 || fail "an unreadable table must fall back to the socket test (busy)"
     rm -f "$u"/inflight-4141-*.json
