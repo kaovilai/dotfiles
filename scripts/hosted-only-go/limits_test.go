@@ -335,3 +335,42 @@ func TestRenderCappedLongWaitStillFailsFast(t *testing.T) {
 		t.Fatalf("retry-after = %q, want the capped 3600", headers["retry-after"])
 	}
 }
+
+// Rank-first candidate selection can pair a short chosen reset with a
+// month-sized forwarded header (retry-after: 30 alongside
+// x-ratelimit-reset-tokens: 875852): the per-header magnitude check must
+// drop the long one even though the chosen reset was never capped.
+func TestAnalyzeLimitPassthroughDropsMonthSizedHeaderDespiteShortChosen(t *testing.T) {
+	now := time.Now()
+	cfg := testConfig()
+	cfg.LimitResetMax = 3600
+	info := analyzeLimit(cfg, 429, map[string]string{
+		"retry-after": "30", "x-ratelimit-reset-tokens": "875852",
+		"x-ratelimit-remaining-tokens": "0",
+	}, "rate limited", now)
+	if _, ok := info.Passthrough["x-ratelimit-reset-tokens"]; ok {
+		t.Fatal("month-sized x-ratelimit-reset-tokens was forwarded")
+	}
+	if info.Passthrough["x-ratelimit-remaining-tokens"] != "0" {
+		t.Fatalf("remaining dimension dropped: %v", info.Passthrough)
+	}
+	if _, ok := info.Passthrough["retry-after"]; ok {
+		t.Fatal("plain retry-after must not be forwarded (renderLimit sets its own)")
+	}
+	// IETF ratelimit policy with a month-sized reset field is dropped too.
+	info = analyzeLimit(cfg, 429, map[string]string{
+		"retry-after": "30",
+		"ratelimit":   "limit=100, r=0; t=875852",
+	}, "rate limited", now)
+	if _, ok := info.Passthrough["ratelimit"]; ok {
+		t.Fatal("month-sized IETF ratelimit policy was forwarded")
+	}
+	// A short policy stays.
+	info = analyzeLimit(cfg, 429, map[string]string{
+		"retry-after": "30",
+		"ratelimit":   "limit=100, r=0; t=45",
+	}, "rate limited", now)
+	if info.Passthrough["ratelimit"] != "limit=100, r=0; t=45" {
+		t.Fatalf("short IETF policy dropped: %v", info.Passthrough)
+	}
+}

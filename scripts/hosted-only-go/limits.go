@@ -476,15 +476,17 @@ func analyzeLimit(cfg *config, status int, headers map[string]string, text strin
 
 	passthrough := map[string]string{}
 	if strings.HasPrefix(source, "upstream-") {
-		capped := strings.HasSuffix(source, "+capped")
 		for name, value := range headers {
 			if name == "retry-after-ms" {
 				passthrough[name] = strconv.Itoa(maxInt(1, int(math.Ceil(reset.Sub(now).Seconds()*1000))))
 			} else if strings.HasPrefix(name, "x-ratelimit-") || strings.HasPrefix(name, "ratelimit") {
-				// A capped answer must not leak the uncapped reset through a
-				// forwarded x-ratelimit-*/ratelimit* header (a client that
-				// prefers those would hold for the month); drop them instead.
-				if capped {
+				// A month-sized reset must not leak through a forwarded
+				// x-ratelimit-*/ratelimit* header even when the CHOSEN
+				// candidate was short (rank-first selection can pair
+				// retry-after: 30 with x-ratelimit-reset-tokens: 875852);
+				// judge each reset-bearing header by its own magnitude.
+				// Limit/remaining dimensions are not waits and pass through.
+				if resetBearingExceeds(name, value, cfg.LimitResetMax) {
 					continue
 				}
 				passthrough[name] = value
@@ -500,6 +502,29 @@ func analyzeLimit(cfg *config, status int, headers map[string]string, text strin
 		Source:      source,
 		Passthrough: passthrough,
 	}
+}
+
+// resetBearingExceeds reports whether a forwarded reset-bearing header value
+// names a wait longer than maxSeconds. Only reset values are checked
+// (x-ratelimit-reset-*, ratelimit-reset, and the t=/reset= fields of IETF
+// ratelimit policies); maxSeconds <= 0 disables the check.
+func resetBearingExceeds(name, value string, maxSeconds int) bool {
+	if maxSeconds <= 0 {
+		return false
+	}
+	switch {
+	case strings.HasPrefix(name, "x-ratelimit-reset-") || name == "ratelimit-reset":
+		if seconds, ok := parseDuration(value); ok {
+			return seconds > float64(maxSeconds)
+		}
+	case name == "ratelimit":
+		for _, item := range splitRateLimit(value) {
+			if seconds, _, ok := rateLimitPolicy(item); ok && seconds > float64(maxSeconds) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func remainingBySource(cands []resetCand, remaining map[string]float64) map[string]float64 {
@@ -611,7 +636,7 @@ func renderLimit(cfg *config, path, model string, info limitInfo, outageStatus i
 		// recovers at the capped re-probe time; the "(reset after ...)"
 		// suffix and retry-after stay the capped value clients schedule on.
 		reason = fmt.Sprintf("Monthly token budget exhausted (quota window ends %s).",
-			info.QuotaReset.UTC().Format("2006-01-02T15:04:05Z"))
+			info.trueReset().UTC().Format("2006-01-02T15:04:05Z"))
 	}
 
 	if strings.Contains(path, "/v1/messages") {
@@ -646,7 +671,7 @@ func renderLimit(cfg *config, path, model string, info limitInfo, outageStatus i
 	if info.Monthly && strings.Contains(path, "/v1/chat/completions") {
 		// The 402 message is informational (AI SDKs do not schedule on it),
 		// so it carries the TRUE window end, unlike the hold-driving fields.
-		stamp := info.QuotaReset.UTC().Format("2006-01-02T15:04:05Z")
+		stamp := info.trueReset().UTC().Format("2006-01-02T15:04:05Z")
 		body, _ := json.Marshal(map[string]any{
 			"error": map[string]any{
 				"message": fmt.Sprintf("Monthly token budget exhausted. Quota resets %s.", stamp),
