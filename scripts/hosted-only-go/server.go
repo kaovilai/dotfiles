@@ -516,7 +516,10 @@ func (a *app) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			} else {
 				info = analyzeLimit(a.cfg, resp.StatusCode, headers, text, now)
 				if info.Monthly {
-					a.noteQuota(model, info.Reset)
+					// QuotaReset (uncapped) so quotaActive spans the real
+					// window and the fallback suppression does not lapse
+					// every cap interval.
+					a.noteQuota(model, info.QuotaReset)
 				}
 			}
 			status, out, extra := renderLimit(a.cfg, r.URL.Path, served, info, outageStatus, now)

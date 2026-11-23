@@ -136,7 +136,7 @@ func TestRenderAnthropicMonthlyQuotaFailsFast(t *testing.T) {
 	now := time.Now()
 	cfg := testConfig()
 	cfg.ClientRetryMax = 21600
-	info := limitInfo{Reset: monthEnd(now, time.UTC), Monthly: true, Kind: "quota"}
+	info := limitInfo{Reset: monthEnd(now, time.UTC), QuotaReset: monthEnd(now, time.UTC), Monthly: true, Kind: "quota"}
 	status, _, headers := renderLimit(cfg, "/v1/messages", cfg.GLM, info, 0, now)
 	if status != http.StatusTooManyRequests {
 		t.Fatalf("status = %d, want 429", status)
@@ -149,7 +149,7 @@ func TestRenderAnthropicMonthlyQuotaFailsFast(t *testing.T) {
 func TestRenderChatQuotaIs402(t *testing.T) {
 	now := time.Now()
 	cfg := testConfig()
-	info := limitInfo{Reset: monthEnd(now, time.UTC), Monthly: true, Kind: "quota"}
+	info := limitInfo{Reset: monthEnd(now, time.UTC), QuotaReset: monthEnd(now, time.UTC), Monthly: true, Kind: "quota"}
 	status, body, headers := renderLimit(cfg, "/v1/chat/completions", cfg.GLM, info, 0, now)
 	if status != 402 {
 		t.Fatalf("status = %d, want 402", status)
@@ -252,6 +252,44 @@ func TestAnalyzeLimitEnMaasMonthlyQuotaCapped(t *testing.T) {
 	}
 	if info.Source != "upstream-header:retry-after+capped" {
 		t.Fatalf("source = %q", info.Source)
+	}
+	// The true window end survives for internal state and wording.
+	if got := info.QuotaReset.Sub(now); got < 875850*time.Second {
+		t.Fatalf("quota reset delta = %v, want the uncapped header value", got)
+	}
+	// A capped answer must not leak the uncapped reset via forwarded headers.
+	if _, ok := info.Passthrough["x-ratelimit-reset-tokens"]; ok {
+		t.Fatal("capped answer forwarded x-ratelimit-reset-tokens")
+	}
+}
+
+func TestAnalyzeLimitPassthroughKeptWhenUncapped(t *testing.T) {
+	now := time.Now()
+	cfg := testConfig()
+	cfg.LimitResetMax = 3600
+	info := analyzeLimit(cfg, 429, map[string]string{
+		"retry-after": "60", "x-ratelimit-reset-tokens": "60",
+	}, "rate limited", now)
+	if info.Monthly {
+		t.Fatal("monthly = true, want false")
+	}
+	if info.Passthrough["x-ratelimit-reset-tokens"] != "60" {
+		t.Fatalf("passthrough = %v, want the short reset forwarded", info.Passthrough)
+	}
+}
+
+// Field identity is positional: a type/code value that textually equals the
+// reason string must still match the exact rate map (CodeRabbit + GLM review
+// on #664: {"reason":"tokens","type":"tokens"} and
+// {"reason":"too_many_requests","type":"too_many_requests"}).
+func TestBodyKindPositionalFieldSemantics(t *testing.T) {
+	for _, body := range []map[string]any{
+		{"reason": "tokens", "type": "tokens"},
+		{"reason": "too_many_requests", "type": "too_many_requests"},
+	} {
+		if got := bodyKind(body); got != "rate-limit" {
+			t.Fatalf("bodyKind(%v) = %q, want rate-limit", body, got)
+		}
 	}
 }
 

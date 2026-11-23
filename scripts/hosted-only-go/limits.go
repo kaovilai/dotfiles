@@ -37,7 +37,13 @@ var (
 )
 
 type limitInfo struct {
-	Reset       time.Time
+	Reset time.Time
+	// QuotaReset is the UNCAPPED end of the quota window when Monthly (equals
+	// Reset otherwise). Reset is the capped re-probe time announced to
+	// clients; QuotaReset feeds internal state (noteQuota) and human-facing
+	// "quota resets" wording, which must not claim the budget recovers at the
+	// cap.
+	QuotaReset  time.Time
 	Monthly     bool
 	Kind        string // quota | rate-limit | outage
 	Source      string
@@ -184,7 +190,11 @@ func bodyKind(err map[string]any) string {
 	// signals: EnMaaS's monthly token quota answers with type
 	// rate_limit_error AND code token_budget_exhausted (2026-11-20). Scanning
 	// every field for a quota hit before any rate hit keeps that classified
-	// as quota instead of plain throttling.
+	// as quota instead of plain throttling. Field identity is positional —
+	// fields[0] is reason (free-form wording), the rest are enum tokens —
+	// because a type/code value can textually equal the reason string
+	// ({"reason":"tokens","type":"tokens"}) and must still match the exact
+	// rate map.
 	fields := []string{reason,
 		strings.ToLower(asString(err["type"])),
 		strings.ToLower(asString(err["code"]))}
@@ -193,19 +203,12 @@ func bodyKind(err map[string]any) string {
 			return "quota"
 		}
 	}
-	for _, v := range fields {
-		if v == "" {
-			continue
-		}
-		if reason == v {
-			// reason carries free-form wording, not just enum codes
-			if strings.Contains(v, "rate_limit") ||
-				strings.HasPrefix(v, "per_second") || strings.HasPrefix(v, "per_minute") ||
-				strings.HasPrefix(v, "per_hour") || v == "rpm" || v == "tpm" {
-				return "rate-limit"
-			}
-			continue
-		}
+	if reason != "" && (strings.Contains(reason, "rate_limit") ||
+		strings.HasPrefix(reason, "per_second") || strings.HasPrefix(reason, "per_minute") ||
+		strings.HasPrefix(reason, "per_hour") || reason == "rpm" || reason == "tpm") {
+		return "rate-limit"
+	}
+	for _, v := range fields[1:] {
 		if rate[v] {
 			return "rate-limit"
 		}
@@ -463,7 +466,9 @@ func analyzeLimit(cfg *config, status int, headers map[string]string, text strin
 	}
 	// Cap the announced reset (default 1 h): an upstream monthly-quota
 	// retry-after of up to a month must not become a client-side hold for the
-	// whole window. Early retry just re-learns a fresh, smaller reset.
+	// whole window. Early retry just re-learns a fresh, smaller reset, so the
+	// true window end is overshot by at most one cap interval per retry.
+	quotaReset := reset
 	if cfg.LimitResetMax > 0 && reset.Sub(now) > time.Duration(cfg.LimitResetMax)*time.Second {
 		reset = now.Add(time.Duration(cfg.LimitResetMax) * time.Second)
 		source += "+capped"
@@ -471,10 +476,17 @@ func analyzeLimit(cfg *config, status int, headers map[string]string, text strin
 
 	passthrough := map[string]string{}
 	if strings.HasPrefix(source, "upstream-") {
+		capped := strings.HasSuffix(source, "+capped")
 		for name, value := range headers {
 			if name == "retry-after-ms" {
 				passthrough[name] = strconv.Itoa(maxInt(1, int(math.Ceil(reset.Sub(now).Seconds()*1000))))
 			} else if strings.HasPrefix(name, "x-ratelimit-") || strings.HasPrefix(name, "ratelimit") {
+				// A capped answer must not leak the uncapped reset through a
+				// forwarded x-ratelimit-*/ratelimit* header (a client that
+				// prefers those would hold for the month); drop them instead.
+				if capped {
+					continue
+				}
 				passthrough[name] = value
 			}
 		}
@@ -482,6 +494,7 @@ func analyzeLimit(cfg *config, status int, headers map[string]string, text strin
 
 	return limitInfo{
 		Reset:       reset,
+		QuotaReset:  quotaReset,
 		Monthly:     kind == "quota",
 		Kind:        kind,
 		Source:      source,
@@ -594,7 +607,11 @@ func renderLimit(cfg *config, path, model string, info limitInfo, outageStatus i
 	case info.Kind == "outage":
 		reason = fmt.Sprintf("Upstream unavailable (%d); retrying later.", outageStatus)
 	case info.Monthly:
-		reason = "Monthly token budget exhausted."
+		// Name the true window end so the answer does not claim the budget
+		// recovers at the capped re-probe time; the "(reset after ...)"
+		// suffix and retry-after stay the capped value clients schedule on.
+		reason = fmt.Sprintf("Monthly token budget exhausted (quota window ends %s).",
+			info.QuotaReset.UTC().Format("2006-01-02T15:04:05Z"))
 	}
 
 	if strings.Contains(path, "/v1/messages") {
@@ -623,7 +640,9 @@ func renderLimit(cfg *config, path, model string, info limitInfo, outageStatus i
 	}
 
 	if info.Monthly && strings.Contains(path, "/v1/chat/completions") {
-		stamp := info.Reset.UTC().Format("2006-01-02T15:04:05Z")
+		// The 402 message is informational (AI SDKs do not schedule on it),
+		// so it carries the TRUE window end, unlike the hold-driving fields.
+		stamp := info.QuotaReset.UTC().Format("2006-01-02T15:04:05Z")
 		body, _ := json.Marshal(map[string]any{
 			"error": map[string]any{
 				"message": fmt.Sprintf("Monthly token budget exhausted. Quota resets %s.", stamp),
