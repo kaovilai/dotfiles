@@ -531,7 +531,10 @@ func (a *app) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			if retryAfter < 1 {
 				retryAfter = 1
 			}
-			a.usage.write(a.event(r, data, requested, served, started, usageInfo{}, false, status, resp.StatusCode, text, true, info.Reset.Unix(), info.Source, info.Monthly, retryAfter, usedFallback, fallbackReason, stream, "", 0))
+			// reset_at records the TRUE window end (QuotaReset) so llm-usage's
+			// quota span shows the real lift time, not the capped re-probe
+			// bound; retry_after below stays the capped announced value.
+			a.usage.write(a.event(r, data, requested, served, started, usageInfo{}, false, status, resp.StatusCode, text, true, info.trueReset().Unix(), info.Source, info.Monthly, retryAfter, usedFallback, fallbackReason, stream, "", 0))
 			return
 		}
 		if tr != nil {

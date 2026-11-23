@@ -313,3 +313,25 @@ func TestBodyKindQuotaCodeBeatsRateType(t *testing.T) {
 		t.Fatalf("bodyKind = %q, want quota", got)
 	}
 }
+
+// The fail-fast must key on the UNCAPPED reset: a 7-day rate-limit reset
+// capped to 1 h would otherwise stay retryable and a watchdog client would
+// re-probe in-process for the whole window instead of handing off to T3.
+func TestRenderCappedLongWaitStillFailsFast(t *testing.T) {
+	now := time.Now()
+	cfg := testConfig()
+	cfg.LimitResetMax = 3600
+	cfg.ClientRetryMax = 21600
+	info := limitInfo{
+		Reset:      now.Add(3600 * time.Second),   // capped announcement
+		QuotaReset: now.Add(604800 * time.Second), // true 7-day wait
+		Kind:       "rate-limit",
+	}
+	_, _, headers := renderLimit(cfg, "/v1/messages", cfg.GLM, info, 0, now)
+	if headers["x-should-retry"] != "false" {
+		t.Fatalf("x-should-retry = %q, want false (uncapped 7d > knob 6h)", headers["x-should-retry"])
+	}
+	if headers["retry-after"] != "3600" {
+		t.Fatalf("retry-after = %q, want the capped 3600", headers["retry-after"])
+	}
+}

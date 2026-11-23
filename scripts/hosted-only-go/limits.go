@@ -632,8 +632,12 @@ func renderLimit(cfg *config, path, model string, info limitInfo, outageStatus i
 		// A month-end reset must not be waited out (the watchdog would stall
 		// 6 h of it) and a wait past the knob is not worth a client retry;
 		// x-should-retry:false stops both retry layers so the error reaches
-		// T3 at once. Short rate-limit/outage waits stay retryable.
-		if info.Monthly || seconds > cfg.ClientRetryMax {
+		// T3 at once. Short rate-limit/outage waits stay retryable. The
+		// comparison uses the UNCAPPED reset: capping must not turn a
+		// past-knob wait (e.g. a 7-day anthropic reset) into an endlessly
+		// retryable short one the watchdog would re-probe in-process for the
+		// whole window.
+		if info.Monthly || info.trueReset().Sub(now).Seconds() > float64(cfg.ClientRetryMax) {
 			headers["x-should-retry"] = "false"
 		}
 		return http.StatusTooManyRequests, body, headers
@@ -674,6 +678,16 @@ func renderLimit(cfg *config, path, model string, info limitInfo, outageStatus i
 	headers["x-codex-primary-window-minutes"] = strconv.Itoa(window)
 	headers["x-codex-primary-reset-at"] = strconv.FormatInt(info.Reset.Unix(), 10)
 	return http.StatusTooManyRequests, body, headers
+}
+
+// trueReset is the uncapped reset: QuotaReset when analyzeLimit filled it
+// (equals Reset when no cap fired), Reset for hand-built limitInfo literals
+// (outage/warm paths) that leave QuotaReset zero.
+func (i limitInfo) trueReset() time.Time {
+	if !i.QuotaReset.IsZero() {
+		return i.QuotaReset
+	}
+	return i.Reset
 }
 
 func maxInt(a, b int) int {
