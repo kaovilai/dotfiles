@@ -68,7 +68,7 @@ type config struct {
 	// whole window. Capping is self-correcting: the client retries at the cap,
 	// gets a fresh (smaller) reset, and the true end is only ever overshot by
 	// one cap interval per retry.
-	LimitResetMax int
+	LimitResetMax  int
 	OutageBase     int
 	OutageMax      int
 	OutageState    string // HOSTED_ONLY_OUTAGE_STATE: streaks survive a restart
@@ -341,7 +341,7 @@ func loadConfig(flavor, port, runtimeDir string) *config {
 		ClientRetryMax: intKnob("CLIENT_RETRY_MAX_SECONDS", 21600, 0),
 		// 1 h default: a held thread re-probes hourly instead of parking for
 		// the rest of a monthly quota window.
-		LimitResetMax: intKnob("LIMIT_RESET_MAX_SECONDS", 3600, 0),
+		LimitResetMax:  intKnob("LIMIT_RESET_MAX_SECONDS", 3600, 0),
 		WarmRSSKB:      envInt("CLAUDE_MLX_LOADED_RSS_KB", 10485760, 0),
 		WarmRetryAfter: envInt("CLAUDE_MLX_WARM_RETRY_AFTER", 30, 1),
 		WarmMax:        envInt("CLAUDE_MLX_WARM_MAX_SECONDS", 900, 0),
