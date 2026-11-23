@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"net/http"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -372,5 +373,25 @@ func TestAnalyzeLimitPassthroughDropsMonthSizedHeaderDespiteShortChosen(t *testi
 	}, "rate limited", now)
 	if info.Passthrough["ratelimit"] != "limit=100, r=0; t=45" {
 		t.Fatalf("short IETF policy dropped: %v", info.Passthrough)
+	}
+}
+
+// The exact x-ratelimit-reset name (no dimension suffix) and date/epoch-valued
+// resets must be magnitude-checked too, not just duration forms.
+func TestResetBearingExceedsExactNameAndDates(t *testing.T) {
+	now := time.Now()
+	cfg := testConfig()
+	cfg.LimitResetMax = 3600
+	epoch := strconv.FormatInt(now.Add(875852*time.Second).Unix(), 10)
+	info := analyzeLimit(cfg, 429, map[string]string{
+		"retry-after":              "30",
+		"x-ratelimit-reset":        epoch,
+		"x-ratelimit-reset-tokens": now.Add(875852 * time.Second).UTC().Format(http.TimeFormat),
+	}, "rate limited", now)
+	if _, ok := info.Passthrough["x-ratelimit-reset"]; ok {
+		t.Fatal("epoch-valued x-ratelimit-reset was forwarded")
+	}
+	if _, ok := info.Passthrough["x-ratelimit-reset-tokens"]; ok {
+		t.Fatal("date-valued x-ratelimit-reset-tokens was forwarded")
 	}
 }

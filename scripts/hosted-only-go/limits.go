@@ -486,7 +486,7 @@ func analyzeLimit(cfg *config, status int, headers map[string]string, text strin
 				// retry-after: 30 with x-ratelimit-reset-tokens: 875852);
 				// judge each reset-bearing header by its own magnitude.
 				// Limit/remaining dimensions are not waits and pass through.
-				if resetBearingExceeds(name, value, cfg.LimitResetMax) {
+				if resetBearingExceeds(name, value, cfg.LimitResetMax, now) {
 					continue
 				}
 				passthrough[name] = value
@@ -506,20 +506,27 @@ func analyzeLimit(cfg *config, status int, headers map[string]string, text strin
 
 // resetBearingExceeds reports whether a forwarded reset-bearing header value
 // names a wait longer than maxSeconds. Only reset values are checked
-// (x-ratelimit-reset-*, ratelimit-reset, and the t=/reset= fields of IETF
-// ratelimit policies); maxSeconds <= 0 disables the check.
-func resetBearingExceeds(name, value string, maxSeconds int) bool {
+// (x-ratelimit-reset with or without a dimension suffix, ratelimit-reset,
+// and the t=/reset= fields of IETF ratelimit policies); maxSeconds <= 0
+// disables the check. Duration and date/epoch forms are both read: a
+// date-valued reset that parseDuration cannot parse falls through to
+// parseWhen so it cannot sail past the cap unread.
+func resetBearingExceeds(name, value string, maxSeconds int, now time.Time) bool {
 	if maxSeconds <= 0 {
 		return false
 	}
+	limit := now.Add(time.Duration(maxSeconds) * time.Second)
 	switch {
-	case strings.HasPrefix(name, "x-ratelimit-reset-") || name == "ratelimit-reset":
+	case name == "x-ratelimit-reset" || strings.HasPrefix(name, "x-ratelimit-reset-") || name == "ratelimit-reset":
 		if seconds, ok := parseDuration(value); ok {
-			return seconds > float64(maxSeconds)
+			return now.Add(time.Duration(seconds * float64(time.Second))).After(limit)
+		}
+		if at, ok := parseWhen(value, now); ok {
+			return at.After(limit)
 		}
 	case name == "ratelimit":
 		for _, item := range splitRateLimit(value) {
-			if seconds, _, ok := rateLimitPolicy(item); ok && seconds > float64(maxSeconds) {
+			if seconds, _, ok := rateLimitPolicy(item); ok && now.Add(time.Duration(seconds*float64(time.Second))).After(limit) {
 				return true
 			}
 		}
