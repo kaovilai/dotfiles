@@ -232,3 +232,46 @@ func TestPassthroughHeaders(t *testing.T) {
 		t.Fatalf("retry-after-ms = %q", info.Passthrough["retry-after-ms"])
 	}
 }
+
+// The observed EnMaaS monthly-quota event (2026-11-20, ryzen-wsl + spectrex360):
+// 429 with type rate_limit_error AND code token_budget_exhausted, plus a
+// retry-after header of 875,852 s (~243 h to the UTC month boundary). The
+// quota code must win the classification and the announced reset must be
+// capped.
+func TestAnalyzeLimitEnMaasMonthlyQuotaCapped(t *testing.T) {
+	now := time.Now()
+	cfg := testConfig()
+	cfg.LimitResetMax = 3600
+	text := `{"error":{"message":"token budget exhausted","type":"rate_limit_error","code":"token_budget_exhausted"}}`
+	info := analyzeLimit(cfg, 429, map[string]string{"retry-after": "875852"}, text, now)
+	if !info.Monthly || info.Kind != "quota" {
+		t.Fatalf("kind = %q monthly = %v, want quota/monthly", info.Kind, info.Monthly)
+	}
+	if got := info.Reset.Sub(now); got < 3599*time.Second || got > 3601*time.Second {
+		t.Fatalf("reset delta = %v, want ~3600s (capped)", got)
+	}
+	if info.Source != "upstream-header:retry-after+capped" {
+		t.Fatalf("source = %q", info.Source)
+	}
+}
+
+func TestAnalyzeLimitResetCapZeroUncapped(t *testing.T) {
+	now := time.Now()
+	cfg := testConfig()
+	cfg.LimitResetMax = 0
+	text := `{"error":{"message":"token budget exhausted","type":"rate_limit_error","code":"token_budget_exhausted"}}`
+	info := analyzeLimit(cfg, 429, map[string]string{"retry-after": "875852"}, text, now)
+	if !info.Monthly {
+		t.Fatal("monthly = false, want true")
+	}
+	if got := info.Reset.Sub(now); got < 875850*time.Second {
+		t.Fatalf("reset delta = %v, want the uncapped header value", got)
+	}
+}
+
+func TestBodyKindQuotaCodeBeatsRateType(t *testing.T) {
+	err := map[string]any{"type": "rate_limit_error", "code": "token_budget_exhausted"}
+	if got := bodyKind(err); got != "quota" {
+		t.Fatalf("bodyKind = %q, want quota", got)
+	}
+}

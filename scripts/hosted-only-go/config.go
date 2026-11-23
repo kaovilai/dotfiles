@@ -61,6 +61,14 @@ type config struct {
 
 	DefaultRetry   int
 	ClientRetryMax int
+	// LimitResetMax caps how far out a rewritten limit reset may be announced
+	// (seconds; 0 disables). EnMaaS's monthly token quota answers 429 with a
+	// retry-after of up to a month (observed 2026-11-20: 875,852 s ≈ 243 h to
+	// the UTC month boundary), which T3 turns into a usage_limit hold for the
+	// whole window. Capping is self-correcting: the client retries at the cap,
+	// gets a fresh (smaller) reset, and the true end is only ever overshot by
+	// one cap interval per retry.
+	LimitResetMax int
 	OutageBase     int
 	OutageMax      int
 	OutageState    string // HOSTED_ONLY_OUTAGE_STATE: streaks survive a restart
@@ -331,6 +339,9 @@ func loadConfig(flavor, port, runtimeDir string) *config {
 		// failing the turn. Only longer resets (a month-end quota) get
 		// x-should-retry:false and surface at once.
 		ClientRetryMax: intKnob("CLIENT_RETRY_MAX_SECONDS", 21600, 0),
+		// 1 h default: a held thread re-probes hourly instead of parking for
+		// the rest of a monthly quota window.
+		LimitResetMax: intKnob("LIMIT_RESET_MAX_SECONDS", 3600, 0),
 		WarmRSSKB:      envInt("CLAUDE_MLX_LOADED_RSS_KB", 10485760, 0),
 		WarmRetryAfter: envInt("CLAUDE_MLX_WARM_RETRY_AFTER", 30, 1),
 		WarmMax:        envInt("CLAUDE_MLX_WARM_MAX_SECONDS", 900, 0),

@@ -173,26 +173,40 @@ func bodyKind(err map[string]any) string {
 	quota := map[string]bool{
 		"insufficient_quota": true, "quota_exceeded": true, "quota_exhausted": true,
 		"budget_exceeded": true, "billing_hard_limit_reached": true, "usage_limit_reached": true,
+		"token_budget_exhausted": true,
 	}
 	rate := map[string]bool{
 		"rate_limit_exceeded": true, "rate_limit_error": true, "rate_limited": true,
 		"too_many_requests": true, "requests": true, "tokens": true,
 	}
 	reason := strings.ToLower(asString(err["reason"]))
-	if strings.HasPrefix(reason, "monthly_") || quota[reason] {
-		return "quota"
-	}
-	if reason != "" && (strings.Contains(reason, "rate_limit") ||
-		strings.HasPrefix(reason, "per_second") || strings.HasPrefix(reason, "per_minute") ||
-		strings.HasPrefix(reason, "per_hour") || reason == "rpm" || reason == "tpm") {
-		return "rate-limit"
-	}
-	for _, field := range []string{"type", "code"} {
-		value := strings.ToLower(asString(err[field]))
-		if quota[value] {
+	// Quota is strictly more specific than throttling, and real bodies mix the
+	// signals: EnMaaS's monthly token quota answers with type
+	// rate_limit_error AND code token_budget_exhausted (2026-11-20). Scanning
+	// every field for a quota hit before any rate hit keeps that classified
+	// as quota instead of plain throttling.
+	fields := []string{reason,
+		strings.ToLower(asString(err["type"])),
+		strings.ToLower(asString(err["code"]))}
+	for _, v := range fields {
+		if strings.HasPrefix(v, "monthly_") || quota[v] {
 			return "quota"
 		}
-		if rate[value] {
+	}
+	for _, v := range fields {
+		if v == "" {
+			continue
+		}
+		if reason == v {
+			// reason carries free-form wording, not just enum codes
+			if strings.Contains(v, "rate_limit") ||
+				strings.HasPrefix(v, "per_second") || strings.HasPrefix(v, "per_minute") ||
+				strings.HasPrefix(v, "per_hour") || v == "rpm" || v == "tpm" {
+				return "rate-limit"
+			}
+			continue
+		}
+		if rate[v] {
 			return "rate-limit"
 		}
 	}
@@ -446,6 +460,13 @@ func analyzeLimit(cfg *config, status int, headers map[string]string, text strin
 		reset, source = monthEnd(now, cfg.QuotaTZ), "estimate:next-month-utc"
 	} else {
 		reset, source = now.Add(time.Duration(cfg.DefaultRetry)*time.Second), "estimate:default"
+	}
+	// Cap the announced reset (default 1 h): an upstream monthly-quota
+	// retry-after of up to a month must not become a client-side hold for the
+	// whole window. Early retry just re-learns a fresh, smaller reset.
+	if cfg.LimitResetMax > 0 && reset.Sub(now) > time.Duration(cfg.LimitResetMax)*time.Second {
+		reset = now.Add(time.Duration(cfg.LimitResetMax) * time.Second)
+		source += "+capped"
 	}
 
 	passthrough := map[string]string{}
