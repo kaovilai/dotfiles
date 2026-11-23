@@ -239,7 +239,7 @@ code=$(curl -s -D "$hdr" -o "$tmp/bodyquota" -w '%{http_code}' -X POST "$url" -H
     -d '{"model":"rits/zai-org/glm-5-3","max_tokens":16,"messages":[{"role":"user","content":"MONTHLY"}]}')
 [[ "$code" == 429 ]] || fail "quota rewrite status: $code ($(<"$tmp/bodyquota"))"
 grep -qi '^x-should-retry: false' "$hdr" || fail "quota must fail fast: $(<"$hdr")"
-[[ "$(<"$tmp/bodyquota")" == *'Monthly token budget exhausted.'* ]] || fail "quota text: $(<"$tmp/bodyquota")"
+[[ "$(<"$tmp/bodyquota")" == *'Monthly token budget exhausted (quota window ends'* ]] || fail "quota text: $(<"$tmp/bodyquota")"
 
 # Chat route: rate limit stays 429 with the codex headers.
 local chat="http://127.0.0.1:$pport/v1/chat/completions"

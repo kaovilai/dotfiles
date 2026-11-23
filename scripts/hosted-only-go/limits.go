@@ -37,7 +37,13 @@ var (
 )
 
 type limitInfo struct {
-	Reset       time.Time
+	Reset time.Time
+	// QuotaReset is the UNCAPPED end of the quota window when Monthly (equals
+	// Reset otherwise). Reset is the capped re-probe time announced to
+	// clients; QuotaReset feeds internal state (noteQuota) and human-facing
+	// "quota resets" wording, which must not claim the budget recovers at the
+	// cap.
+	QuotaReset  time.Time
 	Monthly     bool
 	Kind        string // quota | rate-limit | outage
 	Source      string
@@ -173,26 +179,37 @@ func bodyKind(err map[string]any) string {
 	quota := map[string]bool{
 		"insufficient_quota": true, "quota_exceeded": true, "quota_exhausted": true,
 		"budget_exceeded": true, "billing_hard_limit_reached": true, "usage_limit_reached": true,
+		"token_budget_exhausted": true,
 	}
 	rate := map[string]bool{
 		"rate_limit_exceeded": true, "rate_limit_error": true, "rate_limited": true,
 		"too_many_requests": true, "requests": true, "tokens": true,
 	}
 	reason := strings.ToLower(asString(err["reason"]))
-	if strings.HasPrefix(reason, "monthly_") || quota[reason] {
-		return "quota"
+	// Quota is strictly more specific than throttling, and real bodies mix the
+	// signals: EnMaaS's monthly token quota answers with type
+	// rate_limit_error AND code token_budget_exhausted (2026-11-20). Scanning
+	// every field for a quota hit before any rate hit keeps that classified
+	// as quota instead of plain throttling. Field identity is positional —
+	// fields[0] is reason (free-form wording), the rest are enum tokens —
+	// because a type/code value can textually equal the reason string
+	// ({"reason":"tokens","type":"tokens"}) and must still match the exact
+	// rate map.
+	fields := []string{reason,
+		strings.ToLower(asString(err["type"])),
+		strings.ToLower(asString(err["code"]))}
+	for _, v := range fields {
+		if strings.HasPrefix(v, "monthly_") || quota[v] {
+			return "quota"
+		}
 	}
 	if reason != "" && (strings.Contains(reason, "rate_limit") ||
 		strings.HasPrefix(reason, "per_second") || strings.HasPrefix(reason, "per_minute") ||
 		strings.HasPrefix(reason, "per_hour") || reason == "rpm" || reason == "tpm") {
 		return "rate-limit"
 	}
-	for _, field := range []string{"type", "code"} {
-		value := strings.ToLower(asString(err[field]))
-		if quota[value] {
-			return "quota"
-		}
-		if rate[value] {
+	for _, v := range fields[1:] {
+		if rate[v] {
 			return "rate-limit"
 		}
 	}
@@ -447,6 +464,15 @@ func analyzeLimit(cfg *config, status int, headers map[string]string, text strin
 	} else {
 		reset, source = now.Add(time.Duration(cfg.DefaultRetry)*time.Second), "estimate:default"
 	}
+	// Cap the announced reset (default 1 h): an upstream monthly-quota
+	// retry-after of up to a month must not become a client-side hold for the
+	// whole window. Early retry just re-learns a fresh, smaller reset, so the
+	// true window end is overshot by at most one cap interval per retry.
+	quotaReset := reset
+	if cfg.LimitResetMax > 0 && reset.Sub(now) > time.Duration(cfg.LimitResetMax)*time.Second {
+		reset = now.Add(time.Duration(cfg.LimitResetMax) * time.Second)
+		source += "+capped"
+	}
 
 	passthrough := map[string]string{}
 	if strings.HasPrefix(source, "upstream-") {
@@ -454,6 +480,15 @@ func analyzeLimit(cfg *config, status int, headers map[string]string, text strin
 			if name == "retry-after-ms" {
 				passthrough[name] = strconv.Itoa(maxInt(1, int(math.Ceil(reset.Sub(now).Seconds()*1000))))
 			} else if strings.HasPrefix(name, "x-ratelimit-") || strings.HasPrefix(name, "ratelimit") {
+				// A month-sized reset must not leak through a forwarded
+				// x-ratelimit-*/ratelimit* header even when the CHOSEN
+				// candidate was short (rank-first selection can pair
+				// retry-after: 30 with x-ratelimit-reset-tokens: 875852);
+				// judge each reset-bearing header by its own magnitude.
+				// Limit/remaining dimensions are not waits and pass through.
+				if resetBearingExceeds(name, value, cfg.LimitResetMax, now) {
+					continue
+				}
 				passthrough[name] = value
 			}
 		}
@@ -461,11 +496,42 @@ func analyzeLimit(cfg *config, status int, headers map[string]string, text strin
 
 	return limitInfo{
 		Reset:       reset,
+		QuotaReset:  quotaReset,
 		Monthly:     kind == "quota",
 		Kind:        kind,
 		Source:      source,
 		Passthrough: passthrough,
 	}
+}
+
+// resetBearingExceeds reports whether a forwarded reset-bearing header value
+// names a wait longer than maxSeconds. Only reset values are checked
+// (x-ratelimit-reset with or without a dimension suffix, ratelimit-reset,
+// and the t=/reset= fields of IETF ratelimit policies); maxSeconds <= 0
+// disables the check. Duration and date/epoch forms are both read: a
+// date-valued reset that parseDuration cannot parse falls through to
+// parseWhen so it cannot sail past the cap unread.
+func resetBearingExceeds(name, value string, maxSeconds int, now time.Time) bool {
+	if maxSeconds <= 0 {
+		return false
+	}
+	limit := now.Add(time.Duration(maxSeconds) * time.Second)
+	switch {
+	case name == "x-ratelimit-reset" || strings.HasPrefix(name, "x-ratelimit-reset-") || name == "ratelimit-reset":
+		if seconds, ok := parseDuration(value); ok {
+			return now.Add(time.Duration(seconds * float64(time.Second))).After(limit)
+		}
+		if at, ok := parseWhen(value, now); ok {
+			return at.After(limit)
+		}
+	case name == "ratelimit":
+		for _, item := range splitRateLimit(value) {
+			if seconds, _, ok := rateLimitPolicy(item); ok && now.Add(time.Duration(seconds*float64(time.Second))).After(limit) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func remainingBySource(cands []resetCand, remaining map[string]float64) map[string]float64 {
@@ -573,7 +639,11 @@ func renderLimit(cfg *config, path, model string, info limitInfo, outageStatus i
 	case info.Kind == "outage":
 		reason = fmt.Sprintf("Upstream unavailable (%d); retrying later.", outageStatus)
 	case info.Monthly:
-		reason = "Monthly token budget exhausted."
+		// Name the true window end so the answer does not claim the budget
+		// recovers at the capped re-probe time; the "(reset after ...)"
+		// suffix and retry-after stay the capped value clients schedule on.
+		reason = fmt.Sprintf("Monthly token budget exhausted (quota window ends %s).",
+			info.trueReset().UTC().Format("2006-01-02T15:04:05Z"))
 	}
 
 	if strings.Contains(path, "/v1/messages") {
@@ -594,15 +664,21 @@ func renderLimit(cfg *config, path, model string, info limitInfo, outageStatus i
 		// A month-end reset must not be waited out (the watchdog would stall
 		// 6 h of it) and a wait past the knob is not worth a client retry;
 		// x-should-retry:false stops both retry layers so the error reaches
-		// T3 at once. Short rate-limit/outage waits stay retryable.
-		if info.Monthly || seconds > cfg.ClientRetryMax {
+		// T3 at once. Short rate-limit/outage waits stay retryable. The
+		// comparison uses the UNCAPPED reset: capping must not turn a
+		// past-knob wait (e.g. a 7-day anthropic reset) into an endlessly
+		// retryable short one the watchdog would re-probe in-process for the
+		// whole window.
+		if info.Monthly || info.trueReset().Sub(now).Seconds() > float64(cfg.ClientRetryMax) {
 			headers["x-should-retry"] = "false"
 		}
 		return http.StatusTooManyRequests, body, headers
 	}
 
 	if info.Monthly && strings.Contains(path, "/v1/chat/completions") {
-		stamp := info.Reset.UTC().Format("2006-01-02T15:04:05Z")
+		// The 402 message is informational (AI SDKs do not schedule on it),
+		// so it carries the TRUE window end, unlike the hold-driving fields.
+		stamp := info.trueReset().UTC().Format("2006-01-02T15:04:05Z")
 		body, _ := json.Marshal(map[string]any{
 			"error": map[string]any{
 				"message": fmt.Sprintf("Monthly token budget exhausted. Quota resets %s.", stamp),
@@ -634,6 +710,16 @@ func renderLimit(cfg *config, path, model string, info limitInfo, outageStatus i
 	headers["x-codex-primary-window-minutes"] = strconv.Itoa(window)
 	headers["x-codex-primary-reset-at"] = strconv.FormatInt(info.Reset.Unix(), 10)
 	return http.StatusTooManyRequests, body, headers
+}
+
+// trueReset is the uncapped reset: QuotaReset when analyzeLimit filled it
+// (equals Reset when no cap fired), Reset for hand-built limitInfo literals
+// (outage/warm paths) that leave QuotaReset zero.
+func (i limitInfo) trueReset() time.Time {
+	if !i.QuotaReset.IsZero() {
+		return i.QuotaReset
+	}
+	return i.Reset
 }
 
 func maxInt(a, b int) int {

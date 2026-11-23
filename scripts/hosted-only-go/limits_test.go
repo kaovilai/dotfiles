@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"net/http"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -136,7 +137,7 @@ func TestRenderAnthropicMonthlyQuotaFailsFast(t *testing.T) {
 	now := time.Now()
 	cfg := testConfig()
 	cfg.ClientRetryMax = 21600
-	info := limitInfo{Reset: monthEnd(now, time.UTC), Monthly: true, Kind: "quota"}
+	info := limitInfo{Reset: monthEnd(now, time.UTC), QuotaReset: monthEnd(now, time.UTC), Monthly: true, Kind: "quota"}
 	status, _, headers := renderLimit(cfg, "/v1/messages", cfg.GLM, info, 0, now)
 	if status != http.StatusTooManyRequests {
 		t.Fatalf("status = %d, want 429", status)
@@ -149,7 +150,7 @@ func TestRenderAnthropicMonthlyQuotaFailsFast(t *testing.T) {
 func TestRenderChatQuotaIs402(t *testing.T) {
 	now := time.Now()
 	cfg := testConfig()
-	info := limitInfo{Reset: monthEnd(now, time.UTC), Monthly: true, Kind: "quota"}
+	info := limitInfo{Reset: monthEnd(now, time.UTC), QuotaReset: monthEnd(now, time.UTC), Monthly: true, Kind: "quota"}
 	status, body, headers := renderLimit(cfg, "/v1/chat/completions", cfg.GLM, info, 0, now)
 	if status != 402 {
 		t.Fatalf("status = %d, want 402", status)
@@ -230,5 +231,167 @@ func TestPassthroughHeaders(t *testing.T) {
 	}
 	if info.Passthrough["retry-after-ms"] != "2000" {
 		t.Fatalf("retry-after-ms = %q", info.Passthrough["retry-after-ms"])
+	}
+}
+
+// The observed EnMaaS monthly-quota event (2026-11-20, ryzen-wsl + spectrex360):
+// 429 with type rate_limit_error AND code token_budget_exhausted, plus a
+// retry-after header of 875,852 s (~243 h to the UTC month boundary). The
+// quota code must win the classification and the announced reset must be
+// capped.
+func TestAnalyzeLimitEnMaasMonthlyQuotaCapped(t *testing.T) {
+	now := time.Now()
+	cfg := testConfig()
+	cfg.LimitResetMax = 3600
+	text := `{"error":{"message":"token budget exhausted","type":"rate_limit_error","code":"token_budget_exhausted"}}`
+	info := analyzeLimit(cfg, 429, map[string]string{"retry-after": "875852"}, text, now)
+	if !info.Monthly || info.Kind != "quota" {
+		t.Fatalf("kind = %q monthly = %v, want quota/monthly", info.Kind, info.Monthly)
+	}
+	if got := info.Reset.Sub(now); got < 3599*time.Second || got > 3601*time.Second {
+		t.Fatalf("reset delta = %v, want ~3600s (capped)", got)
+	}
+	if info.Source != "upstream-header:retry-after+capped" {
+		t.Fatalf("source = %q", info.Source)
+	}
+	// The true window end survives for internal state and wording.
+	if got := info.QuotaReset.Sub(now); got < 875850*time.Second {
+		t.Fatalf("quota reset delta = %v, want the uncapped header value", got)
+	}
+	// A capped answer must not leak the uncapped reset via forwarded headers.
+	if _, ok := info.Passthrough["x-ratelimit-reset-tokens"]; ok {
+		t.Fatal("capped answer forwarded x-ratelimit-reset-tokens")
+	}
+}
+
+func TestAnalyzeLimitPassthroughKeptWhenUncapped(t *testing.T) {
+	now := time.Now()
+	cfg := testConfig()
+	cfg.LimitResetMax = 3600
+	info := analyzeLimit(cfg, 429, map[string]string{
+		"retry-after": "60", "x-ratelimit-reset-tokens": "60",
+	}, "rate limited", now)
+	if info.Monthly {
+		t.Fatal("monthly = true, want false")
+	}
+	if info.Passthrough["x-ratelimit-reset-tokens"] != "60" {
+		t.Fatalf("passthrough = %v, want the short reset forwarded", info.Passthrough)
+	}
+}
+
+// Field identity is positional: a type/code value that textually equals the
+// reason string must still match the exact rate map (CodeRabbit + GLM review
+// on #664: {"reason":"tokens","type":"tokens"} and
+// {"reason":"too_many_requests","type":"too_many_requests"}).
+func TestBodyKindPositionalFieldSemantics(t *testing.T) {
+	for _, body := range []map[string]any{
+		{"reason": "tokens", "type": "tokens"},
+		{"reason": "too_many_requests", "type": "too_many_requests"},
+	} {
+		if got := bodyKind(body); got != "rate-limit" {
+			t.Fatalf("bodyKind(%v) = %q, want rate-limit", body, got)
+		}
+	}
+}
+
+func TestAnalyzeLimitResetCapZeroUncapped(t *testing.T) {
+	now := time.Now()
+	cfg := testConfig()
+	cfg.LimitResetMax = 0
+	text := `{"error":{"message":"token budget exhausted","type":"rate_limit_error","code":"token_budget_exhausted"}}`
+	info := analyzeLimit(cfg, 429, map[string]string{"retry-after": "875852"}, text, now)
+	if !info.Monthly {
+		t.Fatal("monthly = false, want true")
+	}
+	if got := info.Reset.Sub(now); got < 875850*time.Second {
+		t.Fatalf("reset delta = %v, want the uncapped header value", got)
+	}
+}
+
+func TestBodyKindQuotaCodeBeatsRateType(t *testing.T) {
+	err := map[string]any{"type": "rate_limit_error", "code": "token_budget_exhausted"}
+	if got := bodyKind(err); got != "quota" {
+		t.Fatalf("bodyKind = %q, want quota", got)
+	}
+}
+
+// The fail-fast must key on the UNCAPPED reset: a 7-day rate-limit reset
+// capped to 1 h would otherwise stay retryable and a watchdog client would
+// re-probe in-process for the whole window instead of handing off to T3.
+func TestRenderCappedLongWaitStillFailsFast(t *testing.T) {
+	now := time.Now()
+	cfg := testConfig()
+	cfg.LimitResetMax = 3600
+	cfg.ClientRetryMax = 21600
+	info := limitInfo{
+		Reset:      now.Add(3600 * time.Second),   // capped announcement
+		QuotaReset: now.Add(604800 * time.Second), // true 7-day wait
+		Kind:       "rate-limit",
+	}
+	_, _, headers := renderLimit(cfg, "/v1/messages", cfg.GLM, info, 0, now)
+	if headers["x-should-retry"] != "false" {
+		t.Fatalf("x-should-retry = %q, want false (uncapped 7d > knob 6h)", headers["x-should-retry"])
+	}
+	if headers["retry-after"] != "3600" {
+		t.Fatalf("retry-after = %q, want the capped 3600", headers["retry-after"])
+	}
+}
+
+// Rank-first candidate selection can pair a short chosen reset with a
+// month-sized forwarded header (retry-after: 30 alongside
+// x-ratelimit-reset-tokens: 875852): the per-header magnitude check must
+// drop the long one even though the chosen reset was never capped.
+func TestAnalyzeLimitPassthroughDropsMonthSizedHeaderDespiteShortChosen(t *testing.T) {
+	now := time.Now()
+	cfg := testConfig()
+	cfg.LimitResetMax = 3600
+	info := analyzeLimit(cfg, 429, map[string]string{
+		"retry-after": "30", "x-ratelimit-reset-tokens": "875852",
+		"x-ratelimit-remaining-tokens": "0",
+	}, "rate limited", now)
+	if _, ok := info.Passthrough["x-ratelimit-reset-tokens"]; ok {
+		t.Fatal("month-sized x-ratelimit-reset-tokens was forwarded")
+	}
+	if info.Passthrough["x-ratelimit-remaining-tokens"] != "0" {
+		t.Fatalf("remaining dimension dropped: %v", info.Passthrough)
+	}
+	if _, ok := info.Passthrough["retry-after"]; ok {
+		t.Fatal("plain retry-after must not be forwarded (renderLimit sets its own)")
+	}
+	// IETF ratelimit policy with a month-sized reset field is dropped too.
+	info = analyzeLimit(cfg, 429, map[string]string{
+		"retry-after": "30",
+		"ratelimit":   "limit=100, r=0; t=875852",
+	}, "rate limited", now)
+	if _, ok := info.Passthrough["ratelimit"]; ok {
+		t.Fatal("month-sized IETF ratelimit policy was forwarded")
+	}
+	// A short policy stays.
+	info = analyzeLimit(cfg, 429, map[string]string{
+		"retry-after": "30",
+		"ratelimit":   "limit=100, r=0; t=45",
+	}, "rate limited", now)
+	if info.Passthrough["ratelimit"] != "limit=100, r=0; t=45" {
+		t.Fatalf("short IETF policy dropped: %v", info.Passthrough)
+	}
+}
+
+// The exact x-ratelimit-reset name (no dimension suffix) and date/epoch-valued
+// resets must be magnitude-checked too, not just duration forms.
+func TestResetBearingExceedsExactNameAndDates(t *testing.T) {
+	now := time.Now()
+	cfg := testConfig()
+	cfg.LimitResetMax = 3600
+	epoch := strconv.FormatInt(now.Add(875852*time.Second).Unix(), 10)
+	info := analyzeLimit(cfg, 429, map[string]string{
+		"retry-after":              "30",
+		"x-ratelimit-reset":        epoch,
+		"x-ratelimit-reset-tokens": now.Add(875852 * time.Second).UTC().Format(http.TimeFormat),
+	}, "rate limited", now)
+	if _, ok := info.Passthrough["x-ratelimit-reset"]; ok {
+		t.Fatal("epoch-valued x-ratelimit-reset was forwarded")
+	}
+	if _, ok := info.Passthrough["x-ratelimit-reset-tokens"]; ok {
+		t.Fatal("date-valued x-ratelimit-reset-tokens was forwarded")
 	}
 }

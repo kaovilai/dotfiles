@@ -516,7 +516,10 @@ func (a *app) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			} else {
 				info = analyzeLimit(a.cfg, resp.StatusCode, headers, text, now)
 				if info.Monthly {
-					a.noteQuota(model, info.Reset)
+					// QuotaReset (uncapped) so quotaActive spans the real
+					// window and the fallback suppression does not lapse
+					// every cap interval.
+					a.noteQuota(model, info.QuotaReset)
 				}
 			}
 			status, out, extra := renderLimit(a.cfg, r.URL.Path, served, info, outageStatus, now)
@@ -528,7 +531,10 @@ func (a *app) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			if retryAfter < 1 {
 				retryAfter = 1
 			}
-			a.usage.write(a.event(r, data, requested, served, started, usageInfo{}, false, status, resp.StatusCode, text, true, info.Reset.Unix(), info.Source, info.Monthly, retryAfter, usedFallback, fallbackReason, stream, "", 0))
+			// reset_at records the TRUE window end (QuotaReset) so llm-usage's
+			// quota span shows the real lift time, not the capped re-probe
+			// bound; retry_after below stays the capped announced value.
+			a.usage.write(a.event(r, data, requested, served, started, usageInfo{}, false, status, resp.StatusCode, text, true, info.trueReset().Unix(), info.Source, info.Monthly, retryAfter, usedFallback, fallbackReason, stream, "", 0))
 			return
 		}
 		if tr != nil {
