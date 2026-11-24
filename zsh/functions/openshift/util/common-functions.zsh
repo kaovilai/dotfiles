@@ -190,7 +190,16 @@ get-release-image() {
                 return 1
                 ;;
         esac
-        echo "quay.io/openshift-release-dev/ocp-release:${OCP_RELEASE_VERSION}-${quay_arch}"
+        local pullspec="quay.io/openshift-release-dev/ocp-release:${OCP_RELEASE_VERSION}-${quay_arch}"
+        # The pinned version comes from the amd64 release controller (or the caller);
+        # the aarch64/multi tags are promoted separately and can lag. A missing tag
+        # otherwise sails through the signature preflight (rc=2 -> proceed) and only
+        # fails at image pull, after ccoctl has created cloud resources. Hard-fail here.
+        if ! oc adm release info "$pullspec" --registry-config ~/pull-secret.txt -o jsonpath='{.metadata.version}' >/dev/null 2>&1; then
+            echo "ERROR: pinned OCP_RELEASE_VERSION=${OCP_RELEASE_VERSION} has no ${quay_arch} release image (${pullspec} does not resolve)" >&2
+            return 1
+        fi
+        echo "$pullspec"
         return 0
     fi
 

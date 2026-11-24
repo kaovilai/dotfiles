@@ -265,7 +265,7 @@ create-ocp-aws-sts() {
     fi
 
     # Check for existing clusters before proceeding
-    check-for-existing-clusters "aws" "sts-$ARCH_SUFFIX" || return 1
+    check-for-existing-clusters "aws" "sts-$ARCH_SUFFIX" || { unset FORCE_NEW_CLUSTER AUTO_SELECT_EC; return 1; }
 
     [[ -n "$FORCE_NEW_CLUSTER" ]] && unset FORCE_NEW_CLUSTER
 
@@ -273,7 +273,7 @@ create-ocp-aws-sts() {
     local stream
     if [[ "$use_nightly" == "true" ]]; then
         if [[ -z "$nightly_minor" ]]; then
-            nightly_minor=$(prompt-nightly-minor-version) || return 1
+            nightly_minor=$(prompt-nightly-minor-version) || { unset AUTO_SELECT_EC; return 1; }
         fi
         export OCP_NIGHTLY_MINOR="$nightly_minor"
         stream="nightly"

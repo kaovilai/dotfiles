@@ -465,7 +465,7 @@ create-ocp-azure-sts(){
     fi
     
     # Check for existing clusters before proceeding
-    check-for-existing-clusters "azure" || return 1
+    check-for-existing-clusters "azure" || { unset FORCE_NEW_CLUSTER AUTO_SELECT_EC; return 1; }
     
     # Unset the force flag after use
     [[ -n "$FORCE_NEW_CLUSTER" ]] && unset FORCE_NEW_CLUSTER
@@ -474,7 +474,7 @@ create-ocp-azure-sts(){
     local stream
     if [[ "$use_nightly" == "true" ]]; then
         if [[ -z "$nightly_minor" ]]; then
-            nightly_minor=$(prompt-nightly-minor-version) || return 1
+            nightly_minor=$(prompt-nightly-minor-version) || { unset AUTO_SELECT_EC; return 1; }
         fi
         export OCP_NIGHTLY_MINOR="$nightly_minor"
         stream="nightly"
