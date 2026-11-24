@@ -465,7 +465,7 @@ create-ocp-azure-sts(){
     fi
     
     # Check for existing clusters before proceeding
-    check-for-existing-clusters "azure" || return 1
+    check-for-existing-clusters "azure" || { unset FORCE_NEW_CLUSTER AUTO_SELECT_EC; return 1; }
     
     # Unset the force flag after use
     [[ -n "$FORCE_NEW_CLUSTER" ]] && unset FORCE_NEW_CLUSTER
@@ -474,7 +474,7 @@ create-ocp-azure-sts(){
     local stream
     if [[ "$use_nightly" == "true" ]]; then
         if [[ -z "$nightly_minor" ]]; then
-            nightly_minor=$(prompt-nightly-minor-version) || return 1
+            nightly_minor=$(prompt-nightly-minor-version) || { unset AUTO_SELECT_EC; return 1; }
         fi
         export OCP_NIGHTLY_MINOR="$nightly_minor"
         stream="nightly"
@@ -497,7 +497,9 @@ create-ocp-azure-sts(){
         stream=${stream_output%% *}
         local selected_version=${stream_output#* }
         if [[ "$selected_version" != "$stream" ]]; then
-            export OCP_RELEASE_VERSION="$selected_version"
+            # Function-scoped (local -x): callees and children still see the pin, but
+            # it dies with this call instead of steering the next create in this shell.
+            local -x OCP_RELEASE_VERSION="$selected_version"
         fi
     fi
     local RELEASE_IMAGE=$(get-release-image "$stream" "multi")

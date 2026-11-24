@@ -190,7 +190,26 @@ get-release-image() {
                 return 1
                 ;;
         esac
-        echo "quay.io/openshift-release-dev/ocp-release:${OCP_RELEASE_VERSION}-${quay_arch}"
+        local pullspec="quay.io/openshift-release-dev/ocp-release:${OCP_RELEASE_VERSION}-${quay_arch}"
+        # The pinned version comes from the amd64 release controller (or the caller);
+        # the aarch64/multi tags are promoted separately and can lag. A missing tag
+        # otherwise sails through the signature preflight (rc=2 -> proceed) and only
+        # fails at image pull, after ccoctl has created cloud resources. Hard-fail here.
+        # One retry, like the skopeo --retry-times 1 in check-release-signatures,
+        # so a single registry blip does not abort the create at its first step.
+        local resolve_err resolved=false attempt
+        for attempt in 1 2; do
+            if resolve_err=$(oc adm release info "$pullspec" --registry-config ~/pull-secret.txt -o jsonpath='{.metadata.version}' 2>&1 >/dev/null); then
+                resolved=true
+                break
+            fi
+            [[ $attempt -eq 1 ]] && sleep 2
+        done
+        if [[ "$resolved" != "true" ]]; then
+            echo "ERROR: could not resolve ${pullspec} for pinned OCP_RELEASE_VERSION=${OCP_RELEASE_VERSION} (missing ${quay_arch} tag, registry auth, or network): ${resolve_err}" >&2
+            return 1
+        fi
+        echo "$pullspec"
         return 0
     fi
 

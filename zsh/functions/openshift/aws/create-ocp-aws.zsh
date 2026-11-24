@@ -328,7 +328,7 @@ create-ocp-aws() {
     fi
     
     # Check for existing clusters before proceeding
-    check-for-existing-clusters "aws" "$ARCH_SUFFIX" || return 1
+    check-for-existing-clusters "aws" "$ARCH_SUFFIX" || { unset FORCE_NEW_CLUSTER AUTO_SELECT_EC; return 1; }
     
     # Unset the force flag after use
     [[ -n "$FORCE_NEW_CLUSTER" ]] && unset FORCE_NEW_CLUSTER
@@ -337,7 +337,7 @@ create-ocp-aws() {
     local stream
     if [[ "$use_nightly" == "true" ]]; then
         if [[ -z "$nightly_minor" ]]; then
-            nightly_minor=$(prompt-nightly-minor-version) || return 1
+            nightly_minor=$(prompt-nightly-minor-version) || { unset AUTO_SELECT_EC; return 1; }
         fi
         export OCP_NIGHTLY_MINOR="$nightly_minor"
         stream="nightly"
@@ -356,9 +356,12 @@ create-ocp-aws() {
         # every major's dev-preview stream, or newest of --ec=X.Y's minor) and
         # pin it via OCP_RELEASE_VERSION, so a 5.x EC is reachable and the
         # release image, signature check and installer binary all agree.
+        # Function-scoped (local -x) so the pin dies with this call on success and on
+        # every early return: a later --ec=X.Y must resolve afresh, not inherit it.
+        # A caller-exported OCP_RELEASE_VERSION never reaches here (pre-set branch above).
         local ec_version
-        ec_version=$(get-ocp-latest-ec-version $ec_minor) || return 1
-        export OCP_RELEASE_VERSION="$ec_version"
+        ec_version=$(get-ocp-latest-ec-version "$ec_minor") || { unset AUTO_SELECT_EC; return 1; }
+        local -x OCP_RELEASE_VERSION="$ec_version"
         stream="dev-preview"
         echo "Automatically selecting Early Candidate release ${ec_version}${ec_minor:+ (--ec=${ec_minor})}"
         unset AUTO_SELECT_EC
@@ -367,7 +370,8 @@ create-ocp-aws() {
         stream=${stream_output%% *}
         local selected_version=${stream_output#* }
         if [[ "$selected_version" != "$stream" ]]; then
-            export OCP_RELEASE_VERSION="$selected_version"
+            # Function-scoped for the same reason as the --ec pin above.
+            local -x OCP_RELEASE_VERSION="$selected_version"
         fi
     fi
 
