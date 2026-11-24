@@ -195,8 +195,9 @@ get-release-image() {
         # the aarch64/multi tags are promoted separately and can lag. A missing tag
         # otherwise sails through the signature preflight (rc=2 -> proceed) and only
         # fails at image pull, after ccoctl has created cloud resources. Hard-fail here.
-        if ! oc adm release info "$pullspec" --registry-config ~/pull-secret.txt -o jsonpath='{.metadata.version}' >/dev/null 2>&1; then
-            echo "ERROR: pinned OCP_RELEASE_VERSION=${OCP_RELEASE_VERSION} has no ${quay_arch} release image (${pullspec} does not resolve)" >&2
+        local resolve_err
+        if ! resolve_err=$(oc adm release info "$pullspec" --registry-config ~/pull-secret.txt -o jsonpath='{.metadata.version}' 2>&1 >/dev/null); then
+            echo "ERROR: could not resolve ${pullspec} for pinned OCP_RELEASE_VERSION=${OCP_RELEASE_VERSION} (missing ${quay_arch} tag, registry auth, or network): ${resolve_err}" >&2
             return 1
         fi
         echo "$pullspec"
