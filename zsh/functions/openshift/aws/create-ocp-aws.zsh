@@ -360,7 +360,7 @@ create-ocp-aws() {
         # every early return: a later --ec=X.Y must resolve afresh, not inherit it.
         # A caller-exported OCP_RELEASE_VERSION never reaches here (pre-set branch above).
         local ec_version
-        ec_version=$(get-ocp-latest-ec-version "$ec_minor") || return 1
+        ec_version=$(get-ocp-latest-ec-version "$ec_minor") || { unset AUTO_SELECT_EC; return 1; }
         local -x OCP_RELEASE_VERSION="$ec_version"
         stream="dev-preview"
         echo "Automatically selecting Early Candidate release ${ec_version}${ec_minor:+ (--ec=${ec_minor})}"
