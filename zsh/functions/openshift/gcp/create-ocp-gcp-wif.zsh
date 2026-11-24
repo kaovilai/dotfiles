@@ -390,7 +390,9 @@ create-ocp-gcp-wif(){
         stream=${stream_output%% *}
         local selected_version=${stream_output#* }
         if [[ "$selected_version" != "$stream" ]]; then
-            export OCP_RELEASE_VERSION="$selected_version"
+            # Function-scoped (local -x): callees and children still see the pin, but
+            # it dies with this call instead of steering the next create in this shell.
+            local -x OCP_RELEASE_VERSION="$selected_version"
         fi
     fi
     local RELEASE_IMAGE=$(get-release-image "$stream" "multi")

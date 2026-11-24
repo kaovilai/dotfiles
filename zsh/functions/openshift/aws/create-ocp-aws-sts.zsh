@@ -305,7 +305,8 @@ create-ocp-aws-sts() {
         stream=${stream_output%% *}
         local selected_version=${stream_output#* }
         if [[ "$selected_version" != "$stream" ]]; then
-            export OCP_RELEASE_VERSION="$selected_version"
+            # Function-scoped for the same reason as the --ec pin above.
+            local -x OCP_RELEASE_VERSION="$selected_version"
         fi
     fi
 

@@ -356,9 +356,12 @@ create-ocp-aws() {
         # every major's dev-preview stream, or newest of --ec=X.Y's minor) and
         # pin it via OCP_RELEASE_VERSION, so a 5.x EC is reachable and the
         # release image, signature check and installer binary all agree.
+        # Function-scoped (local -x) so the pin dies with this call on success and on
+        # every early return: a later --ec=X.Y must resolve afresh, not inherit it.
+        # A caller-exported OCP_RELEASE_VERSION never reaches here (pre-set branch above).
         local ec_version
-        ec_version=$(get-ocp-latest-ec-version $ec_minor) || return 1
-        export OCP_RELEASE_VERSION="$ec_version"
+        ec_version=$(get-ocp-latest-ec-version "$ec_minor") || return 1
+        local -x OCP_RELEASE_VERSION="$ec_version"
         stream="dev-preview"
         echo "Automatically selecting Early Candidate release ${ec_version}${ec_minor:+ (--ec=${ec_minor})}"
         unset AUTO_SELECT_EC
@@ -367,7 +370,8 @@ create-ocp-aws() {
         stream=${stream_output%% *}
         local selected_version=${stream_output#* }
         if [[ "$selected_version" != "$stream" ]]; then
-            export OCP_RELEASE_VERSION="$selected_version"
+            # Function-scoped for the same reason as the --ec pin above.
+            local -x OCP_RELEASE_VERSION="$selected_version"
         fi
     fi
 
