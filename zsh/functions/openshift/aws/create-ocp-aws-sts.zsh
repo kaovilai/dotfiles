@@ -46,7 +46,8 @@ create-ocp-aws-sts() {
         echo ""
         echo "Flags (can be combined):"
         echo "  --force-new Force creation alongside existing clusters (skip prompt)"
-        echo "  --ec        Automatically select Early Candidate release stream"
+        echo "  --ec        Automatically select the newest Accepted Early Candidate (any major)"
+        echo "  --ec=X.Y    Same, restricted to minor X.Y (e.g. --ec=5.1)"
         echo "  --verify-all-signatures"
         echo "              With --ec, check every image in the release payload for a"
         echo "              published signature instead of just rhel-coreos (slower, ~10-20s)"
@@ -188,6 +189,7 @@ create-ocp-aws-sts() {
     # Parse command line flags
     local force_new=false
     local auto_ec=false
+    local ec_minor=""
     local add_kvm_pool=false
     local kvm_spot=false
     local kvm_all_workers=false
@@ -206,6 +208,10 @@ create-ocp-aws-sts() {
                 ;;
             --ec)
                 auto_ec=true
+                ;;
+            --ec=*)
+                auto_ec=true
+                ec_minor="${arg#--ec=}"
                 ;;
             --verify-all-signatures)
                 verify_all_signatures=true
@@ -282,8 +288,14 @@ create-ocp-aws-sts() {
         echo "INFO: Using pre-set OCP_RELEASE_VERSION=$OCP_RELEASE_VERSION (stream=$stream)"
         unset AUTO_SELECT_EC
     elif [[ -n "$AUTO_SELECT_EC" ]]; then
-        stream="4-dev-preview"
-        echo "Automatically selecting Early Candidate release stream"
+        # Same as create-ocp-aws: resolve the concrete EC version up front (newest
+        # Accepted EC across every major, or newest of --ec=X.Y's minor) and pin it
+        # via OCP_RELEASE_VERSION so release image, signature check and installer agree.
+        local ec_version
+        ec_version=$(get-ocp-latest-ec-version $ec_minor) || return 1
+        export OCP_RELEASE_VERSION="$ec_version"
+        stream="dev-preview"
+        echo "Automatically selecting Early Candidate release ${ec_version}${ec_minor:+ (--ec=${ec_minor})}"
         unset AUTO_SELECT_EC
     else
         local stream_output=$(prompt-release-stream)
