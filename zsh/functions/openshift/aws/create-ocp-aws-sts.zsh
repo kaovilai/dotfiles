@@ -291,9 +291,12 @@ create-ocp-aws-sts() {
         # Same as create-ocp-aws: resolve the concrete EC version up front (newest
         # Accepted EC across every major, or newest of --ec=X.Y's minor) and pin it
         # via OCP_RELEASE_VERSION so release image, signature check and installer agree.
+        # Function-scoped (local -x) so the pin dies with this call on success and on
+        # every early return: a later --ec=X.Y must resolve afresh, not inherit it.
+        # A caller-exported OCP_RELEASE_VERSION never reaches here (pre-set branch above).
         local ec_version
-        ec_version=$(get-ocp-latest-ec-version $ec_minor) || return 1
-        export OCP_RELEASE_VERSION="$ec_version"
+        ec_version=$(get-ocp-latest-ec-version "$ec_minor") || return 1
+        local -x OCP_RELEASE_VERSION="$ec_version"
         stream="dev-preview"
         echo "Automatically selecting Early Candidate release ${ec_version}${ec_minor:+ (--ec=${ec_minor})}"
         unset AUTO_SELECT_EC
