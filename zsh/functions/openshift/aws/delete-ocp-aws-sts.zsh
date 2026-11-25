@@ -120,10 +120,10 @@ delete-ocp-aws-sts() {
 
     echo "Destroying AWS STS cluster in directory: $OCP_CREATE_DIR"
     $OPENSHIFT_INSTALL destroy cluster --dir $OCP_CREATE_DIR || echo "no existing cluster"
-    echo "Destroying AWS STS bootstrap in directory: $OCP_CREATE_DIR"
     # destroy cluster removes metadata.json on success; without it destroy
     # bootstrap can only print a fatal "open .../metadata.json" into the log.
     if [[ -f "$OCP_CREATE_DIR/metadata.json" ]]; then
+        echo "Destroying AWS STS bootstrap in directory: $OCP_CREATE_DIR"
         $OPENSHIFT_INSTALL destroy bootstrap --dir $OCP_CREATE_DIR || echo "no existing bootstrap"
     fi
     (ccoctl aws delete \
