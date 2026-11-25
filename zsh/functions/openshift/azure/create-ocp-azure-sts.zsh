@@ -131,7 +131,11 @@ create-ocp-azure-sts(){
             # to ~/OCP/manifests/.logs/ (kept >=30 days, see prune function).
             bash ~/.claude/skills/create-ocp/scripts/archive-logs.sh "$OCP_CREATE_DIR" 2>/dev/null || true
             $OPENSHIFT_INSTALL destroy cluster --dir $OCP_CREATE_DIR || echo "no existing cluster"
-            $OPENSHIFT_INSTALL destroy bootstrap --dir $OCP_CREATE_DIR || echo "no existing bootstrap"
+            # destroy cluster removes metadata.json on success; without it destroy
+            # bootstrap can only print a fatal "open .../metadata.json" into the log.
+            if [[ -f "$OCP_CREATE_DIR/metadata.json" ]]; then
+                $OPENSHIFT_INSTALL destroy bootstrap --dir $OCP_CREATE_DIR || echo "no existing bootstrap"
+            fi
             (retry-ccoctl-azure azure delete \
             --name $CLUSTER_NAME \
             --subscription-id $AZURE_SUBSCRIPTION_ID \
