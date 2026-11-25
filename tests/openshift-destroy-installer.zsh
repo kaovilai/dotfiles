@@ -97,4 +97,24 @@ reset_bins; fake 4.22.19 1; mkcluster 261023-azure-sts "$V422"
 delete-ocp-azure-sts tkaovila-261023-sts >/dev/null 2>&1; eq "azure destroy fail -> 1" $? 1
 eq "azure dir kept" "$([[ -f $tmp/m/261023-azure-sts/metadata.json ]] && print kept)" kept
 
+print "== destroy-ocp-install-dir: bootstrap destroy only while metadata.json exists"
+# rmfake: like fake, but destroy cluster removes metadata.json as the real installer does
+print -r -- "#!/bin/sh
+echo \"\${0##*/} \$*\" >> \"$CALLS\"
+[ \"\$2\" = cluster ] && rm -f \"\$4/metadata.json\"
+exit 0" > "$tmp/bin/openshift-install-rm"; chmod +x "$tmp/bin/openshift-install-rm"
+mkcluster d-rm "$V422"
+out=$(destroy-ocp-install-dir openshift-install-rm "$tmp/m/d-rm" 2>&1); eq "metadata removed by destroy: returns 0" $? 0
+eq "only destroy cluster ran" "$(cat $CALLS)" "openshift-install-rm destroy cluster --dir $tmp/m/d-rm"
+eq "no bootstrap noise" "$out" ""
+reset_bins; fake 4.22.19; mkcluster d-keep "$V422"
+destroy-ocp-install-dir openshift-install-4.22.19 "$tmp/m/d-keep" >/dev/null 2>&1; eq "metadata kept: returns 0" $? 0
+eq "cluster then bootstrap" "$(cat $CALLS)" "openshift-install-4.22.19 destroy cluster --dir $tmp/m/d-keep"$'\n'"openshift-install-4.22.19 destroy bootstrap --dir $tmp/m/d-keep"
+reset_bins; fake 4.22.19 1; mkcluster d-fail "$V422"
+destroy-ocp-install-dir openshift-install-4.22.19 "$tmp/m/d-fail" >/dev/null 2>&1; eq "destroy cluster fails: returns 1" $? 1
+eq "no bootstrap after failed destroy" "$(grep -c bootstrap $CALLS)" 0
+mkcluster d-nometa "" nometa
+destroy-ocp-install-dir openshift-install-4.22.19 "$tmp/m/d-nometa" >/dev/null 2>&1; eq "no metadata: returns 0" $? 0
+eq "no installer call" "$(wc -l < $CALLS | tr -d ' ')" 0
+
 print; print "passed=$pass failed=$fail"; (( fail == 0 ))

@@ -72,7 +72,8 @@ resolve-destroy-installer() {
 }
 
 # destroy-ocp-install-dir <installer> <install_dir>
-# Runs destroy cluster + bootstrap. Returns 1 if `destroy cluster` failed, so
+# Runs destroy cluster, then destroy bootstrap if metadata.json survived it
+# (a successful destroy cluster removes it). Returns 1 if `destroy cluster` failed, so
 # callers keep the dir (and its metadata.json) for a retry instead of
 # removing the only handle on live infra. No metadata.json = nothing the
 # installer can destroy: returns 0 so partial dirs from early failures still
@@ -87,5 +88,11 @@ destroy-ocp-install-dir() {
         echo "ERROR: '$inst destroy cluster' failed; keeping $dir so a retry can still find the infra." >&2
         return 1
     fi
-    "$inst" destroy bootstrap --dir "$dir" || echo "no existing bootstrap"
+    # A successful destroy cluster removes metadata.json; destroy bootstrap then
+    # has nothing to read and only logs a fatal "open .../metadata.json". Run it
+    # only when the installer left metadata.json behind.
+    if [[ -f "$dir/metadata.json" ]]; then
+        "$inst" destroy bootstrap --dir "$dir" || echo "no existing bootstrap"
+    fi
+    return 0
 }
