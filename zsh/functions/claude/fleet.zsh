@@ -198,6 +198,9 @@ _claude-fleet-generate() {
         # claude-t3-* launchers live in ~/.local/bin, which paths.zsh puts
         # on PATH AFTER this file runs — $+commands cannot see them yet,
         # and a function would shadow them. Skip the family by name.
+        # KNOWN LIMIT: this enumerates today's launcher set; a future
+        # claude-* command installed only in a later-added PATH dir
+        # (paths.zsh runs after this file) would need adding here too.
         [[ $name == t3-* ]] && continue
         cache_fns+=("claude-$name") cache_fleets+=("${(q)name}")
         if (( ! $+functions[claude-$name] && ! $+aliases[claude-$name]
