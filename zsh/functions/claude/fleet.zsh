@@ -339,33 +339,38 @@ _claude-fleet-generate() {
         if ! _claude-fleet-path-trusted "$cache_dir" 0; then
             return 0
         fi
-        local i line
+        local i
         # Stale same-pid temp from a crashed shell: rm -f unlinks it (rm
         # never follows symlinks, so a pre-planted symlink is removed, not
         # resolved). The walk already established no other user can write
         # into this directory, so the rm-to-open window is not raceable.
-        rm -f -- "$cache.tmp.$$"
-        # The temp file is created with noclobber — an existing path,
-        # including a pre-planted symlink (even dangling), fails the open
-        # instead of being followed, so ">" can never truncate an
-        # attacker-chosen file. The write runs in a SUBSHELL: a failed
-        # open aborts only the subshell, so the invoking shell's umask is
-        # never left at 077 and the launchers stay defined either way.
+        rm -f -- "$cache.tmp.$$" 2>/dev/null
+        # The temp file is created EXCLUSIVELY and WITHOUT following
+        # symlinks: sysopen maps to open(O_CREAT|O_EXCL|O_NOFOLLOW), so an
+        # existing path at the temp name — regular file, directory, or
+        # (pre-planted / raced-back) symlink, even dangling or to an empty
+        # file — fails the open instead of being written through. A plain
+        # noclobber '>' is NOT sufficient: zsh 5.9's noclobber open falls
+        # back to an ordinary open, and with CLOBBER_EMPTY set that
+        # fallback follows a symlink to an empty regular file. The write
+        # runs in a SUBSHELL (a failed open aborts only the subshell, so
+        # the invoking shell's umask is never left at 077 and the
+        # launchers stay defined either way); the fd and the module load
+        # die with it.
+        local cache_body=""
+        # {1..0} counts DOWN in zsh (1, 0) — guard the empty case or
+        # two empty-subscript lines land in the cache.
+        if (( $#cache_fns )); then
+            for i in {1..$#cache_fns}; do
+                cache_body+="(( ! \$+functions[${cache_fns[i]}] && ! \$+aliases[${cache_fns[i]}] && ! \$+commands[${cache_fns[i]}] )) && functions[${cache_fns[i]}]='claude-fleet ${cache_fleets[i]} \"\$@\"'"$'\n'
+            done
+        fi
+        cache_body+="_claude_fleet_cache_snapshot=${(qq)cfg_content}"
         if (
-            setopt noclobber
+            zmodload zsh/system 2>/dev/null || exit 1
             umask 077
-            {
-                print -r -- "$cache_version"
-                # {1..0} counts DOWN in zsh (1, 0) — guard the empty case or
-                # two empty-subscript lines land in the cache.
-                if (( $#cache_fns )); then
-                    for i in {1..$#cache_fns}; do
-                        line="(( ! \$+functions[${cache_fns[i]}] && ! \$+aliases[${cache_fns[i]}] && ! \$+commands[${cache_fns[i]}] )) && functions[${cache_fns[i]}]='claude-fleet ${cache_fleets[i]} \"\$@\"'"
-                        print -r -- "$line"
-                    done
-                fi
-                print -r -- "_claude_fleet_cache_snapshot=${(qq)cfg_content}"
-            } > "$cache.tmp.$$"
+            sysopen -w -o creat,excl,nofollow -u wfd "$cache.tmp.$$" || exit 1
+            print -u $wfd -r -- "$cache_version"$'\n'"$cache_body" || exit 1
         ); then
             mv -f -- "$cache.tmp.$$" "$cache"
         fi

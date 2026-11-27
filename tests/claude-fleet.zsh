@@ -492,17 +492,34 @@ chmod 755 "$shared"
 
 # Write-side symlink hardening: a pre-planted temp-file symlink must not
 # be followed. rm -f unlinks it (rm never follows symlinks) and the
-# noclobber open would refuse it even without the rm, so the canary file
-# survives AND the cache is still written.
+# sysopen O_EXCL|O_NOFOLLOW create would refuse it even without the rm,
+# so the canary file survives AND the cache is still written. The canary
+# is deliberately EMPTY and CLOBBER_EMPTY is turned on: zsh 5.9's
+# noclobber fallback follows symlinks to empty files, so this pins the
+# attack that motivated dropping noclobber for sysopen.
 print -r -- '{"hosts":[{"name":"tmpsymlink","ssh":"t@x"}]}' > "$tmp/cfg/fleet.json"
 rm -f "$cachefile"
 mkdir -p "$tmp/cache/claude-provider/fleet"
-print -r -- "CANARY" > "$tmp/canary"
+: > "$tmp/canary"
+setopt clobber_empty 2>/dev/null
 ln -s "$tmp/canary" "$tmp/cache/claude-provider/fleet/launchers.zsh.tmp.$$"
 source "$repo/zsh/functions/claude/fleet.zsh"
-[[ "$(cat "$tmp/canary")" == "CANARY" ]] || fail "temp-file symlink was followed (canary clobbered)"
+[[ "$(cat "$tmp/canary")" == "" ]] || fail "temp-file symlink was followed (canary clobbered)"
 [[ -r "$cachefile" ]] || fail "pre-planted temp symlink suppressed the cache write"
 [[ ! -L "$cachefile" ]] || fail "cache file is a symlink"
+
+# Existing-path refusal at the temp name WITHOUT the rm in front: a
+# DIRECTORY at the temp path survives rm -f (which cannot remove
+# directories), so the O_EXCL create itself must refuse it — write
+# skipped, launcher still defined, the directory untouched.
+print -r -- '{"hosts":[{"name":"tmpdir","ssh":"t@x"}]}' > "$tmp/cfg/fleet.json"
+rm -f "$cachefile"
+mkdir -p "$tmp/cache/claude-provider/fleet/launchers.zsh.tmp.$$"
+source "$repo/zsh/functions/claude/fleet.zsh"
+(( $+functions[claude-tmpdir] )) || fail "existing-path temp file rejected the launcher entirely"
+[[ -d "$tmp/cache/claude-provider/fleet/launchers.zsh.tmp.$$" ]] || fail "pre-planted temp directory was disturbed"
+[[ -e "$cachefile" ]] && fail "cache written despite existing-path temp collision"
+rmdir "$tmp/cache/claude-provider/fleet/launchers.zsh.tmp.$$"
 
 # Write gate: an untrusted ancestor ABOVE the XDG root (group-writable,
 # and the go-w fix only touches the XDG root itself, so it stays
