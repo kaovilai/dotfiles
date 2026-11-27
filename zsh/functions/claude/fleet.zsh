@@ -231,7 +231,15 @@ _claude-fleet-generate() {
             # the $q splice — zsh regex has no \xNN escapes):
             # (( ! $+functions[NAME] && ... )) && functions[NAME]='claude-fleet FLEET "$@"'
             local re="^\(\( ! \\\$\+functions\[([A-Za-z0-9_-]+)\] && ! \\\$\+aliases\[([A-Za-z0-9_-]+)\] && ! \\\$\+commands\[([A-Za-z0-9_-]+)\] \)\) && functions\[([A-Za-z0-9_-]+)\]=${q}claude-fleet ([A-Za-z0-9_-]+) \"\\\$@\"${q}\$"
-            for fn in "${(@)cl[2,-2]}"; do
+            # Launcher lines run from 2 until the snapshot MARKER line — a
+            # multi-line snapshot value spans physical lines, so cl[-2] is
+            # not a launcher boundary.
+            local -i n endmark=0
+            for (( n = 2; n <= $#cl; n++ )); do
+                [[ "${cl[n]}" == "_claude_fleet_cache_snapshot="* ]] && { endmark=n; break; }
+            done
+            (( endmark > 1 )) || return 1
+            for fn in "${(@)cl[2,endmark-1]}"; do
                 if [[ "$fn" =~ "$re" ]] \
                    && [[ "$match[1]" == "$match[2]" && "$match[2]" == "$match[3]" && "$match[3]" == "$match[4]" ]] \
                    && (( ! $+functions[$match[4]] && ! $+aliases[$match[4]] && ! $+commands[$match[4]] )); then
