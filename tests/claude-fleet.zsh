@@ -130,6 +130,15 @@ pairs=$(_claude_fleet_host_pairs)
 [[ $pairs == *"goodish:g@x"* ]] || fail "good peer missing from pairs: $pairs"
 [[ $pairs != *emptyish* && $pairs != *numish* ]] || fail "degenerate peer offered by completion"
 
+# Direct resolution rejects degenerate targets the same way (claude-fleet
+# numish must fail BEFORE ssh sees "42" as a destination).
+print -r -- '{"hosts":[{"name":"numish","ssh":42},{"name":"goodish","ssh":"g@x"}]}' \
+    > "$tmp/cfg/fleet.json"
+out=$(claude-fleet numish 2>&1) && fail "numeric .ssh accepted by resolution"
+[[ $out == *"no fleet host named 'numish'"* ]] || fail "numeric .ssh wrong diagnosis: $out"
+out=$(claude-fleet goodish 2>&1)
+[[ $out == *"ssh-host: g@x"* ]] || fail "valid peer stopped resolving: $out"
+
 # Malformed fleet.json surfaces the parse error, not a missing-host message.
 print -r -- '{not json' > "$tmp/cfg/fleet.json"
 out=$(claude-fleet goodish 2>&1) || true

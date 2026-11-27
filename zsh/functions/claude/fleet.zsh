@@ -30,7 +30,11 @@ _claude_fleet_target() {
         return 1
     fi
     local target
-    if ! target=$(jq -r --arg n "$1" '.hosts[] | select(.name == $n) | .ssh // empty' "$cfg" 2>&1); then
+    # Same predicate as generation/completion: a non-string .ssh (jq -r
+    # prints numbers verbatim) must fail resolution, not reach ssh.
+    if ! target=$(jq -r --arg n "$1" \
+        '.hosts[] | select(.name == $n) | select((.ssh|type) == "string" and .ssh != "") | .ssh' \
+        "$cfg" 2>&1); then
         print -ru2 -- "claude-fleet: cannot parse $cfg: ${target%%$'\n'*}"
         return 1
     fi
