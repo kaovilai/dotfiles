@@ -408,4 +408,22 @@ source "$repo/zsh/functions/claude/fleet.zsh"
 out=$(source "$repo/zsh/functions/claude/fleet.zsh" 2>&1)
 [[ $out != *JQ-FORKED* ]] || fail "zero-names config re-forked jq on cache hit"
 
+# A transient jq failure is not cached: the unlucky shell defines nothing,
+# but no cache is written, so the next shell retries.
+print -r -- '{"hosts":[{"name":"jqfail","ssh":"j@x"}]}' > "$tmp/cfg/fleet.json"
+cat > "$tmp/bin/jq" <<'JQ'
+#!/bin/sh
+exit 3
+JQ
+chmod +x "$tmp/bin/jq"
+unset -f claude-jqfail 2>/dev/null || true
+source "$repo/zsh/functions/claude/fleet.zsh"
+(( $+functions[claude-jqfail] )) && fail "failing jq still defined launchers"
+[[ -e "$tmp/cache/claude-provider/fleet/launchers.zsh" ]]     && grep -q "jqfail" "$tmp/cache/claude-provider/fleet/launchers.zsh"     && fail "jq failure was cached"
+# Working jq again: the next shell generates normally.
+rm -f "$tmp/bin/jq"
+rehash
+source "$repo/zsh/functions/claude/fleet.zsh"
+(( $+functions[claude-jqfail] )) || fail "recovery after jq failure failed"
+
 print -- "ok claude-fleet"

@@ -156,10 +156,19 @@ _claude-fleet-generate() {
     # newline, which would make jq -r split the name into phantom peers),
     # duplicate names dropped (resolution refuses them as ambiguous).
     local -a names
-    names=("${(@f)$(print -r -- "$cfg_content" | jq -r '.hosts | map(select((.ssh|type) == "string" and .ssh != "" and ((.ssh | startswith("-")) | not) and (.ssh | test("^[^[:space:]]+$"))) | select((.name|type) == "string" and (.name | test("^[A-Za-z0-9_-]+\\z")))) | group_by(.name) | map(select(length == 1) | .[0]) | .[] | .name' 2>/dev/null)}") || names=()
-    # Zero names (e.g. an all-local-state fleet.json) still falls through to
-    # the cache write below: a version+snapshot-only cache makes the next
+    # jq's EXIT STATUS gates the cache write, not the name count: a
+    # transient jq failure (missing, killed, OOM) must cost only this shell.
+    # Caching the empty result would stick as a fork-free zero-launcher
+    # cache until fleet.json changes — degrading every later shell. A
+    # SUCCESSFUL empty result (all-local-state fleet.json) still falls
+    # through to the write: a version+snapshot-only cache makes the next
     # shell a fork-free hit instead of re-running jq at every startup.
+    local jq_out
+    if ! jq_out=$(print -r -- "$cfg_content" | jq -r '.hosts | map(select((.ssh|type) == "string" and .ssh != "" and ((.ssh | startswith("-")) | not) and (.ssh | test("^[^[:space:]]+$"))) | select((.name|type) == "string" and (.name | test("^[A-Za-z0-9_-]+\\z")))) | group_by(.name) | map(select(length == 1) | .[0]) | .[] | .name' 2>/dev/null); then
+        return 0
+    fi
+    local -a names
+    names=("${(@f)jq_out}")
     # Pass 1 — full names; pass 2 — short aliases: a dashed peer earlier in
     # the file must not shadow a real peer whose full name IS the short form
     # (ryzen-wsl first would otherwise steal claude-ryzen from a later
