@@ -104,7 +104,10 @@ if [[ -o interactive ]]; then
   # leak the previous fd + registration; clean any pending one up first.
   if [[ -n ${_ZSH_DEFER_FD-} ]]; then
     zle -F $_ZSH_DEFER_FD 2>/dev/null
-    exec {_ZSH_DEFER_FD}>&- 2>/dev/null
+    # No 2>/dev/null on the command-less exec: it redirects the SHELL's
+    # stderr for the rest of the session (found via claude/fleet.zsh,
+    # https://github.com/kaovilai/dotfiles/pull/667)
+    exec {_ZSH_DEFER_FD}>&-
   fi
   exec {_ZSH_DEFER_FD}< /dev/null
   zle -F $_ZSH_DEFER_FD _zsh_deferred_plugins
