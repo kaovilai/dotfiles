@@ -114,29 +114,38 @@ _claude-fleet-generate() {
     # ONE read of fleet.json feeds the jq filter, the cache snapshot and
     # the content check: separate reads could race an edit in between.
     local cfg_content="$(<$cfg)"
-    # Cache, v2: ONE file — version line, guarded launcher lines, the peer
-    # list, and the fleet.json snapshot as a quoted assignment — renamed in
-    # a single mv, so no interleave can pair launchers with a foreign
-    # snapshot. Steady state is fork-free (builtin reads only). Each cached
-    # launcher line re-evaluates the collision guard on every source, and
-    # the peer list lets a LATER shell detect a cached omission whose
-    # collision has since disappeared (regenerate instead of serving a
-    # launcher-less peer until the content changes).
+    # Cache, v2: ONE file — version line, a guarded launcher line for
+    # EVERY candidate peer, and the fleet.json snapshot as a quoted
+    # assignment — renamed in a single mv, so no interleave can pair
+    # launchers with a foreign snapshot. Steady state is fork-free (builtin
+    # reads only). The guards baked into each cached line re-evaluate on
+    # every source: a collision present in this shell makes the line
+    # inert, a collision that has disappeared lets it define the launcher
+    # (self-healing).
     local cache_dir="${XDG_CACHE_HOME:-$HOME/.cache}/claude-provider/fleet"
     local cache="$cache_dir/launchers.zsh"
     local -r cache_version="# fleet-launchers cache v2"
-    # Decide BEFORE sourcing: reconstructing the expected snapshot line and
-    # comparing it against the cache's last line needs no evaluation. If the
-    # cache were sourced first, its definitions would look like collisions
-    # to the generation guard below and the rewritten cache would record
-    # only the delta — oscillating forever on every fleet.json edit.
+    # Decide BEFORE sourcing: if the cache were sourced first, its
+    # definitions would look like collisions to the generation guard below
+    # and the rewritten cache would record only the delta — oscillating
+    # forever on every fleet.json edit. The snapshot comparison is
+    # marker-based, NOT line-based: a pretty-printed fleet.json embeds
+    # newlines in the quoted snapshot value, so it spans many lines and a
+    # last-line compare can never match (every shell would then fork jq
+    # and rewrite). Strip everything through the LAST marker occurrence
+    # (the marker line is always the file's final line) and compare the
+    # remainder as a literal string.
     local -a cache_file_lines
     local _claude_fleet_cache_snapshot
+    local cache_content snap_rest
     if [[ -r $cache ]] && cache_file_lines=("${(f)"$(<$cache)"}") \
-       && [[ ${cache_file_lines[1]} == "$cache_version" ]] \
-       && [[ ${cache_file_lines[-1]} == "_claude_fleet_cache_snapshot=${(qq)cfg_content}" ]] \
-       && source "$cache"; then
-        return 0
+       && [[ ${cache_file_lines[1]} == "$cache_version" ]]; then
+        cache_content="$(<$cache)"
+        snap_rest="${cache_content##*_claude_fleet_cache_snapshot=}"
+        snap_rest="${snap_rest%$'\n'}"
+        if [[ "$snap_rest" == "${(qq)cfg_content}" ]] && source "$cache"; then
+            return 0
+        fi
     fi
     # Only connectable peers get launchers: the llm-usage fleet format also
     # carries local-state peers (no .ssh), and a hand-edited entry can carry

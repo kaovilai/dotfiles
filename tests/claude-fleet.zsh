@@ -380,4 +380,24 @@ source "$repo/zsh/functions/claude/fleet.zsh"
 (( $+functions[claude-t3-openai] )) && fail "t3-* peer generated a shadowing launcher"
 (( $+functions[claude-plainpeer] )) || fail "unrelated peer skipped by t3- guard"
 
+# A pretty-printed (multi-line) fleet.json must hit the cache: the quoted
+# snapshot embeds newlines, and a line-based compare would never match.
+printf '{\n  "hosts": [\n    {"name": "prettypeer", "ssh": "pp@x"}\n  ]\n}\n' > "$tmp/cfg/fleet.json"
+unset -f claude-prettypeer 2>/dev/null || true
+source "$repo/zsh/functions/claude/fleet.zsh"
+(( $+functions[claude-prettypeer] )) || fail "pretty-printed fleet.json did not generate"
+unset -f claude-prettypeer 2>/dev/null || true
+# jq fork counter: a cache hit must NOT fork jq (marker compare only).
+real_jq=$(whence -p jq)
+cat > "$tmp/bin/jq" <<JQ
+#!/bin/sh
+echo "JQ-FORKED" >&2
+exec $real_jq "\$@"
+JQ
+chmod +x "$tmp/bin/jq"
+rehash
+out=$(source "$repo/zsh/functions/claude/fleet.zsh"; whence -w claude-prettypeer) 2>&1
+[[ $out == *JQ-FORKED* ]] && fail "cache MISS for pretty-printed fleet.json (jq forked)"
+[[ $out == *function* ]] || fail "pretty-printed cache hit did not define launcher"
+
 print -- "ok claude-fleet"
