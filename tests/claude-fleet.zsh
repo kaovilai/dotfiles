@@ -214,6 +214,13 @@ source "$repo/zsh/functions/claude/fleet.zsh"
 (( $+functions[claude-trailn] )) && fail "trailing-newline name generated a launcher"
 (( $+functions[claude-solidname] )) || fail "valid name skipped by generation predicate"
 
+# A SINGLE entry with an embedded newline in .ssh is diagnosed as the
+# newline defect, not as duplicate entries (count is entries, not lines).
+print -r -- '{"hosts":[{"name":"nlnl","ssh":"a@x\nb@y"}]}' \
+    > "$tmp/cfg/fleet.json"
+out=$(claude-fleet nlnl 2>&1) && fail "newline-in-ssh target accepted"
+[[ $out == *"invalid ssh target containing a newline"* ]] || fail "newline-in-ssh misdiagnosed: $out"
+
 # Duplicate host names are diagnosed, not passed to ssh as a multi-line
 # destination.
 print -r -- '{"hosts":[{"name":"dup","ssh":"a@x"},{"name":"dup","ssh":"b@x"},{"name":"uniq","ssh":"u@x"}]}' \

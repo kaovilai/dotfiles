@@ -32,26 +32,31 @@ _claude_fleet_target() {
     local target
     # Same predicate as generation/completion: a non-string .ssh (jq -r
     # prints numbers verbatim) must fail resolution, not reach ssh.
-    # stderr stays separate: merging it with 2>&1 pollutes $target on
+    # Count ENTRIES in jq, not output lines: one hand-edited entry with an
+    # embedded newline in .ssh would otherwise masquerade as "ambiguous".
+    # stderr stays separate: merging it with 2>&1 pollutes the output on
     # success; parse failures keep their own channel below.
-    local -a lines
-    if ! lines=("${(@f)$(jq -r --arg n "$1" \
-        '.hosts[] | select(.name == $n) | select((.ssh|type) == "string" and .ssh != "") | .ssh' \
-        "$cfg" 2>/dev/null)}"); then
+    local result count target
+    if ! result=$(jq -r --arg n "$1" \
+        '[.hosts[] | select(.name == $n) | select((.ssh|type) == "string" and .ssh != "") | .ssh] | "\(length)\t\(.[0] // "")"' \
+        "$cfg" 2>/dev/null); then
         print -ru2 -- "claude-fleet: cannot parse $cfg"
         return 1
     fi
-    if (( $#lines != 1 )); then
-        # 0 = no such host; 2+ = duplicate entries sharing the name —
-        # either way refuse rather than pass a multi-line destination.
-        if (( $#lines > 1 )); then
-            print -ru2 -- "claude-fleet: '$1' is ambiguous: $#lines entries share that name in $cfg"
-            return 1
-        fi
+    count=${result%%$'\t'*}
+    target=${result#*$'\t'}
+    if (( count > 1 )); then
+        print -ru2 -- "claude-fleet: '$1' is ambiguous: $count entries share that name in $cfg"
+        return 1
+    fi
+    if (( count == 0 )); then
         print -ru2 -- "claude-fleet: no fleet host named '$1' in $cfg"
         return 1
     fi
-    local target=$lines[1]
+    if [[ $target == *$'\n'* ]]; then
+        print -ru2 -- "claude-fleet: '$1' has an invalid ssh target containing a newline in $cfg"
+        return 1
+    fi
     if [[ -z $target ]]; then
         print -ru2 -- "claude-fleet: no fleet host named '$1' in $cfg"
         return 1
@@ -177,6 +182,9 @@ _claude_fleet_host_pairs() {
 # on their own (defined functions); claude-fleet's FIRST argument is a fleet
 # host.
 _claude-fleet() {
+    # Hosts only complete the FIRST argument (CURRENT == 2 in zle terms,
+    # same guard as _claude-mode); later words are remote claude args.
+    (( CURRENT == 2 )) || return 0
     local -a descs
     descs=("${(@f)$(_claude_fleet_host_pairs)}")
     (( $#descs )) && _describe -t fleet-hosts 'fleet host' descs
