@@ -174,7 +174,10 @@ fi
 # assert on exactly what the completion would offer.
 _claude_fleet_host_pairs() {
     emulate -L zsh
-    jq -r '.hosts[] | select((.ssh|type) == "string" and .ssh != "") | select((.name|type) == "string" and (.name | test("^[A-Za-z0-9_-]+\\z"))) | "\(.name):\(.ssh)"' \
+    # Same .ssh predicate as resolution, newline exclusion included: an
+    # entry with an embedded newline in .ssh is refused at call time, so it
+    # must not be offered by completion either (jq -r would split the pair).
+    jq -r '.hosts[] | select((.ssh|type) == "string" and .ssh != "" and (.ssh | test("^[^\\n]+$"))) | select((.name|type) == "string" and (.name | test("^[A-Za-z0-9_-]+\\z"))) | "\(.name):\(.ssh)"' \
         "${LLM_USAGE_CONFIG_DIR:-$HOME/.config/llm-usage}/fleet.json" 2>/dev/null
 }
 

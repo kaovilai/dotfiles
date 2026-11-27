@@ -243,6 +243,14 @@ source "$repo/zsh/functions/claude/fleet.zsh"
 (( $+functions[claude-pathish] )) && fail "launcher generated over a PATH command"
 (( $+functions[claude-freepath] )) || fail "peer skipped because of unrelated PATH command"
 
+# Completion pairs exclude newline-in-.ssh entries (resolution refuses
+# them; jq -r would otherwise split the pair mid-entry).
+print -r -- '{"hosts":[{"name":"nlpair","ssh":"a@x\nb@y"},{"name":"cleanpair","ssh":"c@x"}]}' \
+    > "$tmp/cfg/fleet.json"
+pairs=$(_claude_fleet_host_pairs)
+[[ $pairs == *"cleanpair:c@x"* ]] || fail "clean pair missing: $pairs"
+[[ $pairs != *nlpair* ]] || fail "newline-in-ssh pair offered by completion"
+
 # Completion pairs only offer label-valid names (numeric/corrupt names
 # resolution could never match).
 print -r -- '{"hosts":[{"name":42,"ssh":"n@x"},{"name":"col:on","ssh":"c@x"},{"name":"validone","ssh":"v@x"}]}' \
