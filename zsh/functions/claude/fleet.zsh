@@ -318,36 +318,28 @@ _claude-fleet-generate() {
             fi
         fi
     done
-    # Cache write, gated like the read: 0700 dir (chmod'd — mkdir -m is a
-    # no-op on an existing one), umask 077 before the redirection opens the
-    # temp file (peer hostnames must never be world-readable, not even
-    # briefly), one temp + one mv so the whole cache is atomic. chmod
-    # FOLLOWS symlinks, so every chmod target is validated BEFORE the
-    # chmod: lstat must show a real (non-symlink) directory owned by the
-    # user. Otherwise an attacker-controlled symlink at a cache-tree level
-    # would turn our permission fixup into a confused-deputy chmod of the
-    # symlink's destination. The chmods on the two cache levels MUST
-    # succeed — a tree we cannot chmod is not ours to write into — and the
-    # trust walk must accept the directory, so an attacker-owned or
+    # Cache write, gated like the read. NO chmod ever runs on the cache
+    # path: chmod follows symlinks, and any validate-then-chmod sequence
+    # leaves a race an ancestor-swapping attacker can win (they replace a
+    # validated level with a symlink to a user-owned directory between the
+    # check and the chmod). Instead, each MISSING level is created with
+    # `mkdir -m 700`, which applies the mode atomically at create time;
+    # levels that already exist are never touched. If an existing level's
+    # mode is unacceptable the walk below rejects it and the write is
+    # simply skipped — launchers stay defined, only the fork-free cache is
+    # lost (a pre-existing group-writable XDG root therefore disables
+    # caching rather than being chmod'd by us). The leaf and its parent
+    # must additionally be real user-owned directories (not symlinks), and
+    # the trust walk must accept the directory, so an attacker-owned or
     # attacker-writable tree never receives the write.
-    if { mkdir -m 700 -p "$cache_dir" 2>/dev/null || [[ -d $cache_dir ]]; } \
-       && [[ -w $cache_dir && ! -L $cache_dir && -O $cache_dir ]] \
+    local lvl
+    for lvl in "${cache_dir:h:h}" "${cache_dir:h}" "$cache_dir"; do
+        [[ -d $lvl ]] || mkdir -m 700 "$lvl" 2>/dev/null || break
+    done
+    if [[ -w $cache_dir && ! -L $cache_dir && -O $cache_dir ]] \
        && [[ ! -L ${cache_dir:h} && -O ${cache_dir:h} ]] \
-       && chmod 700 "$cache_dir" "${cache_dir:h}" 2>/dev/null; then
-        # -m modes only the LEAF: the intermediate claude-provider dir (and
-        # a just-created XDG cache root) carry the ambient umask — a
-        # group-writable one must be fixed BEFORE the walk below, or a
-        # fresh root under umask 002 (775) would reject our own write.
-        # Best-effort, and symlink-guarded like the two levels above:
-        # strip only the group/other WRITE bits from the user's shared
-        # XDG root (755 stays 755, 775 becomes 755). A symlinked or
-        # foreign-owned root is left untouched — the walk below inspects
-        # the resolved chain and decides.
-        [[ ! -L ${cache_dir:h:h} && -O ${cache_dir:h:h} ]] \
-            && chmod go-w "${cache_dir:h:h}" 2>/dev/null
-        if ! _claude-fleet-path-trusted "$cache_dir" 0; then
-            return 0
-        fi
+       && [[ -d $cache_dir ]] \
+       && _claude-fleet-path-trusted "$cache_dir" 0; then
         local i
         # Stale same-pid temp from a crashed shell: rm -f unlinks it (rm
         # never follows symlinks, so a pre-planted symlink is removed, not

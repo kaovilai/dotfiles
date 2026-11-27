@@ -557,6 +557,21 @@ zstat -A m +mode "$tmp/owntarget"
 [[ ! -e "$tmp/owntarget/launchers.zsh" ]] || fail "cache written through the fleet symlink"
 (( $+functions[claude-chmodguard] )) || fail "chmod guard rejected the launcher entirely"
 
+# The permission-change path is GONE, not just guarded: the walk-to-chmod
+# race an ancestor-swapping attacker could win is closed by removing the
+# operation. A chmod stub records any invocation during a full
+# generate-and-write cycle; it must stay silent.
+rm -f "$tmp/chmod-log"
+chmod() { print -r -- "$*" >> "$tmp/chmod-log"; command chmod "$@"; }
+print -r -- '{"hosts":[{"name":"nochmod","ssh":"n@x"}]}' > "$tmp/cfg/fleet.json"
+rm -f "$tmp/cache/claude-provider/fleet/launchers.zsh"
+source "$repo/zsh/functions/claude/fleet.zsh"
+unfunction chmod
+[[ ! -e "$tmp/chmod-log" ]] || fail "cache write path invoked chmod: $(cat "$tmp/chmod-log")"
+[[ -r "$tmp/cache/claude-provider/fleet/launchers.zsh" ]] || fail "chmod-free write did not produce a cache"
+zstat -A m +mode "$tmp/cache/claude-provider/fleet/launchers.zsh"
+(( (m & 8#777) == 8#600 )) || fail "cache file mode not 600 ($(printf %o $m))"
+
 # Write gate: an untrusted ancestor ABOVE the XDG root (group-writable,
 # and the go-w fix only touches the XDG root itself, so it stays
 # unfixable) must suppress the cache write — launchers still defined.
