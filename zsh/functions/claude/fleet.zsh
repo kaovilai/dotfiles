@@ -245,20 +245,28 @@ _claude-fleet-generate() {
         # restore); umask's own parser wants the leading-zero form.
         local old_umask=$(umask)
         umask 077
+        # always: the redirection open can still fail after the -w probe
+        # (dir swapped between the two, or -w testing the real uid where
+        # the create checks the effective one) — the restore must fire even
+        # when zsh aborts the function at the failed open, or the whole
+        # session is left at umask 077.
         {
-            print -r -- "$cache_version"
-            # {1..0} counts DOWN in zsh (1, 0) — guard the empty case or
-            # two empty-subscript lines land in the cache.
-            if (( $#cache_fns )); then
-                for i in {1..$#cache_fns}; do
-                    line="(( ! \$+functions[${cache_fns[i]}] && ! \$+aliases[${cache_fns[i]}] && ! \$+commands[${cache_fns[i]}] )) && functions[${cache_fns[i]}]='claude-fleet ${cache_fleets[i]} \"\$@\"'"
-                    print -r -- "$line"
-                done
-            fi
-            print -r -- "_claude_fleet_cache_snapshot=${(qq)cfg_content}"
-        } > "$cache.tmp.$$"
-        mv -f -- "$cache.tmp.$$" "$cache"
-        umask $old_umask
+            {
+                print -r -- "$cache_version"
+                # {1..0} counts DOWN in zsh (1, 0) — guard the empty case or
+                # two empty-subscript lines land in the cache.
+                if (( $#cache_fns )); then
+                    for i in {1..$#cache_fns}; do
+                        line="(( ! \$+functions[${cache_fns[i]}] && ! \$+aliases[${cache_fns[i]}] && ! \$+commands[${cache_fns[i]}] )) && functions[${cache_fns[i]}]='claude-fleet ${cache_fleets[i]} \"\$@\"'"
+                        print -r -- "$line"
+                    done
+                fi
+                print -r -- "_claude_fleet_cache_snapshot=${(qq)cfg_content}"
+            } > "$cache.tmp.$$"
+            mv -f -- "$cache.tmp.$$" "$cache"
+        } always {
+            umask $old_umask
+        }
     fi
     return 0
 }
