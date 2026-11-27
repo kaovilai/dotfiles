@@ -32,12 +32,26 @@ _claude_fleet_target() {
     local target
     # Same predicate as generation/completion: a non-string .ssh (jq -r
     # prints numbers verbatim) must fail resolution, not reach ssh.
-    if ! target=$(jq -r --arg n "$1" \
+    # stderr stays separate: merging it with 2>&1 pollutes $target on
+    # success; parse failures keep their own channel below.
+    local -a lines
+    if ! lines=("${(@f)$(jq -r --arg n "$1" \
         '.hosts[] | select(.name == $n) | select((.ssh|type) == "string" and .ssh != "") | .ssh' \
-        "$cfg" 2>&1); then
-        print -ru2 -- "claude-fleet: cannot parse $cfg: ${target%%$'\n'*}"
+        "$cfg" 2>/dev/null)}"); then
+        print -ru2 -- "claude-fleet: cannot parse $cfg"
         return 1
     fi
+    if (( $#lines != 1 )); then
+        # 0 = no such host; 2+ = duplicate entries sharing the name —
+        # either way refuse rather than pass a multi-line destination.
+        if (( $#lines > 1 )); then
+            print -ru2 -- "claude-fleet: '$1' is ambiguous: $#lines entries share that name in $cfg"
+            return 1
+        fi
+        print -ru2 -- "claude-fleet: no fleet host named '$1' in $cfg"
+        return 1
+    fi
+    local target=$lines[1]
     if [[ -z $target ]]; then
         print -ru2 -- "claude-fleet: no fleet host named '$1' in $cfg"
         return 1
@@ -110,7 +124,8 @@ _claude-fleet-generate() {
         # Aliases parse-expand before functions can run: the repo ships
         # claude-sonnet & co as aliases, and a peer with that name would get
         # a silently dead launcher.
-        if (( ! $+functions[claude-$name] && ! $+aliases[claude-$name] )); then
+        if (( ! $+functions[claude-$name] && ! $+aliases[claude-$name]
+              && ! $+commands[claude-$name] )); then
             functions[claude-$name]='claude-fleet '"${(q)name}"' "$@"'
         fi
     done
@@ -118,7 +133,8 @@ _claude-fleet-generate() {
         [[ $name =~ ^[A-Za-z0-9_-]+$ ]] || continue
         short=${name%%-*}
         if [[ -n $short && $short != $name ]] &&
-           (( ! $+functions[claude-$short] && ! $+aliases[claude-$short] )); then
+           (( ! $+functions[claude-$short] && ! $+aliases[claude-$short]
+              && ! $+commands[claude-$short] )); then
             functions[claude-$short]='claude-fleet '"${(q)name}"' "$@"'
         fi
     done
@@ -150,7 +166,7 @@ fi
 # assert on exactly what the completion would offer.
 _claude_fleet_host_pairs() {
     emulate -L zsh
-    jq -r '.hosts[] | select((.ssh|type) == "string" and .ssh != "") | select(.name != null) | "\(.name):\(.ssh)"' \
+    jq -r '.hosts[] | select((.ssh|type) == "string" and .ssh != "") | select((.name|type) == "string" and (.name | test("^[A-Za-z0-9_-]+$"))) | "\(.name):\(.ssh)"' \
         "${LLM_USAGE_CONFIG_DIR:-$HOME/.config/llm-usage}/fleet.json" 2>/dev/null
 }
 

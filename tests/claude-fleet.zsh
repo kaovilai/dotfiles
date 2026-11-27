@@ -210,4 +210,34 @@ print -rl -- "$out" | grep -qx "line2" || fail "second line of newline arg lost"
 # The re-parse must NOT have fused the lines into one continuation-free arg.
 [[ $out == *"line1line2"* ]] && fail "newline eaten by remote re-parse (line continuation)"
 
+# Duplicate host names are diagnosed, not passed to ssh as a multi-line
+# destination.
+print -r -- '{"hosts":[{"name":"dup","ssh":"a@x"},{"name":"dup","ssh":"b@x"},{"name":"uniq","ssh":"u@x"}]}' \
+    > "$tmp/cfg/fleet.json"
+out=$(claude-fleet dup 2>&1) && fail "duplicate name accepted"
+[[ $out == *"ambiguous"* ]] || fail "duplicate name misdiagnosed: $out"
+out=$(claude-fleet uniq 2>&1)
+[[ $out == *"ssh-host: u@x"* ]] || fail "unique peer stopped resolving: $out"
+
+# A peer whose launcher would shadow a PATH command (claude-dispatch shim,
+# claude-t3-* launchers) generates nothing: functions run before PATH.
+print -r -- '#!/bin/sh
+echo REAL-LAUNCHER' > "$tmp/bin/claude-pathish"
+chmod +x "$tmp/bin/claude-pathish"
+rehash  # commands assoc is a PATH snapshot; the stub postdates shell start
+print -r -- '{"hosts":[{"name":"pathish","ssh":"p@x"},{"name":"freepath","ssh":"f@x"}]}' \
+    > "$tmp/cfg/fleet.json"
+unset -f claude-pathish claude-freepath 2>/dev/null || true
+source "$repo/zsh/functions/claude/fleet.zsh"
+(( $+functions[claude-pathish] )) && fail "launcher generated over a PATH command"
+(( $+functions[claude-freepath] )) || fail "peer skipped because of unrelated PATH command"
+
+# Completion pairs only offer label-valid names (numeric/corrupt names
+# resolution could never match).
+print -r -- '{"hosts":[{"name":42,"ssh":"n@x"},{"name":"col:on","ssh":"c@x"},{"name":"validone","ssh":"v@x"}]}' \
+    > "$tmp/cfg/fleet.json"
+pairs=$(_claude_fleet_host_pairs)
+[[ $pairs == *"validone:v@x"* ]] || fail "valid name missing from pairs: $pairs"
+[[ $pairs != *"42:"* && $pairs != *"col:on"* ]] || fail "invalid name offered by completion"
+
 print -- "ok claude-fleet"
