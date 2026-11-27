@@ -158,18 +158,24 @@ _claude-fleet-generate() {
     # would reject a valid mode-0644 cache. zstat +mode is decimal; the
     # explicit base keeps the mask correct across both.)
     zmodload zsh/stat 2>/dev/null
-    # Ancestor walk: any directory from the cache dir up to / that is
-    # group/other-writable AND not sticky lets another user replace a path
-    # entry after these checks (the kernel allows rename in a dir writable
-    # by the attacker unless the sticky bit, 8#1000, blocks it — /tmp and
-    # friends are world-writable but safe). The immediate dir must also be
-    # user-owned (we create it 0700).
-    local -a st_anc_mode
+    # Ancestor walk, ownership included: a path entry can be replaced by
+    # the OWNER of its containing directory (rename needs write access,
+    # which the owner always has) or by anyone when the dir is
+    # group/other-writable and not sticky (the sticky bit only blocks
+    # OTHER users, never the owner). So every ancestor must be owned by
+    # the user or by root (root can replace anything anywhere — trusting
+    # root-owned 0755 system dirs is the same bet every path-based access
+    # on a multi-user system makes), and must not be group/other-writable
+    # unless sticky.
+    local -a st_anc_mode st_anc_uid
     local anc="${cache:h}" dir_trust_ok=0
     if [[ -O "$anc" ]]; then
         dir_trust_ok=1
         while [[ -n "$anc" ]]; do
+            # zstat -A takes one +field per call; both are builtin lookups.
             if ! zstat -A st_anc_mode +mode "$anc" 2>/dev/null \
+               || ! zstat -A st_anc_uid +uid "$anc" 2>/dev/null \
+               || (( st_anc_uid[1] != UID && st_anc_uid[1] != 0 )) \
                || (( (st_anc_mode[1] & 8#22) != 0 && (st_anc_mode[1] & 8#1000) == 0 )); then
                 dir_trust_ok=0
                 break
