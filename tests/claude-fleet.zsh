@@ -17,6 +17,9 @@ fail() { print -ru2 -- "FAIL: $*"; exit 1; }
 
 mkdir -p "$tmp/bin" "$tmp/cfg"
 export LLM_USAGE_CONFIG_DIR="$tmp/cfg"
+# Isolate the launcher cache: the generator writes XDG_CACHE_HOME, and the
+# suite's throwaway configs must not clobber the real one.
+export XDG_CACHE_HOME="$tmp/cache"
 export PATH="$tmp/bin:$PATH"
 export ZDOTDIR="$tmp"
 
@@ -289,5 +292,30 @@ print -r -- '{"hosts":[{"name":42,"ssh":"n@x"},{"name":"col:on","ssh":"c@x"},{"n
 pairs=$(_claude_fleet_host_pairs)
 [[ $pairs == *"validone:v@x"* ]] || fail "valid name missing from pairs: $pairs"
 [[ $pairs != *"42:"* && $pairs != *"col:on"* ]] || fail "invalid name offered by completion"
+
+# Cache: second source with identical content uses the cached definitions
+# (no jq), a content change regenerates, and the collision guard in the
+# cached lines still fires.
+print -r -- '{"hosts":[{"name":"cachey","ssh":"c@x"}]}' > "$tmp/cfg/fleet.json"
+unset -f claude-cachey 2>/dev/null || true
+source "$repo/zsh/functions/claude/fleet.zsh"
+(( $+functions[claude-cachey] )) || fail "cache write did not define launcher"
+[[ -r "$tmp/cache/claude-provider/fleet/launchers.zsh" ]] || fail "cache file missing"
+unset -f claude-cachey 2>/dev/null || true
+source "$repo/zsh/functions/claude/fleet.zsh"
+(( $+functions[claude-cachey] )) || fail "cache hit did not define launcher"
+out=$(claude-cachey)
+[[ $out == *"ssh-host: c@x"* ]] || fail "cached launcher broken: $out"
+# Guard baked into the cached line: a function defined AFTER the cache was
+# written must still win over the cached definition.
+claude-cachey() { echo LOCAL-WINS; }
+source "$repo/zsh/functions/claude/fleet.zsh"
+[[ $(claude-cachey) == LOCAL-WINS ]] || fail "cached line bypassed collision guard"
+# Content change regenerates (byte-exact key, not mtime).
+print -r -- '{"hosts":[{"name":"cachey","ssh":"c2@x"}]}' > "$tmp/cfg/fleet.json"
+unset -f claude-cachey 2>/dev/null || true
+source "$repo/zsh/functions/claude/fleet.zsh"
+out=$(claude-cachey)
+[[ $out == *"ssh-host: c2@x"* ]] || fail "content change served stale cache: $out"
 
 print -- "ok claude-fleet"

@@ -101,45 +101,45 @@ claude-fleet() {
 # skipped.
 _claude-fleet-generate() {
     emulate -L zsh
-    # One-shot FIRST, before any early return: /dev/null sits ready at EOF
-    # forever, so the handler fires on every zle idle until unregistered —
-    # each firing would fork another jq. Closing also must not redirect the
-    # SHELL's stderr: `exec {fd}>&-` has no command word, so a stray
-    # 2>/dev/null there persists for the whole session (only zle -F, which
-    # has one, may carry it).
-    if [[ -n ${_CLAUDE_FLEET_FD-} ]]; then
-        zle -F $_CLAUDE_FLEET_FD 2>/dev/null
-        exec {_CLAUDE_FLEET_FD}>&-
-        unset _CLAUDE_FLEET_FD
-    fi
     local cfg="${LLM_USAGE_CONFIG_DIR:-$HOME/.config/llm-usage}/fleet.json"
     [[ -r $cfg ]] || return 0
+    # Steady state is fork-free: the launcher definitions are cached and
+    # sourced directly (builtin reads, no jq) while fleet.json is
+    # byte-identical to the copy the cache was built from — no mtime/size
+    # heuristics, so same-second same-size edits cannot serve stale
+    # launchers. This also means the launchers exist immediately in EVERY
+    # context (interactive, zsh -ic, scripts); no zle-idle deferral to race
+    # a -c command.
+    local cache_dir="${XDG_CACHE_HOME:-$HOME/.cache}/claude-provider/fleet"
+    local cache="$cache_dir/launchers.zsh" cached_input="$cache_dir/fleet.json"
+    if [[ -r $cache && -r $cached_input ]] && [[ "$(<$cfg)" == "$(<$cached_input)" ]]; then
+        source "$cache"
+        return 0
+    fi
     # Only connectable peers get launchers: the llm-usage fleet format also
     # carries local-state peers (no .ssh), and a hand-edited entry can carry
-    # an empty or non-string .ssh — none of those can connect, and the
-    # filter must match what _claude_fleet_target accepts (string, nonempty).
+    # an empty, non-string, whitespace-bearing or dash-prefixed .ssh — none
+    # of those can connect, and the filter must match what
+    # _claude_fleet_target accepts. Name predicate mirrors it too: string +
+    # label chars, \z-anchored (Oniguruma's $ matches before a trailing
+    # newline, which would make jq -r split the name into phantom peers),
+    # duplicate names dropped (resolution refuses them as ambiguous).
     local -a names
-    # Name predicate mirrors _claude_fleet_target: string + label chars,
-    # \z-anchored (Oniguruma's $ matches before a trailing newline, which
-    # would make jq -r split the name into phantom peers).
-    # Shared predicate with _claude_fleet_target: resolution also refuses
-    # dash-prefixed targets and ambiguous (duplicate) names, so those get no
-    # launcher either — the generated set stays the resolvable set.
     names=("${(@f)$(jq -r '.hosts | map(select((.ssh|type) == "string" and .ssh != "" and ((.ssh | startswith("-")) | not) and (.ssh | test("^[^[:space:]]+$"))) | select((.name|type) == "string" and (.name | test("^[A-Za-z0-9_-]+\\z")))) | group_by(.name) | map(select(length == 1) | .[0]) | .[] | .name' "$cfg" 2>/dev/null)}") || return 0
     (( $#names )) || return 0
-    local name short
     # Pass 1 — full names; pass 2 — short aliases: a dashed peer earlier in
     # the file must not shadow a real peer whose full name IS the short form
     # (ryzen-wsl first would otherwise steal claude-ryzen from a later
-    # "ryzen" peer).
+    # "ryzen" peer). Aliases parse-expand before functions can run and
+    # functions shadow PATH commands, so both join functions in the guard.
+    local -a gen_fns gen_fleets
+    local name short
     for name in $names; do
         [[ $name =~ ^[A-Za-z0-9_-]+$ ]] || continue
-        # Aliases parse-expand before functions can run: the repo ships
-        # claude-sonnet & co as aliases, and a peer with that name would get
-        # a silently dead launcher.
         if (( ! $+functions[claude-$name] && ! $+aliases[claude-$name]
               && ! $+commands[claude-$name] )); then
             functions[claude-$name]='claude-fleet '"${(q)name}"' "$@"'
+            gen_fns+=("claude-$name") gen_fleets+=("${(q)name}")
         fi
     done
     for name in $names; do
@@ -149,38 +149,28 @@ _claude-fleet-generate() {
            (( ! $+functions[claude-$short] && ! $+aliases[claude-$short]
               && ! $+commands[claude-$short] )); then
             functions[claude-$short]='claude-fleet '"${(q)name}"' "$@"'
+            gen_fns+=("claude-$short") gen_fleets+=("${(q)name}")
         fi
     done
-}
-# The generator's jq is the only subprocess fork in the claude load chain —
-# the prompt stays fork-free. Interactive shells defer it to zle idle (the
-# znap /dev/null-fd pattern: no fork, fires right after the first prompt
-# draws; by then every real claude-* function AND alias is in scope, which
-# is also what the collision guard wants). Non-interactive sources (tests,
-# scripts) generate immediately.
-# tty-stdin discriminates a real terminal (defer; a human cannot type
-# claude-ryzen before zle idles) from scripted shells like `zsh -ic
-# 'claude-ryzen ...'`, whose -c command runs BEFORE zle idle fires — those
-# must generate immediately or the launcher does not exist yet.
-if [[ -o interactive && -t 0 ]]; then
-    zle -N _claude-fleet-generate
-    # Re-source cleanup: unregister and close a pending fd; NO 2>/dev/null
-    # on the bare exec (it would redirect the shell's stderr for the rest
-    # of the session).
-    if [[ -n ${_CLAUDE_FLEET_FD-} ]]; then
-        zle -F $_CLAUDE_FLEET_FD 2>/dev/null
-        exec {_CLAUDE_FLEET_FD}>&-
+    # Cache write: each cached line re-evaluates the collision guard on
+    # every source, so a later shell cannot have a cached definition
+    # bypass it.
+    if (( $#gen_fns )) && mkdir -p "$cache_dir" 2>/dev/null; then
+        local i line
+        {
+            print -r -- '# Generated by zsh/functions/claude/fleet.zsh - do not edit.'
+            for i in {1..$#gen_fns}; do
+                line="(( ! \$+functions[${gen_fns[i]}] && ! \$+aliases[${gen_fns[i]}] && ! \$+commands[${gen_fns[i]}] )) && functions[${gen_fns[i]}]='claude-fleet ${gen_fleets[i]} \"\$@\"'"
+                print -r -- "$line"
+            done
+        } > "$cache"
+        cat -- "$cfg" > "$cached_input"
     fi
-    exec {_CLAUDE_FLEET_FD}< /dev/null
-    zle -F $_CLAUDE_FLEET_FD _claude-fleet-generate
-else
-    _claude-fleet-generate
-fi
+    return 0
+}
+# Generate at source time in every context (see the cache note above).
+_claude-fleet-generate
 
-# "name:ssh" pairs for completion — ssh-backed peers only (the set
-# claude-fleet can actually resolve), one jq pass, read live from
-# fleet.json so edits show without a new shell. Separate helper so tests can
-# assert on exactly what the completion would offer.
 _claude_fleet_host_pairs() {
     emulate -L zsh
     # Same .ssh predicate as resolution, newline exclusion included: an
