@@ -69,3 +69,26 @@ claude-fleet() {
         fi
     done
 }
+
+# Completion: the generated claude-<name> commands complete as command names
+# on their own (defined functions); claude-fleet's FIRST argument is a fleet
+# host, read live from fleet.json so edits show without a new shell.
+_claude-fleet() {
+    local -a hosts
+    hosts=("${(@f)$(jq -r '.hosts[].name // empty' \
+        "${LLM_USAGE_CONFIG_DIR:-$HOME/.config/llm-usage}/fleet.json" 2>/dev/null)}")
+    # hosts as "name:description" pairs; ssh target is the useful description
+    local -a descs
+    local name target
+    for name in $hosts; do
+        target=$(jq -r --arg n "$name" '.hosts[] | select(.name == $n) | .ssh // empty' \
+            "${LLM_USAGE_CONFIG_DIR:-$HOME/.config/llm-usage}/fleet.json" 2>/dev/null)
+        descs+=("$name:${target:-$name}")
+    done
+    (( $#descs )) && _describe -t fleet-hosts 'fleet host' descs
+}
+# $+functions guard, same reason as mode.zsh: this file also loads in bare
+# zsh scripts where compdef does not exist yet.
+if (( $+functions[compdef] )); then
+    compdef _claude-fleet claude-fleet
+fi

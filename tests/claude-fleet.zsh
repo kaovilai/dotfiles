@@ -94,4 +94,20 @@ unset -f claude-fleet claude-copilot
 source "$repo/zsh/functions/claude/fleet.zsh" 2>/dev/null
 (( $+functions[claude-fleet] )) || fail "claude-fleet should stay defined on missing cfg"
 
+# Completion: _claude-fleet defined, registers via compdef when compinit ran
+# (bare shells without compdef must still source cleanly — covered above).
+export LLM_USAGE_CONFIG_DIR="$tmp/cfg"
+print -r -- '{"hosts":[{"name":"ryzen-wsl","ssh":"user@ryzen.example"},{"name":"spectre","ssh":"spec"}]}' \
+    > "$tmp/cfg/fleet.json"
+autoload -Uz compinit && compinit -u -d "$tmp/zcompdump" >/dev/null 2>&1
+source "$repo/zsh/functions/claude/fleet.zsh"
+(( $+functions[_claude-fleet] )) || fail "_claude-fleet completion not defined"
+[[ ${_comps[claude-fleet]:-} == _claude-fleet ]] || fail "claude-fleet not registered with compdef"
+# The describe source reads fleet.json live: descriptions carry ssh targets.
+out=$(_claunch=1; zsh -c "
+source '$repo/zsh/functions/claude/fleet.zsh'
+print -rl -- \$(jq -r '.hosts[].name' '$tmp/cfg/fleet.json')
+" 2>/dev/null)
+[[ $out == *ryzen-wsl* && $out == *spectre* ]] || fail "host list for completion wrong: $out"
+
 print -- "ok claude-fleet"
