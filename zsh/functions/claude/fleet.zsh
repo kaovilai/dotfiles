@@ -156,8 +156,10 @@ _claude-fleet-generate() {
     # newline, which would make jq -r split the name into phantom peers),
     # duplicate names dropped (resolution refuses them as ambiguous).
     local -a names
-    names=("${(@f)$(print -r -- "$cfg_content" | jq -r '.hosts | map(select((.ssh|type) == "string" and .ssh != "" and ((.ssh | startswith("-")) | not) and (.ssh | test("^[^[:space:]]+$"))) | select((.name|type) == "string" and (.name | test("^[A-Za-z0-9_-]+\\z")))) | group_by(.name) | map(select(length == 1) | .[0]) | .[] | .name' 2>/dev/null)}") || return 0
-    (( $#names )) || return 0
+    names=("${(@f)$(print -r -- "$cfg_content" | jq -r '.hosts | map(select((.ssh|type) == "string" and .ssh != "" and ((.ssh | startswith("-")) | not) and (.ssh | test("^[^[:space:]]+$"))) | select((.name|type) == "string" and (.name | test("^[A-Za-z0-9_-]+\\z")))) | group_by(.name) | map(select(length == 1) | .[0]) | .[] | .name' 2>/dev/null)}") || names=()
+    # Zero names (e.g. an all-local-state fleet.json) still falls through to
+    # the cache write below: a version+snapshot-only cache makes the next
+    # shell a fork-free hit instead of re-running jq at every startup.
     # Pass 1 — full names; pass 2 — short aliases: a dashed peer earlier in
     # the file must not shadow a real peer whose full name IS the short form
     # (ryzen-wsl first would otherwise steal claude-ryzen from a later

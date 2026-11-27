@@ -401,4 +401,12 @@ out=$(source "$repo/zsh/functions/claude/fleet.zsh"; whence -w claude-prettypeer
 [[ $out == *JQ-FORKED* ]] && fail "cache MISS for pretty-printed fleet.json (jq forked)"
 [[ $out == *function* ]] || fail "pretty-printed cache hit did not define launcher"
 
+# An all-local-state fleet.json (zero launcher names) still caches: the
+# next shell must be a fork-free hit.
+print -r -- '{"hosts":[{"name":"onlylocal","dir":"/tmp"}]}' > "$tmp/cfg/fleet.json"
+source "$repo/zsh/functions/claude/fleet.zsh"
+[[ -r "$tmp/cache/claude-provider/fleet/launchers.zsh" ]] || fail "zero-names config wrote no cache"
+out=$(source "$repo/zsh/functions/claude/fleet.zsh" 2>&1)
+[[ $out != *JQ-FORKED* ]] || fail "zero-names config re-forked jq on cache hit"
+
 print -- "ok claude-fleet"
