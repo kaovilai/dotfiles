@@ -591,6 +591,22 @@ for d in "$tmp/cache" "$tmp/cache/claude-provider" "$tmp/cache/claude-provider/f
     (( (m & 8#777) == 8#700 )) || fail "$d not 0700 ($(printf %o $m))"
 done
 
+# Mode-widening discriminator: Apple's mkdir without -m never calls chmod
+# (Src: mkdir.c runs chmod only when -m set mode != NULL), so the mode can
+# only come from the kernel's umask application at mkdir(2). Prove it: a
+# post-create chmod to any default/wider mode would show up here — under
+# an all-permissive invoking umask the levels must STILL be exactly 0700.
+umask 0
+rm -rf "$tmp/cache"
+source "$repo/zsh/functions/claude/fleet.zsh"
+for d in "$tmp/cache" "$tmp/cache/claude-provider" "$tmp/cache/claude-provider/fleet"; do
+    zstat -A m +mode "$d"
+    (( (m & 8#777) == 8#700 )) || fail "$d widened under umask 0 ($(printf %o $m)) — post-create chmod?"
+done
+zstat -A m +mode "$tmp/cache/claude-provider/fleet/launchers.zsh"
+(( (m & 8#777) == 8#600 )) || fail "cache file widened under umask 0 ($(printf %o $m))"
+umask 002
+
 # Write gate: an untrusted ancestor ABOVE the XDG root (group-writable,
 # and the go-w fix only touches the XDG root itself, so it stays
 # unfixable) must suppress the cache write — launchers still defined.
