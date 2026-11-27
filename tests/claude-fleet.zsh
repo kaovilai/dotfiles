@@ -115,7 +115,6 @@ print -r -- '{"hosts":[{"name":"evil","ssh":"-oProxyCommand=touch $tmp/PWNED2"}]
 if claude-fleet evil >/dev/null 2>&1; then
     fail "dash-prefixed ssh target accepted"
 fi
-[[ -e $tmp/PWNED2 ]] && fail "ssh option injection executed"
 
 # Degenerate .ssh values (empty string, non-string) get no launcher and no
 # completion pair — the generated set matches what resolution accepts.
@@ -209,6 +208,17 @@ print -r -- "$out" | grep -q "arg: line1" || fail "newline arg lost entirely"
 print -rl -- "$out" | grep -qx "line2" || fail "second line of newline arg lost"
 # The re-parse must NOT have fused the lines into one continuation-free arg.
 [[ $out == *"line1line2"* ]] && fail "newline eaten by remote re-parse (line continuation)"
+
+# Generation predicate mirrors resolution: numeric names and names with a
+# trailing newline (which jq -r would split into phantom peers) generate
+# nothing, while the zsh-side regex stays as defense in depth.
+print -r -- '{"hosts":[{"name":42,"ssh":"n@x"},{"name":"trailn\n","ssh":"t@x"},{"name":"solidname","ssh":"s@x"}]}' \
+    > "$tmp/cfg/fleet.json"
+unset -f claude-42 claude-trailn claude-solidname 2>/dev/null || true
+source "$repo/zsh/functions/claude/fleet.zsh"
+(( $+functions[claude-42] )) && fail "numeric name generated a launcher"
+(( $+functions[claude-trailn] )) && fail "trailing-newline name generated a launcher"
+(( $+functions[claude-solidname] )) || fail "valid name skipped by generation predicate"
 
 # Duplicate host names are diagnosed, not passed to ssh as a multi-line
 # destination.

@@ -112,7 +112,10 @@ _claude-fleet-generate() {
     # an empty or non-string .ssh — none of those can connect, and the
     # filter must match what _claude_fleet_target accepts (string, nonempty).
     local -a names
-    names=("${(@f)$(jq -r '.hosts[] | select((.ssh|type) == "string" and .ssh != "") | .name // empty' "$cfg" 2>/dev/null)}") || return 0
+    # Name predicate mirrors _claude_fleet_target: string + label chars,
+    # \z-anchored (Oniguruma's $ matches before a trailing newline, which
+    # would make jq -r split the name into phantom peers).
+    names=("${(@f)$(jq -r '.hosts[] | select((.ssh|type) == "string" and .ssh != "") | select((.name|type) == "string" and (.name | test("^[A-Za-z0-9_-]+\\z"))) | .name' "$cfg" 2>/dev/null)}") || return 0
     (( $#names )) || return 0
     local name short
     # Pass 1 — full names; pass 2 — short aliases: a dashed peer earlier in
@@ -166,7 +169,7 @@ fi
 # assert on exactly what the completion would offer.
 _claude_fleet_host_pairs() {
     emulate -L zsh
-    jq -r '.hosts[] | select((.ssh|type) == "string" and .ssh != "") | select((.name|type) == "string" and (.name | test("^[A-Za-z0-9_-]+$"))) | "\(.name):\(.ssh)"' \
+    jq -r '.hosts[] | select((.ssh|type) == "string" and .ssh != "") | select((.name|type) == "string" and (.name | test("^[A-Za-z0-9_-]+\\z"))) | "\(.name):\(.ssh)"' \
         "${LLM_USAGE_CONFIG_DIR:-$HOME/.config/llm-usage}/fleet.json" 2>/dev/null
 }
 
