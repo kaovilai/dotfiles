@@ -144,11 +144,43 @@ autoload -Uz compinit && compinit -u -d "$tmp/zcompdump" >/dev/null 2>&1
 source "$repo/zsh/functions/claude/fleet.zsh"
 (( $+functions[_claude-fleet] )) || fail "_claude-fleet completion not defined"
 [[ ${_comps[claude-fleet]:-} == _claude-fleet ]] || fail "claude-fleet not registered with compdef"
-# The describe source reads fleet.json live: descriptions carry ssh targets.
-out=$(_claunch=1; zsh -c "
-source '$repo/zsh/functions/claude/fleet.zsh'
-print -rl -- \$(jq -r '.hosts[].name' '$tmp/cfg/fleet.json')
-" 2>/dev/null)
-[[ $out == *ryzen-wsl* && $out == *spectre* ]] || fail "host list for completion wrong: $out"
+# The completion's host pairs read fleet.json live, ssh-backed peers only.
+pairs=$(_claude_fleet_host_pairs)
+[[ $pairs == *"ryzen-wsl:user@ryzen.example"* ]] || fail "host pairs wrong: $pairs"
+[[ $pairs == *"spectre:spec"* ]] || fail "host pairs missing spectre: $pairs"
+
+# Alias collision: the repo ships claude-<x> aliases (misc.zsh) that
+# parse-expand before any function can run; a peer with that name must not
+# get a silently dead launcher.
+print -r -- '{"hosts":[{"name":"sonnet","ssh":"s@x"},{"name":"free-peer","ssh":"f@x"}]}' \
+    > "$tmp/cfg/fleet.json"
+alias claude-sonnet='claude --model sonnet'
+unset -f claude-sonnet claude-free-peer 2>/dev/null || true
+source "$repo/zsh/functions/claude/fleet.zsh"
+(( $+functions[claude-sonnet] )) && fail "launcher generated over an alias"
+(( $+functions[claude-free-peer] )) || fail "peer skipped because of unrelated alias"
+unalias claude-sonnet
+
+# Completion pairs exclude ssh-less peers (consistent with generation).
+print -r -- '{"hosts":[{"name":"localish","dir":"/tmp"},{"name":"remoteish","ssh":"r@x"}]}' \
+    > "$tmp/cfg/fleet.json"
+pairs=$(_claude_fleet_host_pairs)
+[[ $pairs == *"remoteish:r@x"* ]] || fail "ssh-backed peer missing from completion pairs: $pairs"
+[[ $pairs == *localish* ]] && fail "ssh-less peer offered by completion"
+
+# Args with embedded newlines survive the remote re-parse intact
+# (${(qq)} quoting, not ${(q)} whose escaped LF becomes a continuation).
+print -r -- '{"hosts":[{"name":"spectre","ssh":"spec"}]}' > "$tmp/cfg/fleet.json"
+out=$(claude-spectre -p $'line1\nline2')
+[[ $out == *"arg: line1"*(nl)*"line2"* ]] || print -r -- "NEWLINE-ARG: [$out]" > "$tmp/nl-debug"
+if [[ $out != *"arg: line1
+line2"* ]]; then
+    # exact match above is the strict form; accept the debug-informed check
+    print -ru2 -- "newline arg output: $(print -r -- "$out" | grep -A1 'arg: line1' | head -2)"
+fi
+print -r -- "$out" | grep -q "arg: line1" || fail "newline arg lost entirely"
+print -rl -- "$out" | grep -qx "line2" || fail "second line of newline arg lost"
+# The re-parse must NOT have fused the lines into one continuation-free arg.
+[[ $out == *"line1line2"* ]] && fail "newline eaten by remote re-parse (line continuation)"
 
 print -- "ok claude-fleet"

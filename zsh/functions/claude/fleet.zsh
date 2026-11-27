@@ -49,7 +49,9 @@ claude-fleet() {
     # the user's args arrive at the peer's claude dispatch intact.
     local remote="zsh -ic 'claude \"\$@\"' claude-fleet" a
     for a in "$@"; do
-        remote+=" ${(q)a}"
+        # ${(qq)} single-quote style: ${(q)} backslash-escapes an embedded
+        # newline, which the remote re-parse eats as a line continuation.
+        remote+=" ${(qq)a}"
     done
     command ssh -t -- "$target" "$remote"
 }
@@ -76,34 +78,39 @@ claude-fleet() {
     # "ryzen" peer).
     for name in $names; do
         [[ $name =~ ^[A-Za-z0-9_-]+$ ]] || continue
-        if (( ! $+functions[claude-$name] )); then
+        # Aliases parse-expand before functions can run: the repo ships
+        # claude-sonnet & co as aliases, and a peer with that name would get
+        # a silently dead launcher.
+        if (( ! $+functions[claude-$name] && ! $+aliases[claude-$name] )); then
             functions[claude-$name]='claude-fleet '"${(q)name}"' "$@"'
         fi
     done
     for name in $names; do
         [[ $name =~ ^[A-Za-z0-9_-]+$ ]] || continue
         short=${name%%-*}
-        if [[ -n $short && $short != $name ]] && (( ! $+functions[claude-$short] )); then
+        if [[ -n $short && $short != $name ]] &&
+           (( ! $+functions[claude-$short] && ! $+aliases[claude-$short] )); then
             functions[claude-$short]='claude-fleet '"${(q)name}"' "$@"'
         fi
     done
 }
 
+# "name:ssh" pairs for completion — ssh-backed peers only (the set
+# claude-fleet can actually resolve), one jq pass, read live from
+# fleet.json so edits show without a new shell. Separate helper so tests can
+# assert on exactly what the completion would offer.
+_claude_fleet_host_pairs() {
+    emulate -L zsh
+    jq -r '.hosts[] | select(.ssh != null) | select(.name != null) | "\(.name):\(.ssh)"' \
+        "${LLM_USAGE_CONFIG_DIR:-$HOME/.config/llm-usage}/fleet.json" 2>/dev/null
+}
+
 # Completion: the generated claude-<name> commands complete as command names
 # on their own (defined functions); claude-fleet's FIRST argument is a fleet
-# host, read live from fleet.json so edits show without a new shell.
+# host.
 _claude-fleet() {
-    local -a hosts
-    hosts=("${(@f)$(jq -r '.hosts[].name // empty' \
-        "${LLM_USAGE_CONFIG_DIR:-$HOME/.config/llm-usage}/fleet.json" 2>/dev/null)}")
-    # hosts as "name:description" pairs; ssh target is the useful description
     local -a descs
-    local name target
-    for name in $hosts; do
-        target=$(jq -r --arg n "$name" '.hosts[] | select(.name == $n) | .ssh // empty' \
-            "${LLM_USAGE_CONFIG_DIR:-$HOME/.config/llm-usage}/fleet.json" 2>/dev/null)
-        descs+=("$name:${target:-$name}")
-    done
+    descs=("${(@f)$(_claude_fleet_host_pairs)}")
     (( $#descs )) && _describe -t fleet-hosts 'fleet host' descs
 }
 # $+functions guard, same reason as mode.zsh: this file also loads in bare
