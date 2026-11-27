@@ -214,6 +214,19 @@ source "$repo/zsh/functions/claude/fleet.zsh"
 (( $+functions[claude-trailn] )) && fail "trailing-newline name generated a launcher"
 (( $+functions[claude-solidname] )) || fail "valid name skipped by generation predicate"
 
+# Dash-prefixed targets and duplicate names are refused by resolution, so
+# they get neither launchers nor completion pairs (resolvable == offered).
+print -r -- '{"hosts":[{"name":"dashtarget","ssh":"-oProxyCommand=x"},{"name":"dupgen","ssh":"a@x"},{"name":"dupgen","ssh":"b@x"},{"name":"solo","ssh":"s@x"}]}' \
+    > "$tmp/cfg/fleet.json"
+unset -f claude-dashtarget claude-dupgen claude-solo 2>/dev/null || true
+source "$repo/zsh/functions/claude/fleet.zsh"
+(( $+functions[claude-dashtarget] )) && fail "dash-target peer got a launcher"
+(( $+functions[claude-dupgen] )) && fail "ambiguous peer got a launcher"
+(( $+functions[claude-solo] )) || fail "valid peer skipped by dedup"
+pairs=$(_claude_fleet_host_pairs)
+[[ $pairs == *"solo:s@x"* ]] || fail "valid pair missing: $pairs"
+[[ $pairs != *dashtarget* && $pairs != *dupgen* ]] || fail "refused peer offered by completion"
+
 # A SINGLE entry with an embedded newline in .ssh is diagnosed as the
 # newline defect, not as duplicate entries (count is entries, not lines).
 print -r -- '{"hosts":[{"name":"nlnl","ssh":"a@x\nb@y"}]}' \

@@ -120,7 +120,10 @@ _claude-fleet-generate() {
     # Name predicate mirrors _claude_fleet_target: string + label chars,
     # \z-anchored (Oniguruma's $ matches before a trailing newline, which
     # would make jq -r split the name into phantom peers).
-    names=("${(@f)$(jq -r '.hosts[] | select((.ssh|type) == "string" and .ssh != "") | select((.name|type) == "string" and (.name | test("^[A-Za-z0-9_-]+\\z"))) | .name' "$cfg" 2>/dev/null)}") || return 0
+    # Shared predicate with _claude_fleet_target: resolution also refuses
+    # dash-prefixed targets and ambiguous (duplicate) names, so those get no
+    # launcher either — the generated set stays the resolvable set.
+    names=("${(@f)$(jq -r '.hosts | map(select((.ssh|type) == "string" and .ssh != "" and ((.ssh | startswith("-")) | not)) | select((.name|type) == "string" and (.name | test("^[A-Za-z0-9_-]+\\z")))) | group_by(.name) | map(select(length == 1) | .[0]) | .[] | .name' "$cfg" 2>/dev/null)}") || return 0
     (( $#names )) || return 0
     local name short
     # Pass 1 — full names; pass 2 — short aliases: a dashed peer earlier in
@@ -177,7 +180,7 @@ _claude_fleet_host_pairs() {
     # Same .ssh predicate as resolution, newline exclusion included: an
     # entry with an embedded newline in .ssh is refused at call time, so it
     # must not be offered by completion either (jq -r would split the pair).
-    jq -r '.hosts[] | select((.ssh|type) == "string" and .ssh != "" and (.ssh | test("^[^\\n]+$"))) | select((.name|type) == "string" and (.name | test("^[A-Za-z0-9_-]+\\z"))) | "\(.name):\(.ssh)"' \
+    jq -r '.hosts | map(select((.ssh|type) == "string" and .ssh != "" and ((.ssh | startswith("-")) | not) and (.ssh | test("^[^\\n]+$"))) | select((.name|type) == "string" and (.name | test("^[A-Za-z0-9_-]+\\z")))) | group_by(.name) | map(select(length == 1) | .[0]) | .[] | "\(.name):\(.ssh)"' \
         "${LLM_USAGE_CONFIG_DIR:-$HOME/.config/llm-usage}/fleet.json" 2>/dev/null
 }
 
