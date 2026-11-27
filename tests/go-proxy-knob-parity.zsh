@@ -10,6 +10,8 @@
 
 emulate -L zsh
 typeset repo="${0:A:h:h}"
+export XDG_CACHE_HOME="${TMPDIR:-/tmp}/xdg-$$"
+mkdir -p "$XDG_CACHE_HOME"
 source "$repo/zsh/functions/claude/load.zsh" || { print -u2 'FAIL - load.zsh'; exit 1 }
 export ENMAAS_API_KEY=parity-test-key
 

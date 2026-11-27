@@ -5,6 +5,8 @@
 # stubbed (a fake clock replaces real waiting), so no real proxy, port, launcher
 # or process is touched.
 emulate -LR zsh
+export XDG_CACHE_HOME="${TMPDIR:-/tmp}/xdg-$$"
+mkdir -p "$XDG_CACHE_HOME"
 local repo="${0:A:h:h}"
 fail() { print -ru2 -- "FAIL: $*"; exit 1; }
 source "$repo/zsh/functions/claude/common.zsh" || fail "common.zsh does not source"   # the real _claude_port_serving

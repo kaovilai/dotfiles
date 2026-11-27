@@ -111,30 +111,40 @@ _claude-fleet-generate() {
     fi
     local cfg="${LLM_USAGE_CONFIG_DIR:-$HOME/.config/llm-usage}/fleet.json"
     [[ -r $cfg ]] || return 0
-    # ONE read of fleet.json feeds the jq filter AND the cache snapshot:
-    # two separate reads could race an edit in between, caching launchers
-    # that do not match the snapshot beside them (a mismatch that would
-    # then pass every later content check).
+    # ONE read of fleet.json feeds the jq filter, the cache snapshot and
+    # the content check: separate reads could race an edit in between.
     local cfg_content="$(<$cfg)"
-    # Steady state is fork-free: the launcher definitions are cached and
-    # sourced directly (builtin reads, no jq) while fleet.json is
-    # byte-identical to the copy the cache was built from — no mtime/size
-    # heuristics, so same-second same-size edits cannot serve stale
-    # launchers. This also means the launchers exist immediately in EVERY
-    # context (interactive, zsh -ic, scripts); no zle-idle deferral to race
-    # a -c command.
+    # Cache, v2: ONE file — version line, guarded launcher lines, the peer
+    # list, and the fleet.json snapshot as a quoted assignment — renamed in
+    # a single mv, so no interleave can pair launchers with a foreign
+    # snapshot. Steady state is fork-free (builtin reads only). Each cached
+    # launcher line re-evaluates the collision guard on every source, and
+    # the peer list lets a LATER shell detect a cached omission whose
+    # collision has since disappeared (regenerate instead of serving a
+    # launcher-less peer until the content changes).
     local cache_dir="${XDG_CACHE_HOME:-$HOME/.cache}/claude-provider/fleet"
-    local cache="$cache_dir/launchers.zsh" cached_input="$cache_dir/fleet.json"
-    # Version gate: the cache key is content + GENERATOR version, so a
-    # changed launcher body, jq filter or guard reaches machines whose
-    # fleet.json never changes (same shape-version discipline as the codex
-    # catalogs — see CLAUDE.md). Bump when generation logic changes.
-    local -r cache_version="# fleet-launchers cache v1"
-    if [[ -r $cache && -r $cached_input ]] \
-       && [[ "${${(f)"$(<$cache)"}[1]}" == "$cache_version" ]] \
-       && [[ "$cfg_content" == "$(<$cached_input)" ]]; then
+    local cache="$cache_dir/launchers.zsh"
+    local -r cache_version="# fleet-launchers cache v2"
+    local -a cache_file_lines
+    local -a _claude_fleet_cache_fns
+    local _claude_fleet_cache_snapshot
+    if [[ -r $cache ]] && cache_file_lines=("${(f)"$(<$cache)"}") \
+       && [[ ${cache_file_lines[1]} == "$cache_version" ]]; then
         source "$cache"
-        return 0
+        if [[ "$_claude_fleet_cache_snapshot" == "$cfg_content" ]]; then
+            local fn cache_stale=0
+            for fn in $_claude_fleet_cache_fns; do
+                if (( ! $+functions[$fn] && ! $+aliases[$fn] && ! $+commands[$fn] )); then
+                    # Cached line was omitted for a collision that no
+                    # longer exists — regenerate now.
+                    cache_stale=1
+                    break
+                fi
+            done
+            if (( ! cache_stale )); then
+                return 0
+            fi
+        fi
     fi
     # Only connectable peers get launchers: the llm-usage fleet format also
     # carries local-state peers (no .ssh), and a hand-edited entry can carry
@@ -145,8 +155,6 @@ _claude-fleet-generate() {
     # newline, which would make jq -r split the name into phantom peers),
     # duplicate names dropped (resolution refuses them as ambiguous).
     local -a names
-    # jq reads the SAME single-read content (stdin) that becomes the
-    # snapshot: see the cfg_content note above.
     names=("${(@f)$(print -r -- "$cfg_content" | jq -r '.hosts | map(select((.ssh|type) == "string" and .ssh != "" and ((.ssh | startswith("-")) | not) and (.ssh | test("^[^[:space:]]+$"))) | select((.name|type) == "string" and (.name | test("^[A-Za-z0-9_-]+\\z")))) | group_by(.name) | map(select(length == 1) | .[0]) | .[] | .name' 2>/dev/null)}") || return 0
     (( $#names )) || return 0
     # Pass 1 — full names; pass 2 — short aliases: a dashed peer earlier in
@@ -154,10 +162,15 @@ _claude-fleet-generate() {
     # (ryzen-wsl first would otherwise steal claude-ryzen from a later
     # "ryzen" peer). Aliases parse-expand before functions can run and
     # functions shadow PATH commands, so both join functions in the guard.
-    local -a gen_fns gen_fleets
+    # gen_fns: non-colliding launchers actually defined. cand_fns: every
+    # candidate name INCLUDING collision-omitted ones — the cache records
+    # candidates so a later shell can detect an omission whose collision
+    # has disappeared (see the hit-path check above).
+    local -a gen_fns gen_fleets cand_fns
     local name short
     for name in $names; do
         [[ $name =~ ^[A-Za-z0-9_-]+$ ]] || continue
+        cand_fns+=("claude-$name")
         if (( ! $+functions[claude-$name] && ! $+aliases[claude-$name]
               && ! $+commands[claude-$name] )); then
             functions[claude-$name]='claude-fleet '"${(q)name}"' "$@"'
@@ -167,6 +180,7 @@ _claude-fleet-generate() {
     for name in $names; do
         [[ $name =~ ^[A-Za-z0-9_-]+$ ]] || continue
         short=${name%%-*}
+        [[ -n $short && $short != $name ]] && cand_fns+=("claude-$short")
         if [[ -n $short && $short != $name ]] &&
            (( ! $+functions[claude-$short] && ! $+aliases[claude-$short]
               && ! $+commands[claude-$short] )); then
@@ -174,39 +188,29 @@ _claude-fleet-generate() {
             gen_fns+=("claude-$short") gen_fleets+=("${(q)name}")
         fi
     done
-    # Cache write: each cached line re-evaluates the collision guard on
-    # every source, so a later shell cannot have a cached definition
-    # bypass it.
-    # 0700 dir + umask 077 around the writes: fleet.json carries peer
-    # hostnames (deliberately absent from the public repo); the cache
-    # snapshot must not become world-readable in ~/.cache.
-    if (( $#gen_fns )) && mkdir -m 700 -p "$cache_dir" 2>/dev/null; then
-        # mkdir -m is a no-op on an existing dir: one created by a
-        # pre-permissions version keeps its loose mode until chmod'd here.
+    # Cache write: 0700 dir (chmod'd — mkdir -m is a no-op on an existing
+    # one), umask 077 BEFORE the redirection opens the temp file (peer
+    # hostnames must never be world-readable, not even briefly), one temp
+    # + one mv so the whole cache is atomic.
+    if mkdir -m 700 -p "$cache_dir" 2>/dev/null || [[ -d $cache_dir ]]; then
         chmod 700 -- "$cache_dir" 2>/dev/null
         local i line
-        # umask 077 BEFORE the redirections open the temp files: they must
-        # never carry ambient perms, even briefly.
         local -i old_umask=$(umask)
         umask 077
-        # Atomic writes (temp + mv): concurrent regenerations cannot
-        # interleave into a corrupted launchers.zsh that would then pass
-        # the content check and stick. launchers first, snapshot second —
-        # an interleave between the two mv's fails the NEXT shell's content
-        # check and regenerates (self-healing), never serves a mismatched
-        # pair. Version line doubles as the cache-format gate above. The
-        # snapshot comes from the SAME single cfg_content read that fed
-        # jq, not a second read of the file.
         {
             print -r -- "$cache_version"
-            for i in {1..$#gen_fns}; do
-                line="(( ! \$+functions[${gen_fns[i]}] && ! \$+aliases[${gen_fns[i]}] && ! \$+commands[${gen_fns[i]}] )) && functions[${gen_fns[i]}]='claude-fleet ${gen_fleets[i]} \"\$@\"'"
-                print -r -- "$line"
-            done
+            # {1..0} counts DOWN in zsh (1, 0) — guard the empty case or
+            # two empty-subscript lines land in the cache.
+            if (( $#gen_fns )); then
+                for i in {1..$#gen_fns}; do
+                    line="(( ! \$+functions[${gen_fns[i]}] && ! \$+aliases[${gen_fns[i]}] && ! \$+commands[${gen_fns[i]}] )) && functions[${gen_fns[i]}]='claude-fleet ${gen_fleets[i]} \"\$@\"'"
+                    print -r -- "$line"
+                done
+            fi
+            print -r -- "_claude_fleet_cache_fns=( ${(@q)cand_fns} )"
+            print -r -- "_claude_fleet_cache_snapshot=${(qq)cfg_content}"
         } > "$cache.tmp.$$"
-        print -r -- "$cfg_content" > "$cached_input.tmp.$$"
         mv -f -- "$cache.tmp.$$" "$cache"
-        mv -f -- "$cached_input.tmp.$$" "$cached_input"
         umask $old_umask
     fi
     return 0

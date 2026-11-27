@@ -293,14 +293,19 @@ pairs=$(_claude_fleet_host_pairs)
 [[ $pairs == *"validone:v@x"* ]] || fail "valid name missing from pairs: $pairs"
 [[ $pairs != *"42:"* && $pairs != *"col:on"* ]] || fail "invalid name offered by completion"
 
-# Cache: second source with identical content uses the cached definitions
-# (no jq), a content change regenerates, and the collision guard in the
-# cached lines still fires.
+# Cache, v2 single file: identical content hits (no jq), content change
+# regenerates, the collision guard in cached lines fires, and a cached
+# omission whose collision disappeared is detected and regenerated.
 print -r -- '{"hosts":[{"name":"cachey","ssh":"c@x"}]}' > "$tmp/cfg/fleet.json"
 unset -f claude-cachey 2>/dev/null || true
 source "$repo/zsh/functions/claude/fleet.zsh"
 (( $+functions[claude-cachey] )) || fail "cache write did not define launcher"
-[[ -r "$tmp/cache/claude-provider/fleet/launchers.zsh" ]] || fail "cache file missing"
+cachefile="$tmp/cache/claude-provider/fleet/launchers.zsh"
+[[ -r "$cachefile" ]] || fail "cache file missing"
+[[ "$(print -r -- "${$(<$cachefile)[1]}")" == "" ]] && true
+local -a cl; cl=("${(f)"$(<$cachefile)"}")
+[[ ${cl[1]} == "# fleet-launchers cache v2" ]] || fail "cache version line wrong: ${cl[1]}"
+[[ ! -e "$tmp/cache/claude-provider/fleet/fleet.json" ]] || fail "v1 snapshot file still written"
 unset -f claude-cachey 2>/dev/null || true
 source "$repo/zsh/functions/claude/fleet.zsh"
 (( $+functions[claude-cachey] )) || fail "cache hit did not define launcher"
@@ -311,12 +316,23 @@ out=$(claude-cachey)
 claude-cachey() { echo LOCAL-WINS; }
 source "$repo/zsh/functions/claude/fleet.zsh"
 [[ $(claude-cachey) == LOCAL-WINS ]] || fail "cached line bypassed collision guard"
-# Content change regenerates (byte-exact key, not mtime).
+# Content change regenerates (byte-exact embedded snapshot, not mtime).
 print -r -- '{"hosts":[{"name":"cachey","ssh":"c2@x"}]}' > "$tmp/cfg/fleet.json"
 unset -f claude-cachey 2>/dev/null || true
 source "$repo/zsh/functions/claude/fleet.zsh"
 out=$(claude-cachey)
 [[ $out == *"ssh-host: c2@x"* ]] || fail "content change served stale cache: $out"
+# A cached omission whose collision later disappears regenerates: write the
+# cache while claude-ghost collides, then remove the collision.
+print -r -- '{"hosts":[{"name":"ghost","ssh":"g@x"}]}' > "$tmp/cfg/fleet.json"
+claude-ghost() { echo COLLIDING; }
+source "$repo/zsh/functions/claude/fleet.zsh"
+(( $+functions[claude-ghost] )) || fail "collision function clobbered by generation"
+unset -f claude-ghost
+source "$repo/zsh/functions/claude/fleet.zsh"
+(( $+functions[claude-ghost] )) || fail "disappeared collision not regenerated from cache"
+out=$(claude-ghost)
+[[ $out == *"ssh-host: g@x"* ]] || fail "regenerated ghost launcher broken: $out"
 
 # Cache version gate: a cache with a stale/missing version line is
 # regenerated even when fleet.json content matches.
@@ -324,14 +340,14 @@ print -r -- '{"hosts":[{"name":"vercheck","ssh":"v@x"}]}' > "$tmp/cfg/fleet.json
 unset -f claude-vercheck 2>/dev/null || true
 source "$repo/zsh/functions/claude/fleet.zsh"
 cachefile="$tmp/cache/claude-provider/fleet/launchers.zsh"
-[[ "$(head -n 1 -- "$cachefile")" == "# fleet-launchers cache v1" ]] || fail "version line missing from cache"
+[[ "$(head -n 1 -- "$cachefile")" == "# fleet-launchers cache v2" ]] || fail "version line missing from cache"
 # Corrupt the version line, keep content identical -> must regenerate.
 # (Portable rewrite — GNU-only `sed -i` syntax breaks BSD/macOS sed.)
 { print -r -- '# fleet-launchers cache v0'; sed -n '2,$p' -- "$cachefile"; } > "$cachefile.new"
 mv -f -- "$cachefile.new" "$cachefile"
 unset -f claude-vercheck 2>/dev/null || true
 source "$repo/zsh/functions/claude/fleet.zsh"
-[[ "$(head -n 1 -- "$cachefile")" == "# fleet-launchers cache v1" ]] || fail "stale-version cache not regenerated"
+[[ "$(head -n 1 -- "$cachefile")" == "# fleet-launchers cache v2" ]] || fail "stale-version cache not regenerated"
 (( $+functions[claude-vercheck] )) || fail "regeneration after version mismatch failed"
 
 print -- "ok claude-fleet"

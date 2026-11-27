@@ -242,7 +242,9 @@ try:
                     'CLAUDE_ENMAAS_MODEL_DIALECTS': 'offline-responses=responses offline-error=chat',
                     'ANTHROPIC_AUTH_TOKEN': 'parent-token', 'ANTHROPIC_API_KEY': 'parent-key',
                     'CLAUDE_CODE_USE_VERTEX': '1', 'CLAUDE_CODE_USE_BEDROCK': '1'})
-        script = '''source "$ENMAAS_TEST_REPO/zsh/functions/claude/load.zsh"
+        script = '''export XDG_CACHE_HOME="${TMPDIR:-/tmp}/xdg-$$"
+mkdir -p "$XDG_CACHE_HOME"
+source "$ENMAAS_TEST_REPO/zsh/functions/claude/load.zsh"
 claude-enmaas
 result=$?
 [[ $ANTHROPIC_AUTH_TOKEN == parent-token && $ANTHROPIC_API_KEY == parent-key && $CLAUDE_CODE_USE_VERTEX == 1 && $CLAUDE_CODE_USE_BEDROCK == 1 ]] || exit 99
