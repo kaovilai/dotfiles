@@ -181,13 +181,22 @@ _claude-fleet-generate() {
     # hostnames (deliberately absent from the public repo); the cache
     # snapshot must not become world-readable in ~/.cache.
     if (( $#gen_fns )) && mkdir -m 700 -p "$cache_dir" 2>/dev/null; then
+        # mkdir -m is a no-op on an existing dir: one created by a
+        # pre-permissions version keeps its loose mode until chmod'd here.
+        chmod 700 -- "$cache_dir" 2>/dev/null
         local i line
+        # umask 077 BEFORE the redirections open the temp files: they must
+        # never carry ambient perms, even briefly.
+        local -i old_umask=$(umask)
+        umask 077
         # Atomic writes (temp + mv): concurrent regenerations cannot
         # interleave into a corrupted launchers.zsh that would then pass
         # the content check and stick. launchers first, snapshot second —
         # an interleave between the two mv's fails the NEXT shell's content
         # check and regenerates (self-healing), never serves a mismatched
-        # pair. Version line doubles as the cache-format gate above.
+        # pair. Version line doubles as the cache-format gate above. The
+        # snapshot comes from the SAME single cfg_content read that fed
+        # jq, not a second read of the file.
         {
             print -r -- "$cache_version"
             for i in {1..$#gen_fns}; do
@@ -195,13 +204,10 @@ _claude-fleet-generate() {
                 print -r -- "$line"
             done
         } > "$cache.tmp.$$"
-        cat -- "$cfg" > "$cached_input.tmp.$$"
-        local -i old_umask=$(umask)
-        umask 077
-        chmod 600 -- "$cache.tmp.$$" "$cached_input.tmp.$$" 2>/dev/null
-        umask $old_umask
+        print -r -- "$cfg_content" > "$cached_input.tmp.$$"
         mv -f -- "$cache.tmp.$$" "$cache"
         mv -f -- "$cached_input.tmp.$$" "$cached_input"
+        umask $old_umask
     fi
     return 0
 }
