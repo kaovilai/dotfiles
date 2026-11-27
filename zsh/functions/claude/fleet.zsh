@@ -158,16 +158,25 @@ _claude-fleet-generate() {
     # would reject a valid mode-0644 cache. zstat +mode is decimal; the
     # explicit base keeps the mask correct across both.)
     zmodload zsh/stat 2>/dev/null
-    # Dir-level trust first: a group/other-writable cache dir (or one not
-    # owned by the user) lets another user swap launchers.zsh between the
-    # file checks below and the read; the swapped file needs only the
-    # version line and a snapshot tail matching the (attacker-readable)
-    # fleet.json to be evaluated.
-    local -a st_dir_mode
-    local dir_trust_ok=0
-    if [[ -O ${cache:h} ]] && zstat -A st_dir_mode +mode "${cache:h}" 2>/dev/null \
-       && (( (st_dir_mode[1] & 8#22) == 0 )); then
+    # Ancestor walk: any directory from the cache dir up to / that is
+    # group/other-writable AND not sticky lets another user replace a path
+    # entry after these checks (the kernel allows rename in a dir writable
+    # by the attacker unless the sticky bit, 8#1000, blocks it — /tmp and
+    # friends are world-writable but safe). The immediate dir must also be
+    # user-owned (we create it 0700).
+    local -a st_anc_mode
+    local anc="${cache:h}" dir_trust_ok=0
+    if [[ -O "$anc" ]]; then
         dir_trust_ok=1
+        while [[ -n "$anc" ]]; do
+            if ! zstat -A st_anc_mode +mode "$anc" 2>/dev/null \
+               || (( (st_anc_mode[1] & 8#22) != 0 && (st_anc_mode[1] & 8#1000) == 0 )); then
+                dir_trust_ok=0
+                break
+            fi
+            [[ "$anc" == "/" ]] && break
+            anc="${anc:h}"
+        done
     fi
     # ONE read of the path feeds the version check AND the eval: separate
     # reads would validate one file and execute another if the path were
@@ -254,7 +263,14 @@ _claude-fleet-generate() {
     # leave the whole session at umask 077 (and re-fork jq every shell).
     if { mkdir -m 700 -p "$cache_dir" 2>/dev/null || [[ -d $cache_dir ]]; } \
        && [[ -w $cache_dir ]]; then
-        chmod 700 -- "$cache_dir" 2>/dev/null
+        # -m modes only the LEAF: the intermediate claude-provider dir (and
+        # a just-created XDG cache root) carry the ambient umask — a
+        # group-writable one is correctly rejected by the read-path ancestor
+        # walk, which would disable the cache entirely. Mode our two levels
+        # 700; strip only the group/other WRITE bits from the user's shared
+        # XDG root (755 stays 755, 775 becomes 755).
+        chmod 700 -- "$cache_dir" "${cache_dir:h}" 2>/dev/null
+        chmod go-w -- "${cache_dir:h:h}" 2>/dev/null
         local i line
         # Raw string, NOT typeset -i: umask prints zero-padded octal, and
         # an integer re-parse turns "022" into octal 18 (bad umask on

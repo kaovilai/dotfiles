@@ -237,7 +237,7 @@ try:
         env.update({'PATH': tmp + ':' + env['PATH'], 'ENMAAS_TEST_REPO': str(repo),
                     'CLAUDE_ENMAAS_RUNTIME_DIR': str(Path(tmp) / 'state'),
                     # Keep the fleet launcher cache (load.zsh) off the real one.
-                    'XDG_CACHE_HOME': str(Path(tmp) / 'cache'),
+                    'XDG_CACHE_HOME': str(Path(tmp) / 'cache'),  # fixture is mkdir'd 700 by the generator; XDG root must not be group-writable or the trust walk rejects it
                     'CLAUDE_ENMAAS_PROXY_PORT': str(proxy_port),
                     'ENMAAS_API_BASE_URL': f'http://127.0.0.1:{gateway.server_port}/v1', 'ENMAAS_API_KEY': 'offline-key-a',
                     'ENMAAS_TEST_IMPL': 'go',
