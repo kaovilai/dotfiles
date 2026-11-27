@@ -323,8 +323,10 @@ _claude-fleet-generate() {
     # leaves a race an ancestor-swapping attacker can win (they replace a
     # validated level with a symlink to a user-owned directory between the
     # check and the chmod). Instead, each MISSING level is created with
-    # `mkdir -m 700`, which applies the mode atomically at create time;
-    # levels that already exist are never touched. If an existing level's
+    # plain mkdir under umask 077 (see the subshell below), so the kernel
+    # applies the mode at inode-creation time; levels that already exist
+    # are never touched — not even mkdir -m is safe: Apple's mkdir
+    # implements -m as a pathname chmod AFTER creation. If an existing level's
     # mode is unacceptable the walk below rejects it and the write is
     # simply skipped — launchers stay defined, only the fork-free cache is
     # lost (a pre-existing group-writable XDG root therefore disables
@@ -332,10 +334,19 @@ _claude-fleet-generate() {
     # must additionally be real user-owned directories (not symlinks), and
     # the trust walk must accept the directory, so an attacker-owned or
     # attacker-writable tree never receives the write.
+    # Not even mkdir -m: Apple's mkdir implements -m as a PATHNAME chmod
+    # after a successful creation, which an ancestor-controlling attacker
+    # can race exactly like an explicit chmod. Plain mkdir under umask 077
+    # (in a subshell, so the invoking shell's umask is untouched) lets the
+    # KERNEL apply 0700 at inode-creation time — nothing revisits the
+    # pathname afterward to change permissions.
     local lvl
-    for lvl in "${cache_dir:h:h}" "${cache_dir:h}" "$cache_dir"; do
-        [[ -d $lvl ]] || mkdir -m 700 "$lvl" 2>/dev/null || break
-    done
+    (
+        umask 077
+        for lvl in "${cache_dir:h:h}" "${cache_dir:h}" "$cache_dir"; do
+            [[ -d $lvl ]] || mkdir "$lvl" 2>/dev/null || exit 1
+        done
+    ) || true
     if [[ -w $cache_dir && ! -L $cache_dir && -O $cache_dir ]] \
        && [[ ! -L ${cache_dir:h} && -O ${cache_dir:h} ]] \
        && [[ -d $cache_dir ]] \

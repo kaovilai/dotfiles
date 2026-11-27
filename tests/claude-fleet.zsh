@@ -572,6 +572,25 @@ unfunction chmod
 zstat -A m +mode "$tmp/cache/claude-provider/fleet/launchers.zsh"
 (( (m & 8#777) == 8#600 )) || fail "cache file mode not 600 ($(printf %o $m))"
 
+# mkdir must be invoked WITHOUT -m: Apple's mkdir implements -m as a
+# pathname chmod AFTER creation, which reopens the ancestor-swap race
+# the chmod removal closed. The directory mode must come from the
+# umask-077 creation subshell instead — observable as: no -m flag on
+# any mkdir call, and fresh tree levels land 0700 under the suite's
+# umask 002.
+rm -rf "$tmp/cache"
+rm -f "$tmp/mkdir-log"
+mkdir() { print -r -- "$*" >> "$tmp/mkdir-log"; command mkdir "$@"; }
+source "$repo/zsh/functions/claude/fleet.zsh"
+unfunction mkdir
+if [[ -e "$tmp/mkdir-log" ]] && grep -qE '(^|[[:space:]])-m' "$tmp/mkdir-log"; then
+    fail "mkdir invoked with -m: $(cat "$tmp/mkdir-log")"
+fi
+for d in "$tmp/cache" "$tmp/cache/claude-provider" "$tmp/cache/claude-provider/fleet"; do
+    zstat -A m +mode "$d"
+    (( (m & 8#777) == 8#700 )) || fail "$d not 0700 ($(printf %o $m))"
+done
+
 # Write gate: an untrusted ancestor ABOVE the XDG root (group-writable,
 # and the go-w fix only touches the XDG root itself, so it stays
 # unfixable) must suppress the cache write — launchers still defined.
