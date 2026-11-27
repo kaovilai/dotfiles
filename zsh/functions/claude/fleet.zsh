@@ -161,7 +161,10 @@ _claude-fleet-generate() {
     # Cache write: each cached line re-evaluates the collision guard on
     # every source, so a later shell cannot have a cached definition
     # bypass it.
-    if (( $#gen_fns )) && mkdir -p "$cache_dir" 2>/dev/null; then
+    # 0700 dir + umask 077 around the writes: fleet.json carries peer
+    # hostnames (deliberately absent from the public repo); the cache
+    # snapshot must not become world-readable in ~/.cache.
+    if (( $#gen_fns )) && mkdir -m 700 -p "$cache_dir" 2>/dev/null; then
         local i line
         # Atomic writes (temp + mv): concurrent regenerations cannot
         # interleave into a corrupted launchers.zsh that would then pass
@@ -177,6 +180,10 @@ _claude-fleet-generate() {
             done
         } > "$cache.tmp.$$"
         cat -- "$cfg" > "$cached_input.tmp.$$"
+        local -i old_umask=$(umask)
+        umask 077
+        chmod 600 -- "$cache.tmp.$$" "$cached_input.tmp.$$" 2>/dev/null
+        umask $old_umask
         mv -f -- "$cache.tmp.$$" "$cache"
         mv -f -- "$cached_input.tmp.$$" "$cached_input"
     fi
