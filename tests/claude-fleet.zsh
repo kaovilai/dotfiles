@@ -347,6 +347,10 @@ cachefile="$tmp/cache/claude-provider/fleet/launchers.zsh"
 # Corrupt the version line, keep content identical -> must regenerate.
 # (Portable rewrite — GNU-only `sed -i` syntax breaks BSD/macOS sed.)
 { print -r -- '# fleet-launchers cache v0'; sed -n '2,$p' -- "$cachefile"; } > "$cachefile.new"
+# 0600 so the ONLY defect is the stale version line: under the suite's
+# umask 002 the rewrite lands 0664 and the trust gate would reject it on
+# mode before the version compare ever runs — coverage by accident.
+chmod 600 "$cachefile.new"
 mv -f -- "$cachefile.new" "$cachefile"
 unset -f claude-vercheck 2>/dev/null || true
 source "$repo/zsh/functions/claude/fleet.zsh"
