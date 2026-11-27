@@ -326,7 +326,9 @@ source "$repo/zsh/functions/claude/fleet.zsh"
 cachefile="$tmp/cache/claude-provider/fleet/launchers.zsh"
 [[ "$(head -n 1 -- "$cachefile")" == "# fleet-launchers cache v1" ]] || fail "version line missing from cache"
 # Corrupt the version line, keep content identical -> must regenerate.
-sed -i '1s/.*/# fleet-launchers cache v0/' "$cachefile"
+# (Portable rewrite — GNU-only `sed -i` syntax breaks BSD/macOS sed.)
+{ print -r -- '# fleet-launchers cache v0'; sed -n '2,$p' -- "$cachefile"; } > "$cachefile.new"
+mv -f -- "$cachefile.new" "$cachefile"
 unset -f claude-vercheck 2>/dev/null || true
 source "$repo/zsh/functions/claude/fleet.zsh"
 [[ "$(head -n 1 -- "$cachefile")" == "# fleet-launchers cache v1" ]] || fail "stale-version cache not regenerated"

@@ -101,8 +101,21 @@ claude-fleet() {
 # skipped.
 _claude-fleet-generate() {
     emulate -L zsh
+    # Legacy cleanup for sessions sourced before the cache rework: the old
+    # zle-idle deferral registered a /dev/null fd that nothing unregisters
+    # in this version — close it so it cannot re-fire the deleted handler.
+    if [[ -n ${_CLAUDE_FLEET_FD-} ]]; then
+        zle -F $_CLAUDE_FLEET_FD 2>/dev/null
+        exec {_CLAUDE_FLEET_FD}>&-
+        unset _CLAUDE_FLEET_FD
+    fi
     local cfg="${LLM_USAGE_CONFIG_DIR:-$HOME/.config/llm-usage}/fleet.json"
     [[ -r $cfg ]] || return 0
+    # ONE read of fleet.json feeds the jq filter AND the cache snapshot:
+    # two separate reads could race an edit in between, caching launchers
+    # that do not match the snapshot beside them (a mismatch that would
+    # then pass every later content check).
+    local cfg_content="$(<$cfg)"
     # Steady state is fork-free: the launcher definitions are cached and
     # sourced directly (builtin reads, no jq) while fleet.json is
     # byte-identical to the copy the cache was built from — no mtime/size
@@ -117,8 +130,9 @@ _claude-fleet-generate() {
     # fleet.json never changes (same shape-version discipline as the codex
     # catalogs — see CLAUDE.md). Bump when generation logic changes.
     local -r cache_version="# fleet-launchers cache v1"
-    if [[ -r $cache && -r $cached_input ]] && [[ "$(head -n 1 -- "$cache")" == "$cache_version" ]] \
-       && [[ "$(<$cfg)" == "$(<$cached_input)" ]]; then
+    if [[ -r $cache && -r $cached_input ]] \
+       && [[ "${${(f)"$(<$cache)"}[1]}" == "$cache_version" ]] \
+       && [[ "$cfg_content" == "$(<$cached_input)" ]]; then
         source "$cache"
         return 0
     fi
@@ -131,7 +145,9 @@ _claude-fleet-generate() {
     # newline, which would make jq -r split the name into phantom peers),
     # duplicate names dropped (resolution refuses them as ambiguous).
     local -a names
-    names=("${(@f)$(jq -r '.hosts | map(select((.ssh|type) == "string" and .ssh != "" and ((.ssh | startswith("-")) | not) and (.ssh | test("^[^[:space:]]+$"))) | select((.name|type) == "string" and (.name | test("^[A-Za-z0-9_-]+\\z")))) | group_by(.name) | map(select(length == 1) | .[0]) | .[] | .name' "$cfg" 2>/dev/null)}") || return 0
+    # jq reads the SAME single-read content (stdin) that becomes the
+    # snapshot: see the cfg_content note above.
+    names=("${(@f)$(print -r -- "$cfg_content" | jq -r '.hosts | map(select((.ssh|type) == "string" and .ssh != "" and ((.ssh | startswith("-")) | not) and (.ssh | test("^[^[:space:]]+$"))) | select((.name|type) == "string" and (.name | test("^[A-Za-z0-9_-]+\\z")))) | group_by(.name) | map(select(length == 1) | .[0]) | .[] | .name' 2>/dev/null)}") || return 0
     (( $#names )) || return 0
     # Pass 1 — full names; pass 2 — short aliases: a dashed peer earlier in
     # the file must not shadow a real peer whose full name IS the short form
