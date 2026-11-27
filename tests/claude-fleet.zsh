@@ -318,4 +318,18 @@ source "$repo/zsh/functions/claude/fleet.zsh"
 out=$(claude-cachey)
 [[ $out == *"ssh-host: c2@x"* ]] || fail "content change served stale cache: $out"
 
+# Cache version gate: a cache with a stale/missing version line is
+# regenerated even when fleet.json content matches.
+print -r -- '{"hosts":[{"name":"vercheck","ssh":"v@x"}]}' > "$tmp/cfg/fleet.json"
+unset -f claude-vercheck 2>/dev/null || true
+source "$repo/zsh/functions/claude/fleet.zsh"
+cachefile="$tmp/cache/claude-provider/fleet/launchers.zsh"
+[[ "$(head -n 1 -- "$cachefile")" == "# fleet-launchers cache v1" ]] || fail "version line missing from cache"
+# Corrupt the version line, keep content identical -> must regenerate.
+sed -i '1s/.*/# fleet-launchers cache v0/' "$cachefile"
+unset -f claude-vercheck 2>/dev/null || true
+source "$repo/zsh/functions/claude/fleet.zsh"
+[[ "$(head -n 1 -- "$cachefile")" == "# fleet-launchers cache v1" ]] || fail "stale-version cache not regenerated"
+(( $+functions[claude-vercheck] )) || fail "regeneration after version mismatch failed"
+
 print -- "ok claude-fleet"
