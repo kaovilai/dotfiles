@@ -48,8 +48,11 @@ claude-fleet() {
 }
 
 # Generate claude-<name> (and the short alias) for every fleet.json peer.
-# Guarded per name so a peer colliding with a real function (claude-copilot
-# etc.) never overwrites it.
+# Names are validated against a strict label pattern and the functions are
+# created via the functions associative array (never eval): fleet.json is
+# machine-local but agent-editable, and a crafted name must not parse as
+# shell code. A peer colliding with a real function (claude-copilot etc.) is
+# skipped.
 () {
     emulate -L zsh
     local cfg="${LLM_USAGE_CONFIG_DIR:-$HOME/.config/llm-usage}/fleet.json"
@@ -59,13 +62,15 @@ claude-fleet() {
     (( $#names )) || return 0
     local name short
     for name in $names; do
-        [[ $name == */* || -z $name ]] && continue
+        # [A-Za-z0-9_-] only — anything else (spaces, ;, $(), quotes) is a
+        # skipped peer, never a function definition.
+        [[ $name =~ ^[A-Za-z0-9_-]+$ ]] || continue
         if (( ! $+functions[claude-$name] )); then
-            eval "claude-$name() { claude-fleet $name \"\$@\"; }"
+            functions[claude-$name]='claude-fleet '"${(q)name}"' "$@"'
         fi
         short=${name%%-*}
         if [[ -n $short && $short != $name ]] && (( ! $+functions[claude-$short] )); then
-            eval "claude-$short() { claude-fleet $name \"\$@\"; }"
+            functions[claude-$short]='claude-fleet '"${(q)name}"' "$@"'
         fi
     done
 }

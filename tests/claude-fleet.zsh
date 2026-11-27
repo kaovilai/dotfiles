@@ -88,6 +88,18 @@ unset -f claude-ryzen claude-ryzen-wsl claude-spectre
 source "$repo/zsh/functions/claude/fleet.zsh"
 [[ $(claude-copilot) == REAL ]] || fail "collision guard overwrote claude-copilot"
 
+# Hostile fleet.json names never become code: anything outside
+# [A-Za-z0-9_-] is skipped, not eval'd/defined (GHAS prompt-injection fix).
+print -r -- '{"hosts":[{"name":"x; touch $tmp/PWNED; #","ssh":"x@y"},{"name":"ok-host","ssh":"z@z"},{"name":"bad name","ssh":"z@z"},{"name":"$(echo pwn)","ssh":"z@z"}]}' \
+    > "$tmp/cfg/fleet.json"
+unset -f claude-ok-host 2>/dev/null || true
+source "$repo/zsh/functions/claude/fleet.zsh"
+[[ -e $tmp/PWNED ]] && fail "hostile name executed code"
+(( $+functions[claude-ok-host] )) || fail "valid peer skipped by hostile-name validation"
+for bad in 'claude-x;' 'claude-bad' 'claude-$'; do
+    (( $+functions[$bad] )) && fail "function generated from hostile name: $bad"
+done
+
 # Missing fleet.json: no functions generated, no errors at load.
 export LLM_USAGE_CONFIG_DIR="$tmp/nope"
 unset -f claude-fleet claude-copilot
