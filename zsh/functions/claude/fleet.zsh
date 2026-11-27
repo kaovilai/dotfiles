@@ -153,15 +153,29 @@ _claude-fleet-generate() {
     # code, so a tampered path (symlink, foreign owner, group/other-
     # writable) must be rejected and regenerated, not evaluated. The write
     # path already creates 0600/0700; these checks catch tampering.
-    # (022 is an octal literal in zsh arithmetic — the group/other write
-    # bits; zstat +mode is decimal but the mask works across both.)
+    # (8#22 is EXPLICIT octal — the group/other write bits; a bare 022 in
+    # zsh arithmetic is DECIMAL 22 = 0o26, which also masks other-READ and
+    # would reject a valid mode-0644 cache. zstat +mode is decimal; the
+    # explicit base keeps the mask correct across both.)
     zmodload zsh/stat 2>/dev/null
+    # Dir-level trust first: a group/other-writable cache dir (or one not
+    # owned by the user) lets another user swap launchers.zsh between the
+    # file checks below and the read; the swapped file needs only the
+    # version line and a snapshot tail matching the (attacker-readable)
+    # fleet.json to be evaluated.
+    local -a st_dir_mode
+    local dir_trust_ok=0
+    if [[ -O ${cache:h} ]] && zstat -A st_dir_mode +mode "${cache:h}" 2>/dev/null \
+       && (( (st_dir_mode[1] & 8#22) == 0 )); then
+        dir_trust_ok=1
+    fi
     # ONE read of the path feeds the version check AND the eval: separate
     # reads would validate one file and execute another if the path were
     # atomically swapped between them.
-    if [[ -r $cache && -f $cache && -O $cache && ! -L $cache ]] \
+    if (( dir_trust_ok )) \
+       && [[ -r $cache && -f $cache && -O $cache && ! -L $cache ]] \
        && zstat -A st_mode +mode "$cache" 2>/dev/null \
-       && (( (st_mode[1] & 022) == 0 )) \
+       && (( (st_mode[1] & 8#22) == 0 )) \
        && cache_content="$(<$cache)" \
        && [[ "${${(f)cache_content}[1]}" == "$cache_version" ]]; then
         expected_tail=$'\n'_claude_fleet_cache_snapshot=${(qq)cfg_content}

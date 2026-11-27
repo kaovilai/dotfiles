@@ -454,7 +454,7 @@ unset -f claude-trustpeer 2>/dev/null || true
 source "$repo/zsh/functions/claude/fleet.zsh"
 (( $+functions[claude-trustpeer] )) || fail "world-writable cache rejected the peer entirely"
 zstat -A m +mode "$tmp/cache/claude-provider/fleet/launchers.zsh"
-(( (m & 022) == 0 )) || fail "world-writable cache not regenerated (mode $m)"
+(( (m & 8#22) == 0 )) || fail "world-writable cache not regenerated (mode $m)"
 rm -f "$tmp/cache/claude-provider/fleet/launchers.zsh"
 ln -s /etc/hostname "$tmp/cache/claude-provider/fleet/launchers.zsh"
 unset -f claude-trustpeer 2>/dev/null || true
