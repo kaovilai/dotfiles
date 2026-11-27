@@ -158,7 +158,11 @@ _claude-fleet-generate() {
 # draws; by then every real claude-* function AND alias is in scope, which
 # is also what the collision guard wants). Non-interactive sources (tests,
 # scripts) generate immediately.
-if [[ -o interactive ]]; then
+# tty-stdin discriminates a real terminal (defer; a human cannot type
+# claude-ryzen before zle idles) from scripted shells like `zsh -ic
+# 'claude-ryzen ...'`, whose -c command runs BEFORE zle idle fires — those
+# must generate immediately or the launcher does not exist yet.
+if [[ -o interactive && -t 0 ]]; then
     zle -N _claude-fleet-generate
     # Re-source cleanup: unregister and close a pending fd; NO 2>/dev/null
     # on the bare exec (it would redirect the shell's stderr for the rest
