@@ -466,4 +466,28 @@ source "$repo/zsh/functions/claude/fleet.zsh"
 (( $+functions[claude-trustpeer] )) || fail "symlink cache rejected the peer entirely"
 [[ ! -L "$tmp/cache/claude-provider/fleet/launchers.zsh" ]] || fail "symlink cache not replaced"
 
+# Resolution-aware walk: a USER-OWNED symlink (trusted lexically) whose
+# target lives under an ancestor that turns untrusted must be rejected —
+# the walk recurses into the resolved target's ancestors. The suite
+# cannot create a foreign-owned dir unprivileged, so "untrusted" is
+# simulated by mode: a group-writable non-sticky ancestor.
+# (Fixture dirs are created under umask 002; normalize them first so the
+# positive control is actually trusted.)
+shared="$tmp/sharedroot"
+mkdir -p "$shared/inside/claude-provider/fleet" "$tmp/mylinkhome"
+chmod 755 "$shared" "$shared/inside" "$shared/inside/claude-provider" \
+    "$shared/inside/claude-provider/fleet" "$tmp/mylinkhome"
+print -r -- '{"hosts":[{"name":"viagymlink","ssh":"v@x"}]}' > "$tmp/cfg/fleet.json"
+print -r -- "# cache" > "$shared/inside/claude-provider/fleet/launchers.zsh"
+chmod 600 "$shared/inside/claude-provider/fleet/launchers.zsh"
+ln -sfn "$shared/inside/claude-provider/fleet" "$tmp/mylinkhome/cachelink"
+_claude-fleet-path-trusted "$tmp/mylinkhome/cachelink/launchers.zsh" 0 2>/dev/null \
+    || fail "clean user-owned symlinked path rejected by the trust walk"
+# Untrusted resolved ancestor: group-writable non-sticky target ancestor
+# must fail the walk even though the lexical path is entirely user-owned.
+chmod 775 "$shared"
+_claude-fleet-path-trusted "$tmp/mylinkhome/cachelink/launchers.zsh" 0 2>/dev/null \
+    && fail "group-writable resolved ancestor passed the trust walk"
+chmod 755 "$shared"
+
 print -- "ok claude-fleet"
