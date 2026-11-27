@@ -67,6 +67,17 @@ claude-fleet() {
 # skipped.
 _claude-fleet-generate() {
     emulate -L zsh
+    # One-shot FIRST, before any early return: /dev/null sits ready at EOF
+    # forever, so the handler fires on every zle idle until unregistered —
+    # each firing would fork another jq. Closing also must not redirect the
+    # SHELL's stderr: `exec {fd}>&-` has no command word, so a stray
+    # 2>/dev/null there persists for the whole session (only zle -F, which
+    # has one, may carry it).
+    if [[ -n ${_CLAUDE_FLEET_FD-} ]]; then
+        zle -F $_CLAUDE_FLEET_FD 2>/dev/null
+        exec {_CLAUDE_FLEET_FD}>&-
+        unset _CLAUDE_FLEET_FD
+    fi
     local cfg="${LLM_USAGE_CONFIG_DIR:-$HOME/.config/llm-usage}/fleet.json"
     [[ -r $cfg ]] || return 0
     # Only SSH-backed peers get launchers: the llm-usage fleet format also
@@ -105,9 +116,12 @@ _claude-fleet-generate() {
 # scripts) generate immediately.
 if [[ -o interactive ]]; then
     zle -N _claude-fleet-generate
+    # Re-source cleanup: unregister and close a pending fd; NO 2>/dev/null
+    # on the bare exec (it would redirect the shell's stderr for the rest
+    # of the session).
     if [[ -n ${_CLAUDE_FLEET_FD-} ]]; then
         zle -F $_CLAUDE_FLEET_FD 2>/dev/null
-        exec {_CLAUDE_FLEET_FD}>&- 2>/dev/null
+        exec {_CLAUDE_FLEET_FD}>&-
     fi
     exec {_CLAUDE_FLEET_FD}< /dev/null
     zle -F $_CLAUDE_FLEET_FD _claude-fleet-generate
