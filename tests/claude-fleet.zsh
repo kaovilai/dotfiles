@@ -539,6 +539,24 @@ unfunction rm
 [[ -e "$cachefile" ]] && fail "cache written despite symlink at the temp path at open time"
 rm -f "$tmp/cache/claude-provider/fleet/launchers.zsh.tmp.$$"
 
+# Confused-deputy chmod guard: an attacker-controlled symlink at a
+# cache-tree level must NOT make the permission fixup chmod the
+# symlink's destination (chmod follows symlinks). fleet-as-symlink to a
+# user-owned 755 canary dir: the mode must stay 755, no cache appears
+# inside the canary, and the launcher still defines.
+print -r -- '{"hosts":[{"name":"chmodguard","ssh":"c@x"}]}' > "$tmp/cfg/fleet.json"
+mkdir -p "$tmp/xdg2/claude-provider" "$tmp/owntarget"
+chmod 755 "$tmp/owntarget" "$tmp/xdg2/claude-provider"
+ln -s "$tmp/owntarget" "$tmp/xdg2/claude-provider/fleet"
+save_xdg=$XDG_CACHE_HOME
+XDG_CACHE_HOME="$tmp/xdg2"
+source "$repo/zsh/functions/claude/fleet.zsh"
+XDG_CACHE_HOME="$save_xdg"
+zstat -A m +mode "$tmp/owntarget"
+(( (m & 8#7777) == 8#755 )) || fail "chmod followed the fleet symlink (target mode $(printf %o $m))"
+[[ ! -e "$tmp/owntarget/launchers.zsh" ]] || fail "cache written through the fleet symlink"
+(( $+functions[claude-chmodguard] )) || fail "chmod guard rejected the launcher entirely"
+
 # Write gate: an untrusted ancestor ABOVE the XDG root (group-writable,
 # and the go-w fix only touches the XDG root itself, so it stays
 # unfixable) must suppress the cache write — launchers still defined.

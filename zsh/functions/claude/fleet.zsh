@@ -321,21 +321,30 @@ _claude-fleet-generate() {
     # Cache write, gated like the read: 0700 dir (chmod'd — mkdir -m is a
     # no-op on an existing one), umask 077 before the redirection opens the
     # temp file (peer hostnames must never be world-readable, not even
-    # briefly), one temp + one mv so the whole cache is atomic. The chmods
-    # MUST succeed — a tree we cannot chmod is not ours to write into — and
-    # the trust walk must accept the directory, so an attacker-owned or
+    # briefly), one temp + one mv so the whole cache is atomic. chmod
+    # FOLLOWS symlinks, so every chmod target is validated BEFORE the
+    # chmod: lstat must show a real (non-symlink) directory owned by the
+    # user. Otherwise an attacker-controlled symlink at a cache-tree level
+    # would turn our permission fixup into a confused-deputy chmod of the
+    # symlink's destination. The chmods on the two cache levels MUST
+    # succeed — a tree we cannot chmod is not ours to write into — and the
+    # trust walk must accept the directory, so an attacker-owned or
     # attacker-writable tree never receives the write.
     if { mkdir -m 700 -p "$cache_dir" 2>/dev/null || [[ -d $cache_dir ]]; } \
-       && [[ -w $cache_dir ]] \
+       && [[ -w $cache_dir && ! -L $cache_dir && -O $cache_dir ]] \
+       && [[ ! -L ${cache_dir:h} && -O ${cache_dir:h} ]] \
        && chmod 700 "$cache_dir" "${cache_dir:h}" 2>/dev/null; then
         # -m modes only the LEAF: the intermediate claude-provider dir (and
         # a just-created XDG cache root) carry the ambient umask — a
         # group-writable one must be fixed BEFORE the walk below, or a
         # fresh root under umask 002 (775) would reject our own write.
-        # Best-effort: strip only the group/other WRITE bits from the
-        # user's shared XDG root (755 stays 755, 775 becomes 755); failure
-        # (a root-owned root) leaves the mode as-is and the walk decides.
-        chmod go-w "${cache_dir:h:h}" 2>/dev/null
+        # Best-effort, and symlink-guarded like the two levels above:
+        # strip only the group/other WRITE bits from the user's shared
+        # XDG root (755 stays 755, 775 becomes 755). A symlinked or
+        # foreign-owned root is left untouched — the walk below inspects
+        # the resolved chain and decides.
+        [[ ! -L ${cache_dir:h:h} && -O ${cache_dir:h:h} ]] \
+            && chmod go-w "${cache_dir:h:h}" 2>/dev/null
         if ! _claude-fleet-path-trusted "$cache_dir" 0; then
             return 0
         fi
