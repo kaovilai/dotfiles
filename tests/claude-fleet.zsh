@@ -444,4 +444,21 @@ rm -f "$tmp/JQ-FORKED"
 source "$repo/zsh/functions/claude/fleet.zsh"
 [[ -e "$tmp/JQ-FORKED" ]] || fail "fork detector did not fire on a genuine miss"
 
+# Trust gate: a tampered cache (world-writable, or a symlink) is rejected
+# and regenerated, never evaluated.
+print -r -- '{"hosts":[{"name":"trustpeer","ssh":"t@x"}]}' > "$tmp/cfg/fleet.json"
+unset -f claude-trustpeer 2>/dev/null || true
+source "$repo/zsh/functions/claude/fleet.zsh"
+chmod 666 "$tmp/cache/claude-provider/fleet/launchers.zsh"
+unset -f claude-trustpeer 2>/dev/null || true
+source "$repo/zsh/functions/claude/fleet.zsh"
+(( $+functions[claude-trustpeer] )) || fail "world-writable cache rejected the peer entirely"
+[[ "$(zstat -A m +mode "$tmp/cache/claude-provider/fleet/launchers.zsh" && print -r -- $m)" != *666* ]] || fail "world-writable cache not regenerated"
+rm -f "$tmp/cache/claude-provider/fleet/launchers.zsh"
+ln -s /etc/hostname "$tmp/cache/claude-provider/fleet/launchers.zsh"
+unset -f claude-trustpeer 2>/dev/null || true
+source "$repo/zsh/functions/claude/fleet.zsh"
+(( $+functions[claude-trustpeer] )) || fail "symlink cache rejected the peer entirely"
+[[ ! -L "$tmp/cache/claude-provider/fleet/launchers.zsh" ]] || fail "symlink cache not replaced"
+
 print -- "ok claude-fleet"

@@ -148,7 +148,18 @@ _claude-fleet-generate() {
     local -a cache_file_lines
     local _claude_fleet_cache_snapshot
     local cache_content expected_tail
-    if [[ -r $cache ]] && cache_file_lines=("${(f)"$(<$cache)"}") \
+    local -a st_mode
+    # Filesystem trust gate before the eval: the cache is executed shell
+    # code, so a tampered path (symlink, foreign owner, group/other-
+    # writable) must be rejected and regenerated, not evaluated. The write
+    # path already creates 0600/0700; these checks catch tampering.
+    # (022 is an octal literal in zsh arithmetic — the group/other write
+    # bits; zstat +mode is decimal but the mask works across both.)
+    zmodload zsh/stat 2>/dev/null
+    if [[ -r $cache && -f $cache && -O $cache && ! -L $cache ]] \
+       && zstat -A st_mode +mode "$cache" 2>/dev/null \
+       && (( (st_mode[1] & 022) == 0 )) \
+       && cache_file_lines=("${(f)"$(<$cache)"}") \
        && [[ ${cache_file_lines[1]} == "$cache_version" ]]; then
         cache_content="$(<$cache)"
         expected_tail=$'\n'_claude_fleet_cache_snapshot=${(qq)cfg_content}
