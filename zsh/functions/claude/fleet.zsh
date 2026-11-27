@@ -126,25 +126,12 @@ _claude-fleet-generate() {
     local cache="$cache_dir/launchers.zsh"
     local -r cache_version="# fleet-launchers cache v2"
     local -a cache_file_lines
-    local -a _claude_fleet_cache_fns
     local _claude_fleet_cache_snapshot
     if [[ -r $cache ]] && cache_file_lines=("${(f)"$(<$cache)"}") \
-       && [[ ${cache_file_lines[1]} == "$cache_version" ]]; then
-        source "$cache"
-        if [[ "$_claude_fleet_cache_snapshot" == "$cfg_content" ]]; then
-            local fn cache_stale=0
-            for fn in $_claude_fleet_cache_fns; do
-                if (( ! $+functions[$fn] && ! $+aliases[$fn] && ! $+commands[$fn] )); then
-                    # Cached line was omitted for a collision that no
-                    # longer exists — regenerate now.
-                    cache_stale=1
-                    break
-                fi
-            done
-            if (( ! cache_stale )); then
-                return 0
-            fi
-        fi
+       && [[ ${cache_file_lines[1]} == "$cache_version" ]] \
+       && source "$cache" \
+       && [[ "$_claude_fleet_cache_snapshot" == "$cfg_content" ]]; then
+        return 0
     fi
     # Only connectable peers get launchers: the llm-usage fleet format also
     # carries local-state peers (no .ssh), and a hand-edited entry can carry
@@ -162,30 +149,32 @@ _claude-fleet-generate() {
     # (ryzen-wsl first would otherwise steal claude-ryzen from a later
     # "ryzen" peer). Aliases parse-expand before functions can run and
     # functions shadow PATH commands, so both join functions in the guard.
-    # gen_fns: non-colliding launchers actually defined. cand_fns: every
-    # candidate name INCLUDING collision-omitted ones — the cache records
-    # candidates so a later shell can detect an omission whose collision
-    # has disappeared (see the hit-path check above).
-    local -a gen_fns gen_fleets cand_fns
+    # The cache serializes a guarded line for EVERY candidate — including
+    # names omitted here because of a live collision: the guard makes the
+    # line inert where the collision exists and defines the launcher in a
+    # later shell where it has gone, so a disappeared collision self-heals
+    # on the next cache hit instead of regenerating (an omission-based
+    # cache thrashed: each regeneration dropped the peer the previous
+    # shell had just installed from the cached line).
+    local -a cache_fns cache_fleets
     local name short
     for name in $names; do
         [[ $name =~ ^[A-Za-z0-9_-]+$ ]] || continue
-        cand_fns+=("claude-$name")
+        cache_fns+=("claude-$name") cache_fleets+=("${(q)name}")
         if (( ! $+functions[claude-$name] && ! $+aliases[claude-$name]
               && ! $+commands[claude-$name] )); then
             functions[claude-$name]='claude-fleet '"${(q)name}"' "$@"'
-            gen_fns+=("claude-$name") gen_fleets+=("${(q)name}")
         fi
     done
     for name in $names; do
         [[ $name =~ ^[A-Za-z0-9_-]+$ ]] || continue
         short=${name%%-*}
-        [[ -n $short && $short != $name ]] && cand_fns+=("claude-$short")
-        if [[ -n $short && $short != $name ]] &&
-           (( ! $+functions[claude-$short] && ! $+aliases[claude-$short]
-              && ! $+commands[claude-$short] )); then
-            functions[claude-$short]='claude-fleet '"${(q)name}"' "$@"'
-            gen_fns+=("claude-$short") gen_fleets+=("${(q)name}")
+        if [[ -n $short && $short != $name ]]; then
+            cache_fns+=("claude-$short") cache_fleets+=("${(q)name}")
+            if (( ! $+functions[claude-$short] && ! $+aliases[claude-$short]
+                  && ! $+commands[claude-$short] )); then
+                functions[claude-$short]='claude-fleet '"${(q)name}"' "$@"'
+            fi
         fi
     done
     # Cache write: 0700 dir (chmod'd — mkdir -m is a no-op on an existing
@@ -201,13 +190,12 @@ _claude-fleet-generate() {
             print -r -- "$cache_version"
             # {1..0} counts DOWN in zsh (1, 0) — guard the empty case or
             # two empty-subscript lines land in the cache.
-            if (( $#gen_fns )); then
-                for i in {1..$#gen_fns}; do
-                    line="(( ! \$+functions[${gen_fns[i]}] && ! \$+aliases[${gen_fns[i]}] && ! \$+commands[${gen_fns[i]}] )) && functions[${gen_fns[i]}]='claude-fleet ${gen_fleets[i]} \"\$@\"'"
+            if (( $#cache_fns )); then
+                for i in {1..$#cache_fns}; do
+                    line="(( ! \$+functions[${cache_fns[i]}] && ! \$+aliases[${cache_fns[i]}] && ! \$+commands[${cache_fns[i]}] )) && functions[${cache_fns[i]}]='claude-fleet ${cache_fleets[i]} \"\$@\"'"
                     print -r -- "$line"
                 done
             fi
-            print -r -- "_claude_fleet_cache_fns=( ${(@q)cand_fns} )"
             print -r -- "_claude_fleet_cache_snapshot=${(qq)cfg_content}"
         } > "$cache.tmp.$$"
         mv -f -- "$cache.tmp.$$" "$cache"

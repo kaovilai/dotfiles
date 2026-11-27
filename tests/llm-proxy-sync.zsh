@@ -5,8 +5,6 @@
 # stubbed (a fake clock replaces real waiting), so no real proxy, port, launcher
 # or process is touched.
 emulate -LR zsh
-export XDG_CACHE_HOME="${TMPDIR:-/tmp}/xdg-$$"
-mkdir -p "$XDG_CACHE_HOME"
 local repo="${0:A:h:h}"
 fail() { print -ru2 -- "FAIL: $*"; exit 1; }
 source "$repo/zsh/functions/claude/common.zsh" || fail "common.zsh does not source"   # the real _claude_port_serving
@@ -44,6 +42,9 @@ _claude_enmaas_port() { print 59005; }
 local tmp
 tmp=$(mktemp -d) || fail "mktemp"
 trap 'rm -rf "$tmp"' EXIT
+# Keep the fleet launcher cache (sourced via load.zsh) off the real one.
+export XDG_CACHE_HOME="$tmp/cache"
+mkdir -p "$XDG_CACHE_HOME"
 export XDG_STATE_HOME="$tmp/state"   # watcher pid files and logs
 
 typeset -A listening stub_verdict serving restart_rc watch_names

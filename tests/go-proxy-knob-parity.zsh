@@ -10,7 +10,10 @@
 
 emulate -L zsh
 typeset repo="${0:A:h:h}"
-export XDG_CACHE_HOME="${TMPDIR:-/tmp}/xdg-$$"
+typeset tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+# Keep the fleet launcher cache (sourced via load.zsh) off the real one.
+export XDG_CACHE_HOME="$tmp/cache"
 mkdir -p "$XDG_CACHE_HOME"
 source "$repo/zsh/functions/claude/load.zsh" || { print -u2 'FAIL - load.zsh'; exit 1 }
 export ENMAAS_API_KEY=parity-test-key
