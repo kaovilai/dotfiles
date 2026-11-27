@@ -137,7 +137,7 @@ No formal test suite exists. Changes should be manually tested by:
 ### Important Files
 - `zsh/alias.zsh`: Sources all alias category files
 - `zsh/functions/openshift/load.zsh`: Loads all OpenShift-related functions
-- `zsh/functions/claude/load.zsh`: Loads Claude provider wrappers (`common.zsh`, one file per provider in `providers/`, then `fleet.zsh`, then `mode.zsh`)
+- `zsh/functions/claude/load.zsh`: Loads Claude provider wrappers (`common.zsh`, one file per provider in `providers/`, then `proxies.zsh` and `mode.zsh`, then `fleet.zsh` LAST — its collision guard needs every real claude-* function in scope)
 - `zsh/functions/claude/fleet.zsh`: `claude-<fleet-name>` (from `~/.config/llm-usage/fleet.json` hosts, plus the first token of dashed names) runs interactive Claude Code on a fleet peer over ssh, via the peer's own mode dispatch
 - `zsh/functions/claude/providers/openshell.zsh`: `openshell-<backend>` runs a `claude-<backend>` wrapper with Claude Code inside an NVIDIA OpenShell sandbox; image, design notes and deferred work in `zsh/functions/claude/openshell/`
 - `zsh/znap.zsh`: Manages ZSH plugins (pure prompt, syntax highlighting, autocomplete)

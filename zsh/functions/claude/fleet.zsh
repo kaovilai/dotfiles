@@ -8,6 +8,9 @@
 # runs `zsh -ic 'claude ...'`, so the peer's own mode dispatch (claude-mode)
 # picks its provider and its local proxies — the same session as sitting at
 # that machine. New peers appear after fleet.json changes on the next shell.
+# Peers declared only via llm-usage's LLM_USAGE_FLEET env overrides get no
+# launcher: fleet.json is the machine-local standing list the launchers
+# mirror; env overrides are per-invocation llm-usage configuration.
 #
 # Usage: claude-ryzen [claude args...]   /   claude-spectre -c 'hi'   etc.
 # Manual form: claude-fleet <fleet-name> [claude args...]
@@ -62,7 +65,7 @@ claude-fleet() {
 # machine-local but agent-editable, and a crafted name must not parse as
 # shell code. A peer colliding with a real function (claude-copilot etc.) is
 # skipped.
-() {
+_claude-fleet-generate() {
     emulate -L zsh
     local cfg="${LLM_USAGE_CONFIG_DIR:-$HOME/.config/llm-usage}/fleet.json"
     [[ -r $cfg ]] || return 0
@@ -94,6 +97,23 @@ claude-fleet() {
         fi
     done
 }
+# The generator's jq is the only subprocess fork in the claude load chain —
+# the prompt stays fork-free. Interactive shells defer it to zle idle (the
+# znap /dev/null-fd pattern: no fork, fires right after the first prompt
+# draws; by then every real claude-* function AND alias is in scope, which
+# is also what the collision guard wants). Non-interactive sources (tests,
+# scripts) generate immediately.
+if [[ -o interactive ]]; then
+    zle -N _claude-fleet-generate
+    if [[ -n ${_CLAUDE_FLEET_FD-} ]]; then
+        zle -F $_CLAUDE_FLEET_FD 2>/dev/null
+        exec {_CLAUDE_FLEET_FD}>&- 2>/dev/null
+    fi
+    exec {_CLAUDE_FLEET_FD}< /dev/null
+    zle -F $_CLAUDE_FLEET_FD _claude-fleet-generate
+else
+    _claude-fleet-generate
+fi
 
 # "name:ssh" pairs for completion — ssh-backed peers only (the set
 # claude-fleet can actually resolve), one jq pass, read live from
