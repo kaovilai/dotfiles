@@ -23,8 +23,17 @@ _claude_fleet_target() {
         print -ru2 -- "claude-fleet: $cfg not readable (see scripts/fleet.json.example)"
         return 1
     fi
+    # Surface the real error instead of misdiagnosing it as a missing host
+    # (repo precedent: merge-claude-settings' jq check).
+    if ! command -v jq >/dev/null 2>&1; then
+        print -ru2 -- "claude-fleet: jq is required to read $cfg"
+        return 1
+    fi
     local target
-    target=$(jq -r --arg n "$1" '.hosts[] | select(.name == $n) | .ssh // empty' "$cfg" 2>/dev/null)
+    if ! target=$(jq -r --arg n "$1" '.hosts[] | select(.name == $n) | .ssh // empty' "$cfg" 2>&1); then
+        print -ru2 -- "claude-fleet: cannot parse $cfg: ${target%%$'\n'*}"
+        return 1
+    fi
     if [[ -z $target ]]; then
         print -ru2 -- "claude-fleet: no fleet host named '$1' in $cfg"
         return 1
@@ -80,10 +89,12 @@ _claude-fleet-generate() {
     fi
     local cfg="${LLM_USAGE_CONFIG_DIR:-$HOME/.config/llm-usage}/fleet.json"
     [[ -r $cfg ]] || return 0
-    # Only SSH-backed peers get launchers: the llm-usage fleet format also
-    # carries local-state peers (no .ssh), which could never connect.
+    # Only connectable peers get launchers: the llm-usage fleet format also
+    # carries local-state peers (no .ssh), and a hand-edited entry can carry
+    # an empty or non-string .ssh — none of those can connect, and the
+    # filter must match what _claude_fleet_target accepts (string, nonempty).
     local -a names
-    names=("${(@f)$(jq -r '.hosts[] | select(.ssh != null) | .name // empty' "$cfg" 2>/dev/null)}") || return 0
+    names=("${(@f)$(jq -r '.hosts[] | select((.ssh|type) == "string" and .ssh != "") | .name // empty' "$cfg" 2>/dev/null)}") || return 0
     (( $#names )) || return 0
     local name short
     # Pass 1 — full names; pass 2 — short aliases: a dashed peer earlier in
@@ -135,7 +146,7 @@ fi
 # assert on exactly what the completion would offer.
 _claude_fleet_host_pairs() {
     emulate -L zsh
-    jq -r '.hosts[] | select(.ssh != null) | select(.name != null) | "\(.name):\(.ssh)"' \
+    jq -r '.hosts[] | select((.ssh|type) == "string" and .ssh != "") | select(.name != null) | "\(.name):\(.ssh)"' \
         "${LLM_USAGE_CONFIG_DIR:-$HOME/.config/llm-usage}/fleet.json" 2>/dev/null
 }
 

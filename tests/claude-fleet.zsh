@@ -117,6 +117,24 @@ if claude-fleet evil >/dev/null 2>&1; then
 fi
 [[ -e $tmp/PWNED2 ]] && fail "ssh option injection executed"
 
+# Degenerate .ssh values (empty string, non-string) get no launcher and no
+# completion pair — the generated set matches what resolution accepts.
+print -r -- '{"hosts":[{"name":"emptyish","ssh":""},{"name":"numish","ssh":42},{"name":"goodish","ssh":"g@x"}]}' \
+    > "$tmp/cfg/fleet.json"
+unset -f claude-emptyish claude-numish claude-goodish 2>/dev/null || true
+source "$repo/zsh/functions/claude/fleet.zsh"
+(( $+functions[claude-emptyish] )) && fail "launcher for empty .ssh"
+(( $+functions[claude-numish] )) && fail "launcher for non-string .ssh"
+(( $+functions[claude-goodish] )) || fail "valid peer skipped by strict filter"
+pairs=$(_claude_fleet_host_pairs)
+[[ $pairs == *"goodish:g@x"* ]] || fail "good peer missing from pairs: $pairs"
+[[ $pairs != *emptyish* && $pairs != *numish* ]] || fail "degenerate peer offered by completion"
+
+# Malformed fleet.json surfaces the parse error, not a missing-host message.
+print -r -- '{not json' > "$tmp/cfg/fleet.json"
+out=$(claude-fleet goodish 2>&1) || true
+[[ $out == *"cannot parse"* ]] || fail "malformed json misdiagnosed: $out"
+
 # Hostile fleet.json names never become code: anything outside
 # [A-Za-z0-9_-] is skipped, not eval'd/defined (GHAS prompt-injection fix).
 print -r -- '{"hosts":[{"name":"x; touch $tmp/PWNED; #","ssh":"x@y"},{"name":"ok-host","ssh":"z@z"},{"name":"bad name","ssh":"z@z"},{"name":"$(echo pwn)","ssh":"z@z"}]}' \
