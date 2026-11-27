@@ -108,6 +108,15 @@ source "$repo/zsh/functions/claude/fleet.zsh"
 (( $+functions[claude-localish] )) && fail "launcher generated for ssh-less peer"
 (( $+functions[claude-remoteish] )) || fail "ssh-backed peer skipped"
 
+# Dash-prefixed ssh targets are refused (ssh option injection) and the
+# ssh call carries -- before the target.
+print -r -- '{"hosts":[{"name":"evil","ssh":"-oProxyCommand=touch $tmp/PWNED2"}]}' \
+    > "$tmp/cfg/fleet.json"
+if claude-fleet evil >/dev/null 2>&1; then
+    fail "dash-prefixed ssh target accepted"
+fi
+[[ -e $tmp/PWNED2 ]] && fail "ssh option injection executed"
+
 # Hostile fleet.json names never become code: anything outside
 # [A-Za-z0-9_-] is skipped, not eval'd/defined (GHAS prompt-injection fix).
 print -r -- '{"hosts":[{"name":"x; touch $tmp/PWNED; #","ssh":"x@y"},{"name":"ok-host","ssh":"z@z"},{"name":"bad name","ssh":"z@z"},{"name":"$(echo pwn)","ssh":"z@z"}]}' \

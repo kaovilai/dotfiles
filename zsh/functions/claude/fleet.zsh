@@ -26,6 +26,13 @@ _claude_fleet_target() {
         print -ru2 -- "claude-fleet: no fleet host named '$1' in $cfg"
         return 1
     fi
+    # A dash-prefixed target would be parsed by ssh as an option
+    # (-oProxyCommand=... is code execution); fleet.json is agent-editable,
+    # so validate like the name field.
+    if [[ $target == -* ]]; then
+        print -ru2 -- "claude-fleet: refusing dash-prefixed ssh target for '$1'"
+        return 1
+    fi
     REPLY=$target
 }
 
@@ -44,7 +51,7 @@ claude-fleet() {
     for a in "$@"; do
         remote+=" ${(q)a}"
     done
-    command ssh -t "$target" "$remote"
+    command ssh -t -- "$target" "$remote"
 }
 
 # Generate claude-<name> (and the short alias) for every fleet.json peer.
