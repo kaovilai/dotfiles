@@ -521,6 +521,24 @@ source "$repo/zsh/functions/claude/fleet.zsh"
 [[ -e "$cachefile" ]] && fail "cache written despite existing-path temp collision"
 rmdir "$tmp/cache/claude-provider/fleet/launchers.zsh.tmp.$$"
 
+# Symlink present AT OPEN TIME: rm is stubbed out for the temp path so
+# the pre-planted symlink survives to the sysopen itself, which must
+# refuse it (O_EXCL|O_NOFOLLOW) — canary intact, symlink untouched,
+# write skipped, launcher still defined. This isolates the open's own
+# guarantee from the rm -f defense in front of it.
+print -r -- '{"hosts":[{"name":"tmpsymlink2","ssh":"t@x"}]}' > "$tmp/cfg/fleet.json"
+rm -f "$cachefile"
+: > "$tmp/canary2"
+ln -s "$tmp/canary2" "$tmp/cache/claude-provider/fleet/launchers.zsh.tmp.$$"
+rm() { [[ "$*" == *".tmp.$$" ]] && return 0; command rm "$@"; }
+source "$repo/zsh/functions/claude/fleet.zsh"
+unfunction rm
+[[ "$(cat "$tmp/canary2")" == "" ]] || fail "sysopen followed a symlink at open time (canary clobbered)"
+[[ -L "$tmp/cache/claude-provider/fleet/launchers.zsh.tmp.$$" ]] || fail "pre-planted temp symlink disturbed before open"
+(( $+functions[claude-tmpsymlink2] )) || fail "symlink-at-open rejected the launcher entirely"
+[[ -e "$cachefile" ]] && fail "cache written despite symlink at the temp path at open time"
+rm -f "$tmp/cache/claude-provider/fleet/launchers.zsh.tmp.$$"
+
 # Write gate: an untrusted ancestor ABOVE the XDG root (group-writable,
 # and the go-w fix only touches the XDG root itself, so it stays
 # unfixable) must suppress the cache write — launchers still defined.
