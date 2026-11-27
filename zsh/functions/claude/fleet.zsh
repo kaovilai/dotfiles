@@ -156,12 +156,14 @@ _claude-fleet-generate() {
     # (022 is an octal literal in zsh arithmetic — the group/other write
     # bits; zstat +mode is decimal but the mask works across both.)
     zmodload zsh/stat 2>/dev/null
+    # ONE read of the path feeds the version check AND the eval: separate
+    # reads would validate one file and execute another if the path were
+    # atomically swapped between them.
     if [[ -r $cache && -f $cache && -O $cache && ! -L $cache ]] \
        && zstat -A st_mode +mode "$cache" 2>/dev/null \
        && (( (st_mode[1] & 022) == 0 )) \
-       && cache_file_lines=("${(f)"$(<$cache)"}") \
-       && [[ ${cache_file_lines[1]} == "$cache_version" ]]; then
-        cache_content="$(<$cache)"
+       && cache_content="$(<$cache)" \
+       && [[ "${${(f)cache_content}[1]}" == "$cache_version" ]]; then
         expected_tail=$'\n'_claude_fleet_cache_snapshot=${(qq)cfg_content}
         if [[ "$cache_content" == *"$expected_tail" ]]; then
             eval "$cache_content"
