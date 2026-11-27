@@ -318,34 +318,42 @@ _claude-fleet-generate() {
             fi
         fi
     done
-    # Cache write: 0700 dir (chmod'd — mkdir -m is a no-op on an existing
-    # one), umask 077 BEFORE the redirection opens the temp file (peer
-    # hostnames must never be world-readable, not even briefly), one temp
-    # + one mv so the whole cache is atomic. Writability is probed FIRST:
-    # a redirection-open failure would abort this function mid-block and
-    # leave the whole session at umask 077 (and re-fork jq every shell).
+    # Cache write, gated like the read: 0700 dir (chmod'd — mkdir -m is a
+    # no-op on an existing one), umask 077 before the redirection opens the
+    # temp file (peer hostnames must never be world-readable, not even
+    # briefly), one temp + one mv so the whole cache is atomic. The chmods
+    # MUST succeed — a tree we cannot chmod is not ours to write into — and
+    # the trust walk must accept the directory, so an attacker-owned or
+    # attacker-writable tree never receives the write.
     if { mkdir -m 700 -p "$cache_dir" 2>/dev/null || [[ -d $cache_dir ]]; } \
-       && [[ -w $cache_dir ]]; then
+       && [[ -w $cache_dir ]] \
+       && chmod 700 "$cache_dir" "${cache_dir:h}" 2>/dev/null; then
         # -m modes only the LEAF: the intermediate claude-provider dir (and
         # a just-created XDG cache root) carry the ambient umask — a
-        # group-writable one is correctly rejected by the read-path ancestor
-        # walk, which would disable the cache entirely. Mode our two levels
-        # 700; strip only the group/other WRITE bits from the user's shared
-        # XDG root (755 stays 755, 775 becomes 755).
-        chmod 700 -- "$cache_dir" "${cache_dir:h}" 2>/dev/null
-        chmod go-w -- "${cache_dir:h:h}" 2>/dev/null
+        # group-writable one must be fixed BEFORE the walk below, or a
+        # fresh root under umask 002 (775) would reject our own write.
+        # Best-effort: strip only the group/other WRITE bits from the
+        # user's shared XDG root (755 stays 755, 775 becomes 755); failure
+        # (a root-owned root) leaves the mode as-is and the walk decides.
+        chmod go-w "${cache_dir:h:h}" 2>/dev/null
+        if ! _claude-fleet-path-trusted "$cache_dir" 0; then
+            return 0
+        fi
         local i line
-        # Raw string, NOT typeset -i: umask prints zero-padded octal, and
-        # an integer re-parse turns "022" into octal 18 (bad umask on
-        # restore); umask's own parser wants the leading-zero form.
-        local old_umask=$(umask)
-        umask 077
-        # always: the redirection open can still fail after the -w probe
-        # (dir swapped between the two, or -w testing the real uid where
-        # the create checks the effective one) — the restore must fire even
-        # when zsh aborts the function at the failed open, or the whole
-        # session is left at umask 077.
-        {
+        # Stale same-pid temp from a crashed shell: rm -f unlinks it (rm
+        # never follows symlinks, so a pre-planted symlink is removed, not
+        # resolved). The walk already established no other user can write
+        # into this directory, so the rm-to-open window is not raceable.
+        rm -f -- "$cache.tmp.$$"
+        # The temp file is created with noclobber — an existing path,
+        # including a pre-planted symlink (even dangling), fails the open
+        # instead of being followed, so ">" can never truncate an
+        # attacker-chosen file. The write runs in a SUBSHELL: a failed
+        # open aborts only the subshell, so the invoking shell's umask is
+        # never left at 077 and the launchers stay defined either way.
+        if (
+            setopt noclobber
+            umask 077
             {
                 print -r -- "$cache_version"
                 # {1..0} counts DOWN in zsh (1, 0) — guard the empty case or
@@ -358,10 +366,9 @@ _claude-fleet-generate() {
                 fi
                 print -r -- "_claude_fleet_cache_snapshot=${(qq)cfg_content}"
             } > "$cache.tmp.$$"
+        ); then
             mv -f -- "$cache.tmp.$$" "$cache"
-        } always {
-            umask $old_umask
-        }
+        fi
     fi
     return 0
 }

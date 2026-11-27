@@ -490,4 +490,29 @@ _claude-fleet-path-trusted "$tmp/mylinkhome/cachelink/launchers.zsh" 0 2>/dev/nu
     && fail "group-writable resolved ancestor passed the trust walk"
 chmod 755 "$shared"
 
+# Write-side symlink hardening: a pre-planted temp-file symlink must not
+# be followed. rm -f unlinks it (rm never follows symlinks) and the
+# noclobber open would refuse it even without the rm, so the canary file
+# survives AND the cache is still written.
+print -r -- '{"hosts":[{"name":"tmpsymlink","ssh":"t@x"}]}' > "$tmp/cfg/fleet.json"
+rm -f "$cachefile"
+mkdir -p "$tmp/cache/claude-provider/fleet"
+print -r -- "CANARY" > "$tmp/canary"
+ln -s "$tmp/canary" "$tmp/cache/claude-provider/fleet/launchers.zsh.tmp.$$"
+source "$repo/zsh/functions/claude/fleet.zsh"
+[[ "$(cat "$tmp/canary")" == "CANARY" ]] || fail "temp-file symlink was followed (canary clobbered)"
+[[ -r "$cachefile" ]] || fail "pre-planted temp symlink suppressed the cache write"
+[[ ! -L "$cachefile" ]] || fail "cache file is a symlink"
+
+# Write gate: an untrusted ancestor ABOVE the XDG root (group-writable,
+# and the go-w fix only touches the XDG root itself, so it stays
+# unfixable) must suppress the cache write — launchers still defined.
+print -r -- '{"hosts":[{"name":"gatedpeer","ssh":"g@x"}]}' > "$tmp/cfg/fleet.json"
+rm -f "$cachefile"
+chmod 775 "$tmp"
+source "$repo/zsh/functions/claude/fleet.zsh"
+(( $+functions[claude-gatedpeer] )) || fail "write gate rejected the launcher entirely"
+[[ -e "$cachefile" ]] && fail "cache written through an untrusted ancestor"
+chmod 700 "$tmp"
+
 print -- "ok claude-fleet"
