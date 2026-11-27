@@ -236,12 +236,21 @@ pairs=$(_claude_fleet_host_pairs)
 [[ $pairs == *"solo:s@x"* ]] || fail "valid pair missing: $pairs"
 [[ $pairs != *dashtarget* && $pairs != *dupgen* ]] || fail "refused peer offered by completion"
 
-# A SINGLE entry with an embedded newline in .ssh is diagnosed as the
-# newline defect, not as duplicate entries (count is entries, not lines).
-print -r -- '{"hosts":[{"name":"nlnl","ssh":"a@x\nb@y"}]}' \
+# Whitespace in .ssh (newline or tab) is refused at resolution and
+# excluded from generation/completion — a tab target would otherwise fail
+# only at ssh, invisible to diagnose.
+print -r -- '{"hosts":[{"name":"nlnl","ssh":"a@x\nb@y"},{"name":"tabby","ssh":"a@x\tb"}]}' \
     > "$tmp/cfg/fleet.json"
 out=$(claude-fleet nlnl 2>&1) && fail "newline-in-ssh target accepted"
-[[ $out == *"invalid ssh target containing a newline"* ]] || fail "newline-in-ssh misdiagnosed: $out"
+[[ $out == *"invalid ssh target containing whitespace"* ]] || fail "newline-in-ssh misdiagnosed: $out"
+out=$(claude-fleet tabby 2>&1) && fail "tab-in-ssh target accepted"
+[[ $out == *"invalid ssh target containing whitespace"* ]] || fail "tab-in-ssh misdiagnosed: $out"
+unset -f claude-nlnl claude-tabby 2>/dev/null || true
+source "$repo/zsh/functions/claude/fleet.zsh"
+(( $+functions[claude-nlnl] )) && fail "newline-in-ssh peer got a launcher"
+(( $+functions[claude-tabby] )) && fail "tab-in-ssh peer got a launcher"
+pairs=$(_claude_fleet_host_pairs)
+[[ $pairs != *nlnl* && $pairs != *tabby* ]] || fail "whitespace target offered by completion"
 
 # Duplicate host names are diagnosed, not passed to ssh as a multi-line
 # destination.
