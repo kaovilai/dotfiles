@@ -172,11 +172,25 @@ _claude-fleet-generate() {
     if [[ -O "$anc" ]]; then
         dir_trust_ok=1
         while [[ -n "$anc" ]]; do
-            # zstat -A takes one +field per call; both are builtin lookups.
-            if ! zstat -A st_anc_mode +mode "$anc" 2>/dev/null \
-               || ! zstat -A st_anc_uid +uid "$anc" 2>/dev/null \
-               || (( st_anc_uid[1] != UID && st_anc_uid[1] != 0 )) \
-               || (( (st_anc_mode[1] & 8#22) != 0 && (st_anc_mode[1] & 8#1000) == 0 )); then
+            # zstat -A takes one +field per call; all builtin lookups.
+            # -L lstats the LEXICAL component (a symlink is checked as the
+            # link, not its target): an attacker-owned symlink in the path
+            # can be retargeted after these checks, so it is trusted only
+            # when the LINK itself is user- or root-owned. Real dirs get
+            # the ownership + writability/sticky checks.
+            if ! zstat -L -A st_anc_mode +mode "$anc" 2>/dev/null \
+               || ! zstat -L -A st_anc_uid +uid "$anc" 2>/dev/null \
+               || (( st_anc_uid[1] != UID && st_anc_uid[1] != 0 )); then
+                dir_trust_ok=0
+                break
+            fi
+            if (( (st_anc_mode[1] & 8#170000) == 8#120000 )); then
+                # symlink: only its ownership matters (retarget rights)
+                [[ "$anc" == "/" ]] && break
+                anc="${anc:h}"
+                continue
+            fi
+            if (( (st_anc_mode[1] & 8#22) != 0 && (st_anc_mode[1] & 8#1000) == 0 )); then
                 dir_trust_ok=0
                 break
             fi
