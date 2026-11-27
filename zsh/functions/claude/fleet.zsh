@@ -219,8 +219,33 @@ _claude-fleet-generate() {
        && [[ "${${(f)cache_content}[1]}" == "$cache_version" ]]; then
         expected_tail=$'\n'_claude_fleet_cache_snapshot=${(qq)cfg_content}
         if [[ "$cache_content" == *"$expected_tail" ]]; then
-            eval "$cache_content"
-            return 0
+            # Parse, never eval: each cached launcher line must match the
+            # exact serialization shape (guard + assignment with
+            # label-validated names); the function is rebuilt
+            # programmatically from the extracted names. Any deviation is a
+            # cache miss (regenerate), so file text is never executed.
+            local -a cl
+            local fn fleet line_ok=1 q="'"
+            cl=("${(@f)cache_content}")
+            # Expected line shape (single quotes are real characters, hence
+            # the $q splice — zsh regex has no \xNN escapes):
+            # (( ! $+functions[NAME] && ... )) && functions[NAME]='claude-fleet FLEET "$@"'
+            local re="^\(\( ! \\\$\+functions\[([A-Za-z0-9_-]+)\] && ! \\\$\+aliases\[([A-Za-z0-9_-]+)\] && ! \\\$\+commands\[([A-Za-z0-9_-]+)\] \)\) && functions\[([A-Za-z0-9_-]+)\]=${q}claude-fleet ([A-Za-z0-9_-]+) \"\\\$@\"${q}\$"
+            for fn in "${(@)cl[2,-2]}"; do
+                if [[ "$fn" =~ "$re" ]] \
+                   && [[ "$match[1]" == "$match[2]" && "$match[2]" == "$match[3]" && "$match[3]" == "$match[4]" ]] \
+                   && (( ! $+functions[$match[4]] && ! $+aliases[$match[4]] && ! $+commands[$match[4]] )); then
+                    functions[$match[4]]='claude-fleet '"$match[5]"' "$@"'
+                elif [[ "$fn" =~ "$re" ]]; then
+                    # Guarded out in THIS shell (live collision): correct
+                    # skip, the line is inert here as it would be under eval.
+                    :
+                else
+                    line_ok=0
+                    break
+                fi
+            done
+            (( line_ok )) && return 0
         fi
     fi
     # Only connectable peers get launchers: the llm-usage fleet format also
