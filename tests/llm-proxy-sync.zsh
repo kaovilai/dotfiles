@@ -42,6 +42,9 @@ _claude_enmaas_port() { print 59005; }
 local tmp
 tmp=$(mktemp -d) || fail "mktemp"
 trap 'rm -rf "$tmp"' EXIT
+# Keep the fleet launcher cache (sourced via load.zsh) off the real one.
+export XDG_CACHE_HOME="$tmp/cache"
+mkdir -p "$XDG_CACHE_HOME"
 export XDG_STATE_HOME="$tmp/state"   # watcher pid files and logs
 
 typeset -A listening stub_verdict serving restart_rc watch_names
