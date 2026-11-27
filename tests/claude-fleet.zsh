@@ -305,7 +305,6 @@ source "$repo/zsh/functions/claude/fleet.zsh"
 (( $+functions[claude-cachey] )) || fail "cache write did not define launcher"
 cachefile="$tmp/cache/claude-provider/fleet/launchers.zsh"
 [[ -r "$cachefile" ]] || fail "cache file missing"
-[[ "$(print -r -- "${$(<$cachefile)[1]}")" == "" ]] && true
 local -a cl; cl=("${(f)"$(<$cachefile)"}")
 [[ ${cl[1]} == "# fleet-launchers cache v2" ]] || fail "cache version line wrong: ${cl[1]}"
 [[ ! -e "$tmp/cache/claude-provider/fleet/fleet.json" ]] || fail "v1 snapshot file still written"

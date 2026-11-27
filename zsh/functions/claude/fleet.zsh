@@ -200,8 +200,11 @@ _claude-fleet-generate() {
     # Cache write: 0700 dir (chmod'd — mkdir -m is a no-op on an existing
     # one), umask 077 BEFORE the redirection opens the temp file (peer
     # hostnames must never be world-readable, not even briefly), one temp
-    # + one mv so the whole cache is atomic.
-    if mkdir -m 700 -p "$cache_dir" 2>/dev/null || [[ -d $cache_dir ]]; then
+    # + one mv so the whole cache is atomic. Writability is probed FIRST:
+    # a redirection-open failure would abort this function mid-block and
+    # leave the whole session at umask 077 (and re-fork jq every shell).
+    if { mkdir -m 700 -p "$cache_dir" 2>/dev/null || [[ -d $cache_dir ]]; } \
+       && [[ -w $cache_dir ]]; then
         chmod 700 -- "$cache_dir" 2>/dev/null
         local i line
         # Raw string, NOT typeset -i: umask prints zero-padded octal, and
