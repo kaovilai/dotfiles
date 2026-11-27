@@ -88,6 +88,26 @@ unset -f claude-ryzen claude-ryzen-wsl claude-spectre
 source "$repo/zsh/functions/claude/fleet.zsh"
 [[ $(claude-copilot) == REAL ]] || fail "collision guard overwrote claude-copilot"
 
+# Short alias cannot shadow a later full peer name (two-pass generation):
+# ryzen-wsl listed before ryzen must leave claude-ryzen pointing at the REAL
+# ryzen peer.
+print -r -- '{"hosts":[{"name":"ryzen-wsl","ssh":"w@dashed"},{"name":"ryzen","ssh":"r@full"}]}' \
+    > "$tmp/cfg/fleet.json"
+unset -f claude-ryzen claude-ryzen-wsl 2>/dev/null || true
+source "$repo/zsh/functions/claude/fleet.zsh"
+out=$(claude-ryzen)
+[[ $out == *"ssh-host: r@full"* ]] || fail "short alias shadowed the real peer: $out"
+out=$(claude-ryzen-wsl)
+[[ $out == *"ssh-host: w@dashed"* ]] || fail "full dashed name broken: $out"
+
+# Peers without an ssh target (local-state entries) get no launcher.
+print -r -- '{"hosts":[{"name":"localish","dir":"/tmp"},{"name":"remoteish","ssh":"r@x"}]}' \
+    > "$tmp/cfg/fleet.json"
+unset -f claude-localish claude-remoteish 2>/dev/null || true
+source "$repo/zsh/functions/claude/fleet.zsh"
+(( $+functions[claude-localish] )) && fail "launcher generated for ssh-less peer"
+(( $+functions[claude-remoteish] )) || fail "ssh-backed peer skipped"
+
 # Hostile fleet.json names never become code: anything outside
 # [A-Za-z0-9_-] is skipped, not eval'd/defined (GHAS prompt-injection fix).
 print -r -- '{"hosts":[{"name":"x; touch $tmp/PWNED; #","ssh":"x@y"},{"name":"ok-host","ssh":"z@z"},{"name":"bad name","ssh":"z@z"},{"name":"$(echo pwn)","ssh":"z@z"}]}' \

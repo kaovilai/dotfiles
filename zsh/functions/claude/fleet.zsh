@@ -57,17 +57,24 @@ claude-fleet() {
     emulate -L zsh
     local cfg="${LLM_USAGE_CONFIG_DIR:-$HOME/.config/llm-usage}/fleet.json"
     [[ -r $cfg ]] || return 0
+    # Only SSH-backed peers get launchers: the llm-usage fleet format also
+    # carries local-state peers (no .ssh), which could never connect.
     local -a names
-    names=("${(@f)$(jq -r '.hosts[].name // empty' "$cfg" 2>/dev/null)}") || return 0
+    names=("${(@f)$(jq -r '.hosts[] | select(.ssh != null) | .name // empty' "$cfg" 2>/dev/null)}") || return 0
     (( $#names )) || return 0
     local name short
+    # Pass 1 — full names; pass 2 — short aliases: a dashed peer earlier in
+    # the file must not shadow a real peer whose full name IS the short form
+    # (ryzen-wsl first would otherwise steal claude-ryzen from a later
+    # "ryzen" peer).
     for name in $names; do
-        # [A-Za-z0-9_-] only — anything else (spaces, ;, $(), quotes) is a
-        # skipped peer, never a function definition.
         [[ $name =~ ^[A-Za-z0-9_-]+$ ]] || continue
         if (( ! $+functions[claude-$name] )); then
             functions[claude-$name]='claude-fleet '"${(q)name}"' "$@"'
         fi
+    done
+    for name in $names; do
+        [[ $name =~ ^[A-Za-z0-9_-]+$ ]] || continue
         short=${name%%-*}
         if [[ -n $short && $short != $name ]] && (( ! $+functions[claude-$short] )); then
             functions[claude-$short]='claude-fleet '"${(q)name}"' "$@"'
