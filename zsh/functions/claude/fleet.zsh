@@ -125,12 +125,17 @@ _claude-fleet-generate() {
     local cache_dir="${XDG_CACHE_HOME:-$HOME/.cache}/claude-provider/fleet"
     local cache="$cache_dir/launchers.zsh"
     local -r cache_version="# fleet-launchers cache v2"
+    # Decide BEFORE sourcing: reconstructing the expected snapshot line and
+    # comparing it against the cache's last line needs no evaluation. If the
+    # cache were sourced first, its definitions would look like collisions
+    # to the generation guard below and the rewritten cache would record
+    # only the delta — oscillating forever on every fleet.json edit.
     local -a cache_file_lines
     local _claude_fleet_cache_snapshot
     if [[ -r $cache ]] && cache_file_lines=("${(f)"$(<$cache)"}") \
        && [[ ${cache_file_lines[1]} == "$cache_version" ]] \
-       && source "$cache" \
-       && [[ "$_claude_fleet_cache_snapshot" == "$cfg_content" ]]; then
+       && [[ ${cache_file_lines[-1]} == "_claude_fleet_cache_snapshot=${(qq)cfg_content}" ]] \
+       && source "$cache"; then
         return 0
     fi
     # Only connectable peers get launchers: the llm-usage fleet format also
@@ -160,6 +165,10 @@ _claude-fleet-generate() {
     local name short
     for name in $names; do
         [[ $name =~ ^[A-Za-z0-9_-]+$ ]] || continue
+        # claude-t3-* launchers live in ~/.local/bin, which paths.zsh puts
+        # on PATH AFTER this file runs — $+commands cannot see them yet,
+        # and a function would shadow them. Skip the family by name.
+        [[ $name == t3-* ]] && continue
         cache_fns+=("claude-$name") cache_fleets+=("${(q)name}")
         if (( ! $+functions[claude-$name] && ! $+aliases[claude-$name]
               && ! $+commands[claude-$name] )); then
@@ -169,7 +178,7 @@ _claude-fleet-generate() {
     for name in $names; do
         [[ $name =~ ^[A-Za-z0-9_-]+$ ]] || continue
         short=${name%%-*}
-        if [[ -n $short && $short != $name ]]; then
+        if [[ -n $short && $short != $name ]] && [[ $name != t3-* ]]; then
             cache_fns+=("claude-$short") cache_fleets+=("${(q)name}")
             if (( ! $+functions[claude-$short] && ! $+aliases[claude-$short]
                   && ! $+commands[claude-$short] )); then
@@ -184,7 +193,10 @@ _claude-fleet-generate() {
     if mkdir -m 700 -p "$cache_dir" 2>/dev/null || [[ -d $cache_dir ]]; then
         chmod 700 -- "$cache_dir" 2>/dev/null
         local i line
-        local -i old_umask=$(umask)
+        # Raw string, NOT typeset -i: umask prints zero-padded octal, and
+        # an integer re-parse turns "022" into octal 18 (bad umask on
+        # restore); umask's own parser wants the leading-zero form.
+        local old_umask=$(umask)
         umask 077
         {
             print -r -- "$cache_version"

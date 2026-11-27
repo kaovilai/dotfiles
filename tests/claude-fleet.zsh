@@ -17,6 +17,9 @@ fail() { print -ru2 -- "FAIL: $*"; exit 1; }
 
 mkdir -p "$tmp/bin" "$tmp/cfg"
 export LLM_USAGE_CONFIG_DIR="$tmp/cfg"
+# Deterministic umask: the cache write's umask save/restore round-trips
+# zero-padded octal, and the invoking shell's umask must not matter.
+umask 002
 # Isolate the launcher cache: the generator writes XDG_CACHE_HOME, and the
 # suite's throwaway configs must not clobber the real one.
 export XDG_CACHE_HOME="$tmp/cache"
@@ -349,5 +352,32 @@ unset -f claude-vercheck 2>/dev/null || true
 source "$repo/zsh/functions/claude/fleet.zsh"
 [[ "$(head -n 1 -- "$cachefile")" == "# fleet-launchers cache v2" ]] || fail "stale-version cache not regenerated"
 (( $+functions[claude-vercheck] )) || fail "regeneration after version mismatch failed"
+
+# Convergence: after a content change, the rewritten cache must contain
+# EVERY peer, not just the delta the old cache had not defined (sourcing
+# the old cache first would make its definitions look like collisions).
+print -r -- '{"hosts":[{"name":"conv-a","ssh":"a@x"},{"name":"conv-b","ssh":"b@x"}]}' > "$tmp/cfg/fleet.json"
+unset -f claude-conv-a claude-conv-b 2>/dev/null || true
+source "$repo/zsh/functions/claude/fleet.zsh"
+print -r -- '{"hosts":[{"name":"conv-a","ssh":"a2@x"},{"name":"conv-b","ssh":"b@x"},{"name":"conv-c","ssh":"c@x"}]}' > "$tmp/cfg/fleet.json"
+source "$repo/zsh/functions/claude/fleet.zsh"
+for fn in claude-conv-a claude-conv-b claude-conv-c; do
+    (( $+functions[$fn] )) || fail "$fn missing after content-change regeneration"
+done
+unset -f claude-conv-a claude-conv-b claude-conv-c 2>/dev/null || true
+source "$repo/zsh/functions/claude/fleet.zsh"
+for fn in claude-conv-a claude-conv-b claude-conv-c; do
+    (( $+functions[$fn] )) || fail "$fn missing on the cache hit after regeneration"
+done
+out=$(claude-conv-a)
+[[ $out == *"ssh-host: a2@x"* ]] || fail "converged launcher wrong target: $out"
+
+# A t3-* peer never generates a launcher that would shadow the
+# claude-t3-* PATH commands (which load after this file in .zshrc).
+print -r -- '{"hosts":[{"name":"t3-openai","ssh":"t@x"},{"name":"plainpeer","ssh":"p@x"}]}' > "$tmp/cfg/fleet.json"
+unset -f claude-t3-openai claude-plainpeer 2>/dev/null || true
+source "$repo/zsh/functions/claude/fleet.zsh"
+(( $+functions[claude-t3-openai] )) && fail "t3-* peer generated a shadowing launcher"
+(( $+functions[claude-plainpeer] )) || fail "unrelated peer skipped by t3- guard"
 
 print -- "ok claude-fleet"
