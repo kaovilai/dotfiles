@@ -214,6 +214,15 @@ source "$repo/zsh/functions/claude/fleet.zsh"
 (( $+functions[claude-trailn] )) && fail "trailing-newline name generated a launcher"
 (( $+functions[claude-solidname] )) || fail "valid name skipped by generation predicate"
 
+# Newline-in-.ssh entries generate no launcher either (resolution and
+# completion already refuse them).
+print -r -- '{"hosts":[{"name":"nlgen","ssh":"a@x\nb@y"},{"name":"okgen","ssh":"o@x"}]}' \
+    > "$tmp/cfg/fleet.json"
+unset -f claude-nlgen claude-okgen 2>/dev/null || true
+source "$repo/zsh/functions/claude/fleet.zsh"
+(( $+functions[claude-nlgen] )) && fail "newline-in-ssh peer got a launcher"
+(( $+functions[claude-okgen] )) || fail "valid peer skipped by newline exclusion"
+
 # Dash-prefixed targets and duplicate names are refused by resolution, so
 # they get neither launchers nor completion pairs (resolvable == offered).
 print -r -- '{"hosts":[{"name":"dashtarget","ssh":"-oProxyCommand=x"},{"name":"dupgen","ssh":"a@x"},{"name":"dupgen","ssh":"b@x"},{"name":"solo","ssh":"s@x"}]}' \

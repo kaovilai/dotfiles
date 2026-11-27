@@ -123,7 +123,7 @@ _claude-fleet-generate() {
     # Shared predicate with _claude_fleet_target: resolution also refuses
     # dash-prefixed targets and ambiguous (duplicate) names, so those get no
     # launcher either — the generated set stays the resolvable set.
-    names=("${(@f)$(jq -r '.hosts | map(select((.ssh|type) == "string" and .ssh != "" and ((.ssh | startswith("-")) | not)) | select((.name|type) == "string" and (.name | test("^[A-Za-z0-9_-]+\\z")))) | group_by(.name) | map(select(length == 1) | .[0]) | .[] | .name' "$cfg" 2>/dev/null)}") || return 0
+    names=("${(@f)$(jq -r '.hosts | map(select((.ssh|type) == "string" and .ssh != "" and ((.ssh | startswith("-")) | not) and (.ssh | test("^[^\\n]+$"))) | select((.name|type) == "string" and (.name | test("^[A-Za-z0-9_-]+\\z")))) | group_by(.name) | map(select(length == 1) | .[0]) | .[] | .name' "$cfg" 2>/dev/null)}") || return 0
     (( $#names )) || return 0
     local name short
     # Pass 1 — full names; pass 2 — short aliases: a dashed peer earlier in
