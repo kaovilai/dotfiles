@@ -297,8 +297,8 @@ pairs=$(_claude_fleet_host_pairs)
 [[ $pairs != *"42:"* && $pairs != *"col:on"* ]] || fail "invalid name offered by completion"
 
 # Cache, v2 single file: identical content hits (no jq), content change
-# regenerates, the collision guard in cached lines fires, and a cached
-# omission whose collision disappeared is detected and regenerated.
+# regenerates, the collision guard in cached lines fires, and a peer whose
+# collision disappeared is defined by its (previously inert) cached line.
 print -r -- '{"hosts":[{"name":"cachey","ssh":"c@x"}]}' > "$tmp/cfg/fleet.json"
 unset -f claude-cachey 2>/dev/null || true
 source "$repo/zsh/functions/claude/fleet.zsh"
@@ -325,8 +325,9 @@ unset -f claude-cachey 2>/dev/null || true
 source "$repo/zsh/functions/claude/fleet.zsh"
 out=$(claude-cachey)
 [[ $out == *"ssh-host: c2@x"* ]] || fail "content change served stale cache: $out"
-# A cached omission whose collision later disappears regenerates: write the
-# cache while claude-ghost collides, then remove the collision.
+# A peer omitted at write time for a collision is defined by its inert
+# cached line once the collision disappears: write the cache while
+# claude-ghost collides, then remove the collision.
 print -r -- '{"hosts":[{"name":"ghost","ssh":"g@x"}]}' > "$tmp/cfg/fleet.json"
 claude-ghost() { echo COLLIDING; }
 source "$repo/zsh/functions/claude/fleet.zsh"
