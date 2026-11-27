@@ -9,13 +9,13 @@ One repo covers four things that usually live in five places:
 - **An LLM telemetry stack** — `llm-usage` reads every local proxy's request log (plus Claude/Codex transcripts) and answers "which model actually served my traffic, at what cost, and what is throttled right now" — in the terminal, a browser dashboard, and a native macOS menubar monitor, across your whole fleet of machines.
 - **OpenShift / OADP / Velero cluster automation** — repeatable create/connect/destroy flows for AWS, GCP (WIF), Azure (STS), and ROSA clusters with Velero backup setup, version-matched `oc` binaries, and offline-testable installer logic.
 
-Everything here is ZSH (not Bash), kebab-case for public commands, and covered by [26 offline test suites](tests/) that run without a cluster, a proxy, or a GUI.
+Everything here is ZSH (not Bash), kebab-case for public commands, and covered by [27 offline test suites](tests/) that run without a cluster, a proxy, or a GUI.
 
 ## Highlights
 
 ### 1. One `claude` command, any provider
 
-`claude-mode <provider>` persists your choice; `claude` then dispatches to it. Persistent modes are `copilot`, `enmaas`, `hosted-only`, `vertex`, `vertex-native-adc`, `ollama`, and the `openshell-*` launchers — the other providers below (`openai`, `mlx`, `offline`) have direct `claude-<provider>` wrappers but are not `claude-mode` choices. Proxy-backed providers get `claude-<provider>`, `claude-<provider>-kill`, and `claude-<provider>-restart` (ollama is kill-only); the sandboxed `openshell` provider instead exposes `openshell-<backend>` launchers. `codex` dispatches via `codex-mode`, which supports `native` and `enmaas` only — for the hosted-only cost guard run `codex-hosted-only` directly. Each provider is one self-documenting file under `zsh/functions/claude/providers/`:
+`claude-mode <provider>` persists your choice; `claude` then dispatches to it. `claude-<fleet-name>` (e.g. `claude-ryzen`, generated from the machine-local fleet.json peer list) opens interactive Claude Code on a fleet peer over ssh. Persistent modes are `copilot`, `enmaas`, `hosted-only`, `vertex`, `vertex-native-adc`, `ollama`, and the `openshell-*` launchers — the other providers below (`openai`, `mlx`, `offline`) have direct `claude-<provider>` wrappers but are not `claude-mode` choices. Proxy-backed providers get `claude-<provider>`, `claude-<provider>-kill`, and `claude-<provider>-restart` (ollama is kill-only); the sandboxed `openshell` provider instead exposes `openshell-<backend>` launchers. `codex` dispatches via `codex-mode`, which supports `native` and `enmaas` only — for the hosted-only cost guard run `codex-hosted-only` directly. Each provider is one self-documenting file under `zsh/functions/claude/providers/`:
 
 | Provider | What it does |
 |---|---|
@@ -100,7 +100,7 @@ Details that matter: every `oc adm release extract` goes through a **version-mat
 
 ### 6. A dotfiles repo that tests itself
 
-26 offline test suites (`tests/`) stub out `node`, `claude`, `systemctl`, `curl` and more to verify real behavior: provider lifecycle and proxy routing, mode completion, model pickers, fleet-sync decisions, T3 launchers, and `zsh -n` over the whole `.zshrc`. The shell itself is performance-tuned: lazy-loaded function groups, backgrounded non-essential init, and completion caching.
+27 offline test suites (`tests/`) stub out `node`, `claude`, `systemctl`, `curl` and more to verify real behavior: provider lifecycle and proxy routing, mode completion, model pickers, fleet-sync decisions, T3 launchers, and `zsh -n` over the whole `.zshrc`. The shell itself is performance-tuned: lazy-loaded function groups, backgrounded non-essential init, and completion caching.
 
 ## Function catalog
 
@@ -302,7 +302,7 @@ zsh/
   completions/          # custom completions (llm-usage, tailscale)
 scripts/                # llm-usage, proxies, fleet-sync, menubar monitor, ...
 docs/                   # setup guides + docs/notes/ design notes
-tests/                  # 26 offline test suites
+tests/                  # 27 offline test suites
 ```
 
 See `zsh/aliases/README.md` for adding aliases; conventions (ZSH not Bash, kebab-case public names, `znap` never prefixed on function definitions) are in `CLAUDE.md`.

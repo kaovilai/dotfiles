@@ -1,0 +1,97 @@
+#!/bin/zsh
+# Offline tests for zsh/functions/claude/fleet.zsh: a throwaway
+# LLM_USAGE_CONFIG_DIR with a stub fleet.json, a stub ssh that emulates the
+# remote login shell RE-PARSING the joined command line (plain "$*" loses
+# quoting — that bug shipped once), and a stub remote claude. Stubs locate
+# their own dir via $0 so no path interpolation is needed; ZDOTDIR keeps the
+# user's ~/.zshenv (and its PATH tweaks) out of every spawned zsh. Never
+# touches the real fleet.json or the network.
+emulate -LR zsh
+setopt err_exit pipe_fail
+local repo="${0:A:h:h}"
+local tmp
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+
+fail() { print -ru2 -- "FAIL: $*"; exit 1; }
+
+mkdir -p "$tmp/bin" "$tmp/cfg"
+export LLM_USAGE_CONFIG_DIR="$tmp/cfg"
+export PATH="$tmp/bin:$PATH"
+export ZDOTDIR="$tmp"
+
+# Stub remote claude: prints its args, one per line.
+cat > "$tmp/bin/claude" <<'STUB'
+#!/bin/sh
+echo claude-stub
+for a in "$@"; do echo "  arg: $a"; done
+STUB
+
+# Stub ssh: skip flags, record the host, then EMULATE the remote login shell
+# re-parsing the command line: join the remaining args with spaces and run
+# them in a fresh zsh (which re-parses quoting exactly like the real thing).
+cat > "$tmp/bin/ssh" <<'STUB'
+#!/bin/zsh
+stubdir=${0:A:h}
+export ZDOTDIR=$stubdir:h PATH=$stubdir:$PATH
+local -a remote_args
+remote_args=("$@")
+local first=${remote_args[1]}
+while [[ $first == -* ]]; do
+  remote_args=("${remote_args[@]:1}")
+  first=${remote_args[1]}
+done
+print -r -- "ssh-host: ${remote_args[1]}"
+local joined="${(j: :)remote_args[@]:1}"
+zsh -dfc "PS1=; $joined" 2>&1
+STUB
+chmod +x "$tmp/bin/claude" "$tmp/bin/ssh"
+# zsh hashes commands at startup (ssh -> /usr/bin/ssh from the user's
+# .zshenv PATH); a PATH prepend does not invalidate the entry, and rehash
+# before the stub exists would just re-hash the real one — so rehash HERE.
+rehash
+
+print -r -- '{"hosts":[{"name":"ryzen-wsl","ssh":"user@ryzen.example"},{"name":"spectre","ssh":"spec"}]}' \
+    > "$tmp/cfg/fleet.json"
+
+source "$repo/zsh/functions/claude/fleet.zsh"
+
+# Function generation: full names + short alias for dashed names.
+(( $+functions[claude-fleet] )) || fail "claude-fleet not defined"
+(( $+functions[claude-ryzen-wsl] )) || fail "claude-ryzen-wsl not generated"
+(( $+functions[claude-ryzen] )) || fail "short alias claude-ryzen not generated"
+(( $+functions[claude-spectre] )) || fail "claude-spectre not generated"
+
+# Short alias resolves the FULL fleet name (the wrapper hardcodes it).
+out=$(claude-ryzen)
+[[ $out == *"ssh-host: user@ryzen.example"* ]] || fail "claude-ryzen wrong target: $out"
+[[ $out == *"claude-stub"* ]] || fail "remote claude did not run: $out"
+
+# Undashed host: single function, correct target.
+out=$(claude-spectre)
+[[ $out == *"ssh-host: spec"* ]] || fail "claude-spectre wrong target: $out"
+[[ $out == *"claude-stub"* ]] || fail "remote claude did not run: $out"
+
+# Args pass through the remote re-parse intact — quoting survives ssh.
+out=$(claude-spectre -c 'print hi there')
+[[ $out == *"arg: -c"* && $out == *"arg: print hi there"* ]] || fail "args mangled by remote re-parse: $out"
+
+# Unknown host: friendly error, nonzero exit.
+if claude-fleet nosuchhost >/dev/null 2>&1; then
+    fail "unknown host accepted"
+fi
+
+# Collision guard: a peer named like a real function never overwrites it.
+claude-copilot() { echo REAL; }
+print -r -- '{"hosts":[{"name":"copilot","ssh":"x@y"}]}' > "$tmp/cfg/fleet.json"
+unset -f claude-ryzen claude-ryzen-wsl claude-spectre
+source "$repo/zsh/functions/claude/fleet.zsh"
+[[ $(claude-copilot) == REAL ]] || fail "collision guard overwrote claude-copilot"
+
+# Missing fleet.json: no functions generated, no errors at load.
+export LLM_USAGE_CONFIG_DIR="$tmp/nope"
+unset -f claude-fleet claude-copilot
+source "$repo/zsh/functions/claude/fleet.zsh" 2>/dev/null
+(( $+functions[claude-fleet] )) || fail "claude-fleet should stay defined on missing cfg"
+
+print -- "ok claude-fleet"
