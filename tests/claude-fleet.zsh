@@ -198,12 +198,6 @@ pairs=$(_claude_fleet_host_pairs)
 # (${(qq)} quoting, not ${(q)} whose escaped LF becomes a continuation).
 print -r -- '{"hosts":[{"name":"spectre","ssh":"spec"}]}' > "$tmp/cfg/fleet.json"
 out=$(claude-spectre -p $'line1\nline2')
-[[ $out == *"arg: line1"*(nl)*"line2"* ]] || print -r -- "NEWLINE-ARG: [$out]" > "$tmp/nl-debug"
-if [[ $out != *"arg: line1
-line2"* ]]; then
-    # exact match above is the strict form; accept the debug-informed check
-    print -ru2 -- "newline arg output: $(print -r -- "$out" | grep -A1 'arg: line1' | head -2)"
-fi
 print -r -- "$out" | grep -q "arg: line1" || fail "newline arg lost entirely"
 print -rl -- "$out" | grep -qx "line2" || fail "second line of newline arg lost"
 # The re-parse must NOT have fused the lines into one continuation-free arg.
