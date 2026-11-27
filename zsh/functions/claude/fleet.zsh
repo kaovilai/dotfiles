@@ -167,36 +167,46 @@ _claude-fleet-generate() {
     # root-owned 0755 system dirs is the same bet every path-based access
     # on a multi-user system makes), and must not be group/other-writable
     # unless sticky.
-    local -a st_anc_mode st_anc_uid
-    local anc="${cache:h}" dir_trust_ok=0
-    if [[ -O "$anc" ]]; then
-        dir_trust_ok=1
+    # Resolution-aware ancestor walk: every directory that can affect the
+    # cache path is checked — the LEXICAL ancestors AND, when a component
+    # is a trusted symlink, the RESOLVED target's ancestors (a user-owned
+    # XDG_CACHE_HOME symlink into an attacker-owned dir would otherwise
+    # pass the lexical walk while the target's parent allows replacement).
+    # Rename rights on every checked dir must belong to the user or root:
+    # dirs must be user/root-owned (the owner can always rename entries;
+    # sticky only blocks OTHER users), and not group/other-writable unless
+    # sticky. Symlinks are trusted when the LINK is user/root-owned.
+    # Depth-capped against cycles.
+    _claude-fleet-path-trusted() {
+        local path="$1" depth="$2" anc mode uid link_target
+        local -a st_mode st_uid st_link
+        (( depth < 8 )) || return 1
+        anc="$path"
         while [[ -n "$anc" ]]; do
-            # zstat -A takes one +field per call; all builtin lookups.
-            # -L lstats the LEXICAL component (a symlink is checked as the
-            # link, not its target): an attacker-owned symlink in the path
-            # can be retargeted after these checks, so it is trusted only
-            # when the LINK itself is user- or root-owned. Real dirs get
-            # the ownership + writability/sticky checks.
-            if ! zstat -L -A st_anc_mode +mode "$anc" 2>/dev/null \
-               || ! zstat -L -A st_anc_uid +uid "$anc" 2>/dev/null \
-               || (( st_anc_uid[1] != UID && st_anc_uid[1] != 0 )); then
-                dir_trust_ok=0
-                break
-            fi
-            if (( (st_anc_mode[1] & 8#170000) == 8#120000 )); then
-                # symlink: only its ownership matters (retarget rights)
+            zstat -L -A st_mode +mode "$anc" 2>/dev/null || return 1
+            zstat -L -A st_uid +uid "$anc" 2>/dev/null || return 1
+            (( st_uid[1] == UID || st_uid[1] == 0 )) || return 1
+            if (( (st_mode[1] & 8#170000) == 8#120000 )); then
+                # Trusted symlink: also check the target's own ancestors.
+                zstat -L -A st_link +link "$anc" 2>/dev/null || return 1
+                link_target="${st_link[1]}"
+                [[ "$link_target" == /* ]] || link_target="${anc:h}/$link_target"
+                _claude-fleet-path-trusted "$link_target" $(( depth + 1 )) || return 1
                 [[ "$anc" == "/" ]] && break
                 anc="${anc:h}"
                 continue
             fi
-            if (( (st_anc_mode[1] & 8#22) != 0 && (st_anc_mode[1] & 8#1000) == 0 )); then
-                dir_trust_ok=0
-                break
+            if (( (st_mode[1] & 8#22) != 0 && (st_mode[1] & 8#1000) == 0 )); then
+                return 1
             fi
             [[ "$anc" == "/" ]] && break
             anc="${anc:h}"
         done
+        return 0
+    }
+    local dir_trust_ok=0
+    if [[ -O "${cache:h}" ]] && _claude-fleet-path-trusted "${cache:h}" 0; then
+        dir_trust_ok=1
     fi
     # ONE read of the path feeds the version check AND the eval: separate
     # reads would validate one file and execute another if the path were
