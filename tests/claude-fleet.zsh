@@ -388,25 +388,30 @@ source "$repo/zsh/functions/claude/fleet.zsh"
 (( $+functions[claude-prettypeer] )) || fail "pretty-printed fleet.json did not generate"
 unset -f claude-prettypeer 2>/dev/null || true
 # jq fork counter: a cache hit must NOT fork jq (marker compare only).
+# Fork detector via a FILE side channel: the generator points jq's own
+# stderr at /dev/null, so a stderr marker can never surface — assert on
+# a touched file instead.
 real_jq=$(whence -p jq)
 cat > "$tmp/bin/jq" <<JQ
 #!/bin/sh
-echo "JQ-FORKED" >&2
+touch "$tmp/JQ-FORKED"
 exec $real_jq "\$@"
 JQ
 chmod +x "$tmp/bin/jq"
 rehash
-out=$(source "$repo/zsh/functions/claude/fleet.zsh"; whence -w claude-prettypeer) 2>&1
-[[ $out == *JQ-FORKED* ]] && fail "cache MISS for pretty-printed fleet.json (jq forked)"
-[[ $out == *function* ]] || fail "pretty-printed cache hit did not define launcher"
+rm -f "$tmp/JQ-FORKED"
+source "$repo/zsh/functions/claude/fleet.zsh"
+[[ -e "$tmp/JQ-FORKED" ]] && fail "cache MISS for pretty-printed fleet.json (jq forked)"
+(( $+functions[claude-prettypeer] )) || fail "pretty-printed cache hit did not define launcher"
 
 # An all-local-state fleet.json (zero launcher names) still caches: the
 # next shell must be a fork-free hit.
 print -r -- '{"hosts":[{"name":"onlylocal","dir":"/tmp"}]}' > "$tmp/cfg/fleet.json"
 source "$repo/zsh/functions/claude/fleet.zsh"
 [[ -r "$tmp/cache/claude-provider/fleet/launchers.zsh" ]] || fail "zero-names config wrote no cache"
-out=$(source "$repo/zsh/functions/claude/fleet.zsh" 2>&1)
-[[ $out != *JQ-FORKED* ]] || fail "zero-names config re-forked jq on cache hit"
+rm -f "$tmp/JQ-FORKED"
+source "$repo/zsh/functions/claude/fleet.zsh"
+[[ -e "$tmp/JQ-FORKED" ]] && fail "zero-names config re-forked jq on cache hit"
 
 # A transient jq failure is not cached: the unlucky shell defines nothing,
 # but no cache is written, so the next shell retries.
@@ -425,5 +430,18 @@ rm -f "$tmp/bin/jq"
 rehash
 source "$repo/zsh/functions/claude/fleet.zsh"
 (( $+functions[claude-jqfail] )) || fail "recovery after jq failure failed"
+
+# The fork detector itself must fire on a genuine miss (guard the guard):
+print -r -- '{"hosts":[{"name":"forkcanary","ssh":"f@x"}]}' > "$tmp/cfg/fleet.json"
+cat > "$tmp/bin/jq" <<JQ
+#!/bin/sh
+touch "$tmp/JQ-FORKED"
+exec $real_jq "\$@"
+JQ
+chmod +x "$tmp/bin/jq"
+rehash
+rm -f "$tmp/JQ-FORKED"
+source "$repo/zsh/functions/claude/fleet.zsh"
+[[ -e "$tmp/JQ-FORKED" ]] || fail "fork detector did not fire on a genuine miss"
 
 print -- "ok claude-fleet"

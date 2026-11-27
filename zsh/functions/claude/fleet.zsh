@@ -135,15 +135,25 @@ _claude-fleet-generate() {
     # and rewrite). Strip everything through the LAST marker occurrence
     # (the marker line is always the file's final line) and compare the
     # remainder as a literal string.
+    # The snapshot compare is a literal SUFFIX match on the whole file:
+    # prefix-stripping through the marker breaks when the JSON itself
+    # contains the marker text (the embedded occurrence sits AFTER the
+    # real one, inside the quoted value). The tail — newline + marker +
+    # the full quoted value — is reconstructed and matched literally
+    # (quoted RHS: no glob interpretation). The validated content is then
+    # EVALUATED from the captured string, not re-read from the path:
+    # another shell sharing XDG_CACHE_HOME under a different
+    # LLM_USAGE_CONFIG_DIR could atomically replace the file between the
+    # read and a re-open, executing a foreign config's launchers.
     local -a cache_file_lines
     local _claude_fleet_cache_snapshot
-    local cache_content snap_rest
+    local cache_content expected_tail
     if [[ -r $cache ]] && cache_file_lines=("${(f)"$(<$cache)"}") \
        && [[ ${cache_file_lines[1]} == "$cache_version" ]]; then
         cache_content="$(<$cache)"
-        snap_rest="${cache_content##*_claude_fleet_cache_snapshot=}"
-        snap_rest="${snap_rest%$'\n'}"
-        if [[ "$snap_rest" == "${(qq)cfg_content}" ]] && source "$cache"; then
+        expected_tail=$'\n'_claude_fleet_cache_snapshot=${(qq)cfg_content}
+        if [[ "$cache_content" == *"$expected_tail" ]]; then
+            eval "$cache_content"
             return 0
         fi
     fi
